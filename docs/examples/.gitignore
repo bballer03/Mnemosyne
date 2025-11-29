@@ -1,0 +1,9 @@
+# Ignore generated artifacts from example workflows
+*.hprof
+*.hprof.gz
+*.json
+*.html
+*.log
+*.tmp
+*.zip
+*.gz

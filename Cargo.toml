@@ -1,0 +1,21 @@
+[workspace]
+members = ["cli", "core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Mnemosyne Contributors <opensource@mnemosyne.dev>"]
+license = "Apache-2.0"
+repository = "https://github.com/bballer03/mnemosyne"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "signal"] }
+byteorder = "1.5"

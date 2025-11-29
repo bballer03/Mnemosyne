@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation (README, ARCHITECTURE, CONTRIBUTING)
 - Copilot instructions for fun commit messages
 - Architecture diagrams (SVG)
+- Rust workspace scaffolding (`mnemosyne-core` + `mnemosyne-cli`) with stub CLI commands and core APIs
+- Basic HPROF header parsing with CLI wiring for `parse`, `leaks`, and `analyze`
+- Record-level HPROF scanning with CLI summaries (top tags, record counts, heuristics-driven leak severity)
 
 ### Coming Soon
 - HPROF parser implementation
