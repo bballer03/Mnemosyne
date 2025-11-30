@@ -1,21 +1,28 @@
+use crate::analysis::{LeakKind, LeakSeverity};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Root configuration shared across Mnemosyne surfaces.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AppConfig {
     pub parser: ParserConfig,
     pub ai: AiConfig,
+    pub analysis: AnalysisConfig,
     pub output: OutputFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ParserConfig {
+    #[serde(default = "ParserConfig::default_use_mmap")]
     pub use_mmap: bool,
     pub threads: Option<usize>,
     pub max_objects: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiConfig {
     pub enabled: bool,
     pub provider: AiProvider,
@@ -23,7 +30,16 @@ pub struct AiConfig {
     pub temperature: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnalysisConfig {
+    pub min_severity: LeakSeverity,
+    pub packages: Vec<String>,
+    pub leak_types: Vec<LeakKind>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum AiProvider {
     #[default]
     OpenAi,
@@ -32,22 +48,13 @@ pub enum AiProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
     Text,
     Toon,
     Markdown,
     Html,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            parser: ParserConfig::default(),
-            ai: AiConfig::default(),
-            output: OutputFormat::Text,
-        }
-    }
 }
 
 impl Default for ParserConfig {
@@ -67,6 +74,49 @@ impl Default for AiConfig {
             provider: AiProvider::OpenAi,
             model: "gpt-4.1-mini".into(),
             temperature: 0.2,
+        }
+    }
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            min_severity: LeakSeverity::High,
+            packages: Vec::new(),
+            leak_types: Vec::new(),
+        }
+    }
+}
+
+impl ParserConfig {
+    fn default_use_mmap() -> bool {
+        true
+    }
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Ok(OutputFormat::Text),
+            "toon" => Ok(OutputFormat::Toon),
+            "markdown" | "md" => Ok(OutputFormat::Markdown),
+            "html" => Ok(OutputFormat::Html),
+            other => Err(format!("unsupported output format '{other}'")),
+        }
+    }
+}
+
+impl FromStr for AiProvider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "openai" => Ok(AiProvider::OpenAi),
+            "anthropic" => Ok(AiProvider::Anthropic),
+            "local" => Ok(AiProvider::Local),
+            other => Err(format!("unsupported AI provider '{other}'")),
         }
     }
 }

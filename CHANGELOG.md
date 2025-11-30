@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mnemosyne explain` CLI command plus MCP `explain_leak` handler that reuse AI insights for targeted leak narratives
 - `mnemosyne fix` CLI command and MCP `propose_fix` shim that craft placeholder patches in MINIMAL/DEFENSIVE/COMPREHENSIVE styles
 - TOON (Token-Oriented Outline Notation) report format exposed via `--format toon`, replacing the former JSON output path for CI/CD integrations
+- Config loader that reads `.mnemosyne.toml`, `$MNEMOSYNE_CONFIG`, and `--config` overrides (plus environment variables) so CLI/MCP surfaces share the same defaults
+- `[analysis]` configuration now powers CLI defaults (severity, package filters, leak kinds) with matching `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` environment overrides and updated docs
 
 ### Coming Soon
 - HPROF parser implementation

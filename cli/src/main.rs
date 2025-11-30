@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+mod config_loader;
+use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use mnemosyne_core::{
     analysis::{
         analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakSeverity,
@@ -29,6 +31,10 @@ struct Cli {
     /// Increase verbosity (can be passed multiple times)
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Explicit config file path
+    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -63,8 +69,8 @@ struct ParseArgs {
 #[derive(Debug, Parser)]
 struct LeakArgs {
     heap: PathBuf,
-    #[arg(long, value_enum, default_value_t = SeverityArg::High)]
-    min_severity: SeverityArg,
+    #[arg(long, value_enum)]
+    min_severity: Option<SeverityArg>,
     #[arg(long)]
     package: Option<String>,
 }
@@ -109,8 +115,8 @@ struct ExplainArgs {
     heap: PathBuf,
     #[arg(long = "leak-id")]
     leak_id: Option<String>,
-    #[arg(long, value_enum, default_value_t = SeverityArg::Low)]
-    min_severity: SeverityArg,
+    #[arg(long, value_enum)]
+    min_severity: Option<SeverityArg>,
 }
 
 #[derive(Debug, Parser)]
@@ -192,36 +198,43 @@ async fn main() -> Result<()> {
     install_tracing();
 
     let cli = Cli::parse();
+    let loaded_config = load_app_config(cli.config.as_deref())?;
+
     match cli.command {
-        Commands::Parse(args) => handle_parse(args).await?,
-        Commands::Leaks(args) => handle_leaks(args).await?,
-        Commands::Analyze(args) => handle_analyze(args).await?,
+        Commands::Parse(args) => handle_parse(args, &loaded_config.data).await?,
+        Commands::Leaks(args) => handle_leaks(args, &loaded_config.data).await?,
+        Commands::Analyze(args) => handle_analyze(args, &loaded_config.data).await?,
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
-        Commands::Explain(args) => handle_explain(args).await?,
+        Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
         Commands::Fix(args) => handle_fix(args).await?,
         Commands::Serve(args) => handle_serve(args).await?,
-        Commands::Config => handle_config()?,
+        Commands::Config => handle_config(&loaded_config)?,
     }
 
     Ok(())
 }
 
-async fn handle_parse(args: ParseArgs) -> Result<()> {
+async fn handle_parse(args: ParseArgs, cfg: &AppConfig) -> Result<()> {
     let job = HeapParseJob {
         path: args.heap.to_string_lossy().into(),
         include_strings: false,
-        max_objects: None,
+        max_objects: cfg.parser.max_objects,
     };
     let summary = parse_heap(&job)?;
     print_summary(&summary);
     Ok(())
 }
 
-async fn handle_leaks(args: LeakArgs) -> Result<()> {
-    let mut options = LeakDetectionOptions::new(args.min_severity.into());
-    options.package_filter = args.package;
+async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
+    let mut options = LeakDetectionOptions::from(&cfg.analysis);
+    if let Some(sev) = args.min_severity {
+        options.min_severity = sev.into();
+    }
+    if let Some(package) = args.package {
+        options.package_filter = Some(package);
+    }
 
     let leaks = detect_leaks(args.heap.to_string_lossy().as_ref(), options).await?;
     for leak in leaks {
@@ -236,16 +249,18 @@ async fn handle_leaks(args: LeakArgs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_analyze(args: AnalyzeArgs) -> Result<()> {
-    let mut config = AppConfig::default();
+async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()> {
+    let mut config = base_config.clone();
     config.output = args.format.into();
-    config.ai.enabled = args.ai;
+    let use_ai = args.ai || config.ai.enabled;
+    config.ai.enabled = use_ai;
+    let leak_options = LeakDetectionOptions::from(&config.analysis);
 
     let response = analyze_heap(AnalyzeRequest {
         heap_path: args.heap.to_string_lossy().into(),
         config: config.clone(),
-        leak_options: LeakDetectionOptions::new(LeakSeverity::High),
-        enable_ai: args.ai,
+        leak_options,
+        enable_ai: use_ai,
     })
     .await?;
 
@@ -324,14 +339,18 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_explain(args: ExplainArgs) -> Result<()> {
-    let mut config = AppConfig::default();
+async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()> {
+    let mut config = base_config.clone();
     config.ai.enabled = true;
+    let mut leak_options = LeakDetectionOptions::from(&config.analysis);
+    if let Some(sev) = args.min_severity {
+        leak_options.min_severity = sev.into();
+    }
 
     let response = analyze_heap(AnalyzeRequest {
         heap_path: args.heap.to_string_lossy().into(),
         config: config.clone(),
-        leak_options: LeakDetectionOptions::new(args.min_severity.into()),
+        leak_options,
         enable_ai: true,
     })
     .await?;
@@ -404,9 +423,17 @@ async fn handle_serve(args: ServeArgs) -> Result<()> {
     }
 }
 
-fn handle_config() -> Result<()> {
-    let cfg = AppConfig::default();
-    println!("{}", serde_json::to_string_pretty(&cfg)?);
+fn handle_config(loaded: &LoadedConfig) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&loaded.data)?);
+    match (&loaded.origin, &loaded.path) {
+        (ConfigOrigin::Default, _) => println!("Using built-in defaults (no config file found)."),
+        (_, Some(path)) => println!(
+            "Loaded configuration from {} ({}).",
+            path.display(),
+            loaded.origin.label()
+        ),
+        _ => {}
+    }
     Ok(())
 }
 

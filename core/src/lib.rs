@@ -17,7 +17,7 @@ pub mod report;
 
 pub use ai::{focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat};
 pub use analysis::{AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions};
-pub use config::{AiConfig, AppConfig, OutputFormat, ParserConfig};
+pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
 pub use errors::CoreResult;
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use gc_path::{find_gc_path, GcPathNode, GcPathRequest, GcPathResult};

@@ -17,10 +17,12 @@ This document describes all configuration options for Mnemosyne.
 
 Mnemosyne looks for configuration in the following locations (in order of precedence):
 
-1. `.mnemosyne.toml` in current directory
-2. `~/.config/mnemosyne/config.toml`
-3. `/etc/mnemosyne/config.toml` (Linux)
-4. Built-in defaults
+1. `--config /path/to/file.toml` (explicit CLI flag)
+2. `$MNEMOSYNE_CONFIG` environment variable
+3. `.mnemosyne.toml` in current directory
+4. `~/.config/mnemosyne/config.toml`
+5. `/etc/mnemosyne/config.toml` (Linux)
+6. Built-in defaults
 
 ### Example Configuration
 
@@ -33,6 +35,9 @@ verbose = false
 
 # Output format: "text", "toon", "markdown", "html"
 output_format = "text"
+
+# Toggle AI-powered helpers globally
+enable_ai = true
 
 [parser]
 # Maximum heap dump size to process (in GB, 0 = unlimited)
@@ -53,9 +58,6 @@ packages = ["com.example", "org.myapp"]
 
 # Leak types to detect
 leak_types = ["COROUTINE", "THREAD", "CACHE", "HTTP_RESPONSE"]
-
-# Enable AI-powered analysis
-enable_ai = true
 
 [llm]
 # LLM provider: "openai" (default), "anthropic", "local"
@@ -111,6 +113,18 @@ cache_dir = "~/.cache/mnemosyne"
 max_cache_gb = 10
 ```
 
+> **Note:** The current alpha build consumes the `general`, `parser`, `analysis`, and `ai`/`llm` sections. The remaining tables are reserved for upcoming features and are ignored for now.
+
+### Analysis Defaults
+
+The `[analysis]` table feeds every CLI and MCP command that needs leak heuristics.
+
+- `min_severity` sets the baseline filter for `mnemosyne leaks`, `analyze`, and `explain`. CLI flags such as `--min-severity` override it case-by-case.
+- `packages` accepts a list of package prefixes. The CLI currently uses the first entry when auto-filling leak identifiers, but MCP endpoints can consume the whole list.
+- `leak_types` limits the synthetic leak generator to the listed enums. Supported values mirror the `LeakKind` enum (`CACHE`, `THREAD`, `HTTP_RESPONSE`, `CLASS_LOADER`, `COLLECTION`, `LISTENER`, `COROUTINE`, `UNKNOWN`).
+
+Set these once in `.mnemosyne.toml` and your CI, MCP sessions, and CLI invocations stay aligned.
+
 ---
 
 ## Environment Variables
@@ -139,11 +153,15 @@ export OPENAI_API_KEY="sk-..."
 # Alternative: Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Custom LLM endpoint
-export MNEMOSYNE_LLM_ENDPOINT="http://localhost:8080/v1"
+# Enable/disable AI helpers
+export MNEMOSYNE_AI_ENABLED=true
 
-# Model to use
-export MNEMOSYNE_LLM_MODEL="gpt-4"
+# Provider + model selection
+export MNEMOSYNE_AI_PROVIDER=openai
+export MNEMOSYNE_AI_MODEL="gpt-4.1-mini"
+
+# Temperature for AI responses
+export MNEMOSYNE_AI_TEMPERATURE=0.3
 ```
 
 ### Performance
@@ -155,8 +173,21 @@ export MNEMOSYNE_THREADS=8
 # Disable memory-mapped I/O
 export MNEMOSYNE_USE_MMAP=false
 
-# Cache directory
-export MNEMOSYNE_CACHE_DIR=/tmp/mnemosyne-cache
+# Limit parsed objects (0 = unlimited)
+export MNEMOSYNE_MAX_OBJECTS=500000
+```
+
+### Analysis
+
+```bash
+# Minimum severity for leak reporting (LOW|MEDIUM|HIGH|CRITICAL)
+export MNEMOSYNE_MIN_SEVERITY=HIGH
+
+# Comma-separated package prefixes
+export MNEMOSYNE_PACKAGES="com.example, org.demo"
+
+# Comma-separated leak kinds (CACHE|THREAD|CLASS_LOADER|...)
+export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD,HTTP_RESPONSE"
 ```
 
 ### Logging
@@ -194,6 +225,12 @@ mnemosyne -f toon analyze heap.hprof
 mnemosyne --format toon analyze heap.hprof
 ```
 
+To inspect the merged configuration and its origin, run:
+
+```bash
+mnemosyne config
+```
+
 ### Parse Command
 
 ```bash
@@ -225,12 +262,11 @@ Options:
 mnemosyne leaks [OPTIONS] <HEAP_FILE>
 
 Options:
-  --package <PKG>        Filter by package
-  --min-severity <LVL>   Minimum severity
-  --top <N>             Show top N leaks (default: 10)
-```
-
+  --ai                   Force-enable AI insights (otherwise driven by config)
+  --format <FMT>         Override output format (text|toon|markdown|html)
 ### Diff Command
+`[analysis]` settings (e.g., `min_severity`) are picked up automatically.
+
 
 ```bash
 mnemosyne diff [OPTIONS] <BEFORE> <AFTER>
@@ -240,6 +276,7 @@ Options:
   --by-class            Group by class
 ```
 
+If you omit both flags, the defaults come from `[analysis]`.
 ---
 
 ## MCP Server Configuration
@@ -350,8 +387,13 @@ Compatible with:
 ### Disabling AI Features
 
 ```toml
-[analysis]
+[general]
 enable_ai = false
+
+# or
+
+[ai]
+enabled = false
 ```
 
 Or via CLI:

@@ -116,6 +116,29 @@ export OPENAI_API_KEY="your-api-key-here"
 echo "OPENAI_API_KEY=your-api-key-here" > .env
 ```
 
+Mnemosyne automatically looks for additional settings in the following order:
+
+1. `--config /path/to/file.toml` (explicit CLI flag)
+2. `$MNEMOSYNE_CONFIG` environment variable
+3. `.mnemosyne.toml` in the current working directory
+4. `~/.config/mnemosyne/config.toml`
+5. `/etc/mnemosyne/config.toml`
+
+Run `mnemosyne config` to inspect the effective configuration and where it was loaded from.
+
+Need consistent leak filtering defaults for every command? Add an `[analysis]` block to your config so `mnemosyne leaks`, `analyze`, and `explain` all share the same thresholds:
+
+```toml
+[analysis]
+min_severity = "MEDIUM"
+packages = ["com.example", "org.demo"]
+leak_types = ["CACHE", "THREAD", "HTTP_RESPONSE"]
+```
+
+CLI flags such as `--min-severity` or `--package` still win, but the config keeps the day-one experience aligned across local runs, CI, and MCP.
+
+Prefer shell overrides? Export `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` before running the CLI to apply the same defaults without a file.
+
 ### 4. Run
 ```bash
 ./target/release/mnemosyne parse heap.hprof
@@ -325,6 +348,9 @@ mnemosyne fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --styl
 
 # Trace GC path
 mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
+
+# Inspect effective config (and source)
+mnemosyne config --config ./ops/prod.toml
 ```
 
 ---

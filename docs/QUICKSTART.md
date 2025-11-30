@@ -129,6 +129,46 @@ Impact:
 • Risk of OutOfMemoryError under sustained load
 • Degraded response times due to thread contention
 
+### Step 5: Persist Your Preferences (Optional)
+
+Drop a `.mnemosyne.toml` file in your project (or `~/.config/mnemosyne/config.toml`) to avoid retyping flags:
+
+```toml
+# .mnemosyne.toml
+
+[general]
+output_format = "toon"
+enable_ai = true
+
+[ai]
+model = "gpt-4.1-mini"
+temperature = 0.2
+
+[analysis]
+min_severity = "MEDIUM"
+packages = ["com.example", "org.demo"]
+leak_types = ["CACHE", "THREAD"]
+```
+
+When Mnemosyne starts it resolves configuration in this order:
+
+1. `mnemosyne --config /path/file.toml`
+2. `$MNEMOSYNE_CONFIG`
+3. `.mnemosyne.toml` (current directory)
+4. `~/.config/mnemosyne/config.toml`
+5. `/etc/mnemosyne/config.toml`
+6. Built-in defaults
+
+Use `mnemosyne config` to view the merged result along with the source file.
+
+Prefer shell variables instead? Export the same knobs:
+
+```bash
+export MNEMOSYNE_MIN_SEVERITY=HIGH
+export MNEMOSYNE_PACKAGES="com.example, org.demo"
+export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
+```
+
 Recommendations:
 ────────────────────────────────────────────────────────────────
 1. Break the deadlock cycle:
