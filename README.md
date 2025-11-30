@@ -45,17 +45,19 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Blazing-fast Rust-based `.hprof` parser
 - Memory-mapped I/O (zero-copy parsing)
 - Suitable for multi-gigabyte heap dumps
-- Dominator tree and object graph computation
-- GC root tracing and retained size analysis
+- Lightweight dominator previews derived from parsed class histograms (full retained-size graphs on the roadmap)
+- Class histograms derived directly from raw HPROF record stats so CLI summaries stay accurate
+- Authentic GC path finder parses real GC roots + instance dumps (and gracefully falls back when dumps exceed sampling budgets)
 
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
 - Automatic detection of:
-- Coroutine leaks
-- Thread leaks
-- HTTP client response leaks
-- ClassLoader leaks
-- Cache & collection leaks
+  - Coroutine leaks
+  - Thread leaks
+  - HTTP client response leaks
+  - ClassLoader leaks
+  - Cache & collection leaks
+- Leak heuristics operate on the parsed class histograms (and their dominator context) before falling back to synthetic guesses, so reported classes match what the parser actually observed
 - AI-generated code fixes
 - Leak reproduction snippet generator
 
@@ -137,6 +139,10 @@ leak_types = ["CACHE", "THREAD", "HTTP_RESPONSE"]
 
 CLI flags such as `--min-severity` or `--package` still win, but the config keeps the day-one experience aligned across local runs, CI, and MCP.
 
+Leaks below `min_severity` are filtered out, so noisy low-priority signals stay out of your reports.
+
+When you specify multiple `packages`, Mnemosyne first treats them as an allow-list for real classes (only matching histograms become leak candidates) and then rotates through them as it synthesizes fallback identifiers so each category stays easy to trace back to its service/module.
+
 Prefer shell overrides? Export `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` before running the CLI to apply the same defaults without a file.
 
 ### 4. Run
@@ -171,6 +177,8 @@ Top Memory Consumers:
   3. byte[]                     312 MB  (12.7%)
 ```
 
+Those numbers come straight from Mnemosyne's lightweight class histogram that is derived directly from the HPROF record stream. The same data now drives leak heuristics, diff output, and dominator summaries so every surface references the same ground truth.
+
 #### Detect memory leaks
 ```bash
 mnemosyne leaks heap.hprof
@@ -192,6 +200,20 @@ mnemosyne leaks heap.hprof
    Retained Size: 89 MB
    Issue: Unclosed HTTP responses
 ```
+
+Tune the heuristics per run with `--leak-kind`. Repeat the flag (or provide a comma list) to emit one synthetic entry per requested category:
+
+```bash
+mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
+```
+
+Need to scope results to multiple namespaces? `--package` accepts comma-delimited or repeated values:
+
+```bash
+mnemosyne leaks heap.hprof --package com.example --package org.demo
+```
+
+Under the hood Mnemosyne now filters real class stats with those package prefixes before it ever synthesizes candidates, which keeps the CLI/MCP output focused on the code you actually own.
 
 #### Map a leak to source code
 ```bash
@@ -251,11 +273,12 @@ mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 5
 
 **Example output:**
 ```
-GC path for 0x7f8a9c123456:
-#0 -> com.example.Session [0x7f8a9c123456] via <direct>
-#1 -> com.example.Session$Holder [0x12d687] via value
-ROOT -> java.lang.Thread [GC_ROOT_Thread[root]] via Thread[root]
+GC path for 0x0000000033333333:
+#0 ROOT -> com.example.Leaky [0x0000000044444444] via ROOT Unknown
+#1 -> java.lang.Object [0x0000000033333333] via leakyField
 ```
+
+Mnemosyne now parses real GC roots, class dumps, instance dumps, and object arrays to build a best-effort object graph. If the heap dump omits the necessary records (or exceeds the configured sampling budget) the CLI falls back to the prior synthetic chain so downstream tooling keeps working.
 
 #### Full AI-powered analysis
 ```bash
@@ -284,6 +307,8 @@ When `--ai` is enabled, the CLI and reports include an **AI Insights** block tha
 ```bash
 mnemosyne analyze heap.hprof --format toon > report.toon
 ```
+
+Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection.
 
 **Example TOON payload:**
 ```
@@ -331,8 +356,17 @@ mnemosyne analyze heap.hprof -v
 # Filter by package
 mnemosyne leaks heap.hprof --package com.example
 
+# Specify multiple packages (comma or repeated flag)
+mnemosyne analyze heap.hprof --package com.example,org.demo
+
+# Focus on selected leak kinds
+mnemosyne analyze heap.hprof --leak-kind cache,thread
+
 # Export HTML report
-mnemosyne analyze heap.hprof --format html -o report.html
+mnemosyne analyze heap.hprof --format html --output-file report.html
+
+# Emit JSON for CI
+mnemosyne analyze heap.hprof --format json --output-file report.json
 
 # Compare two heap dumps
 mnemosyne diff before.hprof after.hprof
@@ -352,6 +386,20 @@ mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
 # Inspect effective config (and source)
 mnemosyne config --config ./ops/prod.toml
 ```
+
+### Comparing Heap Dumps
+
+```bash
+$ mnemosyne diff before.hprof after.hprof
+Heap diff: before.hprof -> after.hprof
+  Delta size: +128.00 MB
+  Delta objects: +12500
+  Top changes:
+    - INSTANCE_DUMP: +96.00 MB (before 384.00 MB -> after 480.00 MB)
+    - OBJECT_ARRAY_DUMP: +32.00 MB (before 256.00 MB -> after 288.00 MB)
+```
+
+The diff command parses both snapshots, normalizes their record/class histograms, and highlights the heaviest movers so you can spot regressions quickly. Use it inside CI (see `docs/examples`) to fail builds when heap growth crosses your budget.
 
 ---
 
@@ -412,6 +460,8 @@ Edit `~/Library/Application Support/ChatGPT/mcp_config.json` (macOS):
 ### Example Prompts
 
 Once configured, you can ask your AI assistant:
+
+> **Tip:** `mnemosyne serve` reads the same configuration chain as the CLI. Supply `--config`, set `$MNEMOSYNE_CONFIG`, or drop a `.mnemosyne.toml` next to your heap dumps so MCP sessions inherit your `[analysis]`, AI, and output defaults automatically.
 
 - **"Analyze heap.hprof and show me the root cause."**
 - **"Open the file responsible for the retained objects."**
@@ -566,3 +616,4 @@ It aims to make heap analysis faster, smarter, and more accessible.
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Examples](docs/examples/)** - Usage examples and scripts
 - **[Changelog](CHANGELOG.md)** - Version history
+- **[Status](STATUS.md)** - Snapshot of shipped vs. planned functionality

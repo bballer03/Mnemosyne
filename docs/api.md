@@ -233,31 +233,27 @@ Find the path from an object to its GC root.
 {
   "success": true,
   "data": {
-    "object_id": "0x7f8a9c123456",
+    "object_id": "0x0000000033333333",
     "path": [
       {
-        "object_id": "0x7f8a9c123456",
-        "class_name": "com.example.Session",
-        "field": null,
-        "is_root": false
-      },
-      {
-        "object_id": "0x12d687",
-        "class_name": "com.example.Session$Holder",
-        "field": "value",
-        "is_root": false
-      },
-      {
-        "object_id": "GC_ROOT_Thread[root]",
-        "class_name": "java.lang.Thread",
-        "field": "Thread[root]",
+        "object_id": "0x0000000044444444",
+        "class_name": "com.example.Leaky",
+        "field": "ROOT Unknown",
         "is_root": true
+      },
+      {
+        "object_id": "0x0000000033333333",
+        "class_name": "java.lang.Object",
+        "field": "leakyField",
+        "is_root": false
       }
     ],
-    "path_length": 3
+    "path_length": 2
   }
 }
 ```
+
+The server now streams real GC roots, class dumps, instance dumps, and object arrays to build these paths. If a heap omits the required records—or exceeds the configured sampling budget—the API falls back to the legacy synthetic chain so clients never receive an empty response.
 
 ---
 

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TOON (Token-Oriented Outline Notation) report format exposed via `--format toon`, replacing the former JSON output path for CI/CD integrations
 - Config loader that reads `.mnemosyne.toml`, `$MNEMOSYNE_CONFIG`, and `--config` overrides (plus environment variables) so CLI/MCP surfaces share the same defaults
 - `[analysis]` configuration now powers CLI defaults (severity, package filters, leak kinds) with matching `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` environment overrides and updated docs
+- `mnemosyne leaks/analyze/explain` accept a repeatable `--leak-kind` flag, leak synthesis emits one record per requested kind, and `min_severity` now drops lower-confidence candidates instead of merely renaming them
+- `[analysis].packages` now flow through untouched: leak synthesis rotates through the entire list, and `--package` became repeatable (and comma-friendly) across `leaks`, `analyze`, and `explain`
+- `mnemosyne serve` now honors the shared configuration loader, so MCP requests reuse the same `[analysis]`, AI, and parser defaults as the CLI (including `--config` and `$MNEMOSYNE_CONFIG` precedence)
+- `mnemosyne diff` now parses both snapshots, reports delta size/object counts, and lists the largest class/record shifts with friendlier CLI output plus refreshed docs/examples
+- Authentic GC root tracing: `core::gc_path` parses real roots/class dumps/instance dumps to build best-effort paths (with a graceful synthetic fallback) and comes with updated docs + fixtures
 
 ### Coming Soon
 - HPROF parser implementation

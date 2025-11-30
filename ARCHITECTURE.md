@@ -45,6 +45,24 @@ Mnemosyne aims to be a one-stop solution for analyzing Java heap dumps (HPROF fi
 
 By meeting these goals, Mnemosyne helps engineers identify memory leaks, understand heap composition, and save time in debugging complex Java applications.
 
+## Current Implementation Snapshot (November 2025)
+
+### Shipped today
+- **Parser:** Streams HPROF headers/records, derives class histograms + summary stats (objects, size, dominant tags). No per-object graph yet.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports are printed/redirected via stdout (no built-in `-o`).
+- **Leak heuristics:** Use the parsed class histogram plus package filters/thresholds to generate deterministic leak candidates, with synthetic fallbacks when histograms are empty.
+- **Graph metrics:** Provide a lightweight dominator preview by wiring the top class/record entries into a tiny petgraph structure for reporting.
+- **GC path helper:** Parses real GC roots/class + instance dumps to build best-effort root chains (with budget-aware fallbacks when dumps omit the required records).
+- **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
+
+### Still in progress
+- **Retained-size and real dominator trees** driven by the full object graph.
+- **Config-driven AI task runner** (e.g., YAML-defined prompts with selective context injection).
+- **Rich diffing & JSON/HTML exporters** beyond stdout redirection.
+- **Formal MCP/task automation around the future analysis pipeline.**
+
+The sections below describe the intended architecture; status callouts highlight where the current alpha build diverges so contributors know which pieces still need implementation work.
+
 ## System Architecture Overview (Layered Design)
 
 Mnemosyne's architecture is organized into clear layers, separating the concerns of user interaction, orchestration, analysis, and external integration. This layered design improves maintainability and allows independent evolution of components (for example, swapping the AI backend or parser without affecting other parts). Below is a high-level overview of the system structure:
@@ -80,6 +98,8 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 **Output & UX**: Once results are ready, the CLI presents them to the user. This could mean printing a human-readable report to stdout, writing a Markdown file, or emitting TOON (our compact Token-Oriented Outline Notation) to stdout via `--format toon`. The CLI ensures the output is accessible (with coloring or section headers in terminal output, etc.).
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
+
+> **Status (Nov 2025):** The clap-based CLI is wired up today, but all reports are streamed to stdout (use shell redirection/`tee` to save files). JSON output flags and richer progress UI remain future work.
 
 ### 2. Master Control Program (Orchestrator - MCP)
 
@@ -120,6 +140,8 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 
 By the end of this stage, Mnemosyne has a concise "snapshot" of the heap's contents. This snapshot is then handed to the AI analysis component for deeper insight.
 
+> **Status (Nov 2025):** The parser currently surfaces header metadata, record-tag histograms, and an inferred class histogram (derived from INSTANCE/ARRAY records). Object-level graphs, retained sizes, and per-instance detail are on the roadmap.
+
 ### 4. AI Analysis Engine (Insight Generator)
 
 The AI Analysis Engine is what makes Mnemosyne "AI-powered." It takes the structured data from the parser and formulates high-level insights using an LLM. This component handles creating prompts for the AI, sending them, and interpreting responses:
@@ -143,6 +165,8 @@ If multiple tasks are needed, they can be defined in a data-driven way (e.g. a Y
 
 Overall, the AI Analysis Engine transforms raw data into expert insights. It's like having a knowledgeable assistant review the heap dump and point out "interesting" things. By scripting these inquiries, Mnemosyne can provide a rich analysis that goes beyond what traditional tools offer, which often require the developer to manually deduce issues from raw statistics.
 
+> **Status (Nov 2025):** The current alpha build emits deterministic, template-driven insights so the CLI/MCP interface is stable. The configurable prompt/task runner described here is the next major milestone.
+
 ### 5. LLM Integration Module (AI Service Connector)
 
 This component abstracts the connection to external AI models or services. We anticipate most users will use OpenAI's GPT-4 or similar models initially, but the design allows flexibility:
@@ -161,6 +185,8 @@ This component abstracts the connection to external AI models or services. We an
 
 In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By isolating this, we make it easy to update the tool as AI technology evolves (e.g., switching to a new API or adding support for an on-prem LLM) without affecting the rest of the system. This design choice follows a flexible approach seen in similar tools like KCPilot, which abstracts LLM communication and anticipates future model integrations.
 
+> **Status (Nov 2025):** Configuration plumbing (provider/model/temperature) already exists, but calls currently terminate in a stubbed `generate_ai_insights` routine. Wiring the abstraction to a real LLM backend – or a local model – remains open work.
+
 ### 6. Report Generator (Output Formatter)
 
 The final component takes all the gathered information – raw data from the parser and insights from the AI – and produces a coherent report for the user. The Report Generator focuses on presenting results clearly and in the requested format:
@@ -178,6 +204,8 @@ The final component takes all the gathered information – raw data from the par
 **Formatting and Styles**: The code in this module is responsible for aligning tables, truncating or abbreviating excessively long class names or field data, and ensuring the output is clean. It may also manage saving the report to a file if requested, handling file I/O errors gracefully.
 
 Because the Report Generator is modular, adding a new output format later (say, HTML for a web UI, or direct Slack message formatting) would be straightforward. We simply plug in a new formatter without disturbing the core logic. In the initial implementation, terminal and Markdown outputs, plus JSON, cover the most common needs.
+
+> **Status (Nov 2025):** Text, Markdown, HTML, and TOON reports are rendered via the shared `render_report` helper and written to stdout; redirect or pipe to capture files. A structured JSON exporter and GUI visualizations are still future enhancements.
 
 ## Execution Flow (from CLI to AI and Back)
 
