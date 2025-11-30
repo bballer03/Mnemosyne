@@ -1,14 +1,18 @@
 use crate::{
+    ai::{generate_ai_insights, AiInsights},
     config::AppConfig,
     errors::{CoreError, CoreResult},
+    graph::{summarize_graph, GraphMetrics},
     heap::{parse_heap, HeapDiff, HeapParseJob, HeapSummary},
 };
 use serde::{Deserialize, Serialize};
 use std::{
     cmp,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     time::{Duration, Instant},
 };
-use tracing::{info, warn};
+use tracing::info;
 
 /// Options that drive leak detection heuristics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -34,11 +38,14 @@ pub struct AnalyzeResponse {
     pub leaks: Vec<LeakInsight>,
     pub recommendations: Vec<String>,
     pub elapsed: Duration,
+    pub graph: GraphMetrics,
+    pub ai: Option<AiInsights>,
 }
 
 /// Machine- and human-readable leak record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeakInsight {
+    pub id: String,
     pub class_name: String,
     pub leak_kind: LeakKind,
     pub severity: LeakSeverity,
@@ -48,7 +55,7 @@ pub struct LeakInsight {
 }
 
 /// Enumeration of leak flavors supported by the orchestrator.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, Hash)]
 pub enum LeakKind {
     #[default]
     Unknown,
@@ -83,11 +90,14 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     };
     let summary = parse_heap(&parse_job)?;
 
+    let graph = summarize_graph(&summary);
     let leaks = synthesize_leaks(&summary, &request.leak_options);
-
-    if request.enable_ai {
-        warn!("AI analysis requested but not yet implemented");
-    }
+    let ai = if request.enable_ai || request.config.ai.enabled {
+        info!(model = %request.config.ai.model, "generating synthetic AI insights");
+        Some(generate_ai_insights(&summary, &leaks, &request.config.ai))
+    } else {
+        None
+    };
 
     Ok(AnalyzeResponse {
         summary,
@@ -97,6 +107,8 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
             "Add AI insights pipeline".into(),
         ],
         elapsed: start.elapsed(),
+        graph,
+        ai,
     })
 }
 
@@ -170,7 +182,10 @@ fn synthesize_leaks(summary: &HeapSummary, options: &LeakDetectionOptions) -> Ve
         .map(|pkg| format!("{pkg}.LeakCandidate"))
         .unwrap_or_else(|| "com.example.MemoryKeeper".into());
 
+    let leak_id = make_leak_id(&class_name, leak_kind);
+
     vec![LeakInsight {
+        id: leak_id,
         class_name,
         leak_kind,
         severity,
@@ -178,6 +193,13 @@ fn synthesize_leaks(summary: &HeapSummary, options: &LeakDetectionOptions) -> Ve
         instances,
         description,
     }]
+}
+
+fn make_leak_id(class_name: &str, kind: LeakKind) -> String {
+    let mut hasher = DefaultHasher::new();
+    class_name.hash(&mut hasher);
+    kind.hash(&mut hasher);
+    format!("{}::{:08x}", class_name, hasher.finish())
 }
 
 fn severity_from_size(bytes: u64) -> LeakSeverity {

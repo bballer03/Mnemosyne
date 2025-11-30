@@ -157,7 +157,8 @@ Map leaked objects to source code locations.
 {
   "method": "map_to_code",
   "params": {
-    "leak_id": "leak-001",
+    "leak_id": "com.example.UserSessionCache::ff12ab90",
+    "class": "com.example.UserSessionCache",
     "project_root": "/path/to/project",
     "include_git_info": true
   }
@@ -169,6 +170,7 @@ Map leaked objects to source code locations.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `leak_id` | string | Yes | ID from `detect_leaks` response |
+| `class` | string | No | Fully-qualified class name (improves accuracy) |
 | `project_root` | string | Yes | Root directory of source code |
 | `include_git_info` | boolean | No | Include git blame/history (default: true) |
 
@@ -182,9 +184,9 @@ Map leaked objects to source code locations.
       {
         "file": "src/main/java/com/example/UserSessionCache.java",
         "line": 45,
-        "method": "addSession",
+        "symbol": "public void addSession(...)",
         "code_snippet": "cache.put(sessionId, session);",
-        "git_info": {
+        "git": {
           "author": "John Doe",
           "commit": "abc123def456",
           "date": "2025-11-15T10:30:00Z",
@@ -195,6 +197,8 @@ Map leaked objects to source code locations.
   }
 }
 ```
+
+> **Note:** When no matching file is found, Mnemosyne will return a placeholder entry that explains how to provide better hints (e.g., `class`) for the next attempt.
 
 ---
 
@@ -210,7 +214,7 @@ Find the path from an object to its GC root.
   "params": {
     "heap_path": "/path/to/heap.hprof",
     "object_id": "0x7f8a9c123456",
-    "max_depth": 10
+    "max_depth": 5
   }
 }
 ```
@@ -229,30 +233,28 @@ Find the path from an object to its GC root.
 {
   "success": true,
   "data": {
+    "object_id": "0x7f8a9c123456",
     "path": [
       {
         "object_id": "0x7f8a9c123456",
-        "class": "com.example.Session",
-        "field": null
+        "class_name": "com.example.Session",
+        "field": null,
+        "is_root": false
       },
       {
-        "object_id": "0x7f8a9c789012",
-        "class": "java.util.HashMap$Node",
-        "field": "value"
+        "object_id": "0x12d687",
+        "class_name": "com.example.Session$Holder",
+        "field": "value",
+        "is_root": false
       },
       {
-        "object_id": "0x7f8a9c345678",
-        "class": "com.example.UserSessionCache",
-        "field": "cache"
-      },
-      {
-        "object_id": "GC_ROOT_THREAD",
-        "class": "java.lang.Thread",
-        "field": "session-cleanup",
+        "object_id": "GC_ROOT_Thread[root]",
+        "class_name": "java.lang.Thread",
+        "field": "Thread[root]",
         "is_root": true
       }
     ],
-    "path_length": 4
+    "path_length": 3
   }
 }
 ```

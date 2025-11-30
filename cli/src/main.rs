@@ -7,7 +7,9 @@ use mnemosyne_core::{
         analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakSeverity,
     },
     config::{AppConfig, OutputFormat},
+    gc_path::{find_gc_path, GcPathRequest},
     heap::{parse_heap, HeapParseJob, HeapSummary},
+    mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     report::{render_report, ReportRequest},
 };
@@ -36,6 +38,10 @@ enum Commands {
     Analyze(AnalyzeArgs),
     /// Compare two heap dumps and highlight changes.
     Diff(DiffArgs),
+    /// Map a leak candidate to likely source files.
+    Map(MapArgs),
+    /// Find a path from an object to its GC root.
+    GcPath(GcPathArgs),
     /// Start the Model Context Protocol (MCP) server.
     Serve(ServeArgs),
     /// Show the effective configuration.
@@ -69,6 +75,26 @@ struct AnalyzeArgs {
 struct DiffArgs {
     before: PathBuf,
     after: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct MapArgs {
+    leak_id: String,
+    #[arg(long)]
+    class: Option<String>,
+    #[arg(long = "project-root")]
+    project_root: PathBuf,
+    #[arg(long = "no-git", action = clap::ArgAction::SetTrue)]
+    disable_git: bool,
+}
+
+#[derive(Debug, Parser)]
+struct GcPathArgs {
+    heap: PathBuf,
+    #[arg(long = "object-id")]
+    object_id: String,
+    #[arg(long)]
+    max_depth: Option<u32>,
 }
 
 #[derive(Debug, Parser)]
@@ -127,6 +153,8 @@ async fn main() -> Result<()> {
         Commands::Leaks(args) => handle_leaks(args).await?,
         Commands::Analyze(args) => handle_analyze(args).await?,
         Commands::Diff(args) => handle_diff(args).await?,
+        Commands::Map(args) => handle_map(args).await?,
+        Commands::GcPath(args) => handle_gc_path(args).await?,
         Commands::Serve(args) => handle_serve(args).await?,
         Commands::Config => handle_config()?,
     }
@@ -152,7 +180,8 @@ async fn handle_leaks(args: LeakArgs) -> Result<()> {
     let leaks = detect_leaks(args.heap.to_string_lossy().as_ref(), options).await?;
     for leak in leaks {
         println!(
-            "Potential leak: {} (severity: {:?}) retained ~{:.2} MB",
+            "Potential leak [{}]: {} (severity: {:?}) retained ~{:.2} MB",
+            leak.id,
             leak.class_name,
             leak.severity,
             leak.retained_size_bytes as f64 / (1024.0 * 1024.0)
@@ -193,27 +222,79 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
     Ok(())
 }
 
+async fn handle_map(args: MapArgs) -> Result<()> {
+    let response = map_to_code(&MapToCodeRequest {
+        leak_id: args.leak_id,
+        class_name: args.class,
+        project_root: args.project_root,
+        include_git_info: !args.disable_git,
+    })?;
+
+    println!("Source candidates for `{}`:", response.leak_id);
+    for location in response.locations {
+        println!(
+            "- {}:{} ({})",
+            location.file.display(),
+            location.line,
+            location.symbol
+        );
+        for line in location.code_snippet.lines() {
+            println!("    {}", line.trim_end());
+        }
+        if let Some(git) = &location.git {
+            println!(
+                "    Git: {} @ {} ({}) — {}",
+                git.author, git.commit, git.date, git.message
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
+    let response = find_gc_path(&GcPathRequest {
+        heap_path: args.heap.to_string_lossy().into(),
+        object_id: args.object_id,
+        max_depth: args.max_depth,
+    })?;
+
+    println!("GC path for {}:", response.object_id);
+    for (idx, node) in response.path.iter().enumerate() {
+        let marker = if node.is_root {
+            "ROOT".to_string()
+        } else {
+            format!("#{idx}")
+        };
+        println!(
+            "{} -> {} [{}] via {}",
+            marker,
+            node.class_name,
+            node.object_id,
+            node.field.clone().unwrap_or_else(|| "<direct>".into())
+        );
+    }
+
+    Ok(())
+}
+
 async fn handle_serve(args: ServeArgs) -> Result<()> {
-    warn!("MCP server is experimental; exiting after receiving shutdown signal");
+    warn!("Starting MCP server; press Ctrl+C to stop");
     let options = McpServerOptions {
         host: args.host,
         port: args.port,
     };
 
-    let _ = signal::ctrl_c().await;
-    serve(
-        options,
-        AnalyzeRequest {
-            heap_path: String::new(),
-            config: AppConfig::default(),
-            leak_options: LeakDetectionOptions::new(LeakSeverity::High),
-            enable_ai: false,
-        },
-    )
-    .await
-    .ok();
-
-    Ok(())
+    tokio::select! {
+        res = serve(options) => {
+            res?;
+            Ok(())
+        }
+        _ = signal::ctrl_c() => {
+            warn!("Received interrupt signal; shutting down MCP server");
+            Ok(())
+        }
+    }
 }
 
 fn handle_config() -> Result<()> {

@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rust workspace scaffolding (`mnemosyne-core` + `mnemosyne-cli`) with stub CLI commands and core APIs
 - Basic HPROF header parsing with CLI wiring for `parse`, `leaks`, and `analyze`
 - Record-level HPROF scanning with CLI summaries (top tags, record counts, heuristics-driven leak severity)
+- Functional MCP stdio server that handles `parse_heap` and `detect_leaks` requests
+- Graph module with synthetic dominator summaries included in analysis reports
+- Source mapping module with `mnemosyne map` CLI command, MCP `map_to_code` handler, and leak identifiers surfaced in reports
+- GC path tracing scaffolding with CLI `gc-path` subcommand and MCP `find_gc_path` endpoint
+- AI Insights heuristics powering `--ai` analysis output with model/confidence metadata in CLI, reports, and JSON responses
 
 ### Coming Soon
 - HPROF parser implementation

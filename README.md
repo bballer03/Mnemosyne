@@ -170,6 +170,33 @@ mnemosyne leaks heap.hprof
    Issue: Unclosed HTTP responses
 ```
 
+#### Map a leak to source code
+```bash
+mnemosyne map leak-com.example.MemoryKeeper::d34db33f --project-root ./your-service --class com.example.MemoryKeeper
+```
+
+**Example output:**
+```
+Source candidates for `com.example.MemoryKeeper::d34db33f`:
+- ./your-service/src/main/java/com/example/MemoryKeeper.java:3 (public class MemoryKeeper)
+  public class MemoryKeeper {
+    void retain() {}
+  }
+```
+
+#### Find a GC root path
+```bash
+mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 5
+```
+
+**Example output:**
+```
+GC path for 0x7f8a9c123456:
+#0 -> com.example.Session [0x7f8a9c123456] via <direct>
+#1 -> com.example.Session$Holder [0x12d687] via value
+ROOT -> java.lang.Thread [GC_ROOT_Thread[root]] via Thread[root]
+```
+
 #### Full AI-powered analysis
 ```bash
 mnemosyne analyze heap.hprof --ai
@@ -190,6 +217,8 @@ Recommendation:
 
 Code Fix Available: Run 'mnemosyne fix heap.hprof' to generate patch
 ```
+
+When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. This currently uses deterministic heuristics so the UX stays consistent offline.
 
 #### Output JSON (for CI/CD)
 ```bash
@@ -212,6 +241,15 @@ mnemosyne analyze heap.hprof --json > report.json
       "status": "BLOCKED"
     }
   ],
+  "ai_insights": {
+    "model": "gpt-4.1-mini",
+    "summary": "UserSessionCache retains ~512 MB because cleanup threads stalled; freeing it would reclaim 21% of the heap.",
+    "recommendations": [
+      "Guard UserSessionCache lifetimes with auto-expire entries",
+      "Instrument cleanup thread health"
+    ],
+    "confidence": 0.78
+  },
   "recommendations": [...]
 }
 ```
@@ -234,8 +272,11 @@ mnemosyne analyze heap.hprof --format html -o report.html
 # Compare two heap dumps
 mnemosyne diff before.hprof after.hprof
 
-# Find path to GC root for specific object
-mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456
+# Map leak to code
+mnemosyne map leak-foo --project-root ./service --class com.example.MemoryKeeper
+
+# Trace GC path
+mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
 ```
 
 ---
