@@ -1,6 +1,6 @@
 use crate::{
     ai::{generate_ai_insights, AiInsights},
-    config::AppConfig,
+    config::{AnalysisConfig, AppConfig},
     errors::{CoreError, CoreResult},
     graph::{summarize_graph, GraphMetrics},
     heap::{parse_heap, HeapDiff, HeapParseJob, HeapSummary},
@@ -10,6 +10,7 @@ use std::{
     cmp,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
+    str::FromStr,
     time::{Duration, Instant},
 };
 use tracing::info;
@@ -55,7 +56,8 @@ pub struct LeakInsight {
 }
 
 /// Enumeration of leak flavors supported by the orchestrator.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, Hash, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LeakKind {
     #[default]
     Unknown,
@@ -68,13 +70,46 @@ pub enum LeakKind {
     Listener,
 }
 
+impl FromStr for LeakKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "unknown" => Ok(LeakKind::Unknown),
+            "cache" => Ok(LeakKind::Cache),
+            "coroutine" => Ok(LeakKind::Coroutine),
+            "thread" => Ok(LeakKind::Thread),
+            "httpresponse" | "http_response" | "http-response" => Ok(LeakKind::HttpResponse),
+            "classloader" | "class_loader" | "class-loader" => Ok(LeakKind::ClassLoader),
+            "collection" => Ok(LeakKind::Collection),
+            "listener" => Ok(LeakKind::Listener),
+            other => Err(format!("unsupported leak kind '{other}'")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LeakSeverity {
     Low,
     Medium,
     #[default]
     High,
     Critical,
+}
+
+impl FromStr for LeakSeverity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(LeakSeverity::Low),
+            "medium" | "med" => Ok(LeakSeverity::Medium),
+            "high" => Ok(LeakSeverity::High),
+            "critical" | "crit" => Ok(LeakSeverity::Critical),
+            other => Err(format!("unsupported leak severity '{other}'")),
+        }
+    }
 }
 
 /// Execute the core analysis workflow. Currently a stub that wires together
@@ -140,6 +175,15 @@ impl LeakDetectionOptions {
             package_filter: None,
             leak_types: Vec::new(),
         }
+    }
+}
+
+impl From<&AnalysisConfig> for LeakDetectionOptions {
+    fn from(value: &AnalysisConfig) -> Self {
+        let mut options = LeakDetectionOptions::new(value.min_severity);
+        options.package_filter = value.packages.first().cloned();
+        options.leak_types = value.leak_types.clone();
+        options
     }
 }
 

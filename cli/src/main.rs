@@ -7,7 +7,10 @@ use mnemosyne_core::{
         analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakSeverity,
     },
     config::{AppConfig, OutputFormat},
+    fix::{propose_fix, FixRequest, FixStyle},
+    focus_leaks,
     gc_path::{find_gc_path, GcPathRequest},
+    generate_ai_insights,
     heap::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
@@ -42,6 +45,10 @@ enum Commands {
     Map(MapArgs),
     /// Find a path from an object to its GC root.
     GcPath(GcPathArgs),
+    /// Generate AI explanations for a leak candidate.
+    Explain(ExplainArgs),
+    /// Generate patch suggestions for a leak candidate.
+    Fix(FixArgs),
     /// Start the Model Context Protocol (MCP) server.
     Serve(ServeArgs),
     /// Show the effective configuration.
@@ -98,6 +105,26 @@ struct GcPathArgs {
 }
 
 #[derive(Debug, Parser)]
+struct ExplainArgs {
+    heap: PathBuf,
+    #[arg(long = "leak-id")]
+    leak_id: Option<String>,
+    #[arg(long, value_enum, default_value_t = SeverityArg::Low)]
+    min_severity: SeverityArg,
+}
+
+#[derive(Debug, Parser)]
+struct FixArgs {
+    heap: PathBuf,
+    #[arg(long = "leak-id")]
+    leak_id: Option<String>,
+    #[arg(long = "project-root")]
+    project_root: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = FixStyleArg::Minimal)]
+    style: FixStyleArg,
+}
+
+#[derive(Debug, Parser)]
 struct ServeArgs {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -116,9 +143,16 @@ enum SeverityArg {
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum OutputFormatArg {
     Text,
-    Json,
+    Toon,
     Markdown,
     Html,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum FixStyleArg {
+    Minimal,
+    Defensive,
+    Comprehensive,
 }
 
 impl From<SeverityArg> for LeakSeverity {
@@ -136,9 +170,19 @@ impl From<OutputFormatArg> for OutputFormat {
     fn from(value: OutputFormatArg) -> Self {
         match value {
             OutputFormatArg::Text => OutputFormat::Text,
-            OutputFormatArg::Json => OutputFormat::Json,
+            OutputFormatArg::Toon => OutputFormat::Toon,
             OutputFormatArg::Markdown => OutputFormat::Markdown,
             OutputFormatArg::Html => OutputFormat::Html,
+        }
+    }
+}
+
+impl From<FixStyleArg> for FixStyle {
+    fn from(value: FixStyleArg) -> Self {
+        match value {
+            FixStyleArg::Minimal => FixStyle::Minimal,
+            FixStyleArg::Defensive => FixStyle::Defensive,
+            FixStyleArg::Comprehensive => FixStyle::Comprehensive,
         }
     }
 }
@@ -155,6 +199,8 @@ async fn main() -> Result<()> {
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
+        Commands::Explain(args) => handle_explain(args).await?,
+        Commands::Fix(args) => handle_fix(args).await?,
         Commands::Serve(args) => handle_serve(args).await?,
         Commands::Config => handle_config()?,
     }
@@ -273,6 +319,67 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
             node.object_id,
             node.field.clone().unwrap_or_else(|| "<direct>".into())
         );
+    }
+
+    Ok(())
+}
+
+async fn handle_explain(args: ExplainArgs) -> Result<()> {
+    let mut config = AppConfig::default();
+    config.ai.enabled = true;
+
+    let response = analyze_heap(AnalyzeRequest {
+        heap_path: args.heap.to_string_lossy().into(),
+        config: config.clone(),
+        leak_options: LeakDetectionOptions::new(args.min_severity.into()),
+        enable_ai: true,
+    })
+    .await?;
+
+    let targeted = focus_leaks(&response.leaks, args.leak_id.as_deref());
+    let ai = generate_ai_insights(&response.summary, &targeted, &config.ai);
+
+    println!(
+        "Model: {} (confidence {:.0}%)",
+        ai.model,
+        ai.confidence * 100.0
+    );
+    println!("{}", ai.summary);
+    if !ai.recommendations.is_empty() {
+        println!("Recommendations:");
+        for rec in ai.recommendations {
+            println!("- {}", rec);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_fix(args: FixArgs) -> Result<()> {
+    let response = propose_fix(FixRequest {
+        heap_path: args.heap.to_string_lossy().into_owned(),
+        leak_id: args.leak_id,
+        style: args.style.into(),
+        project_root: args.project_root,
+    })
+    .await?;
+
+    if response.suggestions.is_empty() {
+        println!("No fix suggestions available for the provided criteria.");
+        return Ok(());
+    }
+
+    for suggestion in response.suggestions {
+        println!(
+            "Fix for {} [{}] ({:?}, confidence {:.0}%):",
+            suggestion.class_name,
+            suggestion.leak_id,
+            suggestion.style,
+            suggestion.confidence * 100.0
+        );
+        println!("File: {}", suggestion.target_file);
+        println!("{}", suggestion.description);
+        println!("Patch:\n{}", suggestion.diff);
     }
 
     Ok(())

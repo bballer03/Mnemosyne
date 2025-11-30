@@ -77,7 +77,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Triggering Workflow**: After parsing inputs, the CLI invokes the MCP to perform the requested operation. It essentially hands off control along with user-provided parameters (file path, config flags).
 
-**Output & UX**: Once results are ready, the CLI presents them to the user. This could mean printing a human-readable report to stdout, writing a Markdown file, or emitting JSON to stdout (if `--json` flag is used). The CLI ensures the output is accessible (with coloring or section headers in terminal output, etc.).
+**Output & UX**: Once results are ready, the CLI presents them to the user. This could mean printing a human-readable report to stdout, writing a Markdown file, or emitting TOON (our compact Token-Oriented Outline Notation) to stdout via `--format toon`. The CLI ensures the output is accessible (with coloring or section headers in terminal output, etc.).
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
 

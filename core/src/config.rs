@@ -35,7 +35,7 @@ pub enum AiProvider {
 pub enum OutputFormat {
     #[default]
     Text,
-    Json,
+    Toon,
     Markdown,
     Html,
 }

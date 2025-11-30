@@ -31,7 +31,7 @@ Mnemosyne looks for configuration in the following locations (in order of preced
 # Enable verbose logging
 verbose = false
 
-# Output format: "text", "json", "markdown", "html"
+# Output format: "text", "toon", "markdown", "html"
 output_format = "text"
 
 [parser]
@@ -58,7 +58,7 @@ leak_types = ["COROUTINE", "THREAD", "CACHE", "HTTP_RESPONSE"]
 enable_ai = true
 
 [llm]
-# LLM provider: "openai", "anthropic", "local"
+# LLM provider: "openai" (default), "anthropic", "local"
 provider = "openai"
 
 # Model to use
@@ -124,7 +124,7 @@ Environment variables override configuration file settings.
 export MNEMOSYNE_VERBOSE=true
 
 # Set output format
-export MNEMOSYNE_OUTPUT_FORMAT=json
+export MNEMOSYNE_OUTPUT_FORMAT=toon
 
 # Config file path
 export MNEMOSYNE_CONFIG=/path/to/config.toml
@@ -190,8 +190,8 @@ mnemosyne -c custom.toml analyze heap.hprof
 mnemosyne --config custom.toml analyze heap.hprof
 
 # Output format
-mnemosyne -f json analyze heap.hprof
-mnemosyne --format json analyze heap.hprof
+mnemosyne -f toon analyze heap.hprof
+mnemosyne --format toon analyze heap.hprof
 ```
 
 ### Parse Command

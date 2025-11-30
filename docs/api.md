@@ -271,12 +271,20 @@ Get an AI-generated explanation for a detected leak.
 {
   "method": "explain_leak",
   "params": {
-    "leak_id": "leak-001",
     "heap_path": "/path/to/heap.hprof",
-    "include_recommendations": true
+    "leak_id": "com.example.UserSessionCache::ff12ab90",
+    "min_severity": "LOW"
   }
 }
 ```
+
+#### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `heap_path` | string | Yes | Heap dump to inspect |
+| `leak_id` | string | No | Target leak ID or class (falls back to top leak) |
+| `min_severity` | string | No | Minimum severity to consider (default: LOW) |
 
 #### Response
 
@@ -284,17 +292,24 @@ Get an AI-generated explanation for a detected leak.
 {
   "success": true,
   "data": {
-    "explanation": "The UserSessionCache is retaining stale sessions because the cleanup thread is deadlocked...",
-    "root_cause": "Thread deadlock preventing cache cleanup",
-    "impact": "512 MB of memory retained unnecessarily",
+    "model": "gpt-4.1-mini",
+    "summary": "UserSessionCache is retaining ~512.00 MB via 125432 instances; prioritize freeing it to reclaim 21.0% of the heap.",
     "recommendations": [
-      "Add timeout to cache.cleanup() method",
-      "Use ConcurrentHashMap instead of synchronized HashMap",
-      "Consider using weak references for session storage"
-    ]
+      "Guard UserSessionCache lifetimes: ensure cleanup hooks dispose unused entries.",
+      "Add targeted instrumentation (counters, timers) around the suspected allocation sites.",
+      "Review threading / coroutine lifecycles anchoring these objects to a GC root."
+    ],
+    "confidence": 0.78,
+    "wire": {
+      "format": "Toon",
+      "prompt": "TOON v1\nsection request\n  intent=explain_leak\n  heap_path=/path/to/heap.hprof\n  total_bytes=2453291008\n  total_objects=1234567\n  leak_sampled=1\nsection leaks\n  leak#0\n    id=com.example.UserSessionCache::ff12ab90\n    class=com.example.UserSessionCache\n    kind=Cache\n    severity=High\n    retained_mb=512.00\n    instances=125432\n    description=UserSessionCache dominates 21% of the heap\n",
+      "response": "TOON v1\nsection response\n  model=gpt-4.1-mini\n  confidence_pct=78\n  summary=com.example.UserSessionCache retains ~512.00 MB via 125432 instances (severity High).\nsection remediation\n  priority=high\n  retained_percent=21.0\n"
+    }
   }
 }
 ```
+
+The `wire` block always contains the exact TOON payload Mnemosyne would send to (and expect from) a real LLM. Clients that want to broker their own AI requests can forward this payload without parsing human-readable prose.
 
 ---
 
@@ -308,9 +323,10 @@ Generate code fix suggestions for a leak.
 {
   "method": "propose_fix",
   "params": {
-    "leak_id": "leak-001",
+    "heap_path": "/path/to/heap.hprof",
+    "leak_id": "com.example.UserSessionCache::ff12ab90",
     "project_root": "/path/to/project",
-    "fix_style": "MINIMAL"
+    "style": "DEFENSIVE"
   }
 }
 ```
@@ -319,9 +335,10 @@ Generate code fix suggestions for a leak.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `leak_id` | string | Yes | Leak to fix |
-| `project_root` | string | Yes | Source code root |
-| `fix_style` | string | No | MINIMAL, DEFENSIVE, or COMPREHENSIVE |
+| `heap_path` | string | Yes | Heap dump used for leak context |
+| `leak_id` | string | No | Target leak ID/class (defaults to top leak) |
+| `project_root` | string | No | Source root for path hints |
+| `style` | string | No | MINIMAL, DEFENSIVE, or COMPREHENSIVE (default: MINIMAL) |
 
 #### Response
 
@@ -329,12 +346,15 @@ Generate code fix suggestions for a leak.
 {
   "success": true,
   "data": {
-    "fixes": [
+    "suggestions": [
       {
-        "file": "src/main/java/com/example/UserSessionCache.java",
-        "description": "Add timeout to cleanup method",
-        "diff": "--- a/UserSessionCache.java\n+++ b/UserSessionCache.java\n...",
-        "confidence": 0.95
+        "leak_id": "com.example.UserSessionCache::ff12ab90",
+        "class_name": "com.example.UserSessionCache",
+        "target_file": "src/main/java/com/example/UserSessionCache.java",
+        "description": "Wrap com.example.UserSessionCache allocations in try-with-resources / finally blocks to avoid lingering references.",
+        "diff": "--- a/...\n+++ b/...\n@@ public void retain(...)\n-Resource r = allocator.acquire();\n+try (Resource r = allocator.acquire()) {\n+    // existing logic\n+}\n",
+        "confidence": 0.72,
+        "style": "DEFENSIVE"
       }
     ]
   }

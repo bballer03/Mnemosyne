@@ -85,7 +85,8 @@ BEFORE=$1
 AFTER=$2
 THRESHOLD=100  # MB
 
-DIFF=$(mnemosyne diff $BEFORE $AFTER --json | jq '.total_growth_mb')
+DIFF_BYTES=$(mnemosyne diff $BEFORE $AFTER | rg 'delta_bytes' | awk -F ':' '{print $2}' | tr -dc '0-9-')
+DIFF=$(echo "scale=2; $DIFF_BYTES / (1024 * 1024)" | bc)
 
 if (( $(echo "$DIFF > $THRESHOLD" | bc -l) )); then
   echo "❌ Memory regression detected: +${DIFF}MB"
@@ -110,10 +111,10 @@ HEAP="heap-${TIMESTAMP}.hprof"
 jmap -dump:format=b,file=$HEAP $PID
 
 # Analyze
-mnemosyne analyze $HEAP --json --min-severity HIGH > report-${TIMESTAMP}.json
+mnemosyne analyze $HEAP --format toon --min-severity HIGH > report-${TIMESTAMP}.toon
 
 # Check for critical leaks
-if jq -e '.leaks[] | select(.severity == "CRITICAL")' report-${TIMESTAMP}.json; then
+if grep -q "severity=Critical" report-${TIMESTAMP}.toon; then
   # Send alert
   curl -X POST https://api.pagerduty.com/incidents \
     -H "Authorization: Token ${PAGERDUTY_TOKEN}" \
@@ -154,13 +155,13 @@ jobs:
       - name: Analyze Heap Dump
         run: |
           mnemosyne analyze build/heap-dump.hprof \
-            --json \
+            --format toon \
             --min-severity HIGH \
-            > memory-report.json
+            > memory-report.toon
       
       - name: Check for Critical Leaks
         run: |
-          if jq -e '.leaks[] | select(.severity == "CRITICAL")' memory-report.json; then
+          if grep -q "severity=Critical" memory-report.toon; then
             echo "::error::Critical memory leak detected!"
             exit 1
           fi
@@ -169,7 +170,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: memory-report
-          path: memory-report.json
+          path: memory-report.toon
 ```
 
 ### Kubernetes CronJob
@@ -209,12 +210,12 @@ spec:
               kubectl cp $POD:/tmp/heap.hprof ./heap.hprof
               
               # Analyze
-              mnemosyne analyze heap.hprof --ai --json > report.json
+              mnemosyne analyze heap.hprof --ai --format toon > report.toon
               
               # Send to monitoring system
               curl -X POST https://monitoring.example.com/api/memory-reports \
-                -H "Content-Type: application/json" \
-                -d @report.json
+                -H "Content-Type: text/plain" \
+                -d @report.toon
 ```
 
 ## See Also

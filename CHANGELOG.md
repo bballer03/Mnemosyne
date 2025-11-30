@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Source mapping module with `mnemosyne map` CLI command, MCP `map_to_code` handler, and leak identifiers surfaced in reports
 - GC path tracing scaffolding with CLI `gc-path` subcommand and MCP `find_gc_path` endpoint
 - AI Insights heuristics powering `--ai` analysis output with model/confidence metadata in CLI, reports, and JSON responses
+- `mnemosyne explain` CLI command plus MCP `explain_leak` handler that reuse AI insights for targeted leak narratives
+- `mnemosyne fix` CLI command and MCP `propose_fix` shim that craft placeholder patches in MINIMAL/DEFENSIVE/COMPREHENSIVE styles
+- TOON (Token-Oriented Outline Notation) report format exposed via `--format toon`, replacing the former JSON output path for CI/CD integrations
 
 ### Coming Soon
 - HPROF parser implementation

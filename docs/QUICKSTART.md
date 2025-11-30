@@ -151,10 +151,10 @@ Code fixes available. Run: mnemosyne fix heap.hprof
 
 ```bash
 # In your build pipeline
-mnemosyne analyze heap.hprof --json --min-severity HIGH > report.json
+mnemosyne analyze heap.hprof --format toon --min-severity HIGH > report.toon
 
 # Check for critical leaks
-if jq -e '.leaks[] | select(.severity == "CRITICAL")' report.json; then
+if grep -q "severity=Critical" report.toon; then
   echo "Critical memory leak detected!"
   exit 1
 fi

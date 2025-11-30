@@ -184,6 +184,43 @@ Source candidates for `com.example.MemoryKeeper::d34db33f`:
   }
 ```
 
+#### Explain a leak with AI
+```bash
+mnemosyne explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
+```
+
+**Example output:**
+```
+Model: gpt-4.1-mini (confidence 78%)
+com.example.UserSessionCache is retaining ~512.00 MB via 125432 instances; prioritize freeing it to reclaim 21.0% of the heap.
+Recommendations:
+- Guard com.example.UserSessionCache lifetimes: ensure cleanup hooks dispose unused entries.
+- Add targeted instrumentation (counters, timers) around the suspected allocation sites.
+- Review threading / coroutine lifecycles anchoring these objects to a GC root.
+```
+
+> Behind the scenes Mnemosyne packages every AI prompt/response in **TOON** for deterministic machine parsing. The CLI still prints conversational text, but automation can read the structured transcript via `analysis.ai.wire` (or the MCP `explain_leak` response) to forward the TOON payload to a real LLM.
+
+#### Generate a fix patch
+```bash
+mnemosyne fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive --project-root ./your-service
+```
+
+**Example output:**
+```
+Fix for com.example.UserSessionCache [com.example.UserSessionCache::deadbeef] (Defensive, confidence 72%):
+File: ./your-service/src/main/java/com/example/UserSessionCache.java
+Wrap com.example.UserSessionCache allocations in try-with-resources / finally blocks to avoid lingering references.
+Patch:
+--- a/./your-service/src/main/java/com/example/UserSessionCache.java
++++ b/./your-service/src/main/java/com/example/UserSessionCache.java
+@@ public void retain(...)
+-Resource r = allocator.acquire();
++try (Resource r = allocator.acquire()) {
++    // existing logic
++}
+```
+
 #### Find a GC root path
 ```bash
 mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 5
@@ -220,38 +257,43 @@ Code Fix Available: Run 'mnemosyne fix heap.hprof' to generate patch
 
 When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. This currently uses deterministic heuristics so the UX stays consistent offline.
 
-#### Output JSON (for CI/CD)
+#### Output TOON (for CI/CD)
 ```bash
-mnemosyne analyze heap.hprof --json > report.json
+mnemosyne analyze heap.hprof --format toon > report.toon
 ```
 
-**Example JSON structure:**
-```json
-{
-  "timestamp": "2025-11-30T12:34:56Z",
-  "heap_size": 2453291008,
-  "total_objects": 1234567,
-  "leaks": [
-    {
-      "class": "com.example.UserSessionCache",
-      "severity": "HIGH",
-      "instances": 125432,
-      "retained_size_bytes": 536870912,
-      "gc_root": "Thread[session-cleanup]",
-      "status": "BLOCKED"
-    }
-  ],
-  "ai_insights": {
-    "model": "gpt-4.1-mini",
-    "summary": "UserSessionCache retains ~512 MB because cleanup threads stalled; freeing it would reclaim 21% of the heap.",
-    "recommendations": [
-      "Guard UserSessionCache lifetimes with auto-expire entries",
-      "Instrument cleanup thread health"
-    ],
-    "confidence": 0.78
-  },
-  "recommendations": [...]
-}
+**Example TOON payload:**
+```
+TOON v1
+section summary
+  heap=heap.hprof
+  objects=1234567
+  bytes=2453291008
+  size_gb=2.29
+  graph_nodes=321
+  leak_count=1
+section leaks
+  leak#0
+    id=com.example.UserSessionCache::deadbeef
+    class=com.example.UserSessionCache
+    kind=Cache
+    severity=High
+    retained_mb=512.00
+    instances=125432
+    description=UserSessionCache dominates 21% of the heap via stale sessions
+section dominators
+  dominator#0
+    name=com.example.UserSessionCache
+    parent=<heap-root>
+    descendants=642
+section ai
+  model=gpt-4.1-mini
+  confidence_pct=78
+  summary=UserSessionCache retains ~512 MB because cleanup threads stalled; freeing it would reclaim 21% of the heap.
+  rec#0
+    text=Guard UserSessionCache lifetimes with auto-expire entries
+  rec#1
+    text=Instrument cleanup thread health
 ```
 
 ### Common Commands Cheat Sheet
@@ -274,6 +316,12 @@ mnemosyne diff before.hprof after.hprof
 
 # Map leak to code
 mnemosyne map leak-foo --project-root ./service --class com.example.MemoryKeeper
+
+# Explain a specific leak
+mnemosyne explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
+
+# Generate a defensive fix patch
+mnemosyne fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive
 
 # Trace GC path
 mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
@@ -311,7 +359,10 @@ Edit `~/.config/zed/settings.json`:
     "servers": {
       "mnemosyne": {
         "command": "mnemosyne",
-        "args": ["serve"]
+        "args": ["serve"],
+        "env": {
+          "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
+        }
       }
     }
   }
@@ -324,7 +375,10 @@ Edit `~/Library/Application Support/ChatGPT/mcp_config.json` (macOS):
 {
   "mnemosyne": {
     "command": "mnemosyne",
-    "args": ["serve"]
+    "args": ["serve"],
+    "env": {
+      "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
+    }
   }
 }
 ```

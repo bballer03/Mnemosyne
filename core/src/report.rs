@@ -1,5 +1,6 @@
 use crate::{analysis::AnalyzeResponse, config::OutputFormat, errors::CoreResult};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportRequest {
@@ -17,7 +18,7 @@ pub struct ReportArtifact {
 pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
     let body = match request.format {
         OutputFormat::Text => render_text(&request.analysis),
-        OutputFormat::Json => serde_json::to_string_pretty(&request.analysis)?,
+        OutputFormat::Toon => render_toon(&request.analysis),
         OutputFormat::Markdown => render_markdown(&request.analysis),
         OutputFormat::Html => render_html(&request.analysis),
     };
@@ -25,13 +26,106 @@ pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
     Ok(ReportArtifact {
         mime_type: match request.format {
             OutputFormat::Text => "text/plain",
-            OutputFormat::Json => "application/json",
+            OutputFormat::Toon => "application/x-toon",
             OutputFormat::Markdown => "text/markdown",
             OutputFormat::Html => "text/html",
         }
         .into(),
         contents: body,
     })
+}
+
+fn render_toon(analysis: &AnalyzeResponse) -> String {
+    let mut doc = String::new();
+    doc.push_str("TOON v1\n");
+
+    doc.push_str("section summary\n");
+    push_kv(&mut doc, 2, "heap", &analysis.summary.heap_path);
+    push_kv(&mut doc, 2, "objects", analysis.summary.total_objects);
+    push_kv(&mut doc, 2, "bytes", analysis.summary.total_size_bytes);
+    push_kv(
+        &mut doc,
+        2,
+        "size_gb",
+        format!(
+            "{:.2}",
+            analysis.summary.total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        ),
+    );
+    push_kv(&mut doc, 2, "graph_nodes", analysis.graph.node_count);
+    push_kv(&mut doc, 2, "leak_count", analysis.leaks.len());
+
+    doc.push_str("section leaks\n");
+    if analysis.leaks.is_empty() {
+        push_kv(&mut doc, 2, "status", "empty");
+    } else {
+        for (idx, leak) in analysis.leaks.iter().enumerate() {
+            let header = format!("  leak#{idx}");
+            doc.push_str(&header);
+            doc.push('\n');
+            push_kv(&mut doc, 4, "id", &leak.id);
+            push_kv(&mut doc, 4, "class", &leak.class_name);
+            push_kv(&mut doc, 4, "kind", format!("{:?}", leak.leak_kind));
+            push_kv(&mut doc, 4, "severity", format!("{:?}", leak.severity));
+            push_kv(
+                &mut doc,
+                4,
+                "retained_mb",
+                format!("{:.2}", leak.retained_size_bytes as f64 / (1024.0 * 1024.0)),
+            );
+            push_kv(&mut doc, 4, "instances", leak.instances);
+            push_kv(
+                &mut doc,
+                4,
+                "description",
+                leak.description.replace('\n', " "),
+            );
+        }
+    }
+
+    doc.push_str("section dominators\n");
+    if analysis.graph.dominators.is_empty() {
+        push_kv(&mut doc, 2, "status", "empty");
+    } else {
+        for (idx, dom) in analysis.graph.dominators.iter().enumerate() {
+            doc.push_str(&format!("  dominator#{idx}\n"));
+            let parent = dom.immediate_dominator.as_deref().unwrap_or("<heap-root>");
+            push_kv(&mut doc, 4, "name", &dom.name);
+            push_kv(&mut doc, 4, "parent", parent);
+            push_kv(&mut doc, 4, "descendants", dom.dominates);
+        }
+    }
+
+    doc.push_str("section ai\n");
+    if let Some(ai) = &analysis.ai {
+        push_kv(&mut doc, 2, "model", &ai.model);
+        push_kv(
+            &mut doc,
+            2,
+            "confidence_pct",
+            format!("{:.0}", ai.confidence * 100.0),
+        );
+        push_kv(&mut doc, 2, "summary", ai.summary.replace('\n', " "));
+        if ai.recommendations.is_empty() {
+            push_kv(&mut doc, 2, "recommendations", "none");
+        } else {
+            for (idx, rec) in ai.recommendations.iter().enumerate() {
+                doc.push_str(&format!("  rec#{idx}\n"));
+                push_kv(&mut doc, 4, "text", rec.replace('\n', " "));
+            }
+        }
+    } else {
+        push_kv(&mut doc, 2, "status", "disabled");
+    }
+
+    doc
+}
+
+fn push_kv<T: std::fmt::Display>(buf: &mut String, indent: usize, key: &str, value: T) {
+    for _ in 0..indent {
+        buf.push(' ');
+    }
+    let _ = writeln!(buf, "{}={}", key, value);
 }
 
 fn render_text(analysis: &AnalyzeResponse) -> String {

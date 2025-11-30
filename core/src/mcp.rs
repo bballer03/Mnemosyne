@@ -1,7 +1,13 @@
 use crate::{
-    analysis::{detect_leaks, LeakDetectionOptions, LeakKind, LeakSeverity},
+    analysis::{
+        analyze_heap, detect_leaks, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+    },
+    config::AppConfig,
     errors::{CoreError, CoreResult},
+    fix::{propose_fix, FixRequest, FixStyle},
+    focus_leaks,
     gc_path::{find_gc_path, GcPathRequest},
+    generate_ai_insights,
     heap::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
 };
@@ -130,6 +136,30 @@ struct FindGcPathParams {
     max_depth: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExplainLeakParams {
+    heap_path: String,
+    #[serde(default)]
+    leak_id: Option<String>,
+    #[serde(default)]
+    min_severity: Option<LeakSeverity>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProposeFixParams {
+    heap_path: String,
+    #[serde(default)]
+    leak_id: Option<String>,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+    #[serde(default = "default_fix_style")]
+    style: FixStyle,
+}
+
+fn default_fix_style() -> FixStyle {
+    FixStyle::Minimal
+}
+
 impl MapToCodeParams {
     fn default_include_git() -> bool {
         true
@@ -176,6 +206,34 @@ async fn handle_request(packet: RpcRequest) -> CoreResult<Value> {
                 object_id: params.object_id,
                 max_depth: params.max_depth,
             })?;
+            Ok(serde_json::to_value(response)?)
+        }
+        "explain_leak" => {
+            let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            let analysis = analyze_heap(AnalyzeRequest {
+                heap_path: params.heap_path,
+                config: config.clone(),
+                leak_options: LeakDetectionOptions::new(
+                    params.min_severity.unwrap_or(LeakSeverity::Low),
+                ),
+                enable_ai: true,
+            })
+            .await?;
+            let focused = focus_leaks(&analysis.leaks, params.leak_id.as_deref());
+            let ai = generate_ai_insights(&analysis.summary, &focused, &config.ai);
+            Ok(serde_json::to_value(ai)?)
+        }
+        "propose_fix" => {
+            let params: ProposeFixParams = serde_json::from_value(packet.params)?;
+            let response = propose_fix(FixRequest {
+                heap_path: params.heap_path,
+                leak_id: params.leak_id,
+                style: params.style,
+                project_root: params.project_root,
+            })
+            .await?;
             Ok(serde_json::to_value(response)?)
         }
         other => Err(CoreError::InvalidInput(format!(

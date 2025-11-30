@@ -1,5 +1,6 @@
 use crate::{analysis::LeakInsight, config::AiConfig, heap::HeapSummary};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiInsights {
@@ -7,6 +8,41 @@ pub struct AiInsights {
     pub summary: String,
     pub recommendations: Vec<String>,
     pub confidence: f32,
+    pub wire: AiWireExchange,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiWireExchange {
+    pub format: AiWireFormat,
+    pub prompt: String,
+    pub response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum AiWireFormat {
+    #[default]
+    Toon,
+}
+
+/// Narrow the leak set to a specific identifier; falls back to the full list if
+/// no matching leak is found so downstream callers always have context.
+pub fn focus_leaks(leaks: &[LeakInsight], leak_id: Option<&str>) -> Vec<LeakInsight> {
+    if leaks.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(target) = leak_id {
+        let matches: Vec<LeakInsight> = leaks
+            .iter()
+            .cloned()
+            .filter(|leak| leak.id == target || leak.class_name == target)
+            .collect();
+        if !matches.is_empty() {
+            return matches;
+        }
+    }
+
+    leaks.to_vec()
 }
 
 /// Generate a deterministic, heuristic "AI" insight so that higher layers can
@@ -59,7 +95,114 @@ pub fn generate_ai_insights(
         summary: summary_text,
         recommendations: recs,
         confidence,
+        wire: AiWireExchange {
+            format: AiWireFormat::Toon,
+            prompt: build_toon_prompt(summary, leaks),
+            response: build_toon_response(summary, &top, confidence, config),
+        },
     }
+}
+
+fn build_toon_prompt(summary: &HeapSummary, leaks: &[LeakInsight]) -> String {
+    let mut body = String::from("TOON v1\n");
+    body.push_str("section request\n");
+    push_kv(&mut body, 2, "intent", "explain_leak");
+    push_kv(&mut body, 2, "heap_path", &summary.heap_path);
+    push_kv(&mut body, 2, "total_bytes", summary.total_size_bytes);
+    push_kv(&mut body, 2, "total_objects", summary.total_objects);
+    push_kv(&mut body, 2, "leak_sampled", leaks.len());
+
+    body.push_str("section leaks\n");
+    if leaks.is_empty() {
+        push_kv(&mut body, 2, "status", "empty");
+    } else {
+        for (idx, leak) in leaks.iter().enumerate().take(3) {
+            body.push_str(&format!("  leak#{idx}\n"));
+            push_kv(&mut body, 4, "id", &leak.id);
+            push_kv(&mut body, 4, "class", &leak.class_name);
+            push_kv(&mut body, 4, "kind", format!("{:?}", leak.leak_kind));
+            push_kv(&mut body, 4, "severity", format!("{:?}", leak.severity));
+            push_kv(
+                &mut body,
+                4,
+                "retained_mb",
+                format!("{:.2}", bytes_to_mb(leak.retained_size_bytes)),
+            );
+            push_kv(&mut body, 4, "instances", leak.instances);
+            push_kv(
+                &mut body,
+                4,
+                "description",
+                leak.description.replace('\n', " "),
+            );
+        }
+    }
+
+    body
+}
+
+fn build_toon_response(
+    summary: &HeapSummary,
+    top: &Option<LeakInsight>,
+    confidence: f32,
+    config: &AiConfig,
+) -> String {
+    let mut body = String::from("TOON v1\n");
+    body.push_str("section response\n");
+    push_kv(&mut body, 2, "model", &config.model);
+    push_kv(
+        &mut body,
+        2,
+        "confidence_pct",
+        format!("{:.0}", confidence * 100.0),
+    );
+
+    match top {
+        Some(leak) => {
+            push_kv(
+                &mut body,
+                2,
+                "summary",
+                format!(
+                    "{class} retains ~{size:.2} MB via {instances} instances (severity {severity:?}).",
+                    class = leak.class_name,
+                    size = bytes_to_mb(leak.retained_size_bytes),
+                    instances = leak.instances,
+                    severity = leak.severity
+                ),
+            );
+            body.push_str("section remediation\n");
+            push_kv(&mut body, 2, "priority", "high");
+            push_kv(
+                &mut body,
+                2,
+                "retained_percent",
+                format!(
+                    "{:.1}",
+                    retained_percent(leak.retained_size_bytes, summary.total_size_bytes)
+                ),
+            );
+        }
+        None => {
+            push_kv(
+                &mut body,
+                2,
+                "summary",
+                format!("Heap `{}` currently looks healthy.", summary.heap_path),
+            );
+            body.push_str("section remediation\n");
+            push_kv(&mut body, 2, "priority", "observe");
+        }
+    }
+
+    body
+}
+
+fn push_kv<T: std::fmt::Display>(buf: &mut String, indent: usize, key: &str, value: T) {
+    for _ in 0..indent {
+        buf.push(' ');
+    }
+    let _ = writeln!(buf, "{}={}", key, value);
 }
 
 fn bytes_to_mb(bytes: u64) -> f64 {
@@ -107,6 +250,8 @@ mod tests {
         assert!(insights.summary.contains("com.example.Leak"));
         assert!(insights.recommendations.len() >= 2);
         assert!(insights.confidence > 0.5);
+        assert!(insights.wire.prompt.starts_with("TOON v1"));
+        assert!(insights.wire.response.contains("section response"));
     }
 
     #[test]
@@ -117,5 +262,38 @@ mod tests {
         let insights = generate_ai_insights(&summary, &[], &config);
         assert!(insights.summary.contains("looks healthy"));
         assert_eq!(insights.recommendations.len(), 1);
+        assert_eq!(insights.wire.format, AiWireFormat::Toon);
+    }
+
+    #[test]
+    fn focuses_on_matching_leak() {
+        let leaks = vec![
+            LeakInsight {
+                id: "LeakA::1".into(),
+                class_name: "LeakA".into(),
+                leak_kind: LeakKind::Cache,
+                severity: LeakSeverity::Low,
+                retained_size_bytes: 1,
+                instances: 1,
+                description: String::new(),
+            },
+            LeakInsight {
+                id: "LeakB::2".into(),
+                class_name: "LeakB".into(),
+                leak_kind: LeakKind::Thread,
+                severity: LeakSeverity::High,
+                retained_size_bytes: 2,
+                instances: 2,
+                description: String::new(),
+            },
+        ];
+
+        let focused = focus_leaks(&leaks, Some("LeakB::2"));
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].class_name, "LeakB");
+
+        // Fallback to all leaks when no match.
+        let fallback = focus_leaks(&leaks, Some("missing"));
+        assert_eq!(fallback.len(), leaks.len());
     }
 }
