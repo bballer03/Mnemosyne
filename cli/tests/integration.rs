@@ -315,8 +315,14 @@ fn test_leaks_discloses_colliding_truncated_ids_with_row_stable_mapping() {
     assert_ne!(full_leak_ids[0], full_leak_ids[1]);
     assert_eq!(truncated_first, truncated_second);
     assert!(stdout.contains("Full leak IDs for truncated rows:"));
-    assert!(stdout.contains(&format!("row 1 | {} -> {}", truncated_first, full_leak_ids[0])));
-    assert!(stdout.contains(&format!("row 2 | {} -> {}", truncated_second, full_leak_ids[1])));
+    assert!(stdout.contains(&format!(
+        "row 1 | {} -> {}",
+        truncated_first, full_leak_ids[0]
+    )));
+    assert!(stdout.contains(&format!(
+        "row 2 | {} -> {}",
+        truncated_second, full_leak_ids[1]
+    )));
     assert!(stdout.contains(&format!("Leak: {}", full_leak_ids[0])));
     assert!(stdout.contains(&format!("Leak: {}", full_leak_ids[1])));
 }

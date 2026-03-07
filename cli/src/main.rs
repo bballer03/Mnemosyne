@@ -923,9 +923,7 @@ fn build_record_stats_table(summary: &HeapSummary) -> Table {
 type TruncatedTableValues = Vec<(String, String)>;
 type LeaksTableBuild = (Table, TruncatedTableValues, TruncatedTableValues);
 
-fn build_leaks_table(
-    leaks: &[mnemosyne_core::analysis::LeakInsight],
-) -> LeaksTableBuild {
+fn build_leaks_table(leaks: &[mnemosyne_core::analysis::LeakInsight]) -> LeaksTableBuild {
     let mut table = base_table();
     let mut truncated_leak_ids = Vec::new();
     let mut truncated_classes = Vec::new();
