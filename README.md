@@ -30,8 +30,8 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-generated fi
 It brings total clarity to complex Java/Kotlin heap dumps by combining:
 
 - ⚡ High-performance Rust-based heap parsing
-- 🧩 Advanced object graph & dominator analysis
-- 🧠 AI-generated explanations and code fixes
+- 🧩 Object-graph foundations with dominator/retained-size analysis on the roadmap
+- 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, leak reproduction, forecasting, and more
 
@@ -48,6 +48,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Lightweight dominator previews derived from parsed class histograms (full retained-size graphs on the roadmap)
 - Class histograms derived directly from raw HPROF record stats so CLI summaries stay accurate
 - Authentic GC path finder parses real GC roots + instance dumps (and gracefully falls back when dumps exceed sampling budgets)
+- Shared object-graph model now lives in `core::object_graph`, ready for upcoming record-level graph parsing
 
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
@@ -99,6 +100,8 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 > Mnemosyne is currently in **alpha**.
 > Full binaries and installers will be added soon.
+
+The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus synthetic HPROF fixture builders used by the test suite.
 
 ### 1. Clone the repository
 ```bash
@@ -489,18 +492,24 @@ Once configured, you can ask your AI assistant:
 mnemosyne/
 │
 ├── core/
-│ ├── hprof/# HProf parser
-│ ├── graph/# Object graph + dominator logic
-│ ├── leaks/# Leak detection
-│ ├── mapper/ # Code mapping + Git
-│ └── report/ # JSON/HTML/AI reports
-│
-├── mcp/
-│ ├── server.rs # MCP server
-│ └── handlers/ # MCP command handlers
+│ ├── src/
+│ │ ├── heap.rs          # Streaming HPROF parser + summary stats
+│ │ ├── object_graph.rs  # Shared heap-object / class / GC-root model
+│ │ ├── graph.rs         # Lightweight dominator preview today; retained-size work next
+│ │ ├── analysis.rs      # Leak heuristics + analysis orchestration
+│ │ ├── gc_path.rs       # Best-effort GC root path tracing
+│ │ ├── mapper.rs        # Code mapping + Git integration
+│ │ ├── report.rs        # Text/Markdown/HTML/TOON/JSON report rendering
+│ │ └── test_fixtures.rs # Synthetic HPROF builders used in tests
 │
 ├── cli/
-│ └── main.rs # CLI tool
+│ └── src/main.rs        # CLI entry point
+│
+├── resources/
+│ └── test-fixtures/     # Fixture documentation for parser/graph tests
+│
+├── .github/
+│ └── workflows/ci.yml   # GitHub Actions workspace validation
 │
 ├── web/# (Future) WASM/Web dashboard
 │

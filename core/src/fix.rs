@@ -1,6 +1,9 @@
 use crate::{
     ai::focus_leaks,
-    analysis::{analyze_heap, AnalyzeRequest, LeakInsight, LeakSeverity},
+    analysis::{
+        analyze_heap, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind,
+        ProvenanceMarker,
+    },
     config::AppConfig,
     errors::CoreResult,
 };
@@ -37,6 +40,9 @@ pub struct FixSuggestion {
 pub struct FixResponse {
     pub suggestions: Vec<FixSuggestion>,
     pub project_root: Option<PathBuf>,
+    /// Provenance markers (e.g. synthetic / placeholder when real fix pipeline is not wired).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<ProvenanceMarker>,
 }
 
 /// Generate heuristic fix suggestions for a heap + leak combination. The fixes
@@ -64,6 +70,16 @@ pub async fn propose_fix(request: FixRequest) -> CoreResult<FixResponse> {
     Ok(FixResponse {
         suggestions,
         project_root: request.project_root,
+        provenance: vec![
+            ProvenanceMarker::new(
+                ProvenanceKind::Synthetic,
+                "Fix suggestions are generated heuristically from leak summaries.",
+            ),
+            ProvenanceMarker::new(
+                ProvenanceKind::Placeholder,
+                "Static-analysis-backed remediation is not wired yet; this is placeholder guidance.",
+            ),
+        ],
     })
 }
 
@@ -160,6 +176,7 @@ mod tests {
             retained_size_bytes: 10,
             instances: 2,
             description: String::new(),
+            provenance: Vec::new(),
         };
         let suggestion = build_suggestion(&leak, None, &FixStyle::Minimal);
         assert!(suggestion.diff.contains("SAFE_CAPACITY"));
@@ -183,6 +200,14 @@ mod tests {
         .unwrap();
 
         assert!(!response.suggestions.is_empty());
+        assert!(
+            response.provenance.iter().any(|m| m.kind == ProvenanceKind::Synthetic),
+            "fix response must carry Synthetic provenance"
+        );
+        assert!(
+            response.provenance.iter().any(|m| m.kind == ProvenanceKind::Placeholder),
+            "fix response must carry Placeholder provenance"
+        );
     }
 
     fn write_minimal_hprof(file: &mut tempfile::NamedTempFile) {

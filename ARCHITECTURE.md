@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** November 30, 2025  
+> **Last Updated:** March 7, 2026  
 > **Version:** Alpha  
 > **[← Back to README](README.md)**
 
@@ -45,15 +45,19 @@ Mnemosyne aims to be a one-stop solution for analyzing Java heap dumps (HPROF fi
 
 By meeting these goals, Mnemosyne helps engineers identify memory leaks, understand heap composition, and save time in debugging complex Java applications.
 
-## Current Implementation Snapshot (November 2025)
+## Current Implementation Snapshot (March 2026)
 
 ### Shipped today
 - **Parser:** Streams HPROF headers/records, derives class histograms + summary stats (objects, size, dominant tags). No per-object graph yet.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports are printed/redirected via stdout (no built-in `-o`).
+- **Object-graph foundation:** `core::object_graph` now defines the canonical heap-object, class, field-descriptor, and GC-root types that upcoming HPROF record parsing will populate.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. CLI surfaces provenance markers for `leaks`, `gc-path`, and `fix` output.
 - **Leak heuristics:** Use the parsed class histogram plus package filters/thresholds to generate deterministic leak candidates, with synthetic fallbacks when histograms are empty.
 - **Graph metrics:** Provide a lightweight dominator preview by wiring the top class/record entries into a tiny petgraph structure for reporting.
 - **GC path helper:** Parses real GC roots/class + instance dumps to build best-effort root chains (with budget-aware fallbacks when dumps omit the required records).
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
+- **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
+- **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. Clippy warnings in `heap.rs` and `mapper.rs` resolved.
+- **Validation scaffolding:** Synthetic HPROF fixture builders and a GitHub Actions workflow now provide deterministic parser inputs and automated workspace validation.
 
 ### Still in progress
 - **Retained-size and real dominator trees** driven by the full object graph.
@@ -99,7 +103,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
 
-> **Status (Nov 2025):** The clap-based CLI is wired up today, but all reports are streamed to stdout (use shell redirection/`tee` to save files). JSON output flags and richer progress UI remain future work.
+> **Status (Mar 2026):** The clap-based CLI is fully wired with `--output-file` support, `--format` selection (text/markdown/html/toon/json), and provenance display for `leaks`/`gc-path`/`fix` output. Richer progress UI remains future work.
 
 ### 2. Master Control Program (Orchestrator - MCP)
 
@@ -205,7 +209,7 @@ The final component takes all the gathered information – raw data from the par
 
 Because the Report Generator is modular, adding a new output format later (say, HTML for a web UI, or direct Slack message formatting) would be straightforward. We simply plug in a new formatter without disturbing the core logic. In the initial implementation, terminal and Markdown outputs, plus JSON, cover the most common needs.
 
-> **Status (Nov 2025):** Text, Markdown, HTML, and TOON reports are rendered via the shared `render_report` helper and written to stdout; redirect or pipe to capture files. A structured JSON exporter and GUI visualizations are still future enhancements.
+> **Status (Mar 2026):** Text, Markdown, HTML, TOON, and JSON reports are rendered via the shared `render_report` helper with `--output-file` support. HTML output is XSS-hardened; TOON values are properly escaped. Provenance markers are rendered in all non-JSON formats. GUI visualizations remain future work.
 
 ## Execution Flow (from CLI to AI and Back)
 

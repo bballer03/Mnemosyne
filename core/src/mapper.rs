@@ -159,7 +159,7 @@ fn find_symbol(contents: &str, hint: Option<&str>) -> (u32, String) {
     if let Some(hint) = hint {
         if let Some(line_idx) = contents
             .lines()
-            .position(|line| line.contains(hint.split('.').last().unwrap_or(hint)))
+            .position(|line| line.contains(hint.split('.').next_back().unwrap_or(hint)))
         {
             let symbol = contents
                 .lines()

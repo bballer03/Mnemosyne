@@ -55,6 +55,7 @@ pub enum OutputFormat {
     Toon,
     Markdown,
     Html,
+    Json,
 }
 
 impl Default for ParserConfig {
@@ -103,6 +104,7 @@ impl FromStr for OutputFormat {
             "toon" => Ok(OutputFormat::Toon),
             "markdown" | "md" => Ok(OutputFormat::Markdown),
             "html" => Ok(OutputFormat::Html),
+            "json" => Ok(OutputFormat::Json),
             other => Err(format!("unsupported output format '{other}'")),
         }
     }

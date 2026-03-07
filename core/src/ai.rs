@@ -2,6 +2,10 @@ use crate::{analysis::LeakInsight, config::AiConfig, heap::HeapSummary};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
+fn escape_toon_value(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiInsights {
     pub model: String,
@@ -34,8 +38,8 @@ pub fn focus_leaks(leaks: &[LeakInsight], leak_id: Option<&str>) -> Vec<LeakInsi
     if let Some(target) = leak_id {
         let matches: Vec<LeakInsight> = leaks
             .iter()
-            .cloned()
             .filter(|leak| leak.id == target || leak.class_name == target)
+            .cloned()
             .collect();
         if !matches.is_empty() {
             return matches;
@@ -133,7 +137,7 @@ fn build_toon_prompt(summary: &HeapSummary, leaks: &[LeakInsight]) -> String {
                 &mut body,
                 4,
                 "description",
-                leak.description.replace('\n', " "),
+                &leak.description,
             );
         }
     }
@@ -202,7 +206,8 @@ fn push_kv<T: std::fmt::Display>(buf: &mut String, indent: usize, key: &str, val
     for _ in 0..indent {
         buf.push(' ');
     }
-    let _ = writeln!(buf, "{}={}", key, value);
+    let raw = value.to_string();
+    let _ = writeln!(buf, "{}={}", key, escape_toon_value(&raw));
 }
 
 fn bytes_to_mb(bytes: u64) -> f64 {
@@ -243,6 +248,7 @@ mod tests {
             retained_size_bytes: 256 * 1024 * 1024,
             instances: 42,
             description: "Half the heap".into(),
+            provenance: Vec::new(),
         };
         let config = AiConfig::default();
 
@@ -276,6 +282,7 @@ mod tests {
                 retained_size_bytes: 1,
                 instances: 1,
                 description: String::new(),
+                provenance: Vec::new(),
             },
             LeakInsight {
                 id: "LeakB::2".into(),
@@ -285,6 +292,7 @@ mod tests {
                 retained_size_bytes: 2,
                 instances: 2,
                 description: String::new(),
+                provenance: Vec::new(),
             },
         ];
 

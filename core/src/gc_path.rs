@@ -1,4 +1,5 @@
 use crate::{
+    analysis::{ProvenanceKind, ProvenanceMarker},
     errors::{CoreError, CoreResult},
     heap::{parse_heap, HeapParseJob},
 };
@@ -30,6 +31,9 @@ pub struct GcPathResult {
     pub object_id: String,
     pub path: Vec<GcPathNode>,
     pub path_length: usize,
+    /// Provenance markers (e.g. synthetic / fallback when no real path was resolved).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<ProvenanceMarker>,
 }
 
 const HEAP_DUMP_TAG: u8 = 0x0C;
@@ -123,12 +127,19 @@ fn build_synthetic_path(
         .map(|stat| stat.name.clone())
         .unwrap_or_else(|| "java.lang.Object".into());
 
+    let root_label = summary
+        .header
+        .as_ref()
+        .map(|hdr| hdr.format.trim().to_string())
+        .unwrap_or_else(|| "Thread[root]".into());
+
+    // Build path in root → … → target order (consistent with real GC paths).
     let mut path = Vec::new();
     path.push(GcPathNode {
-        object_id: request.object_id.clone(),
-        class_name: dominant_record.clone(),
-        field: None,
-        is_root: false,
+        object_id: format!("GC_ROOT_{}", root_label.replace(' ', "_")),
+        class_name: "java.lang.Thread".into(),
+        field: Some(root_label),
+        is_root: true,
     });
 
     if depth > 2 {
@@ -143,33 +154,31 @@ fn build_synthetic_path(
         });
     }
 
-    let root_label = summary
-        .header
-        .as_ref()
-        .map(|hdr| hdr.format.trim().to_string())
-        .unwrap_or_else(|| "Thread[root]".into());
-
     path.push(GcPathNode {
-        object_id: format!("GC_ROOT_{}", root_label.replace(' ', "_")),
-        class_name: "java.lang.Thread".into(),
-        field: Some(root_label),
-        is_root: true,
+        object_id: request.object_id.clone(),
+        class_name: dominant_record.clone(),
+        field: None,
+        is_root: false,
     });
 
     if path.len() > depth {
         path.truncate(depth);
-        if let Some(last) = path.last_mut() {
-            last.is_root = true;
-            last.field.get_or_insert_with(|| "<truncated-root>".into());
-        }
-    } else if let Some(last) = path.last_mut() {
-        last.is_root = true;
     }
 
     Ok(GcPathResult {
         object_id: request.object_id.clone(),
         path_length: path.len(),
         path,
+        provenance: vec![
+            ProvenanceMarker::new(
+                ProvenanceKind::Synthetic,
+                "GC path was synthesized from summary-level heap information.",
+            ),
+            ProvenanceMarker::new(
+                ProvenanceKind::Fallback,
+                "No real GC root chain could be resolved; best-effort fallback path returned.",
+            ),
+        ],
     })
 }
 
@@ -289,6 +298,7 @@ impl GcGraph {
             object_id: format_object_id(target, self.id_size),
             path_length: nodes.len(),
             path: nodes,
+            provenance: Vec::new(),
         })
     }
 
@@ -809,6 +819,7 @@ fn prettify_class_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::ProvenanceKind;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -830,9 +841,21 @@ mod tests {
         assert_eq!(result.object_id, request.object_id);
         assert_eq!(result.path_length, result.path.len());
         assert!(!result.path.is_empty());
+        // Synthetic path: root is first, target is last.
+        let first = result.path.first().unwrap();
+        assert!(first.is_root, "first node must be a root");
+        assert!(first.class_name.contains("Thread"));
         let last = result.path.last().unwrap();
-        assert!(last.is_root);
-        assert!(last.class_name.contains("Thread"));
+        assert_eq!(last.object_id, request.object_id, "last node must be the target");
+        // Synthetic path carries provenance.
+        assert!(
+            result.provenance.iter().any(|m| m.kind == ProvenanceKind::Synthetic),
+            "synthetic path must carry Synthetic provenance"
+        );
+        assert!(
+            result.provenance.iter().any(|m| m.kind == ProvenanceKind::Fallback),
+            "synthetic path must carry Fallback provenance"
+        );
     }
 
     #[test]
@@ -858,6 +881,8 @@ mod tests {
             result.path.last().unwrap().object_id,
             format!("0x{target_id:08X}")
         );
+        // Real path has no provenance markers.
+        assert!(result.provenance.is_empty(), "real path must have empty provenance");
     }
 
     fn write_minimal_hprof(file: &mut NamedTempFile) {

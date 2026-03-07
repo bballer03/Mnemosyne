@@ -26,7 +26,7 @@ pub struct McpServerOptions {
 
 /// Start the MCP server loop, reading JSON lines from stdin and emitting
 /// responses on stdout.
-pub async fn serve(options: McpServerOptions) -> CoreResult<()> {
+pub async fn serve(options: McpServerOptions, config: AppConfig) -> CoreResult<()> {
     info!(host = %options.host, port = options.port, "starting MCP server over stdio");
 
     let stdin = io::stdin();
@@ -42,7 +42,7 @@ pub async fn serve(options: McpServerOptions) -> CoreResult<()> {
         let response = match serde_json::from_str::<RpcRequest>(&line) {
             Ok(packet) => {
                 let id = packet.id.clone();
-                match handle_request(packet).await {
+                match handle_request(packet, &config).await {
                     Ok(value) => RpcResponse::success(id, value),
                     Err(err) => RpcResponse::error(id, err.to_string()),
                 }
@@ -166,23 +166,27 @@ impl MapToCodeParams {
     }
 }
 
-async fn handle_request(packet: RpcRequest) -> CoreResult<Value> {
+async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Value> {
     match packet.method.as_str() {
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
             let job = HeapParseJob {
                 path: params.path,
                 include_strings: params.include_strings,
-                max_objects: params.max_objects,
+                max_objects: params.max_objects.or(config.parser.max_objects),
             };
             let summary = parse_heap(&job)?;
             Ok(serde_json::to_value(summary)?)
         }
         "detect_leaks" => {
             let params: DetectLeakParams = serde_json::from_value(packet.params)?;
-            let mut options =
-                LeakDetectionOptions::new(params.min_severity.unwrap_or(LeakSeverity::High));
-            options.package_filter = params.package;
+            let mut options = LeakDetectionOptions::from(&config.analysis);
+            if let Some(sev) = params.min_severity {
+                options.min_severity = sev;
+            }
+            if let Some(package) = params.package {
+                options.package_filters = vec![package];
+            }
             if let Some(leak_types) = params.leak_types {
                 options.leak_types = leak_types;
             }
@@ -210,14 +214,16 @@ async fn handle_request(packet: RpcRequest) -> CoreResult<Value> {
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
-            let mut config = AppConfig::default();
+            let mut config = config.clone();
             config.ai.enabled = true;
+            let mut leak_options = LeakDetectionOptions::from(&config.analysis);
+            if let Some(sev) = params.min_severity {
+                leak_options.min_severity = sev;
+            }
             let analysis = analyze_heap(AnalyzeRequest {
                 heap_path: params.heap_path,
                 config: config.clone(),
-                leak_options: LeakDetectionOptions::new(
-                    params.min_severity.unwrap_or(LeakSeverity::Low),
-                ),
+                leak_options,
                 enable_ai: true,
             })
             .await?;

@@ -17,6 +17,8 @@ Small example heap dumps for testing:
 - `thread-leak.hprof` - Thread leak example (12 MB)
 - `cache-growth.hprof` - Unbounded cache example (8 MB)
 
+Run `mnemosyne parse <dump>` against any of them to see the real class histogram and record-tag percentages that now power leak heuristics, diff output, and dominator summaries.
+
 ## Configuration Examples
 
 Sample configuration files for different scenarios:
@@ -85,14 +87,15 @@ BEFORE=$1
 AFTER=$2
 THRESHOLD=100  # MB
 
-DIFF_BYTES=$(mnemosyne diff $BEFORE $AFTER | rg 'delta_bytes' | awk -F ':' '{print $2}' | tr -dc '0-9-')
-DIFF=$(echo "scale=2; $DIFF_BYTES / (1024 * 1024)" | bc)
+RAW_DELTA=$(mnemosyne diff "$BEFORE" "$AFTER" | awk '/Delta size/ {print $4}')
+DELTA_MB=${RAW_DELTA:+${RAW_DELTA#+}}
+DELTA_MB=${DELTA_MB:-0}
 
-if (( $(echo "$DIFF > $THRESHOLD" | bc -l) )); then
-  echo "❌ Memory regression detected: +${DIFF}MB"
+if (( $(echo "$DELTA_MB > $THRESHOLD" | bc -l) )); then
+  echo "❌ Memory regression detected: +${DELTA_MB}MB"
   exit 1
 else
-  echo "✓ Memory usage within acceptable range: +${DIFF}MB"
+  echo "✓ Memory usage within acceptable range: +${DELTA_MB}MB"
   exit 0
 fi
 ```

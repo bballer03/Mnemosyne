@@ -13,10 +13,16 @@ pub mod graph;
 pub mod heap;
 pub mod mapper;
 pub mod mcp;
+pub mod object_graph;
 pub mod report;
 
+#[cfg(test)]
+pub mod test_fixtures;
+
 pub use ai::{focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat};
-pub use analysis::{AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions};
+pub use analysis::{
+    AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, ProvenanceKind, ProvenanceMarker,
+};
 pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
 pub use errors::CoreResult;
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};

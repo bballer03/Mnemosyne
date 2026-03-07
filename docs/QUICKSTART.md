@@ -68,6 +68,8 @@ Top 5 Memory Consumers:
   5. char[]                     198 MB  ( 8.1%)
 ```
 
+These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run now tells you exactly which classes (or record categories) dominate the dump. The same histogram is reused by `mnemosyne leaks`, `analyze`, and the dominator graph so every command describes the same top offenders.
+
 ### Step 3: Detect Leaks
 
 ```bash
@@ -94,6 +96,14 @@ Output:
    
    Issue: Unclosed HTTP response bodies
 ```
+
+Limit the output to specific categories whenever you need deterministic CI signals:
+
+```bash
+mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
+```
+
+Because the leak engine now consumes the parsed class histogram, package or severity filters operate on real data first and only fall back to synthetic names if the heap lacks useful symbols.
 
 ### Step 4: Get AI Insights (Optional)
 
@@ -169,6 +179,8 @@ export MNEMOSYNE_PACKAGES="com.example, org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
 ```
 
+`packages` now act as an allow-list for real classes first (only matching entries from the histogram become candidates) before Mnemosyne rotates through them while synthesizing fallback IDs. Likewise, `leak_types` either filters the actual leak list or, if none match, forces one synthetic entry per requested kind so your CI remains deterministic.
+
 Recommendations:
 ────────────────────────────────────────────────────────────────
 1. Break the deadlock cycle:
@@ -182,6 +194,20 @@ Recommendations:
 
 Code fixes available. Run: mnemosyne fix heap.hprof
 ```
+
+### Step 6: Save the Report
+
+Need an artifact for CI or teammates?
+
+```bash
+# HTML report
+mnemosyne analyze heap.hprof --format html --output-file report.html
+
+# JSON payload for automated checks
+mnemosyne analyze heap.hprof --format json --output-file report.json
+```
+
+`--output-file` works with every format (text/markdown/html/toon/json). If you omit it, the report streams to stdout so you can still pipe through `tee`.
 
 ---
 

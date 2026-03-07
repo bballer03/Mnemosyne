@@ -33,7 +33,7 @@ Mnemosyne looks for configuration in the following locations (in order of preced
 # Enable verbose logging
 verbose = false
 
-# Output format: "text", "toon", "markdown", "html"
+# Output format: "text", "toon", "markdown", "html", "json"
 output_format = "text"
 
 # Toggle AI-powered helpers globally
@@ -115,13 +115,15 @@ max_cache_gb = 10
 
 > **Note:** The current alpha build consumes the `general`, `parser`, `analysis`, and `ai`/`llm` sections. The remaining tables are reserved for upcoming features and are ignored for now.
 
+Valid `output_format` values today are `text`, `markdown`, `html`, `toon`, and `json` (case-insensitive). JSON pairs nicely with the new `--output-file` CLI flag to generate machine-readable artifacts without relying on shell redirection.
+
 ### Analysis Defaults
 
 The `[analysis]` table feeds every CLI and MCP command that needs leak heuristics.
 
-- `min_severity` sets the baseline filter for `mnemosyne leaks`, `analyze`, and `explain`. CLI flags such as `--min-severity` override it case-by-case.
-- `packages` accepts a list of package prefixes. The CLI currently uses the first entry when auto-filling leak identifiers, but MCP endpoints can consume the whole list.
-- `leak_types` limits the synthetic leak generator to the listed enums. Supported values mirror the `LeakKind` enum (`CACHE`, `THREAD`, `HTTP_RESPONSE`, `CLASS_LOADER`, `COLLECTION`, `LISTENER`, `COROUTINE`, `UNKNOWN`).
+- `min_severity` acts as a hard cutoff for `mnemosyne leaks`, `analyze`, and `explain`. Candidates below the threshold are dropped entirely. CLI flags such as `--min-severity` override it case-by-case.
+- `packages` accepts a list of package prefixes. Mnemosyne now treats them as an allow-list when real class histograms are available (only matching classes become leak candidates) and still rotates through the list when synthesizing fallback identifiers so each namespace shows up in the output. MCP endpoints receive the filtered list for richer prompting as well.
+- `leak_types` constrains both the real leak list (parsed from class stats/dominator context) and the synthetic fallback. If at least one matching class exists, only those kinds survive; otherwise Mnemosyne emits one deterministic entry per requested kind. Supported values mirror the `LeakKind` enum (`CACHE`, `THREAD`, `HTTP_RESPONSE`, `CLASS_LOADER`, `COLLECTION`, `LISTENER`, `COROUTINE`, `UNKNOWN`).
 
 Set these once in `.mnemosyne.toml` and your CI, MCP sessions, and CLI invocations stay aligned.
 
@@ -138,7 +140,7 @@ Environment variables override configuration file settings.
 export MNEMOSYNE_VERBOSE=true
 
 # Set output format
-export MNEMOSYNE_OUTPUT_FORMAT=toon
+export MNEMOSYNE_OUTPUT_FORMAT=json
 
 # Config file path
 export MNEMOSYNE_CONFIG=/path/to/config.toml
@@ -189,6 +191,8 @@ export MNEMOSYNE_PACKAGES="com.example, org.demo"
 # Comma-separated leak kinds (CACHE|THREAD|CLASS_LOADER|...)
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD,HTTP_RESPONSE"
 ```
+
+Setting either variable applies the same logic as the config file: packages filter real classes first, and leak kinds gate both the parsed candidates and any synthetic fallback entries.
 
 ### Logging
 
@@ -249,12 +253,13 @@ Options:
 mnemosyne analyze [OPTIONS] <HEAP_FILE>
 
 Options:
-  --ai                   Enable AI analysis
-  --package <PKG>        Filter by package
-  --min-severity <LVL>   Minimum severity (LOW|MEDIUM|HIGH|CRITICAL)
-  --leak-types <TYPES>   Comma-separated leak types
-  -o, --output <FILE>    Output file
+  --ai                   Force-enable AI analysis (otherwise driven by config)
+  --format <FMT>         Override output format (text|toon|markdown|html)
+  --package <PKG>...     Restrict to specific packages (repeat flag or comma-separated list)
+  --leak-kind <KIND>...  Restrict leak kinds (repeat flag or comma list)
 ```
+
+`[analysis]` settings (e.g., `min_severity`, `packages`, `leak_types`) are picked up automatically.
 
 ### Leaks Command
 
@@ -262,11 +267,14 @@ Options:
 mnemosyne leaks [OPTIONS] <HEAP_FILE>
 
 Options:
-  --ai                   Force-enable AI insights (otherwise driven by config)
-  --format <FMT>         Override output format (text|toon|markdown|html)
-### Diff Command
-`[analysis]` settings (e.g., `min_severity`) are picked up automatically.
+  --package <PKG>...     Filter by one or more packages (repeat flag or use commas)
+  --min-severity <LVL>   Minimum severity (LOW|MEDIUM|HIGH|CRITICAL)
+  --leak-kind <KIND>...  Restrict leak kinds
+```
 
+If you omit these flags, the defaults come from `[analysis]`.
+
+### Diff Command
 
 ```bash
 mnemosyne diff [OPTIONS] <BEFORE> <AFTER>
@@ -275,8 +283,6 @@ Options:
   --min-growth <MB>      Minimum growth to report
   --by-class            Group by class
 ```
-
-If you omit both flags, the defaults come from `[analysis]`.
 ---
 
 ## MCP Server Configuration
@@ -293,6 +299,8 @@ mnemosyne serve --config mcp-config.toml
 # With environment
 OPENAI_API_KEY=sk-... mnemosyne serve
 ```
+
+The MCP server reuses the exact same config loader as the CLI. That means `.mnemosyne.toml`, `$MNEMOSYNE_CONFIG`, `[analysis]` defaults, and all `MNEMOSYNE_*` environment overrides automatically shape every MCP request (leak severity, packages, leak kinds, AI provider, etc.).
 
 ### IDE-Specific Configuration
 

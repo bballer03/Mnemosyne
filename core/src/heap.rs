@@ -75,12 +75,13 @@ pub fn parse_heap(job: &HeapParseJob) -> CoreResult<HeapSummary> {
     } else {
         object_guess
     };
+    let classes = summarize_class_stats(&record_stats, metadata.len());
 
     Ok(HeapSummary {
         heap_path: job.path.clone(),
         total_objects: estimated_objects,
         total_size_bytes: metadata.len(),
-        classes: Vec::new(),
+        classes,
         generated_at: SystemTime::now(),
         header: Some(header),
         total_records,
@@ -154,7 +155,7 @@ fn scan_hprof_records<R: Read>(reader: &mut R) -> CoreResult<(u64, Vec<RecordSta
 
     let object_guess = record_stats
         .iter()
-        .filter(|stat| matches!(stat.tag, 0x21 | 0x22 | 0x23))
+        .filter(|stat| matches!(stat.tag, 0x21..=0x23))
         .map(|stat| stat.count)
         .sum();
 
@@ -200,6 +201,31 @@ fn tag_name(tag: u8) -> &'static str {
     }
 }
 
+fn summarize_class_stats(record_stats: &[RecordStat], total_size_bytes: u64) -> Vec<ClassStat> {
+    if total_size_bytes == 0 {
+        return Vec::new();
+    }
+
+    let total_bytes = total_size_bytes as f64;
+    record_stats
+        .iter()
+        .filter(|stat| matches!(stat.tag, 0x21..=0x23))
+        .map(|stat| {
+            let percentage = if stat.bytes == 0 {
+                0.0
+            } else {
+                ((stat.bytes as f64 / total_bytes) * 100.0) as f32
+            };
+            ClassStat {
+                name: stat.name.clone(),
+                instances: stat.count,
+                total_size_bytes: stat.bytes,
+                percentage,
+            }
+        })
+        .collect()
+}
+
 impl HeapSummary {
     pub fn placeholder(path: &str) -> Self {
         Self {
@@ -233,5 +259,47 @@ impl HeapDiff {
                 after_bytes: 89_000_000,
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarizes_class_stats_from_records() {
+        let record_stats = vec![
+            RecordStat {
+                tag: 0x21,
+                name: "INSTANCE_DUMP".into(),
+                count: 10,
+                bytes: 512,
+            },
+            RecordStat {
+                tag: 0x07,
+                name: "HEAP_SUMMARY".into(),
+                count: 1,
+                bytes: 128,
+            },
+            RecordStat {
+                tag: 0x22,
+                name: "OBJECT_ARRAY_DUMP".into(),
+                count: 4,
+                bytes: 256,
+            },
+        ];
+
+        let classes = summarize_class_stats(&record_stats, 1024);
+        assert_eq!(2, classes.len());
+        assert_eq!("INSTANCE_DUMP", classes[0].name);
+        assert_eq!(10, classes[0].instances);
+        assert!(classes[0].percentage > 45.0 && classes[0].percentage < 55.0);
+        assert_eq!("OBJECT_ARRAY_DUMP", classes[1].name);
+    }
+
+    #[test]
+    fn handles_zero_length_heaps() {
+        let classes = summarize_class_stats(&[], 0);
+        assert!(classes.is_empty());
     }
 }

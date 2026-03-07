@@ -2,11 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use dirs::config_dir;
 use mnemosyne_core::{
     analysis::{LeakKind, LeakSeverity},
-    AiConfig,
-    AiProvider,
-    AnalysisConfig,
-    AppConfig,
-    OutputFormat,
+    AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat,
 };
 use serde::Deserialize;
 use std::{

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -6,7 +6,8 @@ mod config_loader;
 use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakSeverity,
+        analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakKind,
+        LeakSeverity,
     },
     config::{AppConfig, OutputFormat},
     fix::{propose_fix, FixRequest, FixStyle},
@@ -71,8 +72,10 @@ struct LeakArgs {
     heap: PathBuf,
     #[arg(long, value_enum)]
     min_severity: Option<SeverityArg>,
-    #[arg(long)]
-    package: Option<String>,
+    #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
+    packages: Vec<String>,
+    #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
+    leak_kind: Vec<LeakKindArg>,
 }
 
 #[derive(Debug, Parser)]
@@ -80,8 +83,14 @@ struct AnalyzeArgs {
     heap: PathBuf,
     #[arg(long, value_enum, default_value_t = OutputFormatArg::Text)]
     format: OutputFormatArg,
+    #[arg(short = 'o', long = "output-file", value_name = "FILE")]
+    output: Option<PathBuf>,
     #[arg(long)]
     ai: bool,
+    #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
+    packages: Vec<String>,
+    #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
+    leak_kind: Vec<LeakKindArg>,
 }
 
 #[derive(Debug, Parser)]
@@ -117,6 +126,10 @@ struct ExplainArgs {
     leak_id: Option<String>,
     #[arg(long, value_enum)]
     min_severity: Option<SeverityArg>,
+    #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
+    packages: Vec<String>,
+    #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
+    leak_kind: Vec<LeakKindArg>,
 }
 
 #[derive(Debug, Parser)]
@@ -152,6 +165,7 @@ enum OutputFormatArg {
     Toon,
     Markdown,
     Html,
+    Json,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -159,6 +173,18 @@ enum FixStyleArg {
     Minimal,
     Defensive,
     Comprehensive,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum LeakKindArg {
+    Unknown,
+    Cache,
+    Coroutine,
+    Thread,
+    HttpResponse,
+    ClassLoader,
+    Collection,
+    Listener,
 }
 
 impl From<SeverityArg> for LeakSeverity {
@@ -179,6 +205,7 @@ impl From<OutputFormatArg> for OutputFormat {
             OutputFormatArg::Toon => OutputFormat::Toon,
             OutputFormatArg::Markdown => OutputFormat::Markdown,
             OutputFormatArg::Html => OutputFormat::Html,
+            OutputFormatArg::Json => OutputFormat::Json,
         }
     }
 }
@@ -189,6 +216,21 @@ impl From<FixStyleArg> for FixStyle {
             FixStyleArg::Minimal => FixStyle::Minimal,
             FixStyleArg::Defensive => FixStyle::Defensive,
             FixStyleArg::Comprehensive => FixStyle::Comprehensive,
+        }
+    }
+}
+
+impl From<LeakKindArg> for LeakKind {
+    fn from(value: LeakKindArg) -> Self {
+        match value {
+            LeakKindArg::Unknown => LeakKind::Unknown,
+            LeakKindArg::Cache => LeakKind::Cache,
+            LeakKindArg::Coroutine => LeakKind::Coroutine,
+            LeakKindArg::Thread => LeakKind::Thread,
+            LeakKindArg::HttpResponse => LeakKind::HttpResponse,
+            LeakKindArg::ClassLoader => LeakKind::ClassLoader,
+            LeakKindArg::Collection => LeakKind::Collection,
+            LeakKindArg::Listener => LeakKind::Listener,
         }
     }
 }
@@ -209,7 +251,7 @@ async fn main() -> Result<()> {
         Commands::GcPath(args) => handle_gc_path(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
         Commands::Fix(args) => handle_fix(args).await?,
-        Commands::Serve(args) => handle_serve(args).await?,
+        Commands::Serve(args) => handle_serve(args, &loaded_config.data).await?,
         Commands::Config => handle_config(&loaded_config)?,
     }
 
@@ -232,8 +274,11 @@ async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
     if let Some(sev) = args.min_severity {
         options.min_severity = sev.into();
     }
-    if let Some(package) = args.package {
-        options.package_filter = Some(package);
+    if !args.packages.is_empty() {
+        options.package_filters = args.packages.clone();
+    }
+    if !args.leak_kind.is_empty() {
+        options.leak_types = args.leak_kind.iter().copied().map(LeakKind::from).collect();
     }
 
     let leaks = detect_leaks(args.heap.to_string_lossy().as_ref(), options).await?;
@@ -245,6 +290,11 @@ async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
             leak.severity,
             leak.retained_size_bytes as f64 / (1024.0 * 1024.0)
         );
+        for marker in &leak.provenance {
+            let detail = marker.detail.as_deref().unwrap_or("");
+            let kind = format!("{:?}", marker.kind).to_uppercase();
+            println!("    [{kind}] {detail}");
+        }
     }
     Ok(())
 }
@@ -254,6 +304,12 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
     config.output = args.format.into();
     let use_ai = args.ai || config.ai.enabled;
     config.ai.enabled = use_ai;
+    if !args.packages.is_empty() {
+        config.analysis.packages = args.packages.clone();
+    }
+    if !args.leak_kind.is_empty() {
+        config.analysis.leak_types = args.leak_kind.iter().copied().map(LeakKind::from).collect();
+    }
     let leak_options = LeakDetectionOptions::from(&config.analysis);
 
     let response = analyze_heap(AnalyzeRequest {
@@ -269,7 +325,16 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         format: config.output,
     })?;
 
-    println!("{}", report.contents);
+    if let Some(path) = args.output {
+        fs::write(&path, &report.contents)?;
+        println!(
+            "Report ({}) written to {}",
+            report.mime_type,
+            path.display()
+        );
+    } else {
+        println!("{}", report.contents);
+    }
     Ok(())
 }
 
@@ -279,7 +344,30 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
         args.after.to_string_lossy().as_ref(),
     )
     .await?;
-    println!("Heap diff result:\n{diff:#?}");
+    println!("Heap diff: {} -> {}", diff.before, diff.after);
+    println!(
+        "  Delta size: {:+.2} MB",
+        diff.delta_bytes as f64 / (1024.0 * 1024.0)
+    );
+    println!("  Delta objects: {:+}", diff.delta_objects);
+
+    if diff.changed_classes.is_empty() {
+        println!("  No dominant class or record shifts detected.");
+    } else {
+        println!("  Top changes:");
+        for entry in &diff.changed_classes {
+            let delta = entry.after_bytes as i64 - entry.before_bytes as i64;
+            let before_mb = entry.before_bytes as f64 / (1024.0 * 1024.0);
+            let after_mb = entry.after_bytes as f64 / (1024.0 * 1024.0);
+            println!(
+                "    - {}: {:+.2} MB (before {:.2} MB -> after {:.2} MB)",
+                entry.name,
+                delta as f64 / (1024.0 * 1024.0),
+                before_mb,
+                after_mb
+            );
+        }
+    }
     Ok(())
 }
 
@@ -336,12 +424,27 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
         );
     }
 
+    if !response.provenance.is_empty() {
+        println!();
+        for marker in &response.provenance {
+            let detail = marker.detail.as_deref().unwrap_or("");
+            let kind = format!("{:?}", marker.kind).to_uppercase();
+            println!("  [{}] {}", kind, detail);
+        }
+    }
+
     Ok(())
 }
 
 async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()> {
     let mut config = base_config.clone();
     config.ai.enabled = true;
+    if !args.packages.is_empty() {
+        config.analysis.packages = args.packages.clone();
+    }
+    if !args.leak_kind.is_empty() {
+        config.analysis.leak_types = args.leak_kind.iter().copied().map(LeakKind::from).collect();
+    }
     let mut leak_options = LeakDetectionOptions::from(&config.analysis);
     if let Some(sev) = args.min_severity {
         leak_options.min_severity = sev.into();
@@ -401,10 +504,19 @@ async fn handle_fix(args: FixArgs) -> Result<()> {
         println!("Patch:\n{}", suggestion.diff);
     }
 
+    if !response.provenance.is_empty() {
+        println!();
+        for marker in &response.provenance {
+            let detail = marker.detail.as_deref().unwrap_or("");
+            let kind = format!("{:?}", marker.kind).to_uppercase();
+            println!("  [{}] {}", kind, detail);
+        }
+    }
+
     Ok(())
 }
 
-async fn handle_serve(args: ServeArgs) -> Result<()> {
+async fn handle_serve(args: ServeArgs, cfg: &AppConfig) -> Result<()> {
     warn!("Starting MCP server; press Ctrl+C to stop");
     let options = McpServerOptions {
         host: args.host,
@@ -412,7 +524,7 @@ async fn handle_serve(args: ServeArgs) -> Result<()> {
     };
 
     tokio::select! {
-        res = serve(options) => {
+        res = serve(options, cfg.clone()) => {
             res?;
             Ok(())
         }
@@ -461,6 +573,20 @@ fn print_summary(summary: &HeapSummary) {
     }
     println!("Estimated objects: {}", summary.total_objects);
     println!("Total HPROF records: {}", summary.total_records);
+
+    if !summary.classes.is_empty() {
+        println!("Top classes by retained size:");
+        for (idx, class) in summary.classes.iter().take(5).enumerate() {
+            println!(
+                "  {}. {} — {:.2} MB ({:.1}%, {} instances)",
+                idx + 1,
+                class.name,
+                class.total_size_bytes as f64 / (1024.0 * 1024.0),
+                class.percentage,
+                class.instances
+            );
+        }
+    }
 
     if !summary.record_stats.is_empty() {
         println!("Top record tags:");

@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mnemosyne serve` now honors the shared configuration loader, so MCP requests reuse the same `[analysis]`, AI, and parser defaults as the CLI (including `--config` and `$MNEMOSYNE_CONFIG` precedence)
 - `mnemosyne diff` now parses both snapshots, reports delta size/object counts, and lists the largest class/record shifts with friendlier CLI output plus refreshed docs/examples
 - Authentic GC root tracing: `core::gc_path` parses real roots/class dumps/instance dumps to build best-effort paths (with a graceful synthetic fallback) and comes with updated docs + fixtures
+- Provenance system: `ProvenanceKind` enum (`Synthetic`, `Partial`, `Fallback`, `Placeholder`) and `ProvenanceMarker` struct integrated into `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, `FixResponse`; synthetic paths, fix suggestions, and fallback data are labeled automatically
+- Provenance rendering across all non-JSON report formats (Text, Markdown, HTML, TOON) with per-leak and response-level markers; three dedicated tests cover text, TOON, and HTML provenance output
+- CLI provenance display: `leaks`, `gc-path`, and `fix` subcommands now surface provenance markers when present
+- Output hardening: `escape_html()` prevents XSS in HTML reports; `escape_toon_value()` handles control characters and backslashes in TOON key-value output; two dedicated tests validate escaping behavior
+- Clippy cleanup: resolved range-pattern warnings in `heap.rs` and iterator warning in `mapper.rs`
+- Milestone 1 foundations: new `core::object_graph` module defines canonical heap-object, class, field, and GC-root types for upcoming retained-size and dominator work
+- Synthetic HPROF fixture builders: new `core::test_fixtures` module plus `resources/test-fixtures/README.md` document deterministic heap shapes for parser/graph tests
+- GitHub Actions CI workflow: `.github/workflows/ci.yml` now runs workspace `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` on pushes and pull requests
 
 ### Coming Soon
 - HPROF parser implementation

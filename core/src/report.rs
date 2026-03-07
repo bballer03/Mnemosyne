@@ -1,6 +1,35 @@
-use crate::{analysis::AnalyzeResponse, config::OutputFormat, errors::CoreResult};
+use crate::{analysis::{AnalyzeResponse, ProvenanceKind}, config::OutputFormat, errors::CoreResult};
 use serde::{Deserialize, Serialize};
+use serde_json::to_string_pretty;
 use std::fmt::Write as _;
+
+fn escape_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_toon_value(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+}
+
+fn provenance_label(kind: ProvenanceKind) -> &'static str {
+    match kind {
+        ProvenanceKind::Synthetic => "SYNTHETIC",
+        ProvenanceKind::Partial => "PARTIAL",
+        ProvenanceKind::Fallback => "FALLBACK",
+        ProvenanceKind::Placeholder => "PLACEHOLDER",
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportRequest {
@@ -16,23 +45,22 @@ pub struct ReportArtifact {
 
 /// Generate a textual artifact from the provided analysis output.
 pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
-    let body = match request.format {
-        OutputFormat::Text => render_text(&request.analysis),
-        OutputFormat::Toon => render_toon(&request.analysis),
-        OutputFormat::Markdown => render_markdown(&request.analysis),
-        OutputFormat::Html => render_html(&request.analysis),
+    let (contents, mime_type) = match request.format {
+        OutputFormat::Text => (render_text(&request.analysis), "text/plain"),
+        OutputFormat::Toon => (render_toon(&request.analysis), "application/x-toon"),
+        OutputFormat::Markdown => (render_markdown(&request.analysis), "text/markdown"),
+        OutputFormat::Html => (render_html(&request.analysis), "text/html"),
+        OutputFormat::Json => (render_json(&request.analysis)?, "application/json"),
     };
 
     Ok(ReportArtifact {
-        mime_type: match request.format {
-            OutputFormat::Text => "text/plain",
-            OutputFormat::Toon => "application/x-toon",
-            OutputFormat::Markdown => "text/markdown",
-            OutputFormat::Html => "text/html",
-        }
-        .into(),
-        contents: body,
+        mime_type: mime_type.into(),
+        contents,
     })
+}
+
+fn render_json(analysis: &AnalyzeResponse) -> CoreResult<String> {
+    Ok(to_string_pretty(analysis)?)
 }
 
 fn render_toon(analysis: &AnalyzeResponse) -> String {
@@ -78,8 +106,17 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
                 &mut doc,
                 4,
                 "description",
-                leak.description.replace('\n', " "),
+                &leak.description,
             );
+            for (pidx, marker) in leak.provenance.iter().enumerate() {
+                let detail = marker.detail.as_deref().unwrap_or("");
+                push_kv(
+                    &mut doc,
+                    4,
+                    &format!("provenance#{pidx}"),
+                    format!("{}: {}", provenance_label(marker.kind), detail),
+                );
+            }
         }
     }
 
@@ -105,17 +142,28 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
             "confidence_pct",
             format!("{:.0}", ai.confidence * 100.0),
         );
-        push_kv(&mut doc, 2, "summary", ai.summary.replace('\n', " "));
+        push_kv(&mut doc, 2, "summary", &ai.summary);
         if ai.recommendations.is_empty() {
             push_kv(&mut doc, 2, "recommendations", "none");
         } else {
             for (idx, rec) in ai.recommendations.iter().enumerate() {
                 doc.push_str(&format!("  rec#{idx}\n"));
-                push_kv(&mut doc, 4, "text", rec.replace('\n', " "));
+                push_kv(&mut doc, 4, "text", rec);
             }
         }
     } else {
         push_kv(&mut doc, 2, "status", "disabled");
+    }
+
+    if !analysis.provenance.is_empty() {
+        doc.push_str("section provenance\n");
+        for (idx, marker) in analysis.provenance.iter().enumerate() {
+            doc.push_str(&format!("  marker#{idx}\n"));
+            push_kv(&mut doc, 4, "kind", provenance_label(marker.kind));
+            if let Some(detail) = &marker.detail {
+                push_kv(&mut doc, 4, "detail", detail);
+            }
+        }
     }
 
     doc
@@ -125,7 +173,8 @@ fn push_kv<T: std::fmt::Display>(buf: &mut String, indent: usize, key: &str, val
     for _ in 0..indent {
         buf.push(' ');
     }
-    let _ = writeln!(buf, "{}={}", key, value);
+    let raw = value.to_string();
+    let _ = writeln!(buf, "{}={}", key, escape_toon_value(&raw));
 }
 
 fn render_text(analysis: &AnalyzeResponse) -> String {
@@ -151,6 +200,10 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
                 leak.instances,
                 leak.description
             ));
+            for marker in &leak.provenance {
+                let detail = marker.detail.as_deref().unwrap_or("");
+                body.push_str(&format!("    [{}] {}\n", provenance_label(marker.kind), detail));
+            }
         }
     }
 
@@ -175,6 +228,14 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
         ));
         for rec in &ai.recommendations {
             body.push_str(&format!("- {}\n", rec));
+        }
+    }
+
+    if !analysis.provenance.is_empty() {
+        body.push_str("\nProvenance\n----------\n");
+        for marker in &analysis.provenance {
+            let detail = marker.detail.as_deref().unwrap_or("");
+            body.push_str(&format!("[{}] {}\n", provenance_label(marker.kind), detail));
         }
     }
 
@@ -212,6 +273,14 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
                 leak.instances,
                 leak.description
             ));
+            for marker in &leak.provenance {
+                let detail = marker.detail.as_deref().unwrap_or("");
+                doc.push_str(&format!(
+                    "  > **{}**: {}\n",
+                    provenance_label(marker.kind),
+                    detail
+                ));
+            }
         }
     }
 
@@ -242,6 +311,18 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if !analysis.provenance.is_empty() {
+        doc.push_str("\n## Provenance\n\n");
+        for marker in &analysis.provenance {
+            let detail = marker.detail.as_deref().unwrap_or("");
+            doc.push_str(&format!(
+                "- **{}**: {}\n",
+                provenance_label(marker.kind),
+                detail
+            ));
+        }
+    }
+
     doc
 }
 
@@ -252,13 +333,23 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     } else {
         leak_list.push_str("<ul>");
         for leak in &analysis.leaks {
+            let prov_spans: String = leak.provenance.iter().map(|m| {
+                let detail = m.detail.as_deref().unwrap_or("");
+                format!(
+                    " <span class=\"provenance {}\">[{}] {}</span>",
+                    provenance_label(m.kind).to_lowercase(),
+                    escape_html(provenance_label(m.kind)),
+                    escape_html(detail),
+                )
+            }).collect();
             leak_list.push_str(&format!(
-                "<li><strong>{}</strong> [{}]: {:?} (~{:.2} MB, {} instances)</li>",
-                leak.class_name,
-                leak.id,
+                "<li><strong>{}</strong> [{}]: {:?} (~{:.2} MB, {} instances){}</li>",
+                escape_html(&leak.class_name),
+                escape_html(&leak.id),
                 leak.severity,
                 leak.retained_size_bytes as f64 / (1024.0 * 1024.0),
-                leak.instances
+                leak.instances,
+                prov_spans
             ));
         }
         leak_list.push_str("</ul>");
@@ -271,18 +362,33 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
                 let items: String = ai
                     .recommendations
                     .iter()
-                    .map(|rec| format!("<li>{}</li>", rec))
+                    .map(|rec| format!("<li>{}</li>", escape_html(rec)))
                     .collect();
                 format!("<ul>{}</ul>", items)
             };
             format!(
                 "<section><h2>AI Insights</h2><p><strong>Model:</strong> {model} (confidence {confidence:.0}%)</p><p>{summary}</p>{recs}</section>",
-                model = ai.model,
+                model = escape_html(&ai.model),
                 confidence = ai.confidence * 100.0,
-                summary = ai.summary,
+                summary = escape_html(&ai.summary),
                 recs = recs,
             )
         }).unwrap_or_default();
+
+    let provenance_block = if analysis.provenance.is_empty() {
+        String::new()
+    } else {
+        let items: String = analysis.provenance.iter().map(|m| {
+            let detail = m.detail.as_deref().unwrap_or("");
+            format!(
+                "<li class=\"provenance-{}\">[{}] {}</li>",
+                provenance_label(m.kind).to_lowercase(),
+                escape_html(provenance_label(m.kind)),
+                escape_html(detail),
+            )
+        }).collect();
+        format!("<section class=\"provenance\"><h2>Provenance</h2><ul>{items}</ul></section>")
+    };
 
     format!(
         r#"<section>
@@ -294,12 +400,187 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     <p><strong>Graph Nodes:</strong> {nodes}</p>
     <div><strong>Leaks:</strong> {leak_list}</div>
       {ai_block}
+            {provenance_block}
 </section>"#,
-        heap = analysis.summary.heap_path,
+        heap = escape_html(&analysis.summary.heap_path),
         objects = analysis.summary.total_objects,
         size = analysis.summary.total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
         leaks = analysis.leaks.len(),
         nodes = analysis.graph.node_count,
-        leak_list = leak_list
+                leak_list = leak_list,
+                provenance_block = provenance_block
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_escaping_prevents_xss() {
+        let input = r#"<script>alert("xss")</script> & 'quotes'"#;
+        let escaped = escape_html(input);
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+        assert!(!escaped.contains('"'));
+        assert!(escaped.contains("&amp;"));
+        assert!(escaped.contains("&lt;"));
+        assert!(escaped.contains("&gt;"));
+        assert!(escaped.contains("&quot;"));
+        assert!(escaped.contains("&#x27;"));
+    }
+
+    #[test]
+    fn toon_escaping_handles_control_chars() {
+        let input = "line1\nline2\r\nwith\\backslash";
+        let escaped = escape_toon_value(input);
+        assert!(!escaped.contains('\n'));
+        assert!(!escaped.contains('\r'));
+        assert_eq!(escaped, "line1\\nline2\\r\\nwith\\\\backslash");
+    }
+
+    #[test]
+    fn text_report_renders_provenance() {
+        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::graph::GraphMetrics;
+        use crate::heap::HeapSummary;
+        use std::time::{Duration, SystemTime};
+
+        let response = AnalyzeResponse {
+            summary: HeapSummary {
+                heap_path: "test.hprof".into(),
+                total_objects: 100,
+                total_size_bytes: 1024,
+                classes: Vec::new(),
+                generated_at: SystemTime::now(),
+                header: None,
+                total_records: 0,
+                record_stats: Vec::new(),
+            },
+            leaks: vec![LeakInsight {
+                id: "test::leak".into(),
+                class_name: "TestClass".into(),
+                leak_kind: LeakKind::Cache,
+                severity: LeakSeverity::High,
+                retained_size_bytes: 512,
+                instances: 5,
+                description: "test leak".into(),
+                provenance: vec![ProvenanceMarker::new(
+                    ProvenanceKind::Synthetic,
+                    "test provenance",
+                )],
+            }],
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(42),
+            graph: GraphMetrics::default(),
+            ai: None,
+            provenance: vec![ProvenanceMarker::new(
+                ProvenanceKind::Partial,
+                "response provenance",
+            )],
+        };
+
+        let text = render_text(&response);
+        assert!(text.contains("[SYNTHETIC]"), "leak provenance missing");
+        assert!(text.contains("test provenance"), "leak provenance detail missing");
+        assert!(text.contains("[PARTIAL]"), "response provenance missing");
+        assert!(
+            text.contains("response provenance"),
+            "response provenance detail missing"
+        );
+    }
+
+    #[test]
+    fn toon_report_renders_provenance() {
+        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::graph::GraphMetrics;
+        use crate::heap::HeapSummary;
+        use std::time::{Duration, SystemTime};
+
+        let response = AnalyzeResponse {
+            summary: HeapSummary {
+                heap_path: "test.hprof".into(),
+                total_objects: 100,
+                total_size_bytes: 1024,
+                classes: Vec::new(),
+                generated_at: SystemTime::now(),
+                header: None,
+                total_records: 0,
+                record_stats: Vec::new(),
+            },
+            leaks: vec![LeakInsight {
+                id: "test::leak".into(),
+                class_name: "TestClass".into(),
+                leak_kind: LeakKind::Cache,
+                severity: LeakSeverity::High,
+                retained_size_bytes: 512,
+                instances: 5,
+                description: "test leak".into(),
+                provenance: vec![ProvenanceMarker::new(
+                    ProvenanceKind::Synthetic,
+                    "synth detail",
+                )],
+            }],
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(42),
+            graph: GraphMetrics::default(),
+            ai: None,
+            provenance: vec![ProvenanceMarker::new(
+                ProvenanceKind::Partial,
+                "response detail",
+            )],
+        };
+
+        let toon = render_toon(&response);
+        assert!(toon.contains("SYNTHETIC: synth detail"), "leak provenance missing in TOON");
+        assert!(toon.contains("section provenance"), "response provenance section missing in TOON");
+        assert!(toon.contains("kind=PARTIAL"), "response provenance kind missing in TOON");
+    }
+
+    #[test]
+    fn html_report_renders_provenance() {
+        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::graph::GraphMetrics;
+        use crate::heap::HeapSummary;
+        use std::time::{Duration, SystemTime};
+
+        let response = AnalyzeResponse {
+            summary: HeapSummary {
+                heap_path: "test.hprof".into(),
+                total_objects: 100,
+                total_size_bytes: 1024,
+                classes: Vec::new(),
+                generated_at: SystemTime::now(),
+                header: None,
+                total_records: 0,
+                record_stats: Vec::new(),
+            },
+            leaks: vec![LeakInsight {
+                id: "test::leak".into(),
+                class_name: "TestClass".into(),
+                leak_kind: LeakKind::Cache,
+                severity: LeakSeverity::High,
+                retained_size_bytes: 512,
+                instances: 5,
+                description: "test leak".into(),
+                provenance: vec![ProvenanceMarker::new(
+                    ProvenanceKind::Synthetic,
+                    "html synth detail",
+                )],
+            }],
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(42),
+            graph: GraphMetrics::default(),
+            ai: None,
+            provenance: vec![ProvenanceMarker::new(
+                ProvenanceKind::Partial,
+                "html response detail",
+            )],
+        };
+
+        let html = render_html(&response);
+        assert!(html.contains("provenance synthetic"), "leak provenance class missing in HTML");
+        assert!(html.contains("[SYNTHETIC]"), "leak provenance label missing in HTML");
+        assert!(html.contains("provenance-partial"), "response provenance class missing in HTML");
+    }
 }
