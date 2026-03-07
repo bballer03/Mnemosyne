@@ -38,6 +38,44 @@ Before proposing or making changes, read in this order:
 
 ---
 
+## Agent-Enabled Execution Model
+
+This repository uses an **orchestrated multi-agent model** where each agent has specific responsibilities, tool access, and execution capabilities.
+
+### Key agents and their roles
+
+| Agent | Primary role | Expected tools |
+|---|---|---|
+| **Implementation** | Default owner for all coding tasks. Edits source files and validates via terminal. | file edit, terminal (cargo check/test/clippy/fmt, git), codebase search, GitHub MCP (read, optional) |
+| **GitHub Ops** | Owns GitHub Actions, CI/CD, PR/issue/branch, and workflow investigation. | GitHub MCP tools, terminal (git, gh CLI), codebase search, workflow file read/write |
+| **Testing** | Writes and runs tests after implementation. | file edit (test files only), terminal (cargo test), codebase search |
+| **Orchestration** | Routes tasks, assigns files, grants tools. Never codes. | agent dispatch, codebase search, fetch |
+| **Architecture Review** | Design review only. | read only |
+| **Static Analysis** | Post-test risk pass. | read + diagnostics |
+| **API Contract** | Contract alignment across CLI/MCP/docs. | read; write for docs/schemas when assigned |
+| **Documentation Sync** | Updates docs after successful implementation batches. | read + write for doc files only |
+| **Tech PM** | Roadmap, milestones, feature planning. | read + write for `docs/roadmap.md` only |
+
+### Routing expectations
+
+- **Coding tasks** (edit source, fix bugs, implement features) → **Implementation Agent**
+- **Build/test/lint/format execution** → **Implementation Agent** (small scope) or **Testing Agent** (broad scope)
+- **CI failures, GitHub Actions issues, workflow investigation** → **GitHub Ops Agent**
+- **PR/issue/branch state questions** → **GitHub Ops Agent**
+- **Architecture-only review** → **Architecture Review Agent**
+- **Documentation updates after code changes** → **Documentation Sync Agent**
+- **Roadmap and milestone planning** → **Tech PM Agent**
+
+### Local tool-enabled sessions
+
+- Agent sessions running locally in VS Code with terminal access are the **preferred mode** for code edits and validation.
+- The Implementation Agent should always use terminal tools (`cargo check`, `cargo test`, `cargo clippy`, `cargo fmt`) to validate changes before handoff.
+- The GitHub Ops Agent should use GitHub MCP tools when available, falling back to `gh` CLI or local git inspection.
+- **Agents must verify actual runtime tool availability before attempting to use them.** If a required tool is unavailable, report it and adjust approach rather than failing silently.
+- Patch-only output is a fallback of last resort, only used when the user explicitly requests it.
+
+---
+
 ## Multi-Agent Operating Model
 
 ### Controller
