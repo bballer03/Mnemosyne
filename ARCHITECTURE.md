@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** March 7, 2026  
+> **Last Updated:** March 8, 2026  
 > **Version:** Alpha  
 > **[← Back to README](README.md)**
 
@@ -58,7 +58,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. Clippy warnings in `heap.rs` and `mapper.rs` resolved.
-- **Validation scaffolding:** Synthetic HPROF fixture builders, the `test-fixtures` cargo feature, and a GitHub Actions workflow now provide deterministic parser inputs and automated workspace validation across 80 passing tests, including 16 CLI integration tests.
+- **Validation scaffolding:** Synthetic HPROF fixture builders, the `test-fixtures` cargo feature, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 87 passing tests, including 23 CLI integration tests.
 
 ### Still in progress
 - **Extending graph-backed analysis into remaining surfaces**, especially diffing and richer MAT-style suspect ranking.

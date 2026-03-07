@@ -27,7 +27,7 @@ pub use analysis::{
 };
 pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
 pub use dominator::{build_dominator_tree, DominatorTree, VIRTUAL_ROOT_ID};
-pub use errors::CoreResult;
+pub use errors::{CoreError, CoreResult};
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use gc_path::{find_gc_path, GcPathNode, GcPathRequest, GcPathResult};
 pub use graph::{DominatorNode, GraphMetrics};

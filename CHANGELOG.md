@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-08
+
 ### Added
+- Comfy-table-based aligned terminal tables for `mnemosyne parse` summary sections and `mnemosyne leaks`, plus follow-up disclosure sections that print full record-category names, leak IDs, and leak class names when table cells are width-bounded
+- Structured error handling with contextual hints for missing heap dumps, common non-HPROF inputs (`.jar`, `.class`, `.log`, `.txt`, `.csv`), HPROF header parse failures, and invalid config files; the CLI now prints colored `hint:` lines from `CoreError` suggestions
 - Initial project structure
 - Documentation (README, ARCHITECTURE, CONTRIBUTING)
 - Copilot instructions for fun commit messages
 - Architecture diagrams (SVG)
+- GitHub Actions release automation in `.github/workflows/release.yml`: validate `v*` tags against `[workspace.package].version`, cross-compile `mnemosyne-cli` for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows, package tar.gz/zip archives, and publish GitHub Releases with generated notes plus attached binaries
+- Docker image distribution: multi-stage `Dockerfile` + `.dockerignore`, non-root `debian:bookworm-slim` runtime with `ENTRYPOINT ["mnemosyne-cli"]` and `WORKDIR /data`, plus a GHCR publish job in `.github/workflows/release.yml` that pushes `ghcr.io/<owner>/mnemosyne` with `<version>`, `<major>.<minor>`, and `latest` tags on tagged releases
+- Homebrew formula in `HomebrewFormula/mnemosyne.rb` for macOS release archives, with Intel/Apple Silicon selection via `Hardware::CPU.arm?` and release SHA placeholders to fill on the first tagged release
 - Rust workspace scaffolding (`mnemosyne-core` + `mnemosyne-cli`) with stub CLI commands and core APIs
 - Basic HPROF header parsing with CLI wiring for `parse`, `leaks`, and `analyze`
 - Record-level HPROF scanning with CLI summaries (top tags, record counts, heuristics-driven leak severity)
@@ -48,70 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `test-fixtures` cargo feature on `mnemosyne-core` so integration tests can import canonical HPROF fixture builders without inlining them
 - Narrowed `test_fixtures` public API: only `build_simple_fixture()` and `build_graph_fixture()` remain externally visible; builders are `pub(crate)`
 
----
-
-## [0.1.0] - TBD (Alpha Release)
-
-### Planned Features
-- Basic heap dump parsing
-- Class histogram generation
-- Dominator tree computation
-- Simple leak detection
-- CLI tool with basic commands
-- MCP server for IDE integration
-
----
-
-## Version History
-
-### Alpha Phase (Current)
-- **0.1.0**: Initial alpha release (planned)
-  - Core parsing functionality
-  - Basic analysis features
-  - MCP integration
-
-### Future Phases
-
-#### Beta Phase
-- **0.2.0**: Enhanced analysis
-  - AI-powered insights
-  - Source code mapping
-  - Git integration
-
-#### Version 1.0
-- **1.0.0**: Production-ready release
-  - Stable API
-  - Complete documentation
-  - Performance optimizations
-  - Comprehensive test coverage
-
----
-
-## Release Notes Template
-
-```markdown
-## [X.Y.Z] - YYYY-MM-DD
-
-### Added
-- New features and capabilities
-
 ### Changed
-- Changes to existing functionality
-
-### Deprecated
-- Features that will be removed in future versions
-
-### Removed
-- Features that have been removed
-
-### Fixed
-- Bug fixes
-
-### Security
-- Security-related changes
-```
-
----
-
-[Unreleased]: https://github.com/bballer03/mnemosyne/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/bballer03/mnemosyne/releases/tag/v0.1.0
+- Unified maintainer identity to `bballer03` across package metadata and release-facing docs; GitHub repository and GHCR references remain on `bballer03`
+- Clarified `mnemosyne parse` summary wording so the CLI now describes heap record-category aggregate bytes/share/entries instead of implying class-level retained-size semantics; added 4 CLI regressions for parse/leak table output and truncation disclosure, bringing the validated workspace total to 87 tests including 23 CLI integration tests
+- Updated `docs/QUICKSTART.md` output examples to match the shipped table-based CLI presentation for `parse`, `leaks`, and `diff` commands; replaced aspirational progress bar and bullet-style examples with actual spinner messages, aligned ASCII tables, per-leak detail blocks, provenance markers, and inline diff output
+- Updated `README.md` output examples for `parse` and `leaks` to match the shipped spinner-based table presentation; replaced aspirational progress bar and emoji-prefixed examples with actual CLI output format
+- Updated `docs/roadmap.md` Section 11 recommended next steps to reflect completed M2 table output and doc passes; refreshed gap analysis sections (3.3, 3.6), M2 milestone status, backlog table, and added M2-B7 batch entry
+- Added a workspace-level `description` field in `Cargo.toml` so release metadata is complete for packaged artifacts
+- Completed crates.io packaging metadata across workspace/core/cli manifests by inheriting `description`, `readme`, `homepage`, `keywords`, and `categories`, and pinned the `mnemosyne-core` path dependency in `cli/Cargo.toml` to `version = "0.1.0"` for publish/install compatibility

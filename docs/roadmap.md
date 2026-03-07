@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap & Milestones
 
-> **Last updated:** 2026-03-07 (post M1 completion — all batches delivered)
+> **Last updated:** 2026-03-07 (post M2-B6 better error messages)
 > **Owner:** Tech PM Agent
 > **Status:** Living document — updated after each major implementation batch
 
@@ -30,7 +30,7 @@ Mnemosyne has the foundations to become **the first Rust-native, AI-assisted hea
 
 Five properties position Mnemosyne to stand out in a crowded JVM tooling ecosystem: **(1)** Rust performance enabling streaming analysis of heap dumps that exceed host RAM; **(2)** a provenance system unique among heap analyzers, giving users and automation confidence in result trustworthiness; **(3)** MCP-first architecture that makes heap analysis a conversation in the developer's IDE rather than a separate tool; **(4)** AI-native design with well-shaped type contracts (`AiInsights`, `AiWireExchange`, config plumbing) ready for LLM wiring; and **(5)** automation-friendly structured output (JSON, TOON) enabling CI regression detection with machine-readable leak signals.
 
-Honest assessment: **significant work remains** to deliver on this vision, but Milestone 1 is now complete and the foundational analysis engine is in place. The object graph, dominator tree, retained-size computation, unified `detect_leaks()` path, GC-path rewrite, and object navigation API are all delivered. The most critical remaining gap is AI wiring: every "AI-powered" claim in the README is aspirational today. An 80-test suite (59 core + 5 CLI unit + 16 CLI integration) now runs clean in GitHub Actions CI, and the `test-fixtures` feature keeps canonical HPROF builders reusable across unit and integration coverage. There are no release binaries, no sample real-world heap dumps, and no benchmarks. The architecture is sound, the core analysis pipeline is graph-backed across the primary analysis surfaces, and the provenance/reporting layers are well-built — the next priorities are packaging, UX, and wiring real LLM calls.
+Honest assessment: **significant work remains** to deliver on this vision, but Milestone 1 is now complete and the foundational analysis engine is in place. The object graph, dominator tree, retained-size computation, unified `detect_leaks()` path, GC-path rewrite, and object navigation API are all delivered. The most critical remaining gap is AI wiring: every "AI-powered" claim in the README is aspirational today. An 83-test suite (59 core + 5 CLI unit + 19 CLI integration) now runs clean in GitHub Actions CI, the `test-fixtures` feature keeps canonical HPROF builders reusable across unit and integration coverage, tagged GitHub releases can now publish prebuilt binaries for five targets, tagged releases also publish a GHCR Docker image, and the CLI now emits structured suggestions for common file/config mistakes. Sample real-world heap dumps, the first live crates.io publish, table-formatted output, and benchmarks are still missing. The architecture is sound, the core analysis pipeline is graph-backed across the primary analysis surfaces, and the provenance/reporting layers are well-built — the next priorities are finishing the remaining Milestone 2 output polish and wiring real LLM calls.
 
 ---
 
@@ -62,7 +62,7 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 - **Streaming design**: `core::heap` parser processes HPROF records sequentially without loading the full dump. Foundation for scaling to multi-GB files.
 - **Provenance system**: genuinely novel for a heap analyzer. Labels every synthetic/heuristic output surface so consumers know what to trust.
 - **Multi-format output**: 5 report formats with consistent provenance rendering. HTML is XSS-hardened. TOON enables compact CI consumption.
-- **80-test suite with CI**: 59 core + 5 CLI unit + 16 CLI integration tests running in GitHub Actions. Synthetic HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, and end-to-end CLI testing.
+- **83-test suite with CI**: 59 core + 5 CLI unit + 19 CLI integration tests running in GitHub Actions. Synthetic HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, end-to-end CLI testing, and targeted error-path coverage.
 - **Config hierarchy**: TOML + env vars + CLI flags with clear precedence. Production-ready design pattern.
 - **MCP integration**: stdio JSON-RPC server with 6 handlers. First-mover for heap analysis in the MCP ecosystem.
 - **Type contracts**: well-shaped request/response types (`AnalyzeRequest`, `AnalyzeResponse`, `GcPathResult`, `FixResponse`, etc.) that establish stable contracts between CLI, MCP, and core.
@@ -71,7 +71,7 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 - **AI is 100% stubbed**: `generate_ai_insights()` returns hardcoded template strings. There are zero HTTP client dependencies in `Cargo.toml`. The `AiConfig` fields (provider, model, temperature, API key) exist but connect to nothing. Every "AI-powered" claim in documentation is marketing ahead of implementation.
 - **No benchmarks or performance data**: no `criterion` benchmarks for parser throughput, graph construction, dominator computation, or report rendering. Cannot track performance regressions or compare against MAT/VisualVM.
-- **No release packaging**: build-from-source only. No `cargo install` publication, no pre-built binaries, no Homebrew formula, no Docker image.
+- **Release packaging is substantially improved but not finished**: tagged GitHub releases can now publish pre-built binaries, Homebrew scaffolding exists, and tagged releases now push a GHCR Docker image, but crates.io publication and first-release Homebrew checksum finalization are still pending.
 - **No sample real-world data**: synthetic test fixtures exist for deterministic testing, but no example real `.hprof` files for tutorials or development.
 - **Diff is record-level, not object-level**: `diff_heaps()` compares aggregate record/class statistics. It cannot track individual object migration or reference chain changes.
 - **Graph module naming is misleading**: `summarize_graph()` still exists as a lightweight fallback that builds a synthetic tree from top-12 entries. Its name suggests more than it delivers, though the real dominator tree now exists alongside it.
@@ -91,8 +91,8 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 | MCP server | Alpha | Wired and functional but outputs depend on stubs/heuristics. |
 | Config | Beta | Clean hierarchy, env + TOML + CLI. Production-ready pattern. |
 | Provenance | Beta | Unique, well-integrated across all surfaces. Novel in the space. |
-| Testing | Alpha+ | 80 tests (59 core + 5 CLI unit + 16 CLI integration). Synthetic HPROF test fixtures, reusable `test-fixtures` feature, and GitHub Actions CI. No property-based testing or benchmarks yet. |
-| CI/CD | Alpha | GitHub Actions CI runs `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt --check` on pushes and PRs. No release automation, no nightly builds. |
+| Testing | Alpha+ | 83 tests (59 core + 5 CLI unit + 19 CLI integration). Synthetic HPROF test fixtures, reusable `test-fixtures` feature, and GitHub Actions CI. No property-based testing or benchmarks yet. |
+| CI/CD | Alpha+ | GitHub Actions CI runs `cargo check`, `cargo test`, `cargo clippy`, and `cargo fmt --check` on pushes and PRs, and tagged releases now run a separate workflow that validates the tag version, cross-compiles `mnemosyne-cli` for five targets, packages archives, and publishes a GitHub Release. Nightly builds are still absent. |
 
 ---
 
@@ -108,11 +108,11 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.2 Testing & CI Gaps
 
-- **80 tests** across the workspace (59 core + 5 CLI unit + 16 CLI integration). Tests cover provenance rendering, escape functions, analysis paths, HPROF parsing, object graph construction, dominator tree correctness, retained-size computation, CLI argument handling, and end-to-end command execution.
+- **83 tests** across the workspace (59 core + 5 CLI unit + 19 CLI integration). Tests cover provenance rendering, escape functions, analysis paths, HPROF parsing, object graph construction, dominator tree correctness, retained-size computation, CLI argument handling, end-to-end command execution, and targeted failure-path UX.
 - **Synthetic HPROF test fixtures** exist in `core::test_fixtures`. Small deterministic binary HPROF files exercise the parser and graph pipeline without requiring a JVM or committing large binaries.
 - **`test-fixtures` cargo feature** exposes canonical fixture builders to integration tests without widening the builder API surface.
 - **CI pipeline running.** GitHub Actions (`.github/workflows/ci.yml`) runs `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` on pushes and PRs.
-- **16 end-to-end CLI integration tests.** `cli/tests/integration.rs` runs `parse`, `leaks`, `analyze`, `gc-path`, `diff`, `fix`, `report`, and `config` as subprocesses against synthetic HPROF fixtures and validates success/output behavior.
+- **19 end-to-end CLI integration tests.** `cli/tests/integration.rs` runs `parse`, `leaks`, `analyze`, `gc-path`, `diff`, `fix`, `report`, and `config` as subprocesses against synthetic HPROF fixtures and now also validates key error-path guidance.
 - **No integration tests against real `.hprof` files.** Tests use synthetic fixtures only. Real-world heap dumps from production JVMs are not tested.
 - **No coverage tracking.** No `cargo-tarpaulin` or `cargo-llvm-cov` integration. Unknown actual coverage percentage.
 - **No property-based testing.** Parser binary handling is a prime candidate for `proptest` or `quickcheck` fuzzing.
@@ -120,8 +120,7 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.3 Documentation & Onboarding Gaps
 
-- **README claims partially accurate now.** "Advanced object graph & dominator analysis" and "retained size" are now implemented in `analyze_heap()`. "AI-generated explanations" remain aspirational. Progress bar output still does not exist.
-- **QUICKSTART shows aspirational output.** Example output includes progress bars (`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% • 3.2s`) that the tool cannot produce.
+- **README and QUICKSTART now reflect shipped behavior.** Output examples in both files match the actual CLI table-based presentation. "AI-generated explanations" remain aspirational — AI is 100% stubbed.
 - **No API documentation.** `docs/api.md` exists but is a placeholder. `core` module public API has doc-comments on some items but no generated rustdoc site.
 - **No tutorial or cookbook.** No guided walkthrough of a real analysis session. No examples of interpreting output or acting on leak candidates.
 - **No troubleshooting guide.** No documentation for common errors, unsupported HPROF variants, or limitations.
@@ -129,12 +128,10 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.4 Packaging & Release Gaps
 
-- **Build from source only.** No published crate on crates.io, no pre-built binaries.
-- **No `cargo install` support.** The `cli` crate doesn't publish a binary target to crates.io.
-- **No release binaries.** No GitHub Releases, no CI-built artifacts for Linux/macOS/Windows.
-- **No Homebrew formula.** No tap for macOS users.
-- **No Docker image.** No container for CI/CD pipeline integration or incident response toolkits.
-- **No version tags.** Git history has no version tags. `Cargo.toml` shows `0.1.0` but no tagged release.
+- **Tagged release binaries and Docker distribution are automated, but installation is still incomplete.** `.github/workflows/release.yml` now cross-compiles and packages `mnemosyne-cli` for five targets, publishes tagged GitHub releases, and builds/pushes `ghcr.io/<owner>/mnemosyne` on tagged releases, but the crates.io publish step and first-release Homebrew SHA finalization are still outstanding.
+- **`cargo install` is not live yet.** The manifests are prepared for crates.io publication, but the first public publish still has to happen before users can install `mnemosyne-cli` directly from crates.io.
+- **Homebrew scaffolding exists, but distribution is not fully operational yet.** `HomebrewFormula/mnemosyne.rb` is in the repo, but the first tagged release still needs real SHA256 values and any longer-term tap strategy.
+- **Docker delivery is now in place.** A multi-stage `Dockerfile` builds `mnemosyne-cli` into a non-root `debian:bookworm-slim` runtime image, and tagged releases publish `ghcr.io/<owner>/mnemosyne` with semver plus `latest` tags.
 - **No changelog automation.** `CHANGELOG.md` exists but is manually maintained with a single `[Unreleased]` section.
 
 ### 3.5 Feature Parity Gaps vs Eclipse MAT
@@ -154,20 +151,14 @@ The gap is narrowing. With the object graph, dominator tree, retained sizes, uni
 
 ### 3.6 UX & Usability Gaps
 
-- **No progress bars.** Parsing large dumps shows no progress indication. The `anstream` dependency is present but unused for progress output. `indicatif` is not in the dependency tree.
-- **Limited error messages.** Error types in `core::errors` use `thiserror` with basic messages. No suggestions for common mistakes (wrong file format, missing config, etc.).
+- **Progress indicators are present, but not yet byte-accurate.** CLI commands now use `indicatif` spinners, but long-running parses still lack a true progress bar tied to bytes or records processed.
+- **Error messaging is materially better, but troubleshooting docs still lag.** `CoreError` now carries structured variants for missing files, non-HPROF inputs, HPROF header parse failures, and config errors, and the CLI prints `hint:` lines with suggestions. The remaining gap is documentation for unsupported dump variants and deeper troubleshooting scenarios.
 - **No interactive mode.** No REPL or interactive exploration of results.
-- **No color output.** `anstream` is a dependency but output is plain text. No color highlighting for severity levels, provenance markers, or key metrics.
-- **No summary dashboards.** CLI output is sequential text. No at-a-glance summary view.
-- **No table formatting.** Histograms and leak lists are printed as text. No aligned table output.
+- **Output styling is now solid for a CLI tool.** Spinners, colorized labels, and comfy-table aligned ASCII tables with truncation disclosure are shipped. Richer presentation (summary dashboards, interactive TUI) remains future work.
 
 ### 3.7 Ecosystem & Community Gaps
 
-- **No issue templates.** GitHub repo has no `.github/ISSUE_TEMPLATE/` directory.
-- **No PR templates.** No `.github/PULL_REQUEST_TEMPLATE.md`.
-- **No CODE_OF_CONDUCT.** `CONTRIBUTING.md` exists but no code of conduct.
-- **No security policy.** No `SECURITY.md` for vulnerability reporting.
-- **No contributor ladder.** No documented path from first contribution to maintainer.
+- **Community baseline files now exist, but contributor pathways are still thin.** Issue templates, a PR template, `CODE_OF_CONDUCT.md`, and `SECURITY.md` are now in place, but there is still no documented contributor ladder or maintainer path.
 - **No example projects.** `docs/examples/README.md` exists but is a placeholder.
 - **No benchmarks.** No performance comparison data against MAT, VisualVM, or YourKit.
 - **No community infrastructure.** No Discord, Discussions, or mailing list.
@@ -398,7 +389,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 8. ✅ Unified `detect_leaks()` onto the graph-backed path — attempts object graph + dominator analysis first, then falls back with explicit provenance
 9. ✅ Rewrote GC path finder over the full object graph — `ObjectGraph` BFS first, then budget-limited `GcGraph`, then synthetic fallback
 10. ✅ Added object graph navigation API — `get_object(id)`, `get_referrers(id)`, `get_references(id)`
-11. ✅ Added 16 CLI integration tests plus reusable `test-fixtures` feature — 80 total passing tests across the workspace
+11. ✅ Added 16 CLI integration tests plus reusable `test-fixtures` feature — later expanded to 19 integration tests and 83 total passing tests across the workspace
 
 **Dependencies:** None (this is the foundation)
 
@@ -412,13 +403,15 @@ Each of these views corresponds to a core analysis capability and should be desi
 - ✅ Can produce a real dominator tree
 - ✅ Leak detection uses retained-size data when available across both `analyze_heap()` and `detect_leaks()`
 - ✅ GC path uses full object graph when available, with explicit layered fallback when it is not
-- ✅ 80 tests pass (59 core + 5 CLI unit + 16 CLI integration)
+- ✅ 83 tests pass (59 core + 5 CLI unit + 19 CLI integration)
 - ✅ CI runs on every PR
 
 ---
 
 ### Milestone 2 — Packaging, Releases, and DX
 **Objective:** Make Mnemosyne easy to install, use, and contribute to.
+
+**Status:** Feature-complete. Release automation, packaging metadata/Homebrew scaffolding, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped. The only remaining item is first-release operational follow-through: crates.io publication and Homebrew SHA finalization on the first tagged release.
 
 **Why it matters:** No one adopts a tool they can't easily install. Developer experience is the gateway to open-source adoption.
 
@@ -649,7 +642,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 #### M1-B7: Integration Tests ✅
 - **Status:** Delivered
-- **Outcome:** Added 16 CLI integration tests in `cli/tests/integration.rs` covering parse, leaks, analyze, gc-path, diff, fix, report, and config. The `test-fixtures` cargo feature eliminates fixture duplication and brings the total suite to 80 passing tests.
+- **Outcome:** Added 16 CLI integration tests in `cli/tests/integration.rs` covering parse, leaks, analyze, gc-path, diff, fix, report, and config. The `test-fixtures` cargo feature eliminates fixture duplication; later M2 work expanded this to 19 integration tests and 83 passing tests overall.
 
 ### Milestone 2 Batches
 
@@ -657,6 +650,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 - **Goal:** Add progress bars (indicatif) for long-running operations and colorized output
 - **Files/modules affected:** `cli/src/main.rs`, `cli/Cargo.toml` (add indicatif dep)
 - **Expected agent owner:** Implementation Agent
+- **Status:** ✅ Delivered (spinners, colorized labels, and severity/provenance styling are now wired into the CLI)
 - **Validation:** `mnemosyne parse large.hprof` shows a progress bar; errors are red, warnings yellow; tests pass
 - **Risk notes:** Progress reporting requires parser to emit progress callbacks — may need parser interface change
 - **Non-scope:** Do not change core analysis or report logic
@@ -665,7 +659,8 @@ Each of these views corresponds to a core analysis capability and should be desi
 - **Goal:** Set up GitHub Actions to cross-compile and publish release binaries for Linux/macOS/Windows on tag push
 - **Files/modules affected:** `.github/workflows/release.yml` (new), `Cargo.toml` (version metadata)
 - **Expected agent owner:** Implementation Agent
-- **Validation:** Pushing a version tag produces GitHub Release with binaries
+- **Status:** ✅ Delivered (workflow added; tagged release path is now automated)
+- **Validation:** Pushing a version tag produces a GitHub Release with binaries; the workflow also validates the tag version against `[workspace.package].version`
 - **Risk notes:** Cross-compilation can be tricky; consider cross-rs or cargo-zigbuild
 - **Non-scope:** Do not set up Homebrew or Docker yet
 
@@ -673,9 +668,37 @@ Each of these views corresponds to a core analysis capability and should be desi
 - **Goal:** Publish mnemosyne-cli to crates.io; create Homebrew formula
 - **Files/modules affected:** `Cargo.toml` metadata, new `Formula/` or homebrew-tap repo
 - **Expected agent owner:** Implementation Agent
+- **Status:** ⚠️ Mostly delivered (metadata and Homebrew formula scaffolding are in place; crates.io publish and real SHA values still pending)
 - **Validation:** `cargo install mnemosyne-cli` works; `brew install mnemosyne` works
 - **Risk notes:** crates.io requires unique name; may need to check availability
 - **Non-scope:** Do not set up Docker yet
+
+#### M2-B5: Community Files and Templates
+- **Goal:** Add issue templates, PR template, and core community files
+- **Files/modules affected:** `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`
+- **Expected agent owner:** Implementation Agent
+- **Status:** ✅ Delivered
+- **Validation:** GitHub presents bug/feature issue templates and the repository includes contributor conduct and security reporting guidance
+- **Risk notes:** Keep templates aligned with actual support expectations
+- **Non-scope:** Do not expand into contributor-program documentation yet
+
+#### M2-B6: Better Error Messages with Suggestions/Context
+- **Goal:** Replace generic CLI/core failure paths with structured errors, actionable hints, and stronger validation for common user mistakes
+- **Files/modules affected:** `core/src/errors.rs`, `core/src/heap.rs`, `cli/src/main.rs`, `cli/tests/integration.rs`, `core/src/lib.rs`
+- **Expected agent owner:** Implementation Agent
+- **Status:** ✅ Delivered
+- **Validation:** Missing-file errors suggest nearby `.hprof` paths, common wrong extensions produce targeted HPROF guidance, invalid config loads surface fix hints, and 3 new CLI integration tests cover the new error paths
+- **Risk notes:** Error quality still depends on the parser surfacing enough phase/detail context for deeper failures
+- **Non-scope:** Do not add table formatting or broader troubleshooting docs in this batch
+
+#### M2-B7: Table-Formatted CLI Output
+- **Goal:** Add comfy-table for aligned table output in CLI parse summaries and leak listings
+- **Files/modules affected:** `cli/src/main.rs`, `cli/Cargo.toml`, `cli/tests/integration.rs`
+- **Expected agent owner:** Implementation Agent
+- **Status:** ✅ Delivered (comfy-table aligned tables, truncation-safe disclosure with row-stable identifiers, corrected parse summary wording)
+- **Validation:** 87 tests passing (59 core + 5 CLI unit + 23 CLI integration), clippy clean
+- **Risk notes:** None — shipped cleanly after 5 review cycles
+- **Non-scope:** Core analysis, report rendering, MCP output unchanged
 
 ---
 
@@ -779,12 +802,13 @@ Every capability exposed via CLI is also available as a Rust library and via MCP
 | 7 | Rewrite GC path over full object graph | P0 | High | M | Object graph | M1 | ✅ Done |
 | 8 | Object graph navigation API | P0 | High | M | Object graph | M1 | ✅ Done |
 | 9 | Integration tests via reusable synthetic HPROF fixtures | P0 | High | L | Test fixtures + CI | M1 | ✅ Done |
-| 10 | Release binaries | P1 | High | M | CI pipeline (✅) | M2 | ⚬ Pending |
+| 10 | Release binaries | P1 | High | M | CI pipeline (✅) | M2 | ✅ Done |
 | 11 | cargo install support | P1 | High | S | Release setup | M2 | ⚬ Pending |
-| 12 | CLI progress bars + colors | P1 | Medium | S | None | M2 | ⚬ Pending |
+| 12 | CLI progress bars + colors | P1 | Medium | S | None | M2 | ✅ Done |
+| 12a | Table-formatted CLI output | P1 | Medium | S | CLI UX (✅) | M2 | ✅ Done |
 | 13 | MAT-style leak suspects | P1 | High | L | Retained sizes (✅) | M3 | ⚬ Pending |
 | 14 | Histogram by class/package/classloader | P1 | High | M | Object graph (✅) | M3 | ⚬ Pending |
-| 15 | Homebrew formula | P1 | Medium | S | Release binaries | M2 | ⚬ Pending |
+| 15 | Homebrew formula | P1 | Medium | S | Release binaries | M2 | ✅ Done |
 | 16 | LLM integration (real API calls) | P1 | High | L | Meaningful data (✅ M1) | M5 | ⚬ Pending |
 | 17 | Enhanced heap diff | P1 | Medium | M | Object graph (✅) | M3 | ⚬ Pending |
 | 18 | Static interactive HTML reports | P2 | High | L | Reporting exists | M4 | ⚬ Pending |
@@ -796,7 +820,7 @@ Every capability exposed via CLI is also available as a Rust library and via MCP
 | 24 | Unreachable objects | P2 | Medium | M | Object graph (✅) | M3 | ⚬ Pending |
 | 25 | Configurable prompt/task runner | P2 | Medium | L | LLM integration | M5 | ⚬ Pending |
 | 26 | AI conversation mode | P2 | Medium | L | LLM integration | M5 | ⚬ Pending |
-| 27 | Docker image | P2 | Medium | S | Release automation | M2 | ⚬ Pending |
+| 27 | Docker image | P2 | Medium | S | Release automation | M2 | ✅ Done |
 | 28 | Example projects + sample dumps | P2 | Medium | M | Test fixtures (✅) | M6 | ⚬ Pending |
 | 29 | Benchmark suite | P2 | Medium | M | Object graph (✅) | M6 | ⚬ Pending |
 | 30 | Plugin/extension system | P3 | Medium | XL | Stable APIs (M3+) | M6 | ⚬ Pending |
@@ -807,24 +831,35 @@ Every capability exposed via CLI is also available as a Rust library and via MCP
 
 ## Section 11 — Recommended Immediate Next Steps
 
-Milestone 1 is delivered and validated (80 tests, clippy clean, fmt clean). The immediate next steps now begin Milestone 2:
+Milestone 1 is delivered and validated. Milestone 2 is now feature-complete: release automation, packaging metadata/Homebrew scaffolding, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped. 87 tests pass (59 core + 5 CLI unit + 23 CLI integration), clippy and fmt are clean.
 
-### Step 1: M2-B1 — CLI UX Improvements
-**Why next:** Quick win for developer experience. Progress bars, colored output, better error messages. Low risk.
-**Owner:** Implementation Agent
+The only remaining M2 item is operational release follow-through. After that, the project is ready to begin Milestone 3 core analysis work.
+
+### Step 1: First public release follow-through
+**Why next:** Every M2 feature is shipped. The remaining tasks are operational: publish `mnemosyne-core` and `mnemosyne-cli` to crates.io, tag the first release, and replace the Homebrew SHA256 placeholders with real checksums from the release artifacts.
+**Owner:** Implementation Agent (crates.io publish) + GitHub Ops Agent (tag + release)
 **Effort:** Small
+**Blocked by:** Nothing — ready to execute.
 
-### Step 2: M2-B2 — Release Automation
-**Why next:** Get binaries out so people can actually install and use the tool without building from source.
+### Step 2: MAT-style leak suspects algorithm (M3 entry point)
+**Why next:** With the graph-backed retained-size pipeline fully operational, the highest-impact M3 feature is a real leak suspect ranker that identifies objects with disproportionate retained vs shallow size and accumulation patterns. This directly improves the quality of `mnemosyne leaks` output.
+**Owner:** Implementation Agent
+**Effort:** Large
+**Dependencies:** M1 object graph + dominator tree (✅ delivered)
+
+### Step 3: Histogram improvements — group by class/package/classloader
+**Why next:** The parse summary still shows record-category aggregates. With the object graph available, histograms can group by fully-qualified class name, package prefix, and classloader — closing a key MAT parity gap and making `mnemosyne parse` output dramatically more useful.
 **Owner:** Implementation Agent
 **Effort:** Medium
+**Dependencies:** M1 object graph (✅ delivered)
 
-### Step 3: M2-B3 — Packaging (cargo install + Homebrew)
-**Why next:** Complete the distribution story for the broadest reach.
+### Step 4: Enhanced heap diff — object/class-level comparison
+**Why next:** `diff_heaps()` currently compares record-level statistics. With two object graphs available, the diff can track new/freed objects and delta retained sizes per class — a core investigation workflow.
 **Owner:** Implementation Agent
-**Effort:** Small
+**Effort:** Medium
+**Dependencies:** M1 object graph (✅ delivered)
 
 ---
 
 *This roadmap is a living document. Update it after each major batch completion.*
-*Next review: after the first Milestone 2 batch lands.*
+*Next review: after first public release (crates.io + Homebrew SHA) or after M3 Step 2 lands.*

@@ -5,13 +5,20 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-authors = ["Mnemosyne Contributors <opensource@mnemosyne.dev>"]
+authors = ["bballer03"]
 license = "Apache-2.0"
 repository = "https://github.com/bballer03/mnemosyne"
+description = "AI-powered JVM heap analysis tool — parse HPROF dumps, detect memory leaks, trace GC paths"
+readme = "README.md"
+homepage = "https://github.com/bballer03/mnemosyne"
+keywords = ["jvm", "heap-dump", "memory-leak", "hprof", "analysis"]
+categories = ["command-line-utilities", "development-tools::profiling"]
 
 [workspace.dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+console = "0.15"
+indicatif = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 petgraph = "0.6"

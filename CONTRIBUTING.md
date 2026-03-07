@@ -29,6 +29,8 @@ This project adheres to a code of conduct that all contributors are expected to 
 
 ## Getting Started
 
+Mnemosyne is maintained by **bballer03**. Contribute against the upstream repository at https://github.com/bballer03/mnemosyne.
+
 ### Prerequisites
 
 - **Rust** 1.70 or later

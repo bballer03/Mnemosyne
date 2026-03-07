@@ -7,6 +7,24 @@ pub enum CoreError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("File not found: {path}")]
+    FileNotFound {
+        path: String,
+        suggestion: Option<String>,
+    },
+
+    #[error("Not a valid HPROF file: {path}")]
+    NotAnHprof { path: String, detail: String },
+
+    #[error("HPROF parse error ({phase}): {detail}")]
+    HprofParseError { phase: String, detail: String },
+
+    #[error("Configuration error: {detail}")]
+    ConfigError {
+        detail: String,
+        suggestion: Option<String>,
+    },
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
@@ -21,4 +39,15 @@ pub enum CoreError {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl CoreError {
+    /// Returns the user-facing suggestion/hint if available.
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            CoreError::FileNotFound { suggestion, .. } => suggestion.as_deref(),
+            CoreError::ConfigError { suggestion, .. } => suggestion.as_deref(),
+            _ => None,
+        }
+    }
 }

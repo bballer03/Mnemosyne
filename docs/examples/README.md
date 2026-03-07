@@ -145,11 +145,11 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       
       - name: Install Mnemosyne
         run: |
-          cargo install mnemosyne
+          cargo install mnemosyne-cli
       
       - name: Run Tests and Capture Heap Dump
         run: |
@@ -170,7 +170,7 @@ jobs:
           fi
       
       - name: Upload Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: memory-report
           path: memory-report.toon
@@ -192,7 +192,7 @@ spec:
         spec:
           containers:
           - name: mnemosyne
-            image: mnemosyne:latest
+            image: ghcr.io/bballer03/mnemosyne:0.1.0
             env:
             - name: OPENAI_API_KEY
               valueFrom:

@@ -15,6 +15,7 @@ agents:
   - Documentation Sync
   - Tech PM
   - GitHub Ops
+  - Security
 model: Claude Opus 4.6 (copilot)
 target: vscode
 handoffs:
@@ -39,6 +40,12 @@ handoffs:
   - label: Investigate CI/GitHub
     agent: GitHub Ops
     prompt: Investigate the GitHub Actions failure, workflow issue, PR state, or CI problem. Diagnose root cause and report findings with recommended fixes.
+  - label: Security Audit
+    agent: Security
+    prompt: Perform a security audit of the specified scope. Inspect code, dependencies, configs, workflows, and input/output paths for security risks. Produce a structured findings report with severity ratings and remediation recommendations. Do not modify code unless remediation is explicitly requested.
+  - label: Security Remediation
+    agent: Security
+    prompt: Remediate the approved security findings. Apply minimal, scoped fixes. Hand off dependency upgrade work to Implementation Agent and docs updates to Documentation Sync Agent if user-visible behavior changes.
 ---
 
 # Mnemosyne Orchestration Agent
@@ -101,6 +108,11 @@ You coordinate all other agents. You must never become the default coder.
 | Cleanup after stable correctness | Refactor |
 | Post-batch documentation updates | Documentation Sync |
 | Product review, roadmap, and feature planning | Tech PM |
+| Security audit / review | **Security** |
+| Vulnerable dependency review | **Security** (review) → Implementation (upgrade) |
+| Security remediation (approved findings) | **Security** (review + approve) → Implementation (code fixes) |
+| Secret / credential scanning | **Security** |
+| Workflow / CI security review | **Security** (may consult GitHub Ops for runtime context) |
 
 ### Routing priorities
 1. **Prefer Implementation Agent** for any task that involves code edits, feature work, `cargo fmt`, or parser/architecture changes.
@@ -110,6 +122,9 @@ You coordinate all other agents. You must never become the default coder.
 5. Use handoffs instead of re-analysis — once a task is investigated, hand findings to the execution agent rather than re-running discovery.
 6. If Testing Agent finds a production bug, hand off to Implementation — Testing must not edit production source.
 7. If GitHub Ops identifies a code fix needed, hand off to Implementation — do not let GitHub Ops edit production source.
+8. **Security audits and vulnerability reviews always route to the Security Agent first.** Security Agent owns the review; Implementation Agent owns the code fix if remediation is approved.
+9. If Security Agent remediation changes user-visible behavior or security guidance, hand off to Documentation Sync Agent for docs updates.
+10. If a security fix changes module boundaries or trust boundaries, consult **Architecture Review Agent** before approving implementation.
 
 ### Post-implementation validation sequence
 After any implementation batch, the standard validation sequence is:
@@ -117,6 +132,14 @@ After any implementation batch, the standard validation sequence is:
 2. **Testing Agent** runs `cargo check` + `cargo test` (unit and integration). Reports pass/fail.
 3. **Static Analysis Agent** runs `cargo clippy`. Reports findings.
 4. **Documentation Sync Agent** updates docs if the batch changed user-facing behavior.
+
+### Post-security-remediation validation sequence
+After any security remediation batch, this validation sequence applies:
+1. **Security Agent** applies approved fixes (remediation mode) or hands off code changes to **Implementation Agent**.
+2. **Testing Agent** runs `cargo check` + `cargo test`. Reports pass/fail.
+3. **Static Analysis Agent** runs `cargo clippy`. Reports findings.
+4. **Documentation Sync Agent** updates docs if the remediation changed user-visible behavior, configuration, or security guidance.
+5. **Security Agent** performs a follow-up audit on the changed files to confirm the findings are resolved.
 
 Review agents must not become implementation owners unless you explicitly reassign ownership and document why.
 
@@ -135,6 +158,7 @@ Review agents must not become implementation owners unless you explicitly reassi
 | Documentation Sync | read + write for docs only (STATUS.md, README.md, ARCHITECTURE.md, CHANGELOG.md, docs/) |
 | Tech PM | read + write for `docs/roadmap.md` only (planning artifacts) |
 | GitHub Ops | read + terminal + GitHub MCP (when available); write only for `.github/workflows/` when assigned |
+| Security | read + search + codebase + changes + usages; write (editFiles) only in remediation mode when explicitly approved |
 
 Tools are granted per task, not permanently.
 
@@ -227,6 +251,17 @@ If the task requires direct code implementation and no assigned agent has write 
 - name the missing capability
 - do not return plans when execution was requested
 
+If the task requires security remediation and the Security Agent lacks `editFiles` capability:
+- stop immediately
+- name the missing capability (`editFiles` / write access)
+- do not fall back to patch-only output unless the user explicitly asked for patches
+- do not claim remediation was performed when no files were changed
+
+If security remediation validation is needed but terminal tools are unavailable:
+- report that `cargo check` / `cargo test` / `cargo clippy` cannot be run
+- note that validation was not performed
+- do not claim the remediation is validated
+
 If the task requires GitHub platform access and neither GitHub MCP tools nor `gh` CLI are available:
 - report the specific tools that are unavailable
 - proceed with whatever local investigation is possible (git log, workflow file inspection)
@@ -242,6 +277,9 @@ If the task requires GitHub platform access and neither GitHub MCP tools nor `gh
 - do not silently degrade to patch mode
 - do not route CI/workflow tasks to Implementation when GitHub Ops is available
 - do not route code edits to GitHub Ops — always hand off to Implementation
+- do not run Security Agent in remediation mode unless explicitly instructed — audit-only is the default
+- do not claim the Security Agent is callable unless the framework actually registers it with `name: Security` in its frontmatter
+- do not skip post-remediation validation (Testing → Static Analysis) after security fixes
 
 ## Mandatory handoff contract
 Every sub-agent must return exactly:

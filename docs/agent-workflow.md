@@ -36,6 +36,14 @@ Once a batch is approved, this is the only valid execution order:
 
 Any deviation from this order requires explicit orchestration justification.
 
+### Post-security-remediation execution order
+After security remediation is approved and applied:
+1. **Security Agent** applies approved fixes (remediation mode) or hands off code changes to **Implementation Agent**
+2. **Testing Agent** runs `cargo check` + `cargo test` to validate remediation
+3. **Static Analysis Agent** runs `cargo clippy` for post-fix risk pass
+4. **Documentation Sync Agent** updates docs if remediation changed user-visible behavior or security guidance
+5. **Security Agent** (optional) confirms findings are resolved via follow-up audit
+
 ## Agent Routing Rules
 
 | Task type | Default owner |
@@ -50,6 +58,17 @@ Any deviation from this order requires explicit orchestration justification.
 | Design review | Architecture Review |
 | Logs/metrics/tracing | Observability |
 | Cleanup after correctness is stable | Refactor |
+| Security audit / review | Security |
+| Dependency vulnerability review | Security (review) → Implementation (upgrade) |
+| Workflow / CI security review | Security |
+| Approved security remediation | Security (review + approve) → Implementation (code fixes) |
+| Secret / credential scanning | Security |
+
+### Security routing rules
+- Security audits and vulnerability reviews always route to the **Security Agent** first.
+- The Security Agent owns the review. The Implementation Agent owns code fixes if remediation is approved.
+- If approved remediation changes user-visible behavior or security guidance, hand off to **Documentation Sync Agent**.
+- If a security fix changes module boundaries or trust boundaries, consult **Architecture Review Agent** before implementation.
 
 Review agents must not become implementation owners unless orchestration explicitly reassigns ownership with justification.
 
@@ -65,6 +84,15 @@ If implementation is requested but write capability is unavailable:
 - do not fall back to patch-only mode unless the user explicitly asked for patches
 - do not restart analysis to fill the gap
 
+If security remediation is requested but `editFiles` is unavailable:
+- stop immediately
+- name the missing capability (`editFiles` / write access) and blocked task
+- do not fall back to patch-only mode unless the user explicitly asked for patches
+
+If validation is required after remediation but terminal tools are unavailable:
+- report the limitation
+- do not claim the remediation is validated
+
 ## Tool Governance
 
 | Role | Default access |
@@ -77,6 +105,7 @@ If implementation is requested but write capability is unavailable:
 | Testing | read + execute; write only for test files |
 | Observability | read only; write only for approved instrumentation |
 | Refactor | read only; write only after correctness is stable |
+| Security | read + search + codebase + changes + usages; write (editFiles) only in remediation mode when explicitly approved |
 
 Tools are granted per task, not permanently.
 
@@ -133,6 +162,7 @@ Once a scoped batch is approved:
 - observability review
 - testing gap analysis
 - static analysis review
+- security audit (read-only mode)
 
 ### Must be sequential
 - shared model edits
@@ -143,11 +173,13 @@ Once a scoped batch is approved:
 - testing after implementation edits
 - static analysis after testing
 - refactor after correctness is stable
+- security remediation followed by testing then static analysis
 
 ### Forbidden combinations
 - two agents editing the same file
 - Implementation + Refactor on the same module
 - Implementation + API Contract changing the same runtime file simultaneously
+- Security remediation + Implementation on the same file without explicit ownership transfer
 
 ## Merge Readiness Checklist
 

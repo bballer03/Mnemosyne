@@ -9,6 +9,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-generated fi
 - [Key Features](#-key-features)
 - [Architecture](#-architecture)
 - [Installation](#-installation)
+- [Maintainer](#-maintainer)
 - [Usage](#-usage)
 - [MCP Integration](#-mcp-integration)
 - [Project Structure](#-project-structure)
@@ -46,9 +47,11 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
 - `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
-- Class histograms derived directly from raw HPROF record stats so CLI summaries stay accurate
+- Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
+- Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
 - Shared object-graph model now lives in `core::object_graph`, with `core::hprof_parser` and `core::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`)
+- Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
@@ -99,22 +102,62 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 ## 🛠 Installation
 
 > Mnemosyne is currently in **alpha**.
-> Full binaries and installers will be added soon.
+> Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. The repository is now prepared for `cargo install mnemosyne-cli` publication, includes a Homebrew formula for macOS release archives, and publishes a Docker image to `ghcr.io/bballer03/mnemosyne` on tagged releases.
 
-The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus synthetic HPROF fixture builders used by the test suite.
+The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
-### 1. Clone the repository
+### 1. Download a tagged release binary
+Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
+
+### 2. Install with Cargo
+After `mnemosyne-core` and `mnemosyne-cli` are published to crates.io, install the CLI with:
+
+```bash
+cargo install mnemosyne-cli
+```
+
+The workspace metadata and versioned internal dependency specs are now in place for crates.io publication, but the first live publish still has to happen before this command works outside the repository.
+
+### 3. Install with Homebrew (macOS)
+The repository now includes `HomebrewFormula/mnemosyne.rb` for tagged GitHub Release archives:
+
+```bash
+brew install ./HomebrewFormula/mnemosyne.rb
+```
+
+The formula selects Apple Silicon vs Intel archives automatically with `Hardware::CPU.arm?`. Replace the placeholder SHA256 values with the release archive checksums from the first tagged release before using it.
+
+### 4. Run with Docker
+Tagged releases now publish a container image to GHCR with version, major.minor, and `latest` tags:
+
+```bash
+# Use a specific version tag instead of :latest for reproducibility
+docker pull ghcr.io/bballer03/mnemosyne:0.1.0
+
+# Parse a heap dump
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 parse /data/heap.hprof
+
+# Analyze a heap dump
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 analyze /data/heap.hprof
+
+# Detect leaks
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 leaks /data/heap.hprof
+```
+
+The image runs as a non-root user, uses `/data` as its working directory, and sets `mnemosyne-cli` as the entrypoint so heap dumps can be mounted directly into the container.
+
+### 5. Clone the repository
 ```bash
 git clone https://github.com/bballer03/mnemosyne
 cd mnemosyne
 ```
 
-### 2. Build using Rust
+### 6. Build using Rust
 ```bash
 cargo build --release
 ```
 
-### 3. Set up environment variables (optional, for AI features)
+### 7. Set up environment variables (optional, for AI features)
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
 # or use a .env file
@@ -148,10 +191,17 @@ When you specify multiple `packages`, Mnemosyne first treats them as an allow-li
 
 Prefer shell overrides? Export `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` before running the CLI to apply the same defaults without a file.
 
-### 4. Run
+### 8. Run
+The packaged binary name is `mnemosyne-cli`:
+
 ```bash
-./target/release/mnemosyne parse heap.hprof
+./target/release/mnemosyne-cli parse heap.hprof
 ```
+
+## 👤 Maintainer
+
+Mnemosyne is maintained by **bballer03**.
+GitHub repository: https://github.com/bballer03/mnemosyne
 
 ---
 
@@ -166,21 +216,29 @@ mnemosyne parse heap.hprof
 
 **Example output:**
 ```
-Parsing heap dump: heap.hprof (2.4 GB)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% • 3.2s
-
-Heap Summary:
-  Total Objects: 1,234,567
-  Total Size: 2.4 GB
-  Classes: 4,321
-
-Top Memory Consumers:
-  1. java.lang.String[]         421 MB  (17.2%)
-  2. com.example.CacheEntry     385 MB  (15.7%)
-  3. byte[]                     312 MB  (12.7%)
+✓ Parsed heap dump.
+Heap path: heap.hprof
+File size: 2.40 GB
+Format: JAVA PROFILE 1.0.2 | Identifier bytes: 8 | Timestamp(ms): 1709836800000
+Estimated objects: 1234567
+Total HPROF records: 5678901
+Top heap record categories by aggregate bytes:
+ #  Record Category           Bytes      Share  Entries
+ 1  INSTANCE_DUMP           421.00 MB    50.1%   345678
+ 2  PRIMITIVE_ARRAY_DUMP    312.00 MB    37.1%   234567
+ 3  OBJECT_ARRAY_DUMP        89.00 MB    10.6%    67890
+ 4  CLASS_DUMP               12.00 MB     1.4%     4321
+ 5  HEAP_DUMP_SEGMENT         7.50 MB     0.9%       12
+Top record tags:
+ Record Tag                    Hex  Entries       Size
+ HEAP_DUMP_SEGMENT            0x1C       12  841.50 MB
+ STRING_IN_UTF8               0x01    89012   15.00 MB
+ LOAD_CLASS                   0x02     4321    0.50 MB
+ STACK_TRACE                  0x05     1234    0.20 MB
+ STACK_FRAME                  0x04     5678    0.10 MB
 ```
 
-Those numbers come straight from Mnemosyne's lightweight class histogram that is derived directly from the HPROF record stream. The same data now drives leak heuristics, diff output, and dominator summaries so every surface references the same ground truth.
+Those numbers come straight from Mnemosyne's lightweight record-stat histogram derived from the HPROF stream. The parse view is intentionally record-category oriented, while richer class- and object-level retained-size semantics still live in the graph-backed analysis path. If a record-category label is truncated to fit the terminal table, Mnemosyne prints a follow-up disclosure section with the full value.
 
 #### Detect memory leaks
 ```bash
@@ -189,20 +247,24 @@ mnemosyne leaks heap.hprof
 
 **Example output:**
 ```
-🔍 Analyzing for memory leaks...
+✓ Leak detection complete.
+Potential leaks:
+ Leak ID               Class                               Kind      Severity  Retained    Instances
+ leak-usersession-1    com.example.UserSessionCache         Cache     High      512.00 MB      125432
+ leak-okhttp-1         okhttp3.Response                     Resource  Medium     89.00 MB        8921
 
-⚠️  Potential Leaks Detected:
+  Leak: leak-usersession-1
+    Description: Cache growing unbounded, cleanup thread blocked
+    Provenance:
+      [SYNTHETIC] generated from histogram heuristics
 
-1. com.example.UserSessionCache (HIGH SEVERITY)
-   Instances: 125,432
-   Retained Size: 512 MB
-   GC Root: Thread "session-cleanup" (BLOCKED)
-   
-2. okhttp3.Response (MEDIUM SEVERITY)
-   Instances: 8,921
-   Retained Size: 89 MB
-   Issue: Unclosed HTTP responses
+  Leak: leak-okhttp-1
+    Description: Unclosed HTTP response bodies
+    Provenance:
+      [SYNTHETIC] generated from histogram heuristics
 ```
+
+Long leak IDs and class names stay recoverable even when the terminal table bounds cell width; Mnemosyne emits disclosure sections immediately after the table whenever truncation occurs.
 
 Tune the heuristics per run with `--leak-kind`. Repeat the flag (or provide a comma list) to emit one synthetic entry per requested category:
 

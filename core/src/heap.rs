@@ -94,23 +94,27 @@ fn parse_hprof_header<R: Read>(reader: &mut R) -> CoreResult<HprofHeader> {
     loop {
         let mut byte = [0u8; 1];
         if reader.read(&mut byte)? == 0 {
-            return Err(CoreError::InvalidInput(
-                "unexpected EOF while reading HPROF header".into(),
-            ));
+            return Err(CoreError::HprofParseError {
+                phase: "header".into(),
+                detail: "unexpected EOF while reading header".into(),
+            });
         }
         if byte[0] == 0 {
             break;
         }
         if header_bytes.len() > 1024 {
-            return Err(CoreError::InvalidInput(
-                "HPROF header exceeded expected length".into(),
-            ));
+            return Err(CoreError::HprofParseError {
+                phase: "header".into(),
+                detail: "header string exceeded 1024 bytes — this may not be an HPROF file".into(),
+            });
         }
         header_bytes.push(byte[0]);
     }
 
-    let format = String::from_utf8(header_bytes)
-        .map_err(|err| CoreError::InvalidInput(format!("invalid HPROF header string: {err}")))?;
+    let format = String::from_utf8(header_bytes).map_err(|err| CoreError::HprofParseError {
+        phase: "header".into(),
+        detail: format!("invalid header string: {err}"),
+    })?;
     let identifier_size = reader.read_u32::<BigEndian>()?;
     let timestamp_millis = reader.read_u64::<BigEndian>()?;
 

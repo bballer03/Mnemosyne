@@ -48,6 +48,97 @@ fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn write_record(buf: &mut Vec<u8>, tag: u8, body: &[u8]) {
+    buf.push(tag);
+    buf.extend_from_slice(&0u32.to_be_bytes());
+    buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    buf.extend_from_slice(body);
+}
+
+fn build_parse_table_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+    bytes.extend_from_slice(&8u32.to_be_bytes());
+    bytes.extend_from_slice(&0u64.to_be_bytes());
+
+    write_record(&mut bytes, 0x21, &[0; 28]);
+    write_record(&mut bytes, 0x21, &[0; 20]);
+    write_record(&mut bytes, 0x22, &[0; 16]);
+    write_record(&mut bytes, 0x23, &[0; 8]);
+    write_record(&mut bytes, 0x0C, &[0; 12]);
+
+    bytes
+}
+
+fn build_fallback_leak_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+    bytes.extend_from_slice(&8u32.to_be_bytes());
+    bytes.extend_from_slice(&0u64.to_be_bytes());
+
+    write_record(&mut bytes, 0x01, b"synthetic-record");
+    write_record(&mut bytes, 0x0C, &[]);
+
+    bytes
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        output.push(ch);
+    }
+
+    output
+}
+
+fn normalized_stdout(output: &[u8]) -> String {
+    strip_ansi(&stdout_string(output))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_for_assert(value: &str, max_width: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_width {
+        return value.to_string();
+    }
+
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let truncated: String = value.chars().take(max_width - 3).collect();
+    format!("{truncated}...")
+}
+
+fn extract_between<'a>(input: &'a str, prefix: &str, suffix: &str) -> &'a str {
+    input
+        .split_once(prefix)
+        .and_then(|(_, rest)| rest.split_once(suffix).map(|(value, _)| value))
+        .unwrap()
+}
+
+fn extract_all_between(input: &str, prefix: &str, suffix: &str) -> Vec<String> {
+    input
+        .split(prefix)
+        .skip(1)
+        .map(|segment| segment.split_once(suffix).unwrap().0.to_string())
+        .collect()
+}
+
 #[test]
 fn test_parse_prints_summary() {
     let fixture = write_fixture(&build_simple_fixture());
@@ -63,12 +154,36 @@ fn test_parse_prints_summary() {
 }
 
 #[test]
+fn test_parse_emits_table_formatted_summary_sections() {
+    let fixture = write_fixture(&build_parse_table_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd.args(["parse", fixture_path.as_str()]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Top heap record categories by aggregate bytes:"));
+    assert!(stdout.contains("# Record Category Bytes Share Entries"));
+    assert!(stdout.contains("INSTANCE_DUMP"));
+    assert!(stdout.contains("OBJECT_ARRAY_DUMP"));
+    assert!(stdout.contains("PRIMITIVE_ARRAY_DUMP"));
+
+    assert!(stdout.contains("Top record tags:"));
+    assert!(stdout.contains("Record Tag Hex Entries Size"));
+    assert!(stdout.contains("HEAP_DUMP 0x0C"));
+}
+
+#[test]
 fn test_parse_nonexistent_file() {
     let missing = "/tmp/mnemosyne-cli-does-not-exist.hprof";
     let (mut cmd, _sandbox) = cli_command();
 
     cmd.args(["parse", missing]);
-    cmd.assert().failure();
+    cmd.assert().failure().stderr(
+        predicate::str::contains("not found").or(predicate::str::contains("Heap dump not found")),
+    );
 }
 
 #[test]
@@ -99,6 +214,111 @@ fn test_leaks_with_severity_filter() {
 
     cmd.args(["leaks", fixture_path.as_str(), "--min-severity", "critical"]);
     cmd.assert().success();
+}
+
+#[test]
+fn test_leaks_emits_table_and_readable_detail_blocks() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["leaks", fixture_path.as_str(), "--min-severity", "low"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Potential leaks:"));
+    assert!(stdout.contains("Leak ID Class Kind Severity Retained Instances"));
+    assert!(stdout.contains("com.example.CacheLeak"));
+    assert!(stdout.contains("Cache"));
+
+    assert!(stdout.contains("Leak:"));
+    assert!(stdout.contains("Description:"));
+    assert!(stdout.contains("Provenance:"));
+    assert!(stdout.contains("SYNTHETIC"));
+    assert!(stdout.contains("FALLBACK"));
+}
+
+#[test]
+fn test_leaks_prints_full_ids_and_class_names_after_table_truncation() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let long_package =
+        "com.example.really.long.package.name.with.deep.nesting.for.truncation.regression";
+    let full_class_name = format!("{long_package}.CacheLeakCandidate");
+    let truncated_class_name = truncate_for_assert(&full_class_name, 34);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "leaks",
+            fixture_path.as_str(),
+            "--min-severity",
+            "low",
+            "--package",
+            long_package,
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    let full_leak_id = extract_between(&stdout, "Leak: ", " Description:");
+    let truncated_leak_id = truncate_for_assert(full_leak_id, 20);
+
+    assert!(stdout.contains("Potential leaks:"));
+    assert!(stdout.contains("Leak ID Class Kind Severity Retained Instances"));
+    assert_ne!(truncated_leak_id, full_leak_id);
+    assert!(stdout.contains(&truncated_leak_id));
+    assert!(stdout.contains("Full leak IDs for truncated rows:"));
+    assert!(stdout.contains(&format!("{} -> {}", truncated_leak_id, full_leak_id)));
+    assert!(stdout.contains(&format!("Leak: {full_leak_id}")));
+    assert!(stdout.contains(&truncated_class_name));
+    assert!(stdout.contains("Full class names for truncated leak rows:"));
+    assert!(stdout.contains(&format!("-> {full_class_name}")));
+}
+
+#[test]
+fn test_leaks_discloses_colliding_truncated_ids_with_row_stable_mapping() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let long_package =
+        "com.example.really.long.package.name.with.deep.nesting.for.row.stable.id.regression";
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "leaks",
+            fixture_path.as_str(),
+            "--min-severity",
+            "low",
+            "--package",
+            long_package,
+            "--leak-kind",
+            "cache,collection",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    let full_leak_ids = extract_all_between(&stdout, "Leak: ", " Description:");
+
+    assert_eq!(full_leak_ids.len(), 2);
+
+    let truncated_first = truncate_for_assert(&full_leak_ids[0], 20);
+    let truncated_second = truncate_for_assert(&full_leak_ids[1], 20);
+
+    assert_ne!(full_leak_ids[0], full_leak_ids[1]);
+    assert_eq!(truncated_first, truncated_second);
+    assert!(stdout.contains("Full leak IDs for truncated rows:"));
+    assert!(stdout.contains(&format!("row 1 | {} -> {}", truncated_first, full_leak_ids[0])));
+    assert!(stdout.contains(&format!("row 2 | {} -> {}", truncated_second, full_leak_ids[1])));
+    assert!(stdout.contains(&format!("Leak: {}", full_leak_ids[0])));
+    assert!(stdout.contains(&format!("Leak: {}", full_leak_ids[1])));
 }
 
 #[test]
@@ -249,4 +469,46 @@ fn test_unknown_subcommand() {
     cmd.assert().failure().stderr(
         predicate::str::contains("unrecognized subcommand").or(predicate::str::contains("Usage:")),
     );
+}
+
+#[test]
+fn test_parse_jar_file_shows_hint() {
+    let dir = tempdir().unwrap();
+    let jar_path = dir.path().join("app.jar");
+    fs::write(&jar_path, b"PK\x03\x04fake jar content").unwrap();
+    let path_str = path_arg(&jar_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    cmd.args(["parse", path_str.as_str()]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("hint:").or(predicate::str::contains("JAR")));
+}
+
+#[test]
+fn test_parse_txt_file_shows_hint() {
+    let dir = tempdir().unwrap();
+    let txt_path = dir.path().join("data.txt");
+    fs::write(&txt_path, b"this is not a heap dump").unwrap();
+    let path_str = path_arg(&txt_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    cmd.args(["parse", path_str.as_str()]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("hint:").or(predicate::str::contains(".txt")));
+}
+
+#[test]
+fn test_invalid_config_file_shows_error() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("bad_config.toml");
+    fs::write(&config_path, b"this is [[[not valid toml").unwrap();
+    let path_str = path_arg(&config_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    cmd.args(["--config", path_str.as_str(), "config"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("TOML").or(predicate::str::contains("config")));
 }

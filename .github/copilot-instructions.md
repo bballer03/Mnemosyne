@@ -52,6 +52,7 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 | **Orchestration** | Routes tasks, assigns files, grants tools. Never codes. | agent dispatch, codebase search, fetch |
 | **Architecture Review** | Design review only. | read only |
 | **Static Analysis** | Post-test risk pass. | read + diagnostics |
+| **Security** | Security audit and remediation. Reviews code, dependencies, configs, and workflows for security risks. | read + search + codebase + changes + usages; write (editFiles) only when remediation approved |
 | **API Contract** | Contract alignment across CLI/MCP/docs. | read; write for docs/schemas when assigned |
 | **Documentation Sync** | Updates docs after successful implementation batches. | read + write for doc files only |
 | **Tech PM** | Roadmap, milestones, feature planning. | read + write for `docs/roadmap.md` only |
@@ -68,6 +69,9 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 - **Architecture-only review** → **Architecture Review Agent**
 - **Documentation updates after code changes** → **Documentation Sync Agent**
 - **Roadmap and milestone planning** → **Tech PM Agent**
+- **Security audit, vulnerability review, secret scanning** → **Security Agent**
+- **Approved security remediation** → **Security Agent** (review) + **Implementation Agent** (code fixes)
+- **Workflow / CI security review** → **Security Agent**
 
 ### Local tool-enabled sessions
 
@@ -89,6 +93,21 @@ Source-code edits belong to the Implementation Agent unless the task is clearly 
 
 ### Review-only discipline
 Architecture Review and Static Analysis agents are review-only by default. They must not take ownership of implementation work, must not bounce approved batches back into broad re-analysis, and must not produce code changes unless orchestration explicitly reassigns ownership and justifies it.
+
+### Security Agent discipline
+The Security Agent operates in **audit-only mode by default**. It must not modify files unless:
+- The orchestrator or user explicitly requests remediation mode.
+- Write tools (`editFiles`) are confirmed available in the runtime.
+- The specific findings to remediate are named and approved.
+
+Remediation mode requires:
+- `editFiles` (write capability) for the Security Agent or Implementation Agent.
+- Terminal access (`cargo check`, `cargo test`) via Testing Agent for post-fix validation.
+- `cargo clippy` via Static Analysis Agent for post-fix lint pass.
+
+If write tools are unavailable and remediation is requested, the Security Agent must **fail fast** — name the missing capability and the blocked task. Do not fall back to patch-only output unless the user explicitly asked for patches.
+
+Local tool-enabled VS Code sessions are the preferred mode for actual security fixes.
 
 ### Tool governance
 - All agents get read access by default.
@@ -127,9 +146,9 @@ Every sub-agent must return exactly these fields:
 Every batch must name its non-scope items. Agents must not expand scope because a nearby issue looks related. If scope must change, the agent stops and returns to orchestration for re-scoping.
 
 ### Execution sequencing
-- **May run in parallel:** architecture review, API review, DB review, observability review, testing gap analysis, static analysis review
-- **Must be sequential:** implementation edits, shared-model changes, same-file edits, testing after edits, static analysis after testing, refactor after correctness is stable
-- **Forbidden:** two writing agents on the same file; Implementation + Refactor on the same module; implementation + contract review changing the same runtime file simultaneously
+- **May run in parallel:** architecture review, API review, DB review, observability review, testing gap analysis, static analysis review, security audit (read-only mode)
+- **Must be sequential:** implementation edits, shared-model changes, same-file edits, testing after edits, static analysis after testing, refactor after correctness is stable, security remediation followed by testing then static analysis
+- **Forbidden:** two writing agents on the same file; Implementation + Refactor on the same module; implementation + contract review changing the same runtime file simultaneously; security remediation + implementation on the same file without explicit ownership transfer
 
 ---
 

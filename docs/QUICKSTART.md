@@ -18,14 +18,28 @@ Get up and running with Mnemosyne in 5 minutes!
 git clone https://github.com/bballer03/mnemosyne
 cd mnemosyne
 cargo build --release
-sudo cp target/release/mnemosyne /usr/local/bin/
+sudo cp target/release/mnemosyne-cli /usr/local/bin/
 ```
 
 ### Option 2: Using Cargo
 
 ```bash
-cargo install mnemosyne
+cargo install mnemosyne-cli
 ```
+
+This becomes available after the first crates.io publish for `mnemosyne-core` and `mnemosyne-cli`.
+
+### Option 3: Using Homebrew (macOS)
+
+```bash
+brew install ./HomebrewFormula/mnemosyne.rb
+```
+
+Replace the placeholder SHA256 values in the formula with the checksums from the first tagged release before using it.
+
+The current packaged binary name is `mnemosyne-cli`. Commands below still use the shorter `mnemosyne` form in examples, but the packaged artifact currently installs as `mnemosyne-cli`.
+
+Mnemosyne is maintained by **bballer03**. For releases, issues, and discussions, use the upstream repository at https://github.com/bballer03/mnemosyne.
 
 ---
 
@@ -52,23 +66,29 @@ mnemosyne parse heap.hprof
 You'll see output like:
 
 ```
-Parsing heap dump: heap.hprof (2.4 GB)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% • 3.2s
-
-✓ Heap Summary:
-  Total Objects: 1,234,567
-  Total Size: 2.4 GB
-  Classes: 4,321
-
-Top 5 Memory Consumers:
-  1. java.lang.String[]         421 MB  (17.2%)
-  2. com.example.UserSession    385 MB  (15.7%)
-  3. byte[]                     312 MB  (12.7%)
-  4. java.util.HashMap$Node     245 MB  (10.0%)
-  5. char[]                     198 MB  ( 8.1%)
+✓ Parsed heap dump.
+Heap path: heap.hprof
+File size: 2.40 GB
+Format: JAVA PROFILE 1.0.2 | Identifier bytes: 8 | Timestamp(ms): 1709836800000
+Estimated objects: 1234567
+Total HPROF records: 5678901
+Top heap record categories by aggregate bytes:
+ #  Record Category           Bytes      Share  Entries
+ 1  INSTANCE_DUMP           421.00 MB    50.1%   345678
+ 2  PRIMITIVE_ARRAY_DUMP    312.00 MB    37.1%   234567
+ 3  OBJECT_ARRAY_DUMP        89.00 MB    10.6%    67890
+ 4  CLASS_DUMP               12.00 MB     1.4%     4321
+ 5  HEAP_DUMP_SEGMENT         7.50 MB     0.9%       12
+Top record tags:
+ Record Tag                    Hex  Entries       Size
+ HEAP_DUMP_SEGMENT            0x1C       12  841.50 MB
+ STRING_IN_UTF8               0x01    89012   15.00 MB
+ LOAD_CLASS                   0x02     4321    0.50 MB
+ STACK_TRACE                  0x05     1234    0.20 MB
+ STACK_FRAME                  0x04     5678    0.10 MB
 ```
 
-These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which classes (or record categories) dominate the dump. `mnemosyne leaks` still uses this fast histogram path directly, while `mnemosyne analyze` can now upgrade to full object-graph parsing and real dominator-backed retained sizes when the heap contains enough detail.
+These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which record categories dominate the dump. `mnemosyne leaks` still uses this fast histogram path directly, while `mnemosyne analyze` can now upgrade to full object-graph parsing and real dominator-backed retained sizes when the heap contains enough detail.
 
 ### Step 3: Detect Leaks
 
@@ -79,23 +99,24 @@ mnemosyne leaks heap.hprof
 Output:
 
 ```
-🔍 Analyzing for memory leaks...
+✓ Leak detection complete.
+Potential leaks:
+ Leak ID               Class                               Kind      Severity  Retained    Instances
+ leak-usersession-1    com.example.UserSessionCache         Cache     High      512.00 MB      125432
+ leak-okhttp-1         okhttp3.Response                     Resource  Medium     89.00 MB        8921
 
-⚠️  2 Potential Leaks Detected:
+  Leak: leak-usersession-1
+    Description: Cache growing unbounded, cleanup thread blocked
+    Provenance:
+      [SYNTHETIC] generated from histogram heuristics
 
-1. com.example.UserSessionCache (HIGH SEVERITY)
-   Instances: 125,432
-   Retained Size: 512 MB
-   GC Root: Thread "session-cleanup" (BLOCKED)
-   
-   Issue: Cache growing unbounded, cleanup thread blocked
-
-2. okhttp3.Response (MEDIUM SEVERITY)
-   Instances: 8,921
-   Retained Size: 89 MB
-   
-   Issue: Unclosed HTTP response bodies
+  Leak: leak-okhttp-1
+    Description: Unclosed HTTP response bodies
+    Provenance:
+      [SYNTHETIC] generated from histogram heuristics
 ```
+
+When class names or leak IDs are too long for the table, Mnemosyne truncates them inline and prints a disclosure section beneath with the full values keyed by row number.
 
 Limit the output to specific categories whenever you need deterministic CI signals:
 
@@ -143,6 +164,20 @@ Impact:
 • Risk of OutOfMemoryError under sustained load
 • Degraded response times due to thread contention
 
+Recommendations:
+────────────────────────────────────────────────────────────────
+1. Break the deadlock cycle:
+   - Add a timeout to cache.cleanup() method
+   - Use tryLock() with timeout instead of synchronized
+   
+2. Architectural improvements:
+   - Replace synchronized HashMap with ConcurrentHashMap
+   - Use weak references for session storage
+   - Implement time-based eviction with ScheduledExecutorService
+
+Code fixes available. Run: mnemosyne fix heap.hprof
+```
+
 ### Step 5: Persist Your Preferences (Optional)
 
 Drop a `.mnemosyne.toml` file in your project (or `~/.config/mnemosyne/config.toml`) to avoid retyping flags:
@@ -184,20 +219,6 @@ export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
 ```
 
 `packages` now act as an allow-list for real classes first (only matching entries from the histogram become candidates) before Mnemosyne rotates through them while synthesizing fallback IDs. Likewise, `leak_types` either filters the actual leak list or, if none match, forces one synthetic entry per requested kind so your CI remains deterministic.
-
-Recommendations:
-────────────────────────────────────────────────────────────────
-1. Break the deadlock cycle:
-   - Add a timeout to cache.cleanup() method
-   - Use tryLock() with timeout instead of synchronized
-   
-2. Architectural improvements:
-   - Replace synchronized HashMap with ConcurrentHashMap
-   - Use weak references for session storage
-   - Implement time-based eviction with ScheduledExecutorService
-
-Code fixes available. Run: mnemosyne fix heap.hprof
-```
 
 ### Step 6: Save the Report
 
@@ -249,21 +270,13 @@ mnemosyne diff before.hprof after.hprof
 Output:
 
 ```
-Memory Growth Analysis
-═══════════════════════════════════════════════════════════════
-
-Overall Change: -347 MB (-14.2%)
-
-Classes with Significant Changes:
-┌────────────────────────────────┬──────────┬──────────┬─────────┐
-│ Class                          │ Before   │ After    │ Change  │
-├────────────────────────────────┼──────────┼──────────┼─────────┤
-│ com.example.UserSession        │ 385 MB   │  89 MB   │ -77%  ✓ │
-│ java.lang.String[]             │ 421 MB   │ 398 MB   │  -5%  ✓ │
-│ byte[]                         │ 312 MB   │ 334 MB   │  +7%  ⚠ │
-└────────────────────────────────┴──────────┴──────────┴─────────┘
-
-✓ Optimization successful!
+Heap diff: before.hprof -> after.hprof
+  Delta size: -347.00 MB
+  Delta objects: -156789
+  Top changes:
+    - com.example.UserSession: -296.00 MB (before 385.00 MB -> after 89.00 MB)
+    - java.lang.String[]: -23.00 MB (before 421.00 MB -> after 398.00 MB)
+    - byte[]: +22.00 MB (before 312.00 MB -> after 334.00 MB)
 ```
 
 ### Filtering by Package
@@ -306,6 +319,61 @@ mnemosyne leaks heap.hprof --exclude-package org.springframework
 ---
 
 ## Next Steps
+
+- Read the [Architecture](../ARCHITECTURE.md) to understand how it works
+- Check the [API Documentation](api.md) for MCP integration
+- See [Configuration](configuration.md) for advanced options
+- Browse [Examples](examples/) for more use cases
+
+---
+
+## Troubleshooting
+
+### "Command not found: mnemosyne"
+
+Make sure `~/.cargo/bin` is in your PATH:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+### "Failed to parse heap dump"
+
+Ensure the file is a valid HPROF format:
+
+```bash
+file heap.hprof
+# Should output: heap.hprof: Java hprof dump
+```
+
+### "AI analysis unavailable"
+
+Set your OpenAI API key:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+# Or add to ~/.bashrc or ~/.zshrc
+```
+
+### Slow parsing on large heaps
+
+Enable memory-mapped I/O and increase threads:
+
+```bash
+mnemosyne parse heap.hprof --threads 16
+```
+
+---
+
+## Getting Help
+
+- **Documentation**: Check [docs/](.)
+- **Issues**: [GitHub Issues](https://github.com/bballer03/mnemosyne/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/bballer03/mnemosyne/discussions)
+
+---
+
+Happy debugging! 🚀
 
 - Read the [Architecture](../ARCHITECTURE.md) to understand how it works
 - Check the [API Documentation](api.md) for MCP integration
