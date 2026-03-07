@@ -5,8 +5,8 @@
 # to capture the current immutable reference.
 
 # NOTE: Pin to a specific digest in production. Run:
-#   docker pull rust:1.85-bookworm && docker inspect --format='{{index .RepoDigests 0}}' rust:1.85-bookworm
-FROM rust:1.85-bookworm AS builder
+#   docker pull rust:1.91-bookworm && docker inspect --format='{{index .RepoDigests 0}}' rust:1.91-bookworm
+FROM rust:1.91-bookworm AS builder
 
 WORKDIR /app
 
