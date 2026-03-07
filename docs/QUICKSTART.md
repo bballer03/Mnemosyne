@@ -68,7 +68,7 @@ Top 5 Memory Consumers:
   5. char[]                     198 MB  ( 8.1%)
 ```
 
-These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run now tells you exactly which classes (or record categories) dominate the dump. The same histogram is reused by `mnemosyne leaks`, `analyze`, and the dominator graph so every command describes the same top offenders.
+These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which classes (or record categories) dominate the dump. `mnemosyne leaks` still uses this fast histogram path directly, while `mnemosyne analyze` can now upgrade to full object-graph parsing and real dominator-backed retained sizes when the heap contains enough detail.
 
 ### Step 3: Detect Leaks
 
@@ -105,6 +105,8 @@ mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
 
 Because the leak engine now consumes the parsed class histogram, package or severity filters operate on real data first and only fall back to synthetic names if the heap lacks useful symbols.
 
+The dedicated `leaks` command remains summary-driven today. If you need retained sizes backed by the actual object graph and dominator tree, run `mnemosyne analyze` and check the response/report provenance to see whether the graph-backed path succeeded.
+
 ### Step 4: Get AI Insights (Optional)
 
 First, set your API key:
@@ -118,6 +120,8 @@ Then run AI analysis:
 ```bash
 mnemosyne analyze heap.hprof --ai
 ```
+
+When full HPROF object-graph parsing succeeds, `analyze` now computes retained sizes from the dominator tree and includes graph-backed dominator metrics in the report. If parsing or filters prevent that path, Mnemosyne falls back to the summary-driven preview and labels the response accordingly.
 
 Output:
 

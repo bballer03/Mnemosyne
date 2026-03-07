@@ -18,14 +18,14 @@ const TYPE_OBJECT: u8 = 2;
 const TYPE_INT: u8 = 10;
 
 /// Builder for small synthetic HPROF binaries used by unit tests.
-pub struct HprofBuilder {
+pub(crate) struct HprofBuilder {
     id_size: u8,
     buf: Vec<u8>,
     records: Vec<Vec<u8>>,
 }
 
 impl HprofBuilder {
-    pub fn new(id_size: u8) -> Self {
+    pub(crate) fn new(id_size: u8) -> Self {
         assert!(matches!(id_size, 4 | 8), "id_size must be 4 or 8");
 
         let mut buf = Vec::with_capacity(HPROF_HEADER.len() + 12);
@@ -58,14 +58,14 @@ impl HprofBuilder {
         self
     }
 
-    pub fn add_string(&mut self, id: u64, value: &str) -> &mut Self {
+    pub(crate) fn add_string(&mut self, id: u64, value: &str) -> &mut Self {
         let mut body = Vec::with_capacity(self.id_size as usize + value.len());
         Self::write_id(&mut body, id, self.id_size);
         body.write_all(value.as_bytes()).unwrap();
         self.push_record(TAG_STRING_IN_UTF8, body)
     }
 
-    pub fn add_load_class(
+    pub(crate) fn add_load_class(
         &mut self,
         serial: u32,
         class_obj_id: u64,
@@ -80,11 +80,11 @@ impl HprofBuilder {
         self.push_record(TAG_LOAD_CLASS, body)
     }
 
-    pub fn add_heap_dump(&mut self, sub_records: Vec<u8>) -> &mut Self {
+    pub(crate) fn add_heap_dump(&mut self, sub_records: Vec<u8>) -> &mut Self {
         self.push_record(TAG_HEAP_DUMP, sub_records)
     }
 
-    pub fn build(&self) -> Vec<u8> {
+    pub(crate) fn build(&self) -> Vec<u8> {
         let mut buf = self.buf.clone();
         for record in &self.records {
             buf.extend_from_slice(record);
@@ -94,13 +94,13 @@ impl HprofBuilder {
 }
 
 /// Builder for HEAP_DUMP sub-record payloads.
-pub struct HeapDumpBuilder {
+pub(crate) struct HeapDumpBuilder {
     id_size: u8,
     buf: Vec<u8>,
 }
 
 impl HeapDumpBuilder {
-    pub fn new(id_size: u8) -> Self {
+    pub(crate) fn new(id_size: u8) -> Self {
         assert!(matches!(id_size, 4 | 8), "id_size must be 4 or 8");
         Self {
             id_size,
@@ -108,7 +108,7 @@ impl HeapDumpBuilder {
         }
     }
 
-    pub fn add_gc_root_thread_obj(
+    pub(crate) fn add_gc_root_thread_obj(
         &mut self,
         obj_id: u64,
         thread_serial: u32,
@@ -121,7 +121,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn add_gc_root_java_frame(
+    pub(crate) fn add_gc_root_java_frame(
         &mut self,
         obj_id: u64,
         thread_serial: u32,
@@ -134,7 +134,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn add_class_dump(
+    pub(crate) fn add_class_dump(
         &mut self,
         class_obj_id: u64,
         super_class_id: u64,
@@ -161,7 +161,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn add_instance_dump(
+    pub(crate) fn add_instance_dump(
         &mut self,
         obj_id: u64,
         class_obj_id: u64,
@@ -178,7 +178,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn add_obj_array_dump(
+    pub(crate) fn add_obj_array_dump(
         &mut self,
         obj_id: u64,
         array_class_id: u64,
@@ -197,7 +197,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn add_prim_array_dump_i32(&mut self, obj_id: u64, values: &[i32]) -> &mut Self {
+    pub(crate) fn add_prim_array_dump_i32(&mut self, obj_id: u64, values: &[i32]) -> &mut Self {
         self.buf.write_u8(SUBTAG_PRIM_ARRAY_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(0).unwrap();
@@ -211,7 +211,7 @@ impl HeapDumpBuilder {
         self
     }
 
-    pub fn build(self) -> Vec<u8> {
+    pub(crate) fn build(self) -> Vec<u8> {
         self.buf
     }
 }
@@ -245,6 +245,26 @@ pub fn build_simple_fixture() -> Vec<u8> {
         .add_instance_dump(0x2003, 0x200, &build_node_instance_bytes(8, 0, 7))
         .add_obj_array_dump(0x3000, 0x300, &[0x2001, 0x2002])
         .add_prim_array_dump_i32(0x4000, &[10, 20, 30]);
+
+    builder.add_heap_dump(heap.build());
+    builder.build()
+}
+
+pub fn build_graph_fixture() -> Vec<u8> {
+    let mut builder = HprofBuilder::new(4);
+    builder
+        .add_string(1, "java/lang/Object")
+        .add_string(2, "com/example/BigCache")
+        .add_string(3, "entries")
+        .add_load_class(1, 0x100, 0, 1)
+        .add_load_class(2, 0x200, 0, 2);
+
+    let mut heap = HeapDumpBuilder::new(4);
+    heap.add_class_dump(0x100, 0, 0, &[])
+        .add_class_dump(0x200, 0x100, 4, &[(3, TYPE_OBJECT)])
+        .add_gc_root_java_frame(0x1000, 1, 0)
+        .add_instance_dump(0x1000, 0x200, &0x2000u32.to_be_bytes())
+        .add_instance_dump(0x2000, 0x100, &[]);
 
     builder.add_heap_dump(heap.build());
     builder.build()

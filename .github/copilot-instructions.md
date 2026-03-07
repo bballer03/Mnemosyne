@@ -48,7 +48,7 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 |---|---|---|
 | **Implementation** | Default owner for all coding tasks. Edits source files and validates via terminal. | file edit, terminal (cargo check/test/clippy/fmt, git), codebase search, GitHub MCP (read, optional) |
 | **GitHub Ops** | Owns GitHub Actions, CI/CD, PR/issue/branch, and workflow investigation. | GitHub MCP tools, terminal (git, gh CLI), codebase search, workflow file read/write |
-| **Testing** | Writes and runs tests after implementation. | file edit (test files only), terminal (cargo test), codebase search |
+| **Testing** | Writes and runs tests after implementation. Executes cargo check/test via terminal. | file edit (test files only), terminal (cargo check, cargo test), codebase search |
 | **Orchestration** | Routes tasks, assigns files, grants tools. Never codes. | agent dispatch, codebase search, fetch |
 | **Architecture Review** | Design review only. | read only |
 | **Static Analysis** | Post-test risk pass. | read + diagnostics |
@@ -60,6 +60,9 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 
 - **Coding tasks** (edit source, fix bugs, implement features) → **Implementation Agent**
 - **Build/test/lint/format execution** → **Implementation Agent** (small scope) or **Testing Agent** (broad scope)
+- **Running `cargo check` / `cargo test` / integration tests** → **Testing Agent**
+- **Running `cargo clippy`** → **Static Analysis Agent**
+- **Running `cargo fmt`** → **Implementation Agent**
 - **CI failures, GitHub Actions issues, workflow investigation** → **GitHub Ops Agent**
 - **PR/issue/branch state questions** → **GitHub Ops Agent**
 - **Architecture-only review** → **Architecture Review Agent**

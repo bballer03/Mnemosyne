@@ -48,21 +48,22 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 ## Current Implementation Snapshot (March 2026)
 
 ### Shipped today
-- **Parser:** Streams HPROF headers/records, derives class histograms + summary stats (objects, size, dominant tags). No per-object graph yet.
-- **Object-graph foundation:** `core::object_graph` now defines the canonical heap-object, class, field-descriptor, and GC-root types that upcoming HPROF record parsing will populate.
+- **Parser:** `core::heap` still streams HPROF headers/records for summary-level stats, and `core::hprof_parser` now parses binary heap records into an object graph for graph-backed analysis.
+- **Object-graph foundation:** `core::object_graph` defines the canonical heap-object, class, field-descriptor, and GC-root types, and the graph-backed parser now populates them for instances, arrays, and roots.
 - **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. CLI surfaces provenance markers for `leaks`, `gc-path`, and `fix` output.
-- **Leak heuristics:** Use the parsed class histogram plus package filters/thresholds to generate deterministic leak candidates, with synthetic fallbacks when histograms are empty.
-- **Graph metrics:** Provide a lightweight dominator preview by wiring the top class/record entries into a tiny petgraph structure for reporting.
-- **GC path helper:** Parses real GC roots/class + instance dumps to build best-effort root chains (with budget-aware fallbacks when dumps omit the required records).
+- **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails.
+- **Graph metrics:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, while `core::graph::summarize_graph()` remains the lightweight preview fallback for summary-only paths.
+- **GC path helper:** Uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
+- **Navigation API:** `core::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. Clippy warnings in `heap.rs` and `mapper.rs` resolved.
-- **Validation scaffolding:** Synthetic HPROF fixture builders and a GitHub Actions workflow now provide deterministic parser inputs and automated workspace validation.
+- **Validation scaffolding:** Synthetic HPROF fixture builders, the `test-fixtures` cargo feature, and a GitHub Actions workflow now provide deterministic parser inputs and automated workspace validation across 80 passing tests, including 16 CLI integration tests.
 
 ### Still in progress
-- **Retained-size and real dominator trees** driven by the full object graph.
+- **Extending graph-backed analysis into remaining surfaces**, especially diffing and richer MAT-style suspect ranking.
 - **Config-driven AI task runner** (e.g., YAML-defined prompts with selective context injection).
-- **Rich diffing & JSON/HTML exporters** beyond stdout redirection.
+- **Richer diffing and higher-level visualizations** beyond the current record-level diff and shared report exporters.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
 The sections below describe the intended architecture; status callouts highlight where the current alpha build diverges so contributors know which pieces still need implementation work.
@@ -133,7 +134,7 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 - **Class Histogram**: A list of classes with their instance counts and total memory usage (so we know top memory consumers).
 - **Largest Objects**: Identification of individual objects consuming the most memory (by size).
 - **Strings Table**: Perhaps a list of all distinct Strings in the heap (useful for spotting duplicate string issues).
-- **Retained Sizes**: (Future) Calculate retained sizes of objects or object graphs to find leak candidates (this may require building a partial object graph or computing dominator tree).
+- **Retained Sizes**: `analyze_heap()` and `detect_leaks()` now compute retained sizes from the dominator tree when full object-graph parsing succeeds; remaining lighter-weight paths are mainly summary-oriented surfaces such as diffing.
 - **Basic Heap Stats**: Total heap size, number of objects, primitive arrays vs object arrays counts, etc.
 
 **Output Data Format**: The parser outputs a structured representation of the heap summary. This could be in memory (Rust data structures) or serialized (like JSON) if needed. For example, an in-memory model might consist of a list of classes with their counts/sizes, a list of significant objects, and references to relationships (a simplified object graph for leak analysis).
@@ -144,7 +145,7 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 
 By the end of this stage, Mnemosyne has a concise "snapshot" of the heap's contents. This snapshot is then handed to the AI analysis component for deeper insight.
 
-> **Status (Nov 2025):** The parser currently surfaces header metadata, record-tag histograms, and an inferred class histogram (derived from INSTANCE/ARRAY records). Object-level graphs, retained sizes, and per-instance detail are on the roadmap.
+> **Status (Mar 2026):** Mnemosyne now has two parser paths: `core::heap` for streaming summary stats and `core::hprof_parser` for object-level graph construction used by `analyze_heap()`, `detect_leaks()`, and `gc-path`. Some other surfaces, especially diffing, still rely on the lighter summary path.
 
 ### 4. AI Analysis Engine (Insight Generator)
 

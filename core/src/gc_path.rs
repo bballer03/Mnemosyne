@@ -2,6 +2,8 @@ use crate::{
     analysis::{ProvenanceKind, ProvenanceMarker},
     errors::{CoreError, CoreResult},
     heap::{parse_heap, HeapParseJob},
+    hprof_parser::parse_hprof_file,
+    object_graph::ObjectGraph,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use std::{
     fs::File,
     io::{self, BufReader, Read},
 };
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcPathRequest {
@@ -68,18 +71,44 @@ const DEFAULT_MAX_INSTANCES: usize = 32_768;
 const MAX_EDGE_FACTOR: usize = 12;
 const MAX_ROOTS: usize = 8_192;
 
-/// Find a GC path for the requested object. Attempts a best-effort parse of the
-/// heap dump to walk from real GC roots to the target. Falls back to the prior
-/// synthetic path if the dump lacks sufficient data.
+/// Find a GC path for the requested object.
+///
+/// 1. Attempts full ObjectGraph parse via `hprof_parser::parse_hprof_file` and BFS.
+/// 2. Falls back to budget-limited `GcGraph::build` parse.
+/// 3. Final fallback: synthetic path from summary data.
 pub fn find_gc_path(request: &GcPathRequest) -> CoreResult<GcPathResult> {
+    let depth_limit = request.max_depth.unwrap_or(6).clamp(2, 32) as usize;
+    let target_id = parse_object_id(&request.object_id).unwrap_or(0);
+
+    // Primary path: full ObjectGraph via hprof_parser
+    if target_id != 0 {
+        match parse_hprof_file(&request.heap_path) {
+            Ok(graph) if !graph.objects.is_empty() => {
+                if let Some(result) = trace_on_object_graph(&graph, target_id, depth_limit) {
+                    info!(target = target_id, "resolved GC path via full ObjectGraph");
+                    return Ok(result);
+                }
+                info!(
+                    target = target_id,
+                    "target not reachable in full ObjectGraph; trying budget-limited path"
+                );
+            }
+            Ok(_) => {
+                info!("full ObjectGraph was empty; trying budget-limited path");
+            }
+            Err(e) => {
+                info!(error = %e, "full ObjectGraph parse failed; trying budget-limited path");
+            }
+        }
+    }
+
+    // Secondary path: budget-limited GcGraph
     let parse_job = HeapParseJob {
         path: request.heap_path.clone(),
         include_strings: false,
         max_objects: Some(32_768),
     };
     let summary = parse_heap(&parse_job)?;
-    let depth_limit = request.max_depth.unwrap_or(6).clamp(2, 32) as usize;
-    let target_id = parse_object_id(&request.object_id).unwrap_or(0);
 
     if target_id != 0 {
         if let Some(header) = &summary.header {
@@ -96,7 +125,153 @@ pub fn find_gc_path(request: &GcPathRequest) -> CoreResult<GcPathResult> {
         }
     }
 
+    // Tertiary fallback: synthetic path
     build_synthetic_path(request, &summary, depth_limit)
+}
+
+/// BFS on the full ObjectGraph from GC roots to the target object.
+fn trace_on_object_graph(
+    graph: &ObjectGraph,
+    target_id: u64,
+    max_depth: usize,
+) -> Option<GcPathResult> {
+    let id_size = graph.identifier_size as usize;
+    let root_ids: HashSet<u64> = graph
+        .gc_roots
+        .iter()
+        .map(|r| r.object_id)
+        .filter(|id| graph.objects.contains_key(id))
+        .collect();
+
+    if root_ids.is_empty() {
+        return None;
+    }
+    if !graph.objects.contains_key(&target_id) {
+        return None;
+    }
+
+    // If target is itself a root, return a single-node path
+    if root_ids.contains(&target_id) {
+        let class_name = graph
+            .objects
+            .get(&target_id)
+            .and_then(|obj| graph.class_name(obj.class_id))
+            .map(prettify_class_name)
+            .unwrap_or_else(|| "<unknown>".into());
+        return Some(GcPathResult {
+            object_id: format_object_id(target_id, id_size),
+            path_length: 1,
+            path: vec![GcPathNode {
+                object_id: format_object_id(target_id, id_size),
+                class_name,
+                field: Some("ROOT".into()),
+                is_root: true,
+            }],
+            provenance: Vec::new(),
+        });
+    }
+
+    // BFS from roots
+    let mut queue: VecDeque<u64> = root_ids.iter().copied().collect();
+    let mut visited: HashSet<u64> = root_ids.clone();
+    // child -> (parent, field_name)
+    let mut parents: HashMap<u64, (u64, Option<String>)> = HashMap::new();
+    let mut depths: HashMap<u64, usize> = HashMap::new();
+    for &root in &root_ids {
+        depths.insert(root, 0);
+    }
+
+    let mut found = false;
+    while let Some(node) = queue.pop_front() {
+        if node == target_id {
+            found = true;
+            break;
+        }
+        let depth = depths.get(&node).copied().unwrap_or(0);
+        if depth >= max_depth {
+            continue;
+        }
+        if let Some(obj) = graph.objects.get(&node) {
+            let field_names = get_field_names_for_class(graph, obj.class_id);
+            for (idx, &ref_id) in obj.references.iter().enumerate() {
+                if ref_id == 0 {
+                    continue;
+                }
+                if visited.insert(ref_id) {
+                    let field_name = field_names
+                        .as_ref()
+                        .and_then(|names| names.get(idx))
+                        .and_then(|n| n.clone());
+                    parents.insert(ref_id, (node, field_name));
+                    depths.insert(ref_id, depth + 1);
+                    queue.push_back(ref_id);
+                }
+            }
+        }
+    }
+
+    if !found {
+        return None;
+    }
+
+    // Reconstruct path from target back to root
+    let mut chain = Vec::new();
+    let mut current = target_id;
+    chain.push((current, None::<String>));
+    while let Some((parent, field_name)) = parents.get(&current) {
+        chain.push((*parent, field_name.clone()));
+        current = *parent;
+    }
+    chain.reverse();
+
+    let nodes: Vec<GcPathNode> = chain
+        .iter()
+        .enumerate()
+        .map(|(idx, (obj_id, _))| {
+            let is_root = idx == 0 && root_ids.contains(obj_id);
+            let class_name = graph
+                .objects
+                .get(obj_id)
+                .and_then(|obj| graph.class_name(obj.class_id))
+                .map(prettify_class_name)
+                .unwrap_or_else(|| "<unknown>".into());
+            let field = if idx == 0 {
+                if is_root {
+                    Some("ROOT".into())
+                } else {
+                    None
+                }
+            } else {
+                // Get the field name from the parent edge leading to this node
+                chain[idx].1.clone()
+            };
+            GcPathNode {
+                object_id: format_object_id(*obj_id, id_size),
+                class_name,
+                field,
+                is_root,
+            }
+        })
+        .collect();
+
+    Some(GcPathResult {
+        object_id: format_object_id(target_id, id_size),
+        path_length: nodes.len(),
+        path: nodes,
+        provenance: Vec::new(), // Real data — no provenance markers
+    })
+}
+
+/// Get the field names for a class's instance fields.
+fn get_field_names_for_class(graph: &ObjectGraph, class_id: u64) -> Option<Vec<Option<String>>> {
+    let class_info = graph.classes.get(&class_id)?;
+    Some(
+        class_info
+            .instance_fields
+            .iter()
+            .map(|f| f.name.clone())
+            .collect(),
+    )
 }
 
 fn parse_object_id(input: &str) -> Option<u64> {
@@ -996,5 +1171,32 @@ mod tests {
         file.write_all(&(payload.len() as u32).to_be_bytes())
             .unwrap();
         file.write_all(payload).unwrap();
+    }
+
+    #[test]
+    fn find_gc_path_uses_object_graph_path() {
+        // Uses the write_realistic_hprof fixture with 4-byte IDs.
+        // Root 0x44444444 → 0x33333333 via field "leakyField".
+        // The ObjectGraph path should find this real path.
+        let mut file = NamedTempFile::new().unwrap();
+        write_realistic_hprof(&mut file);
+
+        let target_id = 0x4444_4444u64; // the root itself
+        let request = GcPathRequest {
+            heap_path: file.path().display().to_string(),
+            object_id: format!("0x{target_id:08X}"),
+            max_depth: Some(6),
+        };
+
+        let result = find_gc_path(&request).unwrap();
+        // 0x44444444 is a GC root that exists in objects, so ObjectGraph path
+        // should return a single-node root path.
+        assert!(!result.path.is_empty());
+        assert!(result.path[0].is_root);
+        // Real path — no provenance markers
+        assert!(
+            result.provenance.is_empty(),
+            "ObjectGraph-resolved path must have empty provenance"
+        );
     }
 }

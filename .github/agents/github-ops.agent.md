@@ -4,7 +4,7 @@ description: Own GitHub and CI/CD related tasks — workflow failures, PR/issue 
 argument-hint: Describe the GitHub Actions failure, workflow issue, PR/branch question, or CI investigation needed.
 tools: [search, changes, codebase, problems, usages, terminalLastCommand, runInTerminal, githubRepo, fetch]
 agents: []
-model: Claude Opus 4.6 (copilot)
+model: GPT-5.4 (copilot)
 target: vscode
 handoffs:
   - label: Fix Code

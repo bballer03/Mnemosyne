@@ -86,6 +86,8 @@ Parse a heap dump file and return a summary.
 }
 ```
 
+`detect_leaks` currently follows the fast heuristic path used by the CLI `leaks` command. The `retained_size_bytes` field is therefore summary-derived here; real dominator-backed retained sizes are currently surfaced by the `analyze` pipeline when full object-graph parsing succeeds.
+
 ---
 
 ### detect_leaks

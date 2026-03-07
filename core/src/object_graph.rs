@@ -229,4 +229,95 @@ impl ObjectGraph {
             .map(|obj| u64::from(obj.shallow_size))
             .sum()
     }
+
+    /// Look up a specific object by ID.
+    pub fn get_object(&self, id: ObjectId) -> Option<&HeapObject> {
+        self.objects.get(&id)
+    }
+
+    /// Returns the outgoing references (objects this object points to).
+    pub fn get_references(&self, id: ObjectId) -> Vec<ObjectId> {
+        self.objects
+            .get(&id)
+            .map(|obj| obj.references.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns objects that reference the given object ID.
+    /// Delegates to the existing `referrers()` method.
+    pub fn get_referrers(&self, id: ObjectId) -> Vec<ObjectId> {
+        self.referrers(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_graph() -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+
+        graph.objects.insert(
+            1,
+            HeapObject {
+                id: 1,
+                class_id: 100,
+                shallow_size: 32,
+                references: vec![2, 3],
+                kind: ObjectKind::Instance,
+            },
+        );
+        graph.objects.insert(
+            2,
+            HeapObject {
+                id: 2,
+                class_id: 100,
+                shallow_size: 16,
+                references: vec![3],
+                kind: ObjectKind::Instance,
+            },
+        );
+        graph.objects.insert(
+            3,
+            HeapObject {
+                id: 3,
+                class_id: 100,
+                shallow_size: 8,
+                references: vec![],
+                kind: ObjectKind::Instance,
+            },
+        );
+
+        graph
+    }
+
+    #[test]
+    fn get_object_returns_existing() {
+        let graph = make_test_graph();
+        let obj = graph.get_object(1).unwrap();
+        assert_eq!(obj.id, 1);
+        assert_eq!(obj.shallow_size, 32);
+        assert!(graph.get_object(999).is_none());
+    }
+
+    #[test]
+    fn get_references_returns_outgoing() {
+        let graph = make_test_graph();
+        let refs = graph.get_references(1);
+        assert_eq!(refs, vec![2, 3]);
+        let refs2 = graph.get_references(3);
+        assert!(refs2.is_empty());
+        let refs_missing = graph.get_references(999);
+        assert!(refs_missing.is_empty());
+    }
+
+    #[test]
+    fn get_referrers_returns_incoming() {
+        let graph = make_test_graph();
+        let mut referrers = graph.get_referrers(3);
+        referrers.sort();
+        assert_eq!(referrers, vec![1, 2]);
+        let referrers1 = graph.get_referrers(1);
+        assert!(referrers1.is_empty());
+    }
 }

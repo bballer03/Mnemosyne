@@ -30,7 +30,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-generated fi
 It brings total clarity to complex Java/Kotlin heap dumps by combining:
 
 - ⚡ High-performance Rust-based heap parsing
-- 🧩 Object-graph foundations with dominator/retained-size analysis on the roadmap
+- 🧩 Object-graph parsing plus dominator-backed retained sizes in `analyze` and `leaks`, with heuristic fallback when full graph parsing is unavailable
 - 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, leak reproduction, forecasting, and more
@@ -43,12 +43,12 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 
 ### 🚀 High-Performance Heap Analysis
 - Blazing-fast Rust-based `.hprof` parser
-- Memory-mapped I/O (zero-copy parsing)
+- Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
-- Lightweight dominator previews derived from parsed class histograms (full retained-size graphs on the roadmap)
+- `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - Class histograms derived directly from raw HPROF record stats so CLI summaries stay accurate
-- Authentic GC path finder parses real GC roots + instance dumps (and gracefully falls back when dumps exceed sampling budgets)
-- Shared object-graph model now lives in `core::object_graph`, ready for upcoming record-level graph parsing
+- Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
+- Shared object-graph model now lives in `core::object_graph`, with `core::hprof_parser` and `core::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`)
 
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
@@ -58,7 +58,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
   - HTTP client response leaks
   - ClassLoader leaks
   - Cache & collection leaks
-- Leak heuristics operate on the parsed class histograms (and their dominator context) before falling back to synthetic guesses, so reported classes match what the parser actually observed
+- `mnemosyne analyze` and `mnemosyne leaks` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with provenance markers when graph parsing is unavailable
 - AI-generated code fixes
 - Leak reproduction snippet generator
 
@@ -218,6 +218,8 @@ mnemosyne leaks heap.hprof --package com.example --package org.demo
 
 Under the hood Mnemosyne now filters real class stats with those package prefixes before it ever synthesizes candidates, which keeps the CLI/MCP output focused on the code you actually own.
 
+Both `mnemosyne leaks` and `mnemosyne analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `mnemosyne analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
+
 #### Map a leak to source code
 ```bash
 mnemosyne map leak-com.example.MemoryKeeper::d34db33f --project-root ./your-service --class com.example.MemoryKeeper
@@ -281,7 +283,7 @@ GC path for 0x0000000033333333:
 #1 -> java.lang.Object [0x0000000033333333] via leakyField
 ```
 
-Mnemosyne now parses real GC roots, class dumps, instance dumps, and object arrays to build a best-effort object graph. If the heap dump omits the necessary records (or exceeds the configured sampling budget) the CLI falls back to the prior synthetic chain so downstream tooling keeps working.
+Mnemosyne now resolves GC paths by trying full `ObjectGraph` BFS first via `trace_on_object_graph()`, then a budget-limited `GcGraph`, and only then a synthetic path if the heap dump omits the needed records or exceeds the configured sampling budget.
 
 #### Full AI-powered analysis
 ```bash
@@ -337,6 +339,7 @@ section dominators
     name=com.example.UserSessionCache
     parent=<heap-root>
     descendants=642
+    retained_mb=512.00
 section ai
   model=gpt-4.1-mini
   confidence_pct=78
@@ -495,8 +498,10 @@ mnemosyne/
 │ ├── src/
 │ │ ├── heap.rs          # Streaming HPROF parser + summary stats
 │ │ ├── object_graph.rs  # Shared heap-object / class / GC-root model
-│ │ ├── graph.rs         # Lightweight dominator preview today; retained-size work next
-│ │ ├── analysis.rs      # Leak heuristics + analysis orchestration
+│ │ ├── hprof_parser.rs  # Binary HPROF -> ObjectGraph parser
+│ │ ├── dominator.rs     # Real dominator tree + retained-size computation
+│ │ ├── graph.rs         # Reporting graph metrics with graph-backed + preview modes
+│ │ ├── analysis.rs      # Heuristic + graph-backed analysis orchestration
 │ │ ├── gc_path.rs       # Best-effort GC root path tracing
 │ │ ├── mapper.rs        # Code mapping + Git integration
 │ │ ├── report.rs        # Text/Markdown/HTML/TOON/JSON report rendering
@@ -524,22 +529,21 @@ Mnemosyne is built for speed and efficiency:
 
 ### Benchmarks
 
-| Heap Dump Size | Parse Time | Memory Usage | vs. Eclipse MAT | vs. VisualVM |
-|----------------|------------|--------------|-----------------|--------------|
-| 500 MB         | 1.2s       | 180 MB       | 12x faster      | 8x faster    |
-| 2 GB           | 4.8s       | 420 MB       | 15x faster      | 10x faster   |
-| 8 GB           | 18.2s      | 1.1 GB       | 20x faster      | 14x faster   |
-| 32 GB          | 68.5s      | 3.2 GB       | 25x faster      | 18x faster   |
+> **Note:** Formal benchmarks have not been published yet. The figures below describe design goals, not measured results.
 
-**Test System:** AMD Ryzen 9 5950X, 64GB RAM, NVMe SSD
+**Design Targets:**
+- Streaming architecture processes dumps larger than available RAM
+- Rust-native parsing avoids GC pauses that affect Java-based tools (MAT, VisualVM)
+- `petgraph`-backed dominator computation with Lengauer-Tarjan algorithm
+
+Criterion benchmarks and comparative numbers will be published once the analysis pipeline stabilizes.
 
 ### Why is Mnemosyne so fast?
 
-- **Zero-copy parsing**: Memory-mapped I/O avoids unnecessary data copies
+- **Streaming parsing**: BufReader-based sequential processing with low memory overhead
 - **Rust performance**: Near-C speeds with memory safety guarantees
 - **Streaming architecture**: Processes dumps larger than available RAM
-- **Parallel processing**: Multi-threaded dominator tree computation
-- **Efficient graph algorithms**: `petgraph` with optimized data structures
+- **Efficient graph algorithms**: `petgraph` with Lengauer-Tarjan dominator computation
 
 ---
 

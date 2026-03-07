@@ -38,12 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Milestone 1 foundations: new `core::object_graph` module defines canonical heap-object, class, field, and GC-root types for upcoming retained-size and dominator work
 - Synthetic HPROF fixture builders: new `core::test_fixtures` module plus `resources/test-fixtures/README.md` document deterministic heap shapes for parser/graph tests
 - GitHub Actions CI workflow: `.github/workflows/ci.yml` now runs workspace `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` on pushes and pull requests
-
-### Coming Soon
-- HPROF parser implementation
-- Basic leak detection
-- CLI interface
-- MCP server
+- Binary HPROF object-graph parser: new `core::hprof_parser` reads strings, classes, roots, instances, and arrays into `core::object_graph`
+- Real dominator tree support: new `core::dominator` computes immediate dominators, dominated children, and retained sizes from the object graph
+- Graph-backed retained-size integration: `analysis::analyze_heap()` now prefers object-graph + dominator analysis, surfaces retained sizes in graph metrics/report output, and falls back with explicit provenance when full graph-backed results are unavailable
+- Unified `detect_leaks()` onto the graph-backed path: attempts object-graph → dominator → retained-size analysis first, then falls back to heuristics with provenance markers
+- GC path finder rewrite with triple fallback: `ObjectGraph` BFS → budget-limited `GcGraph` → synthetic path, with edge labels enriched by `get_field_names_for_class()`
+- Object graph navigation API: `get_object(id)`, `get_references(id)`, and `get_referrers(id)` on `ObjectGraph` for programmatic heap exploration
+- 16 CLI integration tests in `cli/tests/integration.rs` covering `parse`, `leaks`, `analyze`, `gc-path`, `diff`, `fix`, `report`, and `config` against synthetic HPROF fixtures
+- `test-fixtures` cargo feature on `mnemosyne-core` so integration tests can import canonical HPROF fixture builders without inlining them
+- Narrowed `test_fixtures` public API: only `build_simple_fixture()` and `build_graph_fixture()` remain externally visible; builders are `pub(crate)`
 
 ---
 

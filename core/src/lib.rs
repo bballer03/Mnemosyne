@@ -6,17 +6,19 @@
 pub mod ai;
 pub mod analysis;
 pub mod config;
+pub mod dominator;
 pub mod errors;
 pub mod fix;
 pub mod gc_path;
 pub mod graph;
 pub mod heap;
+pub mod hprof_parser;
 pub mod mapper;
 pub mod mcp;
 pub mod object_graph;
 pub mod report;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
 
 pub use ai::{focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat};
@@ -24,10 +26,12 @@ pub use analysis::{
     AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, ProvenanceKind, ProvenanceMarker,
 };
 pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
+pub use dominator::{build_dominator_tree, DominatorTree, VIRTUAL_ROOT_ID};
 pub use errors::CoreResult;
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use gc_path::{find_gc_path, GcPathNode, GcPathRequest, GcPathResult};
 pub use graph::{DominatorNode, GraphMetrics};
 pub use heap::{parse_heap, HeapDiff, HeapParseJob, HeapSummary, HprofHeader};
+pub use hprof_parser::parse_hprof;
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};

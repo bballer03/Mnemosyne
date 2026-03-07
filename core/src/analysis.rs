@@ -1,9 +1,12 @@
 use crate::{
     ai::{generate_ai_insights, AiInsights},
     config::{AnalysisConfig, AppConfig},
+    dominator::{build_dominator_tree, DominatorTree},
     errors::{CoreError, CoreResult},
-    graph::{summarize_graph, GraphMetrics},
+    graph::{build_graph_metrics_from_dominator, summarize_graph, GraphMetrics},
     heap::{parse_heap, ClassDelta, ClassStat, HeapDiff, HeapParseJob, HeapSummary},
+    hprof_parser::parse_hprof_file,
+    object_graph::ObjectGraph,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -161,8 +164,10 @@ impl FromStr for LeakSeverity {
     }
 }
 
-/// Execute the core analysis workflow. Currently a stub that wires together
-/// the major phases and returns placeholder data.
+/// Execute the core analysis workflow.
+///
+/// Attempts graph-backed analysis via HPROF object graph + dominator tree.
+/// Falls back to heuristic leak detection when HPROF parsing fails.
 pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
@@ -174,8 +179,25 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     };
     let summary = parse_heap(&parse_job)?;
 
-    let graph = summarize_graph(&summary);
-    let leaks = synthesize_leaks(&summary, &request.leak_options);
+    // Attempt graph-backed analysis
+    let dominator_result = try_build_dominator(&request.heap_path);
+
+    let (graph, leaks, provenance) = if let Some((ref obj_graph, ref dom)) = dominator_result {
+        let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+        let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+        // If graph-backed produced no leaks (e.g. all filtered), fall back
+        if graph_leaks.is_empty() {
+            let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
+            (graph_metrics, fallback_leaks, fallback_provenance())
+        } else {
+            (graph_metrics, graph_leaks, Vec::new())
+        }
+    } else {
+        let graph = summarize_graph(&summary);
+        let leaks = synthesize_leaks(&summary, &request.leak_options);
+        (graph, leaks, heuristic_provenance())
+    };
+
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
         Some(generate_ai_insights(&summary, &leaks, &request.config.ai))
@@ -186,14 +208,21 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     Ok(AnalyzeResponse {
         summary,
         leaks,
-        recommendations: vec![
-            "Integrate dominator-based retained size computation".into(),
-            "Add AI insights pipeline".into(),
-        ],
+        recommendations: if dominator_result.is_some() {
+            vec![
+                "Graph-backed analysis complete. Retained sizes are computed from dominator tree."
+                    .into(),
+            ]
+        } else {
+            vec![
+                "Integrate dominator-based retained size computation".into(),
+                "Add AI insights pipeline".into(),
+            ]
+        },
         elapsed: start.elapsed(),
         graph,
         ai,
-        provenance: response_level_provenance(),
+        provenance,
     })
 }
 
@@ -219,11 +248,29 @@ pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapD
 }
 
 /// Kick off leak detection without the rest of the analysis pipeline.
+///
+/// Attempts graph-backed analysis via HPROF object graph + dominator tree first,
+/// falling back to heuristic leak detection when HPROF parsing fails.
 pub async fn detect_leaks(
     heap_path: &str,
     options: LeakDetectionOptions,
 ) -> CoreResult<Vec<LeakInsight>> {
-    info!(%heap_path, ?options, "detecting leaks via heuristic engine");
+    info!(%heap_path, ?options, "detecting leaks");
+
+    // Try graph-backed path first
+    if let Some((obj_graph, dom)) = try_build_dominator(heap_path) {
+        info!(%heap_path, "graph-backed leak detection succeeded");
+        let graph_leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        if !graph_leaks.is_empty() {
+            return Ok(graph_leaks);
+        }
+        // Graph produced no leaks (e.g. filters eliminated everything) — fall through to heuristic
+        info!(%heap_path, "graph-backed path returned no leaks after filtering; falling back to heuristic");
+    } else {
+        info!(%heap_path, "graph-backed path unavailable; using heuristic leak detection");
+    }
+
+    // Heuristic fallback
     let parse_job = HeapParseJob {
         path: heap_path.into(),
         include_strings: false,
@@ -262,6 +309,90 @@ impl LeakDetectionOptions {
             leak_types: Vec::new(),
         }
     }
+}
+
+/// Attempt to parse the HPROF file into an object graph and build a dominator tree.
+/// Returns None if parsing fails (graceful fallback to heuristic path).
+fn try_build_dominator(heap_path: &str) -> Option<(ObjectGraph, DominatorTree)> {
+    match parse_hprof_file(heap_path) {
+        Ok(graph) => {
+            if graph.objects.is_empty() {
+                return None;
+            }
+            let dom = build_dominator_tree(&graph);
+            if dom.node_count() == 0 {
+                return None;
+            }
+            Some((graph, dom))
+        }
+        Err(e) => {
+            info!(error = %e, "HPROF object graph parsing failed; falling back to heuristic analysis");
+            None
+        }
+    }
+}
+
+/// Produce leak insights from the dominator tree's top retained objects.
+fn graph_backed_leaks(
+    dom: &DominatorTree,
+    graph: &ObjectGraph,
+    options: &LeakDetectionOptions,
+) -> Vec<LeakInsight> {
+    let top = dom.top_retained(20);
+    let mut leaks = Vec::new();
+
+    for &(obj_id, retained) in &top {
+        let class_name = graph
+            .objects
+            .get(&obj_id)
+            .and_then(|obj| graph.class_name(obj.class_id))
+            .unwrap_or("<unknown>")
+            .to_string();
+
+        // Apply package filters
+        if !options.package_filters.is_empty()
+            && class_name.contains('.')
+            && !options
+                .package_filters
+                .iter()
+                .any(|pkg| class_name.starts_with(pkg))
+        {
+            continue;
+        }
+
+        let leak_kind = infer_kind_from_class_name(&class_name);
+        if !options.leak_types.is_empty() && !options.leak_types.contains(&leak_kind) {
+            continue;
+        }
+
+        let severity = severity_from_size(retained);
+        if severity < options.min_severity {
+            continue;
+        }
+
+        let instances = dom.dominated_by(obj_id).len() as u64 + 1;
+        let leak_id = make_leak_id(&class_name, leak_kind);
+
+        leaks.push(LeakInsight {
+            id: leak_id,
+            class_name: class_name.clone(),
+            leak_kind,
+            severity,
+            retained_size_bytes: retained,
+            instances,
+            description: format!(
+                "{} retains {} bytes across {} dominated objects (graph-backed analysis)",
+                class_name, retained, instances
+            ),
+            provenance: Vec::new(), // Real data — no provenance markers needed
+        });
+
+        if leaks.len() >= 10 {
+            break;
+        }
+    }
+
+    leaks
 }
 
 fn synthesize_leaks(summary: &HeapSummary, options: &LeakDetectionOptions) -> Vec<LeakInsight> {
@@ -417,11 +548,20 @@ fn build_class_leak(
     }
 }
 
-/// Provenance for the analysis response as a whole.
-fn response_level_provenance() -> Vec<ProvenanceMarker> {
+/// Provenance for the analysis response when analysis is entirely heuristic.
+fn heuristic_provenance() -> Vec<ProvenanceMarker> {
     vec![ProvenanceMarker::new(
         ProvenanceKind::Partial,
         "Graph metrics are summary-level preview data; full dominator-based heap analysis is not yet implemented.",
+    )]
+}
+
+/// Provenance when graph was available but leak filters produced no results,
+/// so heuristic leaks were used as fallback.
+fn fallback_provenance() -> Vec<ProvenanceMarker> {
+    vec![ProvenanceMarker::new(
+        ProvenanceKind::Fallback,
+        "Graph-backed dominator analysis was available but leak filters produced no results; heuristic fallback was used for leak detection.",
     )]
 }
 
@@ -789,8 +929,8 @@ mod tests {
     }
 
     #[test]
-    fn response_provenance_is_partial_preview() {
-        let markers = response_level_provenance();
+    fn heuristic_provenance_is_partial_preview() {
+        let markers = heuristic_provenance();
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0].kind, ProvenanceKind::Partial);
         assert!(markers[0]
@@ -925,5 +1065,183 @@ mod tests {
         assert_eq!(10, diff.delta_objects);
         assert_eq!(1, diff.changed_classes.len());
         assert_eq!(50, diff.changed_classes[0].after_bytes);
+    }
+
+    // -- graph-backed leak tests -------------------------------------------
+
+    use crate::dominator::build_dominator_tree;
+    use crate::object_graph::{GcRoot, GcRootType, HeapObject, ObjectGraph, ObjectKind};
+
+    /// Helper: build a programmatic ObjectGraph from a compact description.
+    fn make_test_graph(objects: &[(u64, u64, u32, &[u64])], gc_roots: &[u64]) -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+        for &(id, class_id, size, refs) in objects {
+            graph.objects.insert(
+                id,
+                HeapObject {
+                    id,
+                    class_id,
+                    shallow_size: size,
+                    references: refs.to_vec(),
+                    kind: ObjectKind::Instance,
+                },
+            );
+        }
+        for &root_id in gc_roots {
+            graph.gc_roots.push(GcRoot {
+                object_id: root_id,
+                root_type: GcRootType::StickyClass,
+            });
+        }
+        graph
+    }
+
+    #[test]
+    fn graph_backed_leaks_uses_retained_sizes() {
+        // Root(1) → A(2) → B(3); shallow sizes: 10, 20, 30
+        // Retained: 1=60, 2=50, 3=30
+        let obj_graph = make_test_graph(
+            &[
+                (1, 0x100, 10, &[2]),
+                (2, 0x100, 20, &[3]),
+                (3, 0x100, 30, &[]),
+            ],
+            &[1],
+        );
+        let dom = build_dominator_tree(&obj_graph);
+        let options = LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            package_filters: Vec::new(),
+            leak_types: Vec::new(),
+        };
+
+        let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        assert!(!leaks.is_empty());
+        // The top leak should have retained_size matching the dominator tree
+        assert_eq!(leaks[0].retained_size_bytes, 60);
+        assert_eq!(leaks[1].retained_size_bytes, 50);
+        assert_eq!(leaks[2].retained_size_bytes, 30);
+    }
+
+    #[test]
+    fn graph_backed_leaks_respects_package_filter() {
+        // All objects use class_id 0x100 which resolves to None → "<unknown>".
+        // "<unknown>" does not contain '.', so package filter should NOT exclude it.
+        let obj_graph = make_test_graph(&[(1, 0x100, 10, &[2]), (2, 0x100, 20, &[])], &[1]);
+        let dom = build_dominator_tree(&obj_graph);
+        let options = LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            package_filters: vec!["com.example".into()],
+            leak_types: Vec::new(),
+        };
+
+        let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        // "<unknown>" doesn't contain '.', so package filter doesn't apply
+        assert_eq!(leaks.len(), 2);
+    }
+
+    #[test]
+    fn graph_backed_leaks_have_empty_provenance() {
+        let obj_graph = make_test_graph(&[(1, 0x100, 10, &[])], &[1]);
+        let dom = build_dominator_tree(&obj_graph);
+        let options = LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            package_filters: Vec::new(),
+            leak_types: Vec::new(),
+        };
+
+        let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        assert!(!leaks.is_empty());
+        assert!(
+            leaks[0].provenance.is_empty(),
+            "graph-backed leaks must have empty provenance (real data)"
+        );
+    }
+
+    #[test]
+    fn fallback_provenance_is_fallback_kind() {
+        let markers = fallback_provenance();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, ProvenanceKind::Fallback);
+        assert!(markers[0]
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("heuristic fallback"));
+    }
+
+    #[tokio::test]
+    async fn detect_leaks_tries_graph_path() {
+        use crate::test_fixtures::{HeapDumpBuilder, HprofBuilder};
+        use std::io::Write;
+
+        // Build an HPROF where the GC root IS an object in the heap.
+        let mut builder = HprofBuilder::new(4);
+        builder
+            .add_string(1, "java/lang/Object")
+            .add_string(2, "com/example/BigCache")
+            .add_load_class(1, 0x100, 0, 1)
+            .add_load_class(2, 0x200, 0, 2);
+
+        let mut heap = HeapDumpBuilder::new(4);
+        // Class dumps
+        heap.add_class_dump(0x100, 0, 0, &[])
+            .add_class_dump(0x200, 0x100, 0, &[]);
+        // Root object that is also an instance
+        heap.add_gc_root_java_frame(0x1000, 1, 0)
+            .add_instance_dump(0x1000, 0x200, &[])
+            .add_instance_dump(0x2000, 0x200, &[]);
+
+        builder.add_heap_dump(heap.build());
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&builder.build()).unwrap();
+        file.flush().unwrap();
+
+        let options = LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            package_filters: Vec::new(),
+            leak_types: Vec::new(),
+        };
+
+        let leaks = detect_leaks(file.path().to_str().unwrap(), options)
+            .await
+            .unwrap();
+        // The fixture produces a valid HPROF with objects and a GC root that
+        // is also in the objects map, so graph-backed path should succeed.
+        assert!(!leaks.is_empty(), "detect_leaks should return results");
+        // Graph-backed leaks have empty provenance (real data)
+        for leak in &leaks {
+            assert!(
+                !leak
+                    .provenance
+                    .iter()
+                    .any(|m| m.kind == ProvenanceKind::Synthetic),
+                "graph-backed leaks must not have Synthetic provenance"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn detect_leaks_falls_back_to_heuristic() {
+        use std::io::Write;
+
+        // Write invalid HPROF data — graph path will fail, heuristic should kick in
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        // Valid HPROF header but no heap dump records
+        file.write_all(b"JAVA PROFILE 1.0.2\0").unwrap();
+        file.write_all(&4u32.to_be_bytes()).unwrap();
+        file.write_all(&0u64.to_be_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let options = LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            package_filters: Vec::new(),
+            leak_types: Vec::new(),
+        };
+
+        let result = detect_leaks(file.path().to_str().unwrap(), options).await;
+        // Should succeed via heuristic path (may produce empty results for tiny files)
+        assert!(result.is_ok(), "heuristic fallback should not error");
     }
 }

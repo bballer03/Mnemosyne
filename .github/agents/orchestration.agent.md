@@ -81,27 +81,42 @@ You coordinate all other agents. You must never become the default coder.
 | API contract docs/schemas | API Contract |
 | API contract runtime code | **Implementation** |
 | Database/persistence changes | Database Migration |
-| Test writing/updating | Testing |
-| Test/lint/format **execution** (small scope) | **Implementation** |
-| Test/lint/format **execution** (broad scope) | Testing |
-| Lint/build diagnosis (review-only) | Static Analysis |
+| Test writing/updating | **Testing** |
+| Running `cargo test` | **Testing** |
+| Running `cargo check` (validation) | **Testing** |
+| Running integration tests | **Testing** |
+| Test fixture verification | **Testing** |
+| Running `cargo clippy` | **Static Analysis** |
+| Running `cargo fmt` | **Implementation** |
+| Code edits / feature implementation | **Implementation** |
+| Parser / architecture changes | **Implementation** |
 | CI / GitHub Actions failures | **GitHub Ops** |
 | Workflow run investigation | **GitHub Ops** |
 | PR / issue / branch state inspection | **GitHub Ops** |
 | Workflow file fixes | **GitHub Ops** |
 | Commit / push / PR preparation | **GitHub Ops** (or Implementation if code-only) |
 | Design review | Architecture Review |
+| Lint/build diagnosis (review-only) | Static Analysis |
 | Logs/metrics/tracing | Observability |
 | Cleanup after stable correctness | Refactor |
 | Post-batch documentation updates | Documentation Sync |
 | Product review, roadmap, and feature planning | Tech PM |
 
 ### Routing priorities
-1. **Prefer Implementation Agent** for any task that involves code edits + terminal validation (cargo check/test/clippy/fmt).
-2. **Prefer GitHub Ops Agent** for any task that involves GitHub Actions, workflow failures, PR/issue state, or CI investigation.
-3. **Prefer Testing Agent** for broad test suite work; prefer Implementation Agent for targeted test-adjacent validation.
-4. Use handoffs instead of re-analysis — once a task is investigated, hand findings to the execution agent rather than re-running discovery.
-5. If GitHub Ops identifies a code fix needed, hand off to Implementation — do not let GitHub Ops edit production source.
+1. **Prefer Implementation Agent** for any task that involves code edits, feature work, `cargo fmt`, or parser/architecture changes.
+2. **Prefer Testing Agent** for running `cargo check`, `cargo test`, integration tests, test fixture verification, and regression detection.
+3. **Prefer Static Analysis Agent** for `cargo clippy` and lint-focused diagnosis.
+4. **Prefer GitHub Ops Agent** for GitHub Actions, workflow failures, PR/issue state, or CI investigation.
+5. Use handoffs instead of re-analysis — once a task is investigated, hand findings to the execution agent rather than re-running discovery.
+6. If Testing Agent finds a production bug, hand off to Implementation — Testing must not edit production source.
+7. If GitHub Ops identifies a code fix needed, hand off to Implementation — do not let GitHub Ops edit production source.
+
+### Post-implementation validation sequence
+After any implementation batch, the standard validation sequence is:
+1. **Implementation Agent** writes code and runs initial `cargo check`/`cargo fmt` as needed.
+2. **Testing Agent** runs `cargo check` + `cargo test` (unit and integration). Reports pass/fail.
+3. **Static Analysis Agent** runs `cargo clippy`. Reports findings.
+4. **Documentation Sync Agent** updates docs if the batch changed user-facing behavior.
 
 Review agents must not become implementation owners unless you explicitly reassign ownership and document why.
 
@@ -114,7 +129,7 @@ Review agents must not become implementation owners unless you explicitly reassi
 | API Contract | read; write only when docs/schemas assigned |
 | Database Migration | read; write + execute only for approved persistence |
 | Implementation | read + write; execute if compile/test feedback needed |
-| Testing | read + execute; write only for test files |
+| Testing | read + terminal execution (`cargo check`, `cargo test`) + write only for test files |
 | Observability | read; write only for approved instrumentation |
 | Refactor | read; write only after correctness is stable |
 | Documentation Sync | read + write for docs only (STATUS.md, README.md, ARCHITECTURE.md, CHANGELOG.md, docs/) |

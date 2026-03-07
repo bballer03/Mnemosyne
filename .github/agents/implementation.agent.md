@@ -4,7 +4,7 @@ description: Implement approved Mnemosyne changes inside assigned boundaries wit
 argument-hint: State the exact scope, owned files, required behavior change, and anything that must remain unchanged.
 tools: [search, edit, changes, codebase, problems, usages, terminalLastCommand, runInTerminal, githubRepo, fetch]
 agents: []
-model: Claude Opus 4.6 (copilot)
+model: GPT-5.4 (copilot)
 target: vscode
 handoffs:
   - label: Add Tests
