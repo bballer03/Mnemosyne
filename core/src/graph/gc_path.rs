@@ -1,9 +1,7 @@
 use crate::{
     analysis::{ProvenanceKind, ProvenanceMarker},
     errors::{CoreError, CoreResult},
-    heap::{parse_heap, HeapParseJob},
-    hprof_parser::parse_hprof_file,
-    object_graph::ObjectGraph,
+    hprof::{parse_heap, parse_hprof_file, HeapParseJob, HeapSummary, ObjectGraph},
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -293,7 +291,7 @@ fn parse_object_id(input: &str) -> Option<u64> {
 
 fn build_synthetic_path(
     request: &GcPathRequest,
-    summary: &crate::heap::HeapSummary,
+    summary: &HeapSummary,
     depth: usize,
 ) -> CoreResult<GcPathResult> {
     let dominant_record = summary

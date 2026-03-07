@@ -1,14 +1,13 @@
 use crate::{
     analysis::{
-        analyze_heap, detect_leaks, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights, AnalyzeRequest,
+        LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
     errors::{CoreError, CoreResult},
     fix::{propose_fix, FixRequest, FixStyle},
-    focus_leaks,
-    gc_path::{find_gc_path, GcPathRequest},
-    generate_ai_insights,
-    heap::{parse_heap, HeapParseJob},
+    graph::{find_gc_path, GcPathRequest},
+    hprof::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
 };
 use serde::{Deserialize, Serialize};

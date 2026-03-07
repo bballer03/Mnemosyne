@@ -1,7 +1,7 @@
 use crate::{
-    ai::focus_leaks,
     analysis::{
-        analyze_heap, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind, ProvenanceMarker,
+        analyze_heap, focus_leaks, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind,
+        ProvenanceMarker,
     },
     config::AppConfig,
     errors::CoreResult,

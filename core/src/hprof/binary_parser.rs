@@ -3,11 +3,11 @@
 //! This module reads HPROF heap-dump files (format version 1.0.x)
 //! and populates the `object_graph` types directly.
 
-use crate::errors::{CoreError, CoreResult};
-use crate::object_graph::{
+use super::object_graph::{
     field_types, field_value_size, ClassId, ClassInfo, FieldDescriptor, GcRoot, GcRootType,
     HeapObject, LoadedClass, ObjectGraph, ObjectKind,
 };
+use crate::errors::{CoreError, CoreResult};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::fs::File;

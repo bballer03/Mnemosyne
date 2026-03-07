@@ -1,4 +1,5 @@
-use crate::{analysis::LeakInsight, config::AiConfig, heap::HeapSummary};
+use super::engine::LeakInsight;
+use crate::{config::AiConfig, hprof::HeapSummary};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -223,7 +224,7 @@ fn retained_percent(retained: u64, total: u64) -> f64 {
 mod tests {
     use super::*;
     use crate::analysis::{LeakKind, LeakSeverity};
-    use crate::heap::HeapSummary;
+    use crate::hprof::HeapSummary;
     use std::time::SystemTime;
 
     #[test]

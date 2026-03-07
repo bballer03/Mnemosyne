@@ -130,29 +130,35 @@ cargo run -- serve
 
 ```
 mnemosyne/
-│
-├── core/                  # Core library crates
-│   ├── hprof/            # HProf format parser
-│   ├── graph/            # Object graph & dominator tree
-│   ├── leaks/            # Leak detection algorithms
-│   ├── mapper/           # Source code mapping
-│   └── report/           # Report generation
-│
-├── mcp/                  # MCP server implementation
-│   ├── server.rs         # Server entry point
-│   └── handlers/         # MCP command handlers
-│
-├── cli/                  # Command-line interface
-│   └── main.rs
-│
-├── tests/                # Integration tests
-│   ├── fixtures/         # Test heap dumps
-│   └── integration/
-│
-├── docs/                 # Documentation
-│   └── examples/         # Example code and analyses
-│
-└── resources/            # Images, diagrams, etc.
+├── Cargo.toml              # Workspace root
+├── cli/
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs         # CLI entry point
+│   │   └── config_loader.rs
+│   └── tests/
+│       └── integration.rs  # 23 CLI integration tests
+├── core/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs            # Public API re-exports
+│       ├── hprof/            # parser.rs, binary_parser.rs, object_graph.rs, test_fixtures.rs
+│       ├── graph/            # dominator.rs, gc_path.rs, metrics.rs
+│       ├── analysis/         # engine.rs, ai.rs
+│       ├── mapper/           # source.rs
+│       ├── report/           # renderer.rs
+│       ├── fix/              # generator.rs
+│       ├── mcp/              # server.rs
+│       ├── config.rs         # Configuration types
+│       └── errors.rs         # CoreError types
+├── docs/                    # Documentation
+├── resources/
+│   └── test-fixtures/       # Test fixture documentation
+├── HomebrewFormula/
+│   └── mnemosyne.rb         # macOS Homebrew formula
+├── .github/
+│   └── workflows/           # CI + release workflows
+└── Dockerfile               # Multi-stage Docker build
 ```
 
 ---
@@ -251,18 +257,21 @@ pub fn parse_heap(path: impl AsRef<Path>) -> Result<HeapSnapshot> {
 mod tests {
     use super::*;
 
+      #[cfg(feature = "test-fixtures")]
+      use mnemosyne_core::test_fixtures::{build_graph_fixture, build_simple_fixture};
+
     #[test]
+      #[cfg(feature = "test-fixtures")]
     fn test_parse_small_heap() {
-        let snapshot = parse_heap("tests/fixtures/small.hprof").unwrap();
-        assert_eq!(snapshot.total_objects(), 1234);
+            let fixture = build_simple_fixture();
+            assert!(fixture.len() > 0);
     }
 
     #[test]
-    fn test_detect_simple_leak() {
-        let snapshot = create_test_snapshot();
-        let leaks = detect_leaks(&snapshot);
-        assert_eq!(leaks.len(), 1);
-        assert_eq!(leaks[0].class_name, "com.example.LeakyCache");
+      #[cfg(feature = "test-fixtures")]
+      fn test_build_graph_fixture() {
+            let fixture = build_graph_fixture();
+            assert!(fixture.len() > 0);
     }
 
     #[test]

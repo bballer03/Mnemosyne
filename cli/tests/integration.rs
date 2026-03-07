@@ -1,7 +1,7 @@
 use std::{fs, io::Write, path::Path};
 
 use assert_cmd::Command;
-use mnemosyne_core::test_fixtures::{build_graph_fixture, build_simple_fixture};
+use mnemosyne_core::hprof::test_fixtures::{build_graph_fixture, build_simple_fixture};
 use predicates::prelude::*;
 use serde_json::{Deserializer, Value};
 use tempfile::{tempdir, NamedTempFile, TempDir};

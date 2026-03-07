@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap & Milestones
 
-> **Last updated:** 2026-03-07 (post M2-B6 better error messages)
+> **Last updated:** 2026-03-08 (post v0.1.1 release)
 > **Owner:** Tech PM Agent
 > **Status:** Living document — updated after each major implementation batch
 
@@ -24,13 +24,13 @@
 
 ## Section 1 — Executive Summary
 
-Mnemosyne is today an **alpha-stage Rust-based JVM heap analysis tool**. It can stream-parse HPROF files to produce class histograms and heap summaries, parse binary HPROF records into a full object reference graph (`core::hprof_parser` → `core::object_graph`), compute a real dominator tree via Lengauer-Tarjan (`core::dominator`), derive retained sizes from post-order subtree accumulation, run graph-backed analysis in both `analyze_heap()` and `detect_leaks()` with automatic fallback to heuristics when parsing fails, trace GC root paths with `ObjectGraph` BFS first plus layered fallbacks, expose object navigation via `get_object(id)`, `get_references(id)`, and `get_referrers(id)`, generate template-based fix suggestions, and render results in five output formats (Text, Markdown, HTML, TOON, JSON) — all backed by a provenance system that labels every synthetic, partial, fallback, or placeholder data surface. A stdio MCP server exposes six JSON-RPC handlers (`parse_heap`, `detect_leaks`, `map_to_code`, `find_gc_path`, `explain_leak`, `propose_fix`), making the tool available inside VS Code, Cursor, Zed, JetBrains, and ChatGPT Desktop. The AI module (`generate_ai_insights`) is **fully stubbed**: it returns deterministic template text with zero LLM calls and zero HTTP client dependencies.
+Mnemosyne is today an **alpha-stage Rust-based JVM heap analysis tool**. It can stream-parse HPROF files to produce class histograms and heap summaries, parse binary HPROF records into a full object reference graph (`core::hprof::binary_parser` → `core::hprof::object_graph`), compute a real dominator tree via Lengauer-Tarjan (`core::graph::dominator`), derive retained sizes from post-order subtree accumulation, run graph-backed analysis in both `analyze_heap()` and `detect_leaks()` with automatic fallback to heuristics when parsing fails, trace GC root paths with `ObjectGraph` BFS first plus layered fallbacks, expose object navigation via `get_object(id)`, `get_references(id)`, and `get_referrers(id)`, generate template-based fix suggestions, and render results in five output formats (Text, Markdown, HTML, TOON, JSON) — all backed by a provenance system that labels every synthetic, partial, fallback, or placeholder data surface. A stdio MCP server exposes seven JSON-RPC handlers (`parse_heap`, `detect_leaks`, `map_to_code`, `find_gc_path`, `explain_leak`, `propose_fix`, `apply_fix`), making the tool available inside VS Code, Cursor, Zed, JetBrains, and ChatGPT Desktop. The AI module (`analysis::generate_ai_insights`) is **fully stubbed**: it returns deterministic template text with zero LLM calls and zero HTTP client dependencies.
 
 Mnemosyne has the foundations to become **the first Rust-native, AI-assisted heap analysis platform** that rivals Eclipse MAT in analysis depth while offering capabilities no existing tool provides: provenance-tracked outputs that distinguish real analysis from heuristic guesses, MCP-native IDE integration for copilot-style workflows, CI/CD-friendly automation via structured JSON and TOON output, and an AI-native architecture designed from day one for LLM integration. The Rust core means multi-GB heap dumps can be processed with predictable memory usage and no GC pauses — a meaningful advantage over Java-based tools like MAT and VisualVM for production incident response.
 
 Five properties position Mnemosyne to stand out in a crowded JVM tooling ecosystem: **(1)** Rust performance enabling streaming analysis of heap dumps that exceed host RAM; **(2)** a provenance system unique among heap analyzers, giving users and automation confidence in result trustworthiness; **(3)** MCP-first architecture that makes heap analysis a conversation in the developer's IDE rather than a separate tool; **(4)** AI-native design with well-shaped type contracts (`AiInsights`, `AiWireExchange`, config plumbing) ready for LLM wiring; and **(5)** automation-friendly structured output (JSON, TOON) enabling CI regression detection with machine-readable leak signals.
 
-Honest assessment: **significant work remains** to deliver on this vision, but Milestone 1 is now complete and the foundational analysis engine is in place. The object graph, dominator tree, retained-size computation, unified `detect_leaks()` path, GC-path rewrite, and object navigation API are all delivered. The most critical remaining gap is AI wiring: every "AI-powered" claim in the README is aspirational today. An 83-test suite (59 core + 5 CLI unit + 19 CLI integration) now runs clean in GitHub Actions CI, the `test-fixtures` feature keeps canonical HPROF builders reusable across unit and integration coverage, tagged GitHub releases can now publish prebuilt binaries for five targets, tagged releases also publish a GHCR Docker image, and the CLI now emits structured suggestions for common file/config mistakes. Sample real-world heap dumps, the first live crates.io publish, table-formatted output, and benchmarks are still missing. The architecture is sound, the core analysis pipeline is graph-backed across the primary analysis surfaces, and the provenance/reporting layers are well-built — the next priorities are finishing the remaining Milestone 2 output polish and wiring real LLM calls.
+Honest assessment: **significant work remains** to deliver on this vision, but Milestone 1 is now complete and the foundational analysis engine is in place. The object graph, dominator tree, retained-size computation, unified `detect_leaks()` path, GC-path rewrite, and object navigation API are all delivered. v0.1.1 also completed the internal `core/src/` restructure from flat files into grouped module directories (`hprof/`, `graph/`, `analysis/`, `mapper/`, `report/`, `fix/`, `mcp/`) while preserving public API re-exports in `lib.rs`. The most critical remaining gap is AI wiring: every "AI-powered" claim in the README is aspirational today. An 87-test suite (59 core + 5 CLI unit + 23 CLI integration) now runs clean in GitHub Actions CI, the `test-fixtures` feature keeps canonical HPROF builders reusable across unit and integration coverage, tagged GitHub releases publish prebuilt binaries for five targets, v0.1.1 is the current release baseline, tagged releases publish a GHCR Docker image, and the CLI now emits structured suggestions for common file/config mistakes. Sample real-world heap dumps and benchmarks are still missing. The architecture is sound, the core analysis pipeline is graph-backed across the primary analysis surfaces, and the provenance/reporting layers are well-built — the next priorities are Milestone 3 analysis depth and wiring real LLM calls.
 
 ---
 
@@ -40,38 +40,38 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 | Capability | Status | Honest Assessment |
 |---|---|---|
-| HPROF streaming parser | ✅ Implemented | Two-tier parsing: `core::heap` streams headers + record tags for fast class histograms. `core::hprof_parser` now parses binary HPROF records (STRING_IN_UTF8, LOAD_CLASS, CLASS_DUMP, INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP, 8 GC root types) into a full `core::object_graph::ObjectGraph` with objects, references, classes, and GC roots. Uses `byteorder` for big-endian binary parsing. Both 4-byte and 8-byte identifier sizes supported. |
+| HPROF streaming parser | ✅ Implemented | Two-tier parsing: `core::hprof::parser` streams headers + record tags for fast class histograms. `core::hprof::binary_parser` now parses binary HPROF records (STRING_IN_UTF8, LOAD_CLASS, CLASS_DUMP, INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP, 8 GC root types) into a full `core::hprof::object_graph::ObjectGraph` with objects, references, classes, and GC roots. Uses `byteorder` for big-endian binary parsing. Both 4-byte and 8-byte identifier sizes supported. |
 | Leak detection heuristics | ✅ Unified | `detect_leaks()` now attempts the same object-graph → dominator → retained-size path as `analyze_heap()`, then falls back to heuristics with `ProvenanceKind::Fallback` when graph parsing fails or filters exclude all candidates. Direct leak detection is no longer split from the graph-backed pipeline. |
-| Graph / dominator tree | ✅ Complete | `core::dominator::build_dominator_tree()` runs Lengauer–Tarjan (`petgraph::algo::dominators::simple_fast`) over the full object reference graph with a virtual super-root connected to all GC roots. Computes retained sizes via post-order subtree accumulation. Exposed through `analyze_heap()` and `detect_leaks()`. `ObjectGraph` now also exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for navigable exploration. |
-| GC root path tracing | ✅ Implemented | `core::gc_path` now tries full `ObjectGraph` BFS first, then falls back to a budget-limited `GcGraph`, then synthetic paths when heap data is insufficient. Field-name edge labels are preserved via `get_field_names_for_class()`. |
-| AI / LLM insights | ❌ Stubbed | `core::ai::generate_ai_insights()` returns deterministic template text. No HTTP client in `Cargo.toml`, no API calls, no LLM SDK. Config plumbing exists (`AiConfig` with provider/model/temperature fields) but terminates at the stub. The "AI-powered" claim in README is entirely aspirational. |
+| Graph / dominator tree | ✅ Complete | `core::graph::dominator::build_dominator_tree()` runs Lengauer–Tarjan (`petgraph::algo::dominators::simple_fast`) over the full object reference graph with a virtual super-root connected to all GC roots. Computes retained sizes via post-order subtree accumulation. Exposed through `analyze_heap()` and `detect_leaks()`. `ObjectGraph` now also exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for navigable exploration. |
+| GC root path tracing | ✅ Implemented | `core::graph::gc_path` now tries full `ObjectGraph` BFS first, then falls back to a budget-limited `GcGraph`, then synthetic paths when heap data is insufficient. Field-name edge labels are preserved via `get_field_names_for_class()`. |
+| AI / LLM insights | ❌ Stubbed | `core::analysis::generate_ai_insights()` returns deterministic template text. No HTTP client in `Cargo.toml`, no API calls, no LLM SDK. Config plumbing exists (`AiConfig` with provider/model/temperature fields) but terminates at the stub. The "AI-powered" claim in README is entirely aspirational. |
 | Fix suggestions | ⚠️ Template only | `core::fix::propose_fix()` generates template patches in three styles (Minimal, Defensive, Comprehensive). No AI involvement, no code analysis. Useful scaffolding with provenance markers. |
 | Source mapping | ✅ Implemented | `core::mapper::map_to_code()` scans project dirs for `.java`/`.kt` files, runs `git blame` for metadata. Basic but functional for local projects. |
 | Reporting | ✅ Implemented | `core::report` renders 5 formats (Text, Markdown, HTML, TOON, JSON). HTML output uses `escape_html()` for XSS prevention. TOON uses `escape_toon_value()` for control characters. Provenance markers rendered in all non-JSON formats. One of the most polished subsystems. |
-| MCP server | ✅ Wired | `core::mcp::serve()` runs a stdio JSON-RPC loop with async Tokio I/O. Handles 6 methods. Works end-to-end but backed by the same stubs/heuristics as CLI. |
+| MCP server | ✅ Wired | `core::mcp::serve()` runs a stdio JSON-RPC loop with async Tokio I/O. Handles 7 methods. Works end-to-end but backed by the same stubs/heuristics as CLI. |
 | Config system | ✅ Implemented | `cli::config_loader` reads TOML files from 5 locations + env vars + CLI flags. `core::config` defines `AppConfig`, `AiConfig`, `ParserConfig`, `AnalysisConfig`. Clean, well-layered. |
 | Provenance system | ✅ Implemented | `ProvenanceKind` (Synthetic, Partial, Fallback, Placeholder) + `ProvenanceMarker` on `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, `FixResponse`. Rendered in all report formats and CLI output. Unique feature in the heap-analysis space. |
 
 ### Technical Strengths
 
 - **Rust performance model**: streaming parser with `BufReader`, no GC, predictable memory. Can handle files larger than RAM in principle.
-- **Clean module separation**: 13 focused modules in `core` (`ai`, `analysis`, `config`, `dominator`, `errors`, `fix`, `gc_path`, `graph`, `heap`, `hprof_parser`, `mapper`, `mcp`, `object_graph`, `report`, `test_fixtures`) with clear single-responsibility boundaries.
-- **Real object graph**: `core::hprof_parser` parses binary HPROF records into an `ObjectGraph` with objects, reference edges, class metadata, and GC roots — the foundation for all graph-backed analysis.
-- **Real dominator tree**: `core::dominator` implements Lengauer–Tarjan over the full object graph with virtual super-root. Computes retained sizes via post-order accumulation.
+- **Clean module separation**: grouped implementation domains in `core/src/` (`hprof/`, `graph/`, `analysis/`, `mapper/`, `report/`, `fix/`, `mcp/`) plus shared `config.rs`, `errors.rs`, and `lib.rs` re-exports.
+- **Real object graph**: `core::hprof::binary_parser` parses binary HPROF records into an `ObjectGraph` with objects, reference edges, class metadata, and GC roots — the foundation for all graph-backed analysis.
+- **Real dominator tree**: `core::graph::dominator` implements Lengauer–Tarjan over the full object graph with virtual super-root. Computes retained sizes via post-order accumulation.
 - **Graph-backed analysis pipeline**: `analyze_heap()` attempts object-graph → dominator-tree → retained-size analysis first, with automatic fallback to heuristics. Provenance markers distinguish real from heuristic results.
-- **Streaming design**: `core::heap` parser processes HPROF records sequentially without loading the full dump. Foundation for scaling to multi-GB files.
+- **Streaming design**: `core::hprof::parser` processes HPROF records sequentially without loading the full dump. Foundation for scaling to multi-GB files.
 - **Provenance system**: genuinely novel for a heap analyzer. Labels every synthetic/heuristic output surface so consumers know what to trust.
 - **Multi-format output**: 5 report formats with consistent provenance rendering. HTML is XSS-hardened. TOON enables compact CI consumption.
-- **83-test suite with CI**: 59 core + 5 CLI unit + 19 CLI integration tests running in GitHub Actions. Synthetic HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, end-to-end CLI testing, and targeted error-path coverage.
+- **87-test suite with CI**: 59 core + 5 CLI unit + 23 CLI integration tests running in GitHub Actions. Synthetic HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, end-to-end CLI testing, and targeted error-path coverage.
 - **Config hierarchy**: TOML + env vars + CLI flags with clear precedence. Production-ready design pattern.
-- **MCP integration**: stdio JSON-RPC server with 6 handlers. First-mover for heap analysis in the MCP ecosystem.
+- **MCP integration**: stdio JSON-RPC server with 7 handlers. First-mover for heap analysis in the MCP ecosystem.
 - **Type contracts**: well-shaped request/response types (`AnalyzeRequest`, `AnalyzeResponse`, `GcPathResult`, `FixResponse`, etc.) that establish stable contracts between CLI, MCP, and core.
 
 ### Major Weaknesses
 
 - **AI is 100% stubbed**: `generate_ai_insights()` returns hardcoded template strings. There are zero HTTP client dependencies in `Cargo.toml`. The `AiConfig` fields (provider, model, temperature, API key) exist but connect to nothing. Every "AI-powered" claim in documentation is marketing ahead of implementation.
 - **No benchmarks or performance data**: no `criterion` benchmarks for parser throughput, graph construction, dominator computation, or report rendering. Cannot track performance regressions or compare against MAT/VisualVM.
-- **Release packaging is substantially improved but not finished**: tagged GitHub releases can now publish pre-built binaries, Homebrew scaffolding exists, and tagged releases now push a GHCR Docker image, but crates.io publication and first-release Homebrew checksum finalization are still pending.
+- **AI is still the primary gap, not packaging.** Release channels are live through v0.1.1 across GitHub Releases, crates.io, Docker, and Homebrew, but the analysis stack still lacks real LLM wiring and published performance data.
 - **No sample real-world data**: synthetic test fixtures exist for deterministic testing, but no example real `.hprof` files for tutorials or development.
 - **Diff is record-level, not object-level**: `diff_heaps()` compares aggregate record/class statistics. It cannot track individual object migration or reference chain changes.
 - **Graph module naming is misleading**: `summarize_graph()` still exists as a lightweight fallback that builds a synthetic tree from top-12 entries. Its name suggests more than it delivers, though the real dominator tree now exists alongside it.
@@ -80,9 +80,9 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 | Subsystem | Maturity | Rationale |
 |---|---|---|
-| Parser | Alpha+ | `core::heap` handles record-level stats. `core::hprof_parser` parses object-level binary HPROF into a full `ObjectGraph`. Both 4-byte and 8-byte ID sizes supported. |
+| Parser | Alpha+ | `core::hprof::parser` handles record-level stats. `core::hprof::binary_parser` parses object-level binary HPROF into a full `ObjectGraph`. Both 4-byte and 8-byte ID sizes supported. |
 | Leak detection | Alpha+ | `detect_leaks()` and `analyze_heap()` now share the graph-backed retained-size pipeline with explicit heuristic fallback provenance. |
-| Graph / Dominator | Alpha+ | Real Lengauer–Tarjan dominator tree implemented in `core::dominator`, retained sizes surfaced in both primary analysis paths, and `ObjectGraph` now exposes a navigation API. |
+| Graph / Dominator | Alpha+ | Real Lengauer–Tarjan dominator tree implemented in `core::graph::dominator`, retained sizes surfaced in both primary analysis paths, and `ObjectGraph` now exposes a navigation API. |
 | AI | Pre-alpha | Fully stubbed. Returns deterministic text. Not wired to any model. |
 | GC root paths | Alpha | Real parsing of roots/instances within budget. Best-effort with fallback. Among the strongest features. |
 | Fix suggestions | Alpha | Template-based scaffolding. No code analysis or AI involvement. |
@@ -91,7 +91,7 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 | MCP server | Alpha | Wired and functional but outputs depend on stubs/heuristics. |
 | Config | Beta | Clean hierarchy, env + TOML + CLI. Production-ready pattern. |
 | Provenance | Beta | Unique, well-integrated across all surfaces. Novel in the space. |
-| Testing | Alpha+ | 83 tests (59 core + 5 CLI unit + 19 CLI integration). Synthetic HPROF test fixtures, reusable `test-fixtures` feature, and GitHub Actions CI. No property-based testing or benchmarks yet. |
+| Testing | Alpha+ | 87 tests (59 core + 5 CLI unit + 23 CLI integration). Synthetic HPROF test fixtures, reusable `test-fixtures` feature, and GitHub Actions CI. No property-based testing or benchmarks yet. |
 | CI/CD | Alpha+ | GitHub Actions CI runs `cargo check`, `cargo test`, `cargo clippy`, and `cargo fmt --check` on pushes and PRs, and tagged releases now run a separate workflow that validates the tag version, cross-compiles `mnemosyne-cli` for five targets, packages archives, and publishes a GitHub Release. Nightly builds are still absent. |
 
 ---
@@ -100,7 +100,7 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.1 Correctness & Trust Gaps
 
-**Object reference graph: implemented and now used across the primary analysis surfaces.** `core::hprof_parser` parses INSTANCE_DUMP field values (using CLASS_DUMP field descriptors), OBJ_ARRAY_DUMP elements, PRIM_ARRAY_DUMP, and GC root records into a full `ObjectGraph` with reference edges. `core::dominator` computes a real dominator tree via Lengauer–Tarjan and derives retained sizes via post-order accumulation. `analyze_heap()` and `detect_leaks()` both use this pipeline, `gc_path` now prefers `ObjectGraph` BFS first, and `ObjectGraph` exposes `get_object(id)`, `get_referrers(id)`, and `get_references(id)` for exploration. The main remaining correctness gap is elsewhere:
+**Object reference graph: implemented and now used across the primary analysis surfaces.** `core::hprof::binary_parser` parses INSTANCE_DUMP field values (using CLASS_DUMP field descriptors), OBJ_ARRAY_DUMP elements, PRIM_ARRAY_DUMP, and GC root records into a full `ObjectGraph` with reference edges. `core::graph::dominator` computes a real dominator tree via Lengauer–Tarjan and derives retained sizes via post-order accumulation. `analyze_heap()` and `detect_leaks()` both use this pipeline, `core::graph::gc_path` now prefers `ObjectGraph` BFS first, and `ObjectGraph` exposes `get_object(id)`, `get_referrers(id)`, and `get_references(id)` for exploration. The main remaining correctness gap is elsewhere:
 
 - **Diff is record-level, not object-level.** `diff_heaps()` compares aggregate record/class statistics between two snapshots. It cannot track individual object migration, new allocation sites, or reference chain changes.
 
@@ -108,11 +108,11 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.2 Testing & CI Gaps
 
-- **83 tests** across the workspace (59 core + 5 CLI unit + 19 CLI integration). Tests cover provenance rendering, escape functions, analysis paths, HPROF parsing, object graph construction, dominator tree correctness, retained-size computation, CLI argument handling, end-to-end command execution, and targeted failure-path UX.
+- **87 tests** across the workspace (59 core + 5 CLI unit + 23 CLI integration). Tests cover provenance rendering, escape functions, analysis paths, HPROF parsing, object graph construction, dominator tree correctness, retained-size computation, CLI argument handling, end-to-end command execution, and targeted failure-path UX.
 - **Synthetic HPROF test fixtures** exist in `core::test_fixtures`. Small deterministic binary HPROF files exercise the parser and graph pipeline without requiring a JVM or committing large binaries.
 - **`test-fixtures` cargo feature** exposes canonical fixture builders to integration tests without widening the builder API surface.
 - **CI pipeline running.** GitHub Actions (`.github/workflows/ci.yml`) runs `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` on pushes and PRs.
-- **19 end-to-end CLI integration tests.** `cli/tests/integration.rs` runs `parse`, `leaks`, `analyze`, `gc-path`, `diff`, `fix`, `report`, and `config` as subprocesses against synthetic HPROF fixtures and now also validates key error-path guidance.
+- **23 end-to-end CLI integration tests.** `cli/tests/integration.rs` runs `parse`, `leaks`, `analyze`, `gc-path`, `diff`, `fix`, `report`, and `config` as subprocesses against synthetic HPROF fixtures and now also validates key error-path guidance.
 - **No integration tests against real `.hprof` files.** Tests use synthetic fixtures only. Real-world heap dumps from production JVMs are not tested.
 - **No coverage tracking.** No `cargo-tarpaulin` or `cargo-llvm-cov` integration. Unknown actual coverage percentage.
 - **No property-based testing.** Parser binary handling is a prime candidate for `proptest` or `quickcheck` fuzzing.
@@ -128,11 +128,12 @@ Honest assessment: **significant work remains** to deliver on this vision, but M
 
 ### 3.4 Packaging & Release Gaps
 
-- **Tagged release binaries and Docker distribution are automated, but installation is still incomplete.** `.github/workflows/release.yml` now cross-compiles and packages `mnemosyne-cli` for five targets, publishes tagged GitHub releases, and builds/pushes `ghcr.io/<owner>/mnemosyne` on tagged releases, but the crates.io publish step and first-release Homebrew SHA finalization are still outstanding.
-- **`cargo install` is not live yet.** The manifests are prepared for crates.io publication, but the first public publish still has to happen before users can install `mnemosyne-cli` directly from crates.io.
-- **Homebrew scaffolding exists, but distribution is not fully operational yet.** `HomebrewFormula/mnemosyne.rb` is in the repo, but the first tagged release still needs real SHA256 values and any longer-term tap strategy.
+- **Release distribution is live for v0.1.1.** `.github/workflows/release.yml` cross-compiles and packages `mnemosyne-cli` for five targets, publishes tagged GitHub releases, builds/pushes `ghcr.io/<owner>/mnemosyne` on tagged releases, and the current production release is now shipped across those channels.
+- **✅ crates.io published** (`mnemosyne-core 0.1.1` + `mnemosyne-cli 0.1.1`).
+- **✅ `cargo install mnemosyne-cli` is live.**
 - **Docker delivery is now in place.** A multi-stage `Dockerfile` builds `mnemosyne-cli` into a non-root `debian:bookworm-slim` runtime image, and tagged releases publish `ghcr.io/<owner>/mnemosyne` with semver plus `latest` tags.
-- **No changelog automation.** `CHANGELOG.md` exists but is manually maintained with a single `[Unreleased]` section.
+- **✅ SHA256 values filled for v0.1.1.** `HomebrewFormula/mnemosyne.rb` now contains release checksums for the tagged archives.
+- **✅ CHANGELOG.md has `[0.1.1] - 2026-03-08` section.** Changelog updates are still manual.
 
 ### 3.5 Feature Parity Gaps vs Eclipse MAT
 
@@ -171,7 +172,7 @@ The gap is narrowing. With the object graph, dominator tree, retained sizes, uni
 |---|---|---|---|---|---|---|
 | Dominator tree | ✅ Basic | Real Lengauer-Tarjan implemented; not exposed as browsable view | Expose via CLI subcommand + MCP handler + navigation API | Medium | Critical | M1 ✅ |
 | Retained size | ✅ Basic | Computed from dominator tree, surfaced in `analyze_heap()` | Expose in more surfaces (`detect_leaks`, diff, histogram) | Medium | Critical | M1 ✅ |
-| Object graph traversal | ✅ Basic | Object graph exists (`core::object_graph` + `core::hprof_parser`) and now exposes `get_object(id)`, `get_referrers(id)`, `get_references(id)`; no dedicated CLI/MCP browser yet | Expose navigation through richer CLI, MCP, and UI explorer surfaces | Medium | Critical | M1 ✅ |
+| Object graph traversal | ✅ Basic | Object graph exists under `core::hprof/` (`object_graph.rs` + `binary_parser.rs`) and now exposes `get_object(id)`, `get_referrers(id)`, `get_references(id)`; no dedicated CLI/MCP browser yet | Expose navigation through richer CLI, MCP, and UI explorer surfaces | Medium | Critical | M1 ✅ |
 | Shortest path to GC roots | ✅ Basic | `gc_path` now prefers full `ObjectGraph` BFS, then falls back to a budget-limited graph and synthetic path when necessary | Improve explorer surfaces and reduce fallback use on extreme dumps | Medium | High | M1 ✅ |
 | Leak suspects report | ⚠️ Partial | Direct leak detection is now graph-backed, but the richer MAT-style suspect algorithm is not implemented | Find objects with disproportionate retained size relative to shallow size and accumulation patterns | High | Critical | M3 |
 | Histogram by class/package/classloader | ⚠️ Partial | Record-level histogram only, no classloader or package grouping | Parse per-object data, group by fully-qualified class name, classloader, package | Medium | High | M3 |
@@ -188,25 +189,25 @@ The gap is narrowing. With the object graph, dominator tree, retained sizes, uni
 ### Detailed Analysis per Feature
 
 **Dominator Tree.**
-*Current Status:* ✅ Implemented. `core::dominator::build_dominator_tree()` runs `petgraph::algo::dominators::simple_fast` (Lengauer–Tarjan) over the full object reference graph built by `core::hprof_parser`. A virtual super-root node connects to all GC roots. `core::graph::summarize_graph()` remains as a lightweight fallback for when the full graph is unavailable.
+*Current Status:* ✅ Implemented. `core::graph::dominator::build_dominator_tree()` runs `petgraph::algo::dominators::simple_fast` (Lengauer–Tarjan) over the full object reference graph built by `core::hprof::binary_parser`. A virtual super-root node connects to all GC roots. `core::graph::summarize_graph()` remains as a lightweight fallback for when the full graph is unavailable.
 *Remaining Gap:* The dominator tree is consumed by `analyze_heap()` but is not exposed as a standalone CLI subcommand, MCP handler, or browsable view. Users cannot navigate the tree interactively.
 *Next Steps:* Add a `mnemosyne dominators` CLI command and MCP handler. Expose `top_retained(n)`, tree-browsing queries, and integrate into the future web UI.
 *Milestone:* Core algorithm delivered in M1-B4. Browsable view is M4.
 
 **Retained Size.**
-*Current Status:* ✅ Implemented. `core::dominator::build_dominator_tree()` computes retained sizes via post-order traversal, accumulating shallow sizes upward through the dominated subtree. `core::graph::build_graph_metrics_from_dominator()` populates `DominatorNode.retained_size` with real values. Both `analyze_heap()` and `detect_leaks()` now surface retained-size-backed leak insights when graph parsing succeeds.
+*Current Status:* ✅ Implemented. `core::graph::dominator::build_dominator_tree()` computes retained sizes via post-order traversal, accumulating shallow sizes upward through the dominated subtree. `core::graph::build_graph_metrics_from_dominator()` populates `DominatorNode.retained_size` with real values. Both `analyze_heap()` and `detect_leaks()` now surface retained-size-backed leak insights when graph parsing succeeds.
 *Remaining Gap:* Diff, histogram, and MCP surfaces still do not expose retained sizes as richly as the main analysis flows.
 *Next Steps:* Expose retained sizes in `diff_heaps()` output, histogram views, and future explorer surfaces.
 *Milestone:* Core computation and primary-surface integration delivered in M1. Broader surface integration moves to later milestones.
 
 **Object Graph Traversal.**
-*Current Status:* ✅ Basic. `core::hprof_parser` parses binary HPROF records into `core::object_graph::ObjectGraph` with `HeapObject` nodes (instances, object arrays, primitive arrays), `ClassInfo` metadata, `GcRoot` entries, and reference edges. The graph is consumed by `core::dominator` and `analyze_heap()`, and `ObjectGraph` now exposes `get_object(id)`, `get_referrers(id)`, and `get_references(id)`.
+*Current Status:* ✅ Basic. `core::hprof::binary_parser` parses binary HPROF records into `core::hprof::object_graph::ObjectGraph` with `HeapObject` nodes (instances, object arrays, primitive arrays), `ClassInfo` metadata, `GcRoot` entries, and reference edges. The graph is consumed by `core::graph::dominator` and `analyze_heap()`, and `ObjectGraph` now exposes `get_object(id)`, `get_referrers(id)`, and `get_references(id)`.
 *Remaining Gap:* Navigation is available programmatically but not yet surfaced as a dedicated CLI, MCP, or UI explorer experience.
 *Next Steps:* Expose the existing navigation API through richer CLI and MCP browsing surfaces. Foundation for the future web UI object inspector.
 *Milestone:* Graph data structures and base navigation API delivered in M1. Richer explorer surfaces remain future work.
 
 **Shortest Path to GC Roots.**
-*Current Status:* ✅ Basic. `core::gc_path` now tries BFS over the complete `ObjectGraph` first, preserving richer edge labels, then falls back to a budget-limited graph and finally a synthetic path with provenance markers when heap data is insufficient.
+*Current Status:* ✅ Basic. `core::graph::gc_path` now tries BFS over the complete `ObjectGraph` first, preserving richer edge labels, then falls back to a budget-limited graph and finally a synthetic path with provenance markers when heap data is insufficient.
 *Remaining Gap:* Extreme dumps can still fall into the fallback tiers, and there is no dedicated visual exploration surface for path traversal yet.
 *Next Steps:* Improve explorer surfaces and keep reducing fallback pressure on very large heaps.
 *Milestone:* Core graph-backed path-finding delivered in M1.
@@ -248,7 +249,7 @@ The gap is narrowing. With the object graph, dominator tree, retained sizes, uni
 *Milestone:* M3 — uses M1 object graph (✅ delivered) and field-value parsing.
 
 **Large Dump Performance.**
-*Current Status:* The streaming parser handles arbitrarily large files at the record level. The full object graph parser (`core::hprof_parser`) loads all objects into memory, which works well for dumps up to ~1GB but may require significant RAM for larger dumps.
+*Current Status:* The streaming parser handles arbitrarily large files at the record level. The full object graph parser (`core::hprof::binary_parser`) loads all objects into memory, which works well for dumps up to ~1GB but may require significant RAM for larger dumps.
 *Gap:* A 4GB heap dump may contain 50M+ objects, each with multiple references. An in-memory adjacency list could require 10-20GB of RAM.
 *Recommended Approach:* (1) Current in-memory graph works for dumps up to ~1GB. (2) For larger dumps, implement a two-pass strategy: first pass indexes object positions, second pass resolves references using memory-mapped access. (3) Consider disk-backed storage (e.g., `sled` or `redb` for an on-disk object store) for very large dumps.
 *Milestone:* Basic in-memory graph delivered in M1. Optimized for large dumps in M3.
@@ -380,20 +381,20 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 **Delivered:**
 1. ✅ Sample HPROF test fixtures — `core::test_fixtures` builds synthetic HPROF binaries for deterministic testing
-2. ✅ Object graph data structures — `core::object_graph` defines `ObjectGraph`, `HeapObject`, `ClassInfo`, `GcRoot`, `FieldDescriptor`, etc.
-3. ✅ Full object graph parser — `core::hprof_parser` parses INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP, CLASS_DUMP, GC root records into the indexed object store with reference edges
-4. ✅ Real dominator tree — `core::dominator::build_dominator_tree()` implements Lengauer-Tarjan via `petgraph::algo::dominators::simple_fast` with virtual super-root
+2. ✅ Object graph data structures — `core::hprof::object_graph` defines `ObjectGraph`, `HeapObject`, `ClassInfo`, `GcRoot`, `FieldDescriptor`, etc.
+3. ✅ Full object graph parser — `core::hprof::binary_parser` parses INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP, CLASS_DUMP, GC root records into the indexed object store with reference edges
+4. ✅ Real dominator tree — `core::graph::dominator::build_dominator_tree()` implements Lengauer-Tarjan via `petgraph::algo::dominators::simple_fast` with virtual super-root
 5. ✅ Retained size computation — post-order subtree accumulation in the dominator tree
 6. ✅ Graph-backed analysis in `analyze_heap()` — attempts object-graph → dominator → retained-size pipeline first, falls back to heuristics with provenance markers
 7. ✅ CI pipeline — GitHub Actions for build + test + clippy + fmt
 8. ✅ Unified `detect_leaks()` onto the graph-backed path — attempts object graph + dominator analysis first, then falls back with explicit provenance
 9. ✅ Rewrote GC path finder over the full object graph — `ObjectGraph` BFS first, then budget-limited `GcGraph`, then synthetic fallback
 10. ✅ Added object graph navigation API — `get_object(id)`, `get_referrers(id)`, `get_references(id)`
-11. ✅ Added 16 CLI integration tests plus reusable `test-fixtures` feature — later expanded to 19 integration tests and 83 total passing tests across the workspace
+11. ✅ Added 16 CLI integration tests plus reusable `test-fixtures` feature — later expanded to 23 integration tests and 87 total passing tests across the workspace
 
 **Dependencies:** None (this is the foundation)
 
-**Modules/files affected:** `core/src/heap.rs`, `core/src/hprof_parser.rs`, `core/src/object_graph.rs`, `core/src/dominator.rs`, `core/src/graph.rs`, `core/src/analysis.rs`, `core/src/gc_path.rs`, `core/src/test_fixtures.rs`, `.github/workflows/ci.yml`
+**Modules/files affected:** `core/src/hprof/parser.rs`, `core/src/hprof/binary_parser.rs`, `core/src/hprof/object_graph.rs`, `core/src/graph/dominator.rs`, `core/src/graph/metrics.rs`, `core/src/analysis/engine.rs`, `core/src/graph/gc_path.rs`, `core/src/hprof/test_fixtures.rs`, `.github/workflows/ci.yml`
 
 **Complexity:** Very High — this was the hardest milestone with the most new code. It is now fully delivered.
 
@@ -403,7 +404,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 - ✅ Can produce a real dominator tree
 - ✅ Leak detection uses retained-size data when available across both `analyze_heap()` and `detect_leaks()`
 - ✅ GC path uses full object graph when available, with explicit layered fallback when it is not
-- ✅ 83 tests pass (59 core + 5 CLI unit + 19 CLI integration)
+- ✅ 87 tests pass (59 core + 5 CLI unit + 23 CLI integration)
 - ✅ CI runs on every PR
 
 ---
@@ -411,7 +412,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 ### Milestone 2 — Packaging, Releases, and DX
 **Objective:** Make Mnemosyne easy to install, use, and contribute to.
 
-**Status:** Feature-complete. Release automation, packaging metadata/Homebrew scaffolding, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped. The only remaining item is first-release operational follow-through: crates.io publication and Homebrew SHA finalization on the first tagged release.
+**Status:** ✅ Complete. Release automation, packaging metadata, crates.io publication, Homebrew formula checksums, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped.
 
 **Why it matters:** No one adopts a tool they can't easily install. Developer experience is the gateway to open-source adoption.
 
@@ -468,7 +469,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 **Dependencies:** M1 (object graph, retained sizes, dominator tree) — ✅ core delivered
 
-**Modules/files affected:** `core/src/analysis.rs`, `core/src/heap.rs`, `core/src/graph.rs`, new `core/src/query.rs`, new `core/src/thread.rs`, new `core/src/collections.rs`
+**Modules/files affected:** `core/src/analysis/engine.rs`, `core/src/hprof/parser.rs`, `core/src/graph/metrics.rs`, new `core/src/query.rs`, new `core/src/thread.rs`, new `core/src/collections.rs`
 
 **Complexity:** Very High
 
@@ -507,7 +508,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 **Dependencies:** M1 (object graph), M3 (analysis features)
 
-**Modules/files affected:** `core/src/report.rs`, new `core/src/web.rs` or `web/` crate, HTML templates, static assets
+**Modules/files affected:** `core/src/report/renderer.rs`, new `core/src/web.rs` or `web/` crate, HTML templates, static assets
 
 **Complexity:** High
 
@@ -547,7 +548,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 **Dependencies:** M1 (meaningful data to send to AI) — ✅ core delivered, M3 (richer analysis context)
 
-**Modules/files affected:** `core/src/ai.rs`, `core/src/mcp.rs`, `core/src/config.rs`, new `core/src/llm.rs`, new `core/src/prompts/` directory
+**Modules/files affected:** `core/src/analysis/ai.rs`, `core/src/mcp/server.rs`, `core/src/config.rs`, new `core/src/llm.rs`, new `core/src/prompts/` directory
 
 **Complexity:** High
 
@@ -622,15 +623,15 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 #### M1-B2: Object Graph Parser — Data Structures ✅
 - **Status:** Delivered
-- **Outcome:** `core::object_graph` defines `ObjectGraph`, `HeapObject`, `ClassInfo`, `FieldDescriptor`, `GcRoot`, `GcRootType`, `LoadedClass`, `ObjectKind`, and the string/class lookup tables. Canonical model used by parser, dominator, and analysis.
+- **Outcome:** `core::hprof::object_graph` defines `ObjectGraph`, `HeapObject`, `ClassInfo`, `FieldDescriptor`, `GcRoot`, `GcRootType`, `LoadedClass`, `ObjectKind`, and the string/class lookup tables. Canonical model used by parser, dominator, and analysis.
 
 #### M1-B3: Object Graph Parser — HPROF Parsing ✅
 - **Status:** Delivered
-- **Outcome:** `core::hprof_parser` parses binary HPROF strings, classes, GC roots, INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP into `ObjectGraph`. Uses `byteorder` for big-endian binary parsing. API: `parse_hprof(data: &[u8])`, `parse_hprof_file(path: &str)`.
+- **Outcome:** `core::hprof::binary_parser` parses binary HPROF strings, classes, GC roots, INSTANCE_DUMP, OBJ_ARRAY_DUMP, PRIM_ARRAY_DUMP into `ObjectGraph`. Uses `byteorder` for big-endian binary parsing. API: `parse_hprof(data: &[u8])`, `parse_hprof_file(path: &str)`.
 
 #### M1-B4: Dominator Tree Algorithm ✅
 - **Status:** Delivered
-- **Outcome:** `core::dominator::build_dominator_tree()` runs `petgraph::algo::dominators::simple_fast` (Lengauer-Tarjan) over the full object reference graph with a virtual super-root connected to all GC roots. Computes retained sizes via post-order accumulation. API: `top_retained(n)`, `retained_size(id)`, `immediate_dominator(id)`, `dominated_by(id)`, `node_count()`.
+- **Outcome:** `core::graph::dominator::build_dominator_tree()` runs `petgraph::algo::dominators::simple_fast` (Lengauer-Tarjan) over the full object reference graph with a virtual super-root connected to all GC roots. Computes retained sizes via post-order accumulation. API: `top_retained(n)`, `retained_size(id)`, `immediate_dominator(id)`, `dominated_by(id)`, `node_count()`.
 
 #### M1-B5: Retained Size Computation ✅
 - **Status:** Delivered
@@ -642,7 +643,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 #### M1-B7: Integration Tests ✅
 - **Status:** Delivered
-- **Outcome:** Added 16 CLI integration tests in `cli/tests/integration.rs` covering parse, leaks, analyze, gc-path, diff, fix, report, and config. The `test-fixtures` cargo feature eliminates fixture duplication; later M2 work expanded this to 19 integration tests and 83 passing tests overall.
+- **Outcome:** Added 16 CLI integration tests in `cli/tests/integration.rs` covering parse, leaks, analyze, gc-path, diff, fix, report, and config. The `test-fixtures` cargo feature eliminates fixture duplication; later M2 work expanded this to 23 integration tests and 87 passing tests overall.
 
 ### Milestone 2 Batches
 
@@ -668,7 +669,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 - **Goal:** Publish mnemosyne-cli to crates.io; create Homebrew formula
 - **Files/modules affected:** `Cargo.toml` metadata, new `Formula/` or homebrew-tap repo
 - **Expected agent owner:** Implementation Agent
-- **Status:** ⚠️ Mostly delivered (metadata and Homebrew formula scaffolding are in place; crates.io publish and real SHA values still pending)
+- **Status:** ✅ Delivered (crates.io publish is live and the Homebrew formula carries real SHA256 values for v0.1.1)
 - **Validation:** `cargo install mnemosyne-cli` works; `brew install mnemosyne` works
 - **Risk notes:** crates.io requires unique name; may need to check availability
 - **Non-scope:** Do not set up Docker yet
@@ -684,7 +685,7 @@ Each of these views corresponds to a core analysis capability and should be desi
 
 #### M2-B6: Better Error Messages with Suggestions/Context
 - **Goal:** Replace generic CLI/core failure paths with structured errors, actionable hints, and stronger validation for common user mistakes
-- **Files/modules affected:** `core/src/errors.rs`, `core/src/heap.rs`, `cli/src/main.rs`, `cli/tests/integration.rs`, `core/src/lib.rs`
+- **Files/modules affected:** `core/src/errors.rs`, `core/src/hprof/parser.rs`, `cli/src/main.rs`, `cli/tests/integration.rs`, `core/src/lib.rs`
 - **Expected agent owner:** Implementation Agent
 - **Status:** ✅ Delivered
 - **Validation:** Missing-file errors suggest nearby `.hprof` paths, common wrong extensions produce targeted HPROF guidance, invalid config loads surface fix hints, and 3 new CLI integration tests cover the new error paths
@@ -831,29 +832,23 @@ Every capability exposed via CLI is also available as a Rust library and via MCP
 
 ## Section 11 — Recommended Immediate Next Steps
 
-Milestone 1 is delivered and validated. Milestone 2 is now feature-complete: release automation, packaging metadata/Homebrew scaffolding, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped. 87 tests pass (59 core + 5 CLI unit + 23 CLI integration), clippy and fmt are clean.
+Milestone 1 is delivered and validated. Milestone 2 is now complete: release automation, packaging metadata, crates.io publication, Homebrew checksums, CLI UX (spinners, colors, aligned comfy-table output with truncation disclosure), Docker image distribution, community files, contextual error handling, and documentation consistency passes are all shipped. 87 tests pass (59 core + 5 CLI unit + 23 CLI integration), clippy and fmt are clean.
 
-The only remaining M2 item is operational release follow-through. After that, the project is ready to begin Milestone 3 core analysis work.
+With the v0.1.1 release and core module restructure documented, the project is ready to begin Milestone 3 core analysis work.
 
-### Step 1: First public release follow-through
-**Why next:** Every M2 feature is shipped. The remaining tasks are operational: publish `mnemosyne-core` and `mnemosyne-cli` to crates.io, tag the first release, and replace the Homebrew SHA256 placeholders with real checksums from the release artifacts.
-**Owner:** Implementation Agent (crates.io publish) + GitHub Ops Agent (tag + release)
-**Effort:** Small
-**Blocked by:** Nothing — ready to execute.
-
-### Step 2: MAT-style leak suspects algorithm (M3 entry point)
+### Step 1: MAT-style leak suspects algorithm (M3 entry point)
 **Why next:** With the graph-backed retained-size pipeline fully operational, the highest-impact M3 feature is a real leak suspect ranker that identifies objects with disproportionate retained vs shallow size and accumulation patterns. This directly improves the quality of `mnemosyne leaks` output.
 **Owner:** Implementation Agent
 **Effort:** Large
 **Dependencies:** M1 object graph + dominator tree (✅ delivered)
 
-### Step 3: Histogram improvements — group by class/package/classloader
+### Step 2: Histogram improvements — group by class/package/classloader
 **Why next:** The parse summary still shows record-category aggregates. With the object graph available, histograms can group by fully-qualified class name, package prefix, and classloader — closing a key MAT parity gap and making `mnemosyne parse` output dramatically more useful.
 **Owner:** Implementation Agent
 **Effort:** Medium
 **Dependencies:** M1 object graph (✅ delivered)
 
-### Step 4: Enhanced heap diff — object/class-level comparison
+### Step 3: Enhanced heap diff — object/class-level comparison
 **Why next:** `diff_heaps()` currently compares record-level statistics. With two object graphs available, the diff can track new/freed objects and delta retained sizes per class — a core investigation workflow.
 **Owner:** Implementation Agent
 **Effort:** Medium
@@ -862,4 +857,4 @@ The only remaining M2 item is operational release follow-through. After that, th
 ---
 
 *This roadmap is a living document. Update it after each major batch completion.*
-*Next review: after first public release (crates.io + Homebrew SHA) or after M3 Step 2 lands.*
+*Next review: after M3 Step 1 lands or at the next validated release/documentation batch.*

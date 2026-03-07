@@ -1,6 +1,5 @@
-use crate::dominator::{DominatorTree, VIRTUAL_ROOT_ID};
-use crate::heap::{ClassStat, HeapSummary, RecordStat};
-use crate::object_graph::ObjectGraph;
+use super::dominator::{DominatorTree, VIRTUAL_ROOT_ID};
+use crate::hprof::{ClassStat, HeapSummary, ObjectGraph, RecordStat};
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::Graph;
 use serde::{Deserialize, Serialize};
@@ -151,9 +150,9 @@ pub fn summarize_graph(summary: &HeapSummary) -> GraphMetrics {
 
 #[cfg(test)]
 mod tests {
+    use super::super::dominator::build_dominator_tree;
     use super::*;
-    use crate::dominator::build_dominator_tree;
-    use crate::object_graph::{GcRoot, GcRootType, HeapObject, ObjectKind};
+    use crate::hprof::{GcRoot, GcRootType, HeapObject, ObjectKind};
 
     fn make_test_graph(objects: &[(u64, u64, u32, &[u64])], gc_roots: &[u64]) -> ObjectGraph {
         let mut graph = ObjectGraph::new(8);

@@ -1,12 +1,15 @@
+use super::ai::{generate_ai_insights, AiInsights};
 use crate::{
-    ai::{generate_ai_insights, AiInsights},
     config::{AnalysisConfig, AppConfig},
-    dominator::{build_dominator_tree, DominatorTree},
     errors::{CoreError, CoreResult},
-    graph::{build_graph_metrics_from_dominator, summarize_graph, GraphMetrics},
-    heap::{parse_heap, ClassDelta, ClassStat, HeapDiff, HeapParseJob, HeapSummary},
-    hprof_parser::parse_hprof_file,
-    object_graph::ObjectGraph,
+    graph::{
+        build_dominator_tree, build_graph_metrics_from_dominator, summarize_graph, DominatorTree,
+        GraphMetrics,
+    },
+    hprof::{
+        parse_heap, parse_hprof_file, ClassDelta, ClassStat, HeapDiff, HeapParseJob, HeapSummary,
+        ObjectGraph,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -784,7 +787,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap::{ClassStat, RecordStat};
+    use crate::hprof::{ClassStat, RecordStat};
     use std::time::SystemTime;
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
@@ -1069,8 +1072,8 @@ mod tests {
 
     // -- graph-backed leak tests -------------------------------------------
 
-    use crate::dominator::build_dominator_tree;
-    use crate::object_graph::{GcRoot, GcRootType, HeapObject, ObjectGraph, ObjectKind};
+    use crate::graph::build_dominator_tree;
+    use crate::hprof::{GcRoot, GcRootType, HeapObject, ObjectGraph, ObjectKind};
 
     /// Helper: build a programmatic ObjectGraph from a compact description.
     fn make_test_graph(objects: &[(u64, u64, u32, &[u64])], gc_roots: &[u64]) -> ObjectGraph {

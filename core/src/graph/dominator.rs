@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::object_graph::{ObjectGraph, ObjectId};
+use crate::hprof::{ObjectGraph, ObjectId};
 
 /// Virtual super-root ID that doesn't collide with real HPROF object IDs.
 pub const VIRTUAL_ROOT_ID: ObjectId = u64::MAX;
@@ -192,7 +192,7 @@ impl DominatorTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object_graph::{GcRoot, GcRootType, HeapObject, ObjectKind};
+    use crate::hprof::{GcRoot, GcRootType, HeapObject, ObjectKind};
 
     /// Helper: build a programmatic ObjectGraph from a compact description.
     fn make_graph(
@@ -340,7 +340,7 @@ mod tests {
         // The simple fixture's only GC root (0x1000) has no HeapObject, so
         // the dominator tree should be empty (no reachable objects).
         let data = crate::test_fixtures::build_simple_fixture();
-        let obj_graph = crate::hprof_parser::parse_hprof(&data).expect("parse should succeed");
+        let obj_graph = crate::hprof::parse_hprof(&data).expect("parse should succeed");
         let tree = build_dominator_tree(&obj_graph);
 
         // 0x1000 is a GC root but NOT in objects → nothing is reachable

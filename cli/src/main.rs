@@ -17,15 +17,13 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, AnalyzeRequest, LeakDetectionOptions, LeakKind,
-        LeakSeverity, ProvenanceKind,
+        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_insights, AnalyzeRequest,
+        LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
     },
     config::{AppConfig, OutputFormat},
     fix::{propose_fix, FixRequest, FixStyle},
-    focus_leaks,
-    gc_path::{find_gc_path, GcPathRequest},
-    generate_ai_insights,
-    heap::{parse_heap, HeapParseJob, HeapSummary},
+    graph::{find_gc_path, GcPathRequest},
+    hprof::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     report::{render_report, ReportRequest},

@@ -50,7 +50,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
-- Shared object-graph model now lives in `core::object_graph`, with `core::hprof_parser` and `core::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`)
+- Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`)
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
 ### 🧠 AI-Powered Leak Diagnostics
@@ -101,8 +101,8 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ## 🛠 Installation
 
-> Mnemosyne is currently in **alpha**.
-> Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. The repository is now prepared for `cargo install mnemosyne-cli` publication, includes a Homebrew formula for macOS release archives, and publishes a Docker image to `ghcr.io/bballer03/mnemosyne` on tagged releases.
+> Mnemosyne v0.1.1 (alpha) is now available.
+> Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, the repository includes a Homebrew formula for macOS release archives, and tagged releases publish a Docker image to `ghcr.io/bballer03/mnemosyne`.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
@@ -110,13 +110,13 @@ The repository now includes a GitHub Actions CI workflow that runs workspace `ch
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
 
 ### 2. Install with Cargo
-After `mnemosyne-core` and `mnemosyne-cli` are published to crates.io, install the CLI with:
+Both `mnemosyne-core` and `mnemosyne-cli` are published on crates.io.
+
+Install the CLI with:
 
 ```bash
 cargo install mnemosyne-cli
 ```
-
-The workspace metadata and versioned internal dependency specs are now in place for crates.io publication, but the first live publish still has to happen before this command works outside the repository.
 
 ### 3. Install with Homebrew (macOS)
 The repository now includes `HomebrewFormula/mnemosyne.rb` for tagged GitHub Release archives:
@@ -125,23 +125,23 @@ The repository now includes `HomebrewFormula/mnemosyne.rb` for tagged GitHub Rel
 brew install ./HomebrewFormula/mnemosyne.rb
 ```
 
-The formula selects Apple Silicon vs Intel archives automatically with `Hardware::CPU.arm?`. Replace the placeholder SHA256 values with the release archive checksums from the first tagged release before using it.
+The formula selects Apple Silicon vs Intel archives automatically with `Hardware::CPU.arm?`.
 
 ### 4. Run with Docker
 Tagged releases now publish a container image to GHCR with version, major.minor, and `latest` tags:
 
 ```bash
 # Use a specific version tag instead of :latest for reproducibility
-docker pull ghcr.io/bballer03/mnemosyne:0.1.0
+docker pull ghcr.io/bballer03/mnemosyne:0.1.1
 
 # Parse a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 parse /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 parse /data/heap.hprof
 
 # Analyze a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 analyze /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 analyze /data/heap.hprof
 
 # Detect leaks
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.0 leaks /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 leaks /data/heap.hprof
 ```
 
 The image runs as a non-root user, uses `/data` as its working directory, and sets `mnemosyne-cli` as the entrypoint so heap dumps can be mounted directly into the container.
@@ -558,16 +558,16 @@ mnemosyne/
 │
 ├── core/
 │ ├── src/
-│ │ ├── heap.rs          # Streaming HPROF parser + summary stats
-│ │ ├── object_graph.rs  # Shared heap-object / class / GC-root model
-│ │ ├── hprof_parser.rs  # Binary HPROF -> ObjectGraph parser
-│ │ ├── dominator.rs     # Real dominator tree + retained-size computation
-│ │ ├── graph.rs         # Reporting graph metrics with graph-backed + preview modes
-│ │ ├── analysis.rs      # Heuristic + graph-backed analysis orchestration
-│ │ ├── gc_path.rs       # Best-effort GC root path tracing
-│ │ ├── mapper.rs        # Code mapping + Git integration
-│ │ ├── report.rs        # Text/Markdown/HTML/TOON/JSON report rendering
-│ │ └── test_fixtures.rs # Synthetic HPROF builders used in tests
+│ │ ├── hprof/           # HPROF parsing (streaming + binary + object graph)
+│ │ ├── graph/           # Dominator tree, GC paths, graph metrics
+│ │ ├── analysis/        # Leak detection engine + AI insights
+│ │ ├── mapper/          # Source code mapping + Git integration
+│ │ ├── report/          # Report rendering (Text/MD/HTML/TOON/JSON)
+│ │ ├── fix/             # Fix generation
+│ │ ├── mcp/             # MCP JSON-RPC server
+│ │ ├── config.rs        # Configuration types
+│ │ ├── errors.rs        # CoreError types
+│ │ └── lib.rs           # Public API re-exports
 │
 ├── cli/
 │ └── src/main.rs        # CLI entry point

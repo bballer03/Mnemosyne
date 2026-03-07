@@ -2,6 +2,8 @@
 
 Get up and running with Mnemosyne in 5 minutes!
 
+Current release: v0.1.1. The core crate is now organized into grouped module directories under `core/src/`, but the CLI workflow shown here is unchanged.
+
 ## Prerequisites
 
 - Rust 1.70+ installed
@@ -27,15 +29,11 @@ sudo cp target/release/mnemosyne-cli /usr/local/bin/
 cargo install mnemosyne-cli
 ```
 
-This becomes available after the first crates.io publish for `mnemosyne-core` and `mnemosyne-cli`.
-
 ### Option 3: Using Homebrew (macOS)
 
 ```bash
 brew install ./HomebrewFormula/mnemosyne.rb
 ```
-
-Replace the placeholder SHA256 values in the formula with the checksums from the first tagged release before using it.
 
 The current packaged binary name is `mnemosyne-cli`. Commands below still use the shorter `mnemosyne` form in examples, but the packaged artifact currently installs as `mnemosyne-cli`.
 

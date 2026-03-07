@@ -459,7 +459,7 @@ mod tests {
             LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
         };
         use crate::graph::GraphMetrics;
-        use crate::heap::HeapSummary;
+        use crate::hprof::HeapSummary;
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
@@ -515,7 +515,7 @@ mod tests {
             LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
         };
         use crate::graph::GraphMetrics;
-        use crate::heap::HeapSummary;
+        use crate::hprof::HeapSummary;
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
@@ -573,7 +573,7 @@ mod tests {
             LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
         };
         use crate::graph::GraphMetrics;
-        use crate::heap::HeapSummary;
+        use crate::hprof::HeapSummary;
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {

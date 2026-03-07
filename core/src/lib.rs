@@ -3,35 +3,30 @@
 //! This crate hosts the domain logic shared between the CLI
 //! application and future MCP / IDE integrations.
 
-pub mod ai;
 pub mod analysis;
 pub mod config;
-pub mod dominator;
 pub mod errors;
 pub mod fix;
-pub mod gc_path;
 pub mod graph;
-pub mod heap;
-pub mod hprof_parser;
+pub mod hprof;
 pub mod mapper;
 pub mod mcp;
-pub mod object_graph;
 pub mod report;
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod test_fixtures;
-
-pub use ai::{focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat};
 pub use analysis::{
-    AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, ProvenanceKind, ProvenanceMarker,
+    focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat, AnalyzeRequest,
+    AnalyzeResponse, LeakDetectionOptions, ProvenanceKind, ProvenanceMarker,
 };
 pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
-pub use dominator::{build_dominator_tree, DominatorTree, VIRTUAL_ROOT_ID};
 pub use errors::{CoreError, CoreResult};
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
-pub use gc_path::{find_gc_path, GcPathNode, GcPathRequest, GcPathResult};
-pub use graph::{DominatorNode, GraphMetrics};
-pub use heap::{parse_heap, HeapDiff, HeapParseJob, HeapSummary, HprofHeader};
-pub use hprof_parser::parse_hprof;
+pub use graph::{
+    build_dominator_tree, find_gc_path, DominatorNode, DominatorTree, GcPathNode, GcPathRequest,
+    GcPathResult, GraphMetrics, VIRTUAL_ROOT_ID,
+};
+pub use hprof::{parse_heap, parse_hprof, HeapDiff, HeapParseJob, HeapSummary, HprofHeader};
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use hprof::test_fixtures;

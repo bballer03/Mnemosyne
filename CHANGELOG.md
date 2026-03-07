@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-03-08
+
+### Changed
+- **Core module restructure:** Reorganized flat `core/src/` layout into grouped module directories (`hprof/`, `graph/`, `analysis/`, `mapper/`, `report/`, `fix/`, `mcp/`). Public API re-exports preserved for backward compatibility.
+- `heap` module renamed to `hprof::parser`; HPROF binary parser, object graph model, and test fixtures grouped under `hprof/`.
+- `dominator`, `gc_path`, and graph metrics grouped under `graph/`.
+- `analysis` engine and AI insights grouped under `analysis/`.
+- Fix generation, code mapping, report rendering, and MCP server each have their own module directory.
+- CLI imports updated to use new module paths (`hprof::`, `graph::`).
+
 ## [0.1.0] - 2026-03-08
 
 ### Added

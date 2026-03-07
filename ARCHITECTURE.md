@@ -1,7 +1,7 @@
 # Architecture
 
 > **Last Updated:** March 8, 2026  
-> **Version:** Alpha  
+> **Version:** 0.1.1 (alpha)  
 > **[← Back to README](README.md)**
 
 ## 📋 Table of Contents
@@ -48,16 +48,16 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 ## Current Implementation Snapshot (March 2026)
 
 ### Shipped today
-- **Parser:** `core::heap` still streams HPROF headers/records for summary-level stats, and `core::hprof_parser` now parses binary heap records into an object graph for graph-backed analysis.
-- **Object-graph foundation:** `core::object_graph` defines the canonical heap-object, class, field-descriptor, and GC-root types, and the graph-backed parser now populates them for instances, arrays, and roots.
+- **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
+- **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, and GC-root types, and the graph-backed parser now populates them for instances, arrays, and roots.
 - **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. CLI surfaces provenance markers for `leaks`, `gc-path`, and `fix` output.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails.
 - **Graph metrics:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, while `core::graph::summarize_graph()` remains the lightweight preview fallback for summary-only paths.
-- **GC path helper:** Uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
-- **Navigation API:** `core::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
+- **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
+- **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
-- **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. Clippy warnings in `heap.rs` and `mapper.rs` resolved.
+- **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.1.1 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
 - **Validation scaffolding:** Synthetic HPROF fixture builders, the `test-fixtures` cargo feature, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 87 passing tests, including 23 CLI integration tests.
 
 ### Still in progress
@@ -66,7 +66,46 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Richer diffing and higher-level visualizations** beyond the current record-level diff and shared report exporters.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
-The sections below describe the intended architecture; status callouts highlight where the current alpha build diverges so contributors know which pieces still need implementation work.
+The sections below describe the intended architecture; status callouts highlight where the current v0.1.1 build diverges so contributors know which pieces still need implementation work.
+
+### Project Structure
+
+The `core` crate now uses grouped module directories rather than a flat `core/src/` file list. Public API re-exports remain in `core/src/lib.rs`, while implementation details are organized by domain:
+
+```text
+core/
+└── src/
+   ├── lib.rs              # Public API re-exports
+   ├── config.rs           # Configuration types
+   ├── errors.rs           # CoreError types
+   ├── hprof/              # HPROF parsing domain
+   │   ├── mod.rs
+   │   ├── parser.rs       # Streaming summary parser (was heap.rs)
+   │   ├── binary_parser.rs # Binary HPROF -> ObjectGraph (was hprof_parser.rs)
+   │   ├── object_graph.rs
+   │   └── test_fixtures.rs
+   ├── graph/              # Object graph analysis domain
+   │   ├── mod.rs
+   │   ├── dominator.rs
+   │   ├── gc_path.rs
+   │   └── metrics.rs      # Graph metrics / summaries (was graph.rs)
+   ├── analysis/           # Leak detection + AI orchestration
+   │   ├── mod.rs
+   │   ├── engine.rs       # Analysis engine (was analysis.rs)
+   │   └── ai.rs
+   ├── mapper/             # Source code mapping
+   │   ├── mod.rs
+   │   └── source.rs       # Was mapper.rs
+   ├── report/             # Report rendering
+   │   ├── mod.rs
+   │   └── renderer.rs     # Was report.rs
+   ├── fix/                # Fix generation
+   │   ├── mod.rs
+   │   └── generator.rs    # Was fix.rs
+   └── mcp/                # MCP server
+      ├── mod.rs
+      └── server.rs       # Was mcp.rs
+```
 
 ## System Architecture Overview (Layered Design)
 
@@ -145,7 +184,7 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 
 By the end of this stage, Mnemosyne has a concise "snapshot" of the heap's contents. This snapshot is then handed to the AI analysis component for deeper insight.
 
-> **Status (Mar 2026):** Mnemosyne now has two parser paths: `core::heap` for streaming summary stats and `core::hprof_parser` for object-level graph construction used by `analyze_heap()`, `detect_leaks()`, and `gc-path`. Some other surfaces, especially diffing, still rely on the lighter summary path.
+> **Status (Mar 2026):** Mnemosyne now has two parser paths inside `core::hprof/`: `parser.rs` for streaming summary stats and `binary_parser.rs` for object-level graph construction used by `analyze_heap()`, `detect_leaks()`, and `gc-path`. Some other surfaces, especially diffing, still rely on the lighter summary path.
 
 ### 4. AI Analysis Engine (Insight Generator)
 
@@ -170,7 +209,7 @@ If multiple tasks are needed, they can be defined in a data-driven way (e.g. a Y
 
 Overall, the AI Analysis Engine transforms raw data into expert insights. It's like having a knowledgeable assistant review the heap dump and point out "interesting" things. By scripting these inquiries, Mnemosyne can provide a rich analysis that goes beyond what traditional tools offer, which often require the developer to manually deduce issues from raw statistics.
 
-> **Status (Nov 2025):** The current alpha build emits deterministic, template-driven insights so the CLI/MCP interface is stable. The configurable prompt/task runner described here is the next major milestone.
+> **Status (Mar 2026):** The current alpha build emits deterministic, template-driven insights so the CLI/MCP interface is stable. The configurable prompt/task runner described here is the next major milestone.
 
 ### 5. LLM Integration Module (AI Service Connector)
 
@@ -190,7 +229,7 @@ This component abstracts the connection to external AI models or services. We an
 
 In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By isolating this, we make it easy to update the tool as AI technology evolves (e.g., switching to a new API or adding support for an on-prem LLM) without affecting the rest of the system. This design choice follows a flexible approach seen in similar tools like KCPilot, which abstracts LLM communication and anticipates future model integrations.
 
-> **Status (Nov 2025):** Configuration plumbing (provider/model/temperature) already exists, but calls currently terminate in a stubbed `generate_ai_insights` routine. Wiring the abstraction to a real LLM backend – or a local model – remains open work.
+> **Status (Mar 2026):** Configuration plumbing (provider/model/temperature) already exists, but calls currently terminate in a stubbed `generate_ai_insights` routine. Wiring the abstraction to a real LLM backend – or a local model – remains open work.
 
 ### 6. Report Generator (Output Formatter)
 
