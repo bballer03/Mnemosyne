@@ -1,8 +1,7 @@
 use crate::{
     ai::focus_leaks,
     analysis::{
-        analyze_heap, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind,
-        ProvenanceMarker,
+        analyze_heap, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind, ProvenanceMarker,
     },
     config::AppConfig,
     errors::CoreResult,
@@ -201,11 +200,17 @@ mod tests {
 
         assert!(!response.suggestions.is_empty());
         assert!(
-            response.provenance.iter().any(|m| m.kind == ProvenanceKind::Synthetic),
+            response
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Synthetic),
             "fix response must carry Synthetic provenance"
         );
         assert!(
-            response.provenance.iter().any(|m| m.kind == ProvenanceKind::Placeholder),
+            response
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Placeholder),
             "fix response must carry Placeholder provenance"
         );
     }

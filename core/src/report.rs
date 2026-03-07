@@ -1,4 +1,8 @@
-use crate::{analysis::{AnalyzeResponse, ProvenanceKind}, config::OutputFormat, errors::CoreResult};
+use crate::{
+    analysis::{AnalyzeResponse, ProvenanceKind},
+    config::OutputFormat,
+    errors::CoreResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use std::fmt::Write as _;
@@ -19,7 +23,10 @@ fn escape_html(input: &str) -> String {
 }
 
 fn escape_toon_value(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+    input
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn provenance_label(kind: ProvenanceKind) -> &'static str {
@@ -102,12 +109,7 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
                 format!("{:.2}", leak.retained_size_bytes as f64 / (1024.0 * 1024.0)),
             );
             push_kv(&mut doc, 4, "instances", leak.instances);
-            push_kv(
-                &mut doc,
-                4,
-                "description",
-                &leak.description,
-            );
+            push_kv(&mut doc, 4, "description", &leak.description);
             for (pidx, marker) in leak.provenance.iter().enumerate() {
                 let detail = marker.detail.as_deref().unwrap_or("");
                 push_kv(
@@ -202,7 +204,11 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
             ));
             for marker in &leak.provenance {
                 let detail = marker.detail.as_deref().unwrap_or("");
-                body.push_str(&format!("    [{}] {}\n", provenance_label(marker.kind), detail));
+                body.push_str(&format!(
+                    "    [{}] {}\n",
+                    provenance_label(marker.kind),
+                    detail
+                ));
             }
         }
     }
@@ -333,15 +339,19 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     } else {
         leak_list.push_str("<ul>");
         for leak in &analysis.leaks {
-            let prov_spans: String = leak.provenance.iter().map(|m| {
-                let detail = m.detail.as_deref().unwrap_or("");
-                format!(
-                    " <span class=\"provenance {}\">[{}] {}</span>",
-                    provenance_label(m.kind).to_lowercase(),
-                    escape_html(provenance_label(m.kind)),
-                    escape_html(detail),
-                )
-            }).collect();
+            let prov_spans: String = leak
+                .provenance
+                .iter()
+                .map(|m| {
+                    let detail = m.detail.as_deref().unwrap_or("");
+                    format!(
+                        " <span class=\"provenance {}\">[{}] {}</span>",
+                        provenance_label(m.kind).to_lowercase(),
+                        escape_html(provenance_label(m.kind)),
+                        escape_html(detail),
+                    )
+                })
+                .collect();
             leak_list.push_str(&format!(
                 "<li><strong>{}</strong> [{}]: {:?} (~{:.2} MB, {} instances){}</li>",
                 escape_html(&leak.class_name),
@@ -378,15 +388,19 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     let provenance_block = if analysis.provenance.is_empty() {
         String::new()
     } else {
-        let items: String = analysis.provenance.iter().map(|m| {
-            let detail = m.detail.as_deref().unwrap_or("");
-            format!(
-                "<li class=\"provenance-{}\">[{}] {}</li>",
-                provenance_label(m.kind).to_lowercase(),
-                escape_html(provenance_label(m.kind)),
-                escape_html(detail),
-            )
-        }).collect();
+        let items: String = analysis
+            .provenance
+            .iter()
+            .map(|m| {
+                let detail = m.detail.as_deref().unwrap_or("");
+                format!(
+                    "<li class=\"provenance-{}\">[{}] {}</li>",
+                    provenance_label(m.kind).to_lowercase(),
+                    escape_html(provenance_label(m.kind)),
+                    escape_html(detail),
+                )
+            })
+            .collect();
         format!("<section class=\"provenance\"><h2>Provenance</h2><ul>{items}</ul></section>")
     };
 
@@ -407,8 +421,8 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         size = analysis.summary.total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
         leaks = analysis.leaks.len(),
         nodes = analysis.graph.node_count,
-                leak_list = leak_list,
-                provenance_block = provenance_block
+        leak_list = leak_list,
+        provenance_block = provenance_block
     )
 }
 
@@ -441,7 +455,9 @@ mod tests {
 
     #[test]
     fn text_report_renders_provenance() {
-        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::analysis::{
+            LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
+        };
         use crate::graph::GraphMetrics;
         use crate::heap::HeapSummary;
         use std::time::{Duration, SystemTime};
@@ -482,7 +498,10 @@ mod tests {
 
         let text = render_text(&response);
         assert!(text.contains("[SYNTHETIC]"), "leak provenance missing");
-        assert!(text.contains("test provenance"), "leak provenance detail missing");
+        assert!(
+            text.contains("test provenance"),
+            "leak provenance detail missing"
+        );
         assert!(text.contains("[PARTIAL]"), "response provenance missing");
         assert!(
             text.contains("response provenance"),
@@ -492,7 +511,9 @@ mod tests {
 
     #[test]
     fn toon_report_renders_provenance() {
-        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::analysis::{
+            LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
+        };
         use crate::graph::GraphMetrics;
         use crate::heap::HeapSummary;
         use std::time::{Duration, SystemTime};
@@ -532,14 +553,25 @@ mod tests {
         };
 
         let toon = render_toon(&response);
-        assert!(toon.contains("SYNTHETIC: synth detail"), "leak provenance missing in TOON");
-        assert!(toon.contains("section provenance"), "response provenance section missing in TOON");
-        assert!(toon.contains("kind=PARTIAL"), "response provenance kind missing in TOON");
+        assert!(
+            toon.contains("SYNTHETIC: synth detail"),
+            "leak provenance missing in TOON"
+        );
+        assert!(
+            toon.contains("section provenance"),
+            "response provenance section missing in TOON"
+        );
+        assert!(
+            toon.contains("kind=PARTIAL"),
+            "response provenance kind missing in TOON"
+        );
     }
 
     #[test]
     fn html_report_renders_provenance() {
-        use crate::analysis::{LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker};
+        use crate::analysis::{
+            LeakInsight, LeakKind, LeakSeverity, ProvenanceKind, ProvenanceMarker,
+        };
         use crate::graph::GraphMetrics;
         use crate::heap::HeapSummary;
         use std::time::{Duration, SystemTime};
@@ -579,8 +611,17 @@ mod tests {
         };
 
         let html = render_html(&response);
-        assert!(html.contains("provenance synthetic"), "leak provenance class missing in HTML");
-        assert!(html.contains("[SYNTHETIC]"), "leak provenance label missing in HTML");
-        assert!(html.contains("provenance-partial"), "response provenance class missing in HTML");
+        assert!(
+            html.contains("provenance synthetic"),
+            "leak provenance class missing in HTML"
+        );
+        assert!(
+            html.contains("[SYNTHETIC]"),
+            "leak provenance label missing in HTML"
+        );
+        assert!(
+            html.contains("provenance-partial"),
+            "response provenance class missing in HTML"
+        );
     }
 }

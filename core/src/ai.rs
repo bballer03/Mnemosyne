@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
 fn escape_toon_value(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "\\r")
+    input
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,12 +136,7 @@ fn build_toon_prompt(summary: &HeapSummary, leaks: &[LeakInsight]) -> String {
                 format!("{:.2}", bytes_to_mb(leak.retained_size_bytes)),
             );
             push_kv(&mut body, 4, "instances", leak.instances);
-            push_kv(
-                &mut body,
-                4,
-                "description",
-                &leak.description,
-            );
+            push_kv(&mut body, 4, "description", &leak.description);
         }
     }
 

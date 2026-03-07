@@ -127,11 +127,21 @@ pub struct GcRoot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GcRootType {
     JniGlobal,
-    JniLocal { thread_serial: u32, frame: u32 },
-    JavaFrame { thread_serial: u32, frame: u32 },
-    NativeStack { thread_serial: u32 },
+    JniLocal {
+        thread_serial: u32,
+        frame: u32,
+    },
+    JavaFrame {
+        thread_serial: u32,
+        frame: u32,
+    },
+    NativeStack {
+        thread_serial: u32,
+    },
     StickyClass,
-    ThreadBlock { thread_serial: u32 },
+    ThreadBlock {
+        thread_serial: u32,
+    },
     MonitorUsed,
     ThreadObject {
         thread_serial: u32,
@@ -214,6 +224,9 @@ impl ObjectGraph {
 
     /// Returns the total shallow size of all objects.
     pub fn total_shallow_size(&self) -> u64 {
-        self.objects.values().map(|obj| u64::from(obj.shallow_size)).sum()
+        self.objects
+            .values()
+            .map(|obj| u64::from(obj.shallow_size))
+            .sum()
     }
 }

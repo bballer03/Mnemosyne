@@ -846,14 +846,23 @@ mod tests {
         assert!(first.is_root, "first node must be a root");
         assert!(first.class_name.contains("Thread"));
         let last = result.path.last().unwrap();
-        assert_eq!(last.object_id, request.object_id, "last node must be the target");
+        assert_eq!(
+            last.object_id, request.object_id,
+            "last node must be the target"
+        );
         // Synthetic path carries provenance.
         assert!(
-            result.provenance.iter().any(|m| m.kind == ProvenanceKind::Synthetic),
+            result
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Synthetic),
             "synthetic path must carry Synthetic provenance"
         );
         assert!(
-            result.provenance.iter().any(|m| m.kind == ProvenanceKind::Fallback),
+            result
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Fallback),
             "synthetic path must carry Fallback provenance"
         );
     }
@@ -882,7 +891,10 @@ mod tests {
             format!("0x{target_id:08X}")
         );
         // Real path has no provenance markers.
-        assert!(result.provenance.is_empty(), "real path must have empty provenance");
+        assert!(
+            result.provenance.is_empty(),
+            "real path must have empty provenance"
+        );
     }
 
     fn write_minimal_hprof(file: &mut NamedTempFile) {

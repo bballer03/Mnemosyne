@@ -750,11 +750,17 @@ mod tests {
         let leaks = synthesize_synthetic_leaks(&summary, &options);
         assert!(!leaks.is_empty());
         assert!(
-            leaks[0].provenance.iter().any(|m| m.kind == ProvenanceKind::Synthetic),
+            leaks[0]
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Synthetic),
             "synthetic leak must be labeled Synthetic"
         );
         assert!(
-            leaks[0].provenance.iter().any(|m| m.kind == ProvenanceKind::Fallback),
+            leaks[0]
+                .provenance
+                .iter()
+                .any(|m| m.kind == ProvenanceKind::Fallback),
             "synthetic leak must be labeled Fallback"
         );
     }
@@ -776,7 +782,10 @@ mod tests {
 
         let leaks = synthesize_leaks(&summary, &options);
         assert!(!leaks.is_empty());
-        assert!(leaks[0].provenance.is_empty(), "class-stat leaks must have empty provenance");
+        assert!(
+            leaks[0].provenance.is_empty(),
+            "class-stat leaks must have empty provenance"
+        );
     }
 
     #[test]
@@ -784,7 +793,11 @@ mod tests {
         let markers = response_level_provenance();
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0].kind, ProvenanceKind::Partial);
-        assert!(markers[0].detail.as_deref().unwrap_or_default().contains("preview"));
+        assert!(markers[0]
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("preview"));
     }
 
     #[test]
