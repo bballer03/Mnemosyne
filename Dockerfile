@@ -14,9 +14,12 @@ COPY Cargo.toml Cargo.lock ./
 COPY cli/Cargo.toml ./cli/Cargo.toml
 COPY core/Cargo.toml ./core/Cargo.toml
 
-RUN mkdir -p cli/src core/src \
+RUN mkdir -p cli/src core/src core/benches \
     && printf 'fn main() {}\n' > cli/src/main.rs \
-    && printf 'pub fn docker_build_stub() {}\n' > core/src/lib.rs
+    && printf 'pub fn docker_build_stub() {}\n' > core/src/lib.rs \
+    && printf 'fn main() {}\n' > core/benches/parser_bench.rs \
+    && printf 'fn main() {}\n' > core/benches/graph_bench.rs \
+    && printf 'fn main() {}\n' > core/benches/dominator_bench.rs
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
@@ -24,6 +27,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 COPY cli/src ./cli/src
 COPY core/src ./core/src
+COPY core/benches ./core/benches
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
