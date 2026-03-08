@@ -59,6 +59,9 @@ packages = ["com.example", "org.myapp"]
 # Leak types to detect
 leak_types = ["COROUTINE", "THREAD", "CACHE", "HTTP_RESPONSE"]
 
+# Retained/shallow ratio threshold for accumulation-point suspects
+accumulation_threshold = 10.0
+
 [llm]
 # LLM provider: "openai" (default), "anthropic", "local"
 provider = "openai"
@@ -124,6 +127,7 @@ The `[analysis]` table feeds every CLI and MCP command that needs leak heuristic
 - `min_severity` acts as a hard cutoff for `mnemosyne leaks`, `analyze`, and `explain`. Candidates below the threshold are dropped entirely. CLI flags such as `--min-severity` override it case-by-case.
 - `packages` accepts a list of package prefixes. Mnemosyne now treats them as an allow-list when real class histograms are available (only matching classes become leak candidates) and still rotates through the list when synthesizing fallback identifiers so each namespace shows up in the output. MCP endpoints receive the filtered list for richer prompting as well.
 - `leak_types` constrains both the real leak list (parsed from class stats/dominator context) and the synthetic fallback. If at least one matching class exists, only those kinds survive; otherwise Mnemosyne emits one deterministic entry per requested kind. Supported values mirror the `LeakKind` enum (`CACHE`, `THREAD`, `HTTP_RESPONSE`, `CLASS_LOADER`, `COLLECTION`, `LISTENER`, `COROUTINE`, `UNKNOWN`).
+- `accumulation_threshold` controls when graph-backed suspect ranking marks an object as an accumulation point. The default `10.0` is intentionally conservative: an object must retain at least 10x its own shallow size before it is flagged this way.
 
 Set these once in `.mnemosyne.toml` and your CI, MCP sessions, and CLI invocations stay aligned.
 

@@ -1,8 +1,9 @@
 use super::dominator::{DominatorTree, VIRTUAL_ROOT_ID};
-use crate::hprof::{ClassStat, HeapSummary, ObjectGraph, RecordStat};
+use crate::hprof::{ClassStat, HeapSummary, ObjectGraph, ObjectId, RecordStat};
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::Graph;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Aggregated dominator tree information for reporting.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -21,8 +22,199 @@ pub struct DominatorNode {
     pub retained_size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistogramEntry {
+    pub key: String,
+    pub instance_count: u64,
+    pub shallow_size: u64,
+    pub retained_size: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistogramGroupBy {
+    Class,
+    Package,
+    ClassLoader,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistogramResult {
+    pub group_by: HistogramGroupBy,
+    pub entries: Vec<HistogramEntry>,
+    pub total_instances: u64,
+    pub total_shallow_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnreachableSet {
+    pub total_count: u64,
+    pub total_shallow_size: u64,
+    pub by_class: Vec<UnreachableClassEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnreachableClassEntry {
+    pub class_name: String,
+    pub count: u64,
+    pub shallow_size: u64,
+}
+
 fn is_zero(v: &u64) -> bool {
     *v == 0
+}
+
+pub fn build_histogram(
+    graph: &ObjectGraph,
+    dom: &DominatorTree,
+    group_by: HistogramGroupBy,
+) -> HistogramResult {
+    let mut entries_by_key: HashMap<String, HistogramEntry> = HashMap::new();
+    let mut total_instances = 0_u64;
+    let mut total_shallow_size = 0_u64;
+
+    for (&obj_id, obj) in &graph.objects {
+        let shallow_size = u64::from(obj.shallow_size);
+        let retained_size = dom.retained_size(obj_id);
+        let key = resolve_histogram_key(graph, obj_id, group_by);
+
+        let entry = entries_by_key.entry(key.clone()).or_insert(HistogramEntry {
+            key,
+            instance_count: 0,
+            shallow_size: 0,
+            retained_size: 0,
+        });
+        entry.instance_count += 1;
+        entry.shallow_size += shallow_size;
+        entry.retained_size += retained_size;
+
+        total_instances += 1;
+        total_shallow_size += shallow_size;
+    }
+
+    let mut entries: Vec<HistogramEntry> = entries_by_key.into_values().collect();
+    entries.sort_by(|a, b| {
+        b.retained_size
+            .cmp(&a.retained_size)
+            .then_with(|| b.shallow_size.cmp(&a.shallow_size))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+
+    HistogramResult {
+        group_by,
+        entries,
+        total_instances,
+        total_shallow_size,
+    }
+}
+
+pub fn find_unreachable_objects(graph: &ObjectGraph) -> UnreachableSet {
+    let mut reachable: HashSet<ObjectId> = HashSet::new();
+    let mut queue: VecDeque<ObjectId> = VecDeque::new();
+
+    for root in &graph.gc_roots {
+        if graph.objects.contains_key(&root.object_id) && reachable.insert(root.object_id) {
+            queue.push_back(root.object_id);
+        }
+    }
+
+    while let Some(obj_id) = queue.pop_front() {
+        if let Some(object) = graph.objects.get(&obj_id) {
+            for &reference in &object.references {
+                if graph.objects.contains_key(&reference) && reachable.insert(reference) {
+                    queue.push_back(reference);
+                }
+            }
+        }
+    }
+
+    let mut grouped: HashMap<String, UnreachableClassEntry> = HashMap::new();
+    let mut total_count = 0_u64;
+    let mut total_shallow_size = 0_u64;
+
+    for (&obj_id, obj) in &graph.objects {
+        if reachable.contains(&obj_id) {
+            continue;
+        }
+
+        let class_name = graph
+            .class_name(obj.class_id)
+            .unwrap_or("<unknown>")
+            .to_string();
+        let shallow_size = u64::from(obj.shallow_size);
+        let entry = grouped
+            .entry(class_name.clone())
+            .or_insert(UnreachableClassEntry {
+                class_name,
+                count: 0,
+                shallow_size: 0,
+            });
+        entry.count += 1;
+        entry.shallow_size += shallow_size;
+        total_count += 1;
+        total_shallow_size += shallow_size;
+    }
+
+    let mut by_class: Vec<UnreachableClassEntry> = grouped.into_values().collect();
+    by_class.sort_by(|a, b| {
+        b.shallow_size
+            .cmp(&a.shallow_size)
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| a.class_name.cmp(&b.class_name))
+    });
+
+    UnreachableSet {
+        total_count,
+        total_shallow_size,
+        by_class,
+    }
+}
+
+fn resolve_histogram_key(
+    graph: &ObjectGraph,
+    obj_id: ObjectId,
+    group_by: HistogramGroupBy,
+) -> String {
+    let Some(obj) = graph.objects.get(&obj_id) else {
+        return String::from("<unknown>");
+    };
+
+    match group_by {
+        HistogramGroupBy::Class => graph
+            .class_name(obj.class_id)
+            .unwrap_or("<unknown>")
+            .to_string(),
+        HistogramGroupBy::Package => {
+            extract_package_name(graph.class_name(obj.class_id).unwrap_or("<unknown>"))
+        }
+        HistogramGroupBy::ClassLoader => graph
+            .classes
+            .get(&obj.class_id)
+            .map(|class| resolve_class_loader_name(graph, class.class_loader_id))
+            .unwrap_or_else(|| String::from("<unknown>")),
+    }
+}
+
+fn extract_package_name(class_name: &str) -> String {
+    class_name
+        .rmatch_indices(['.', '/'])
+        .next()
+        .map(|(idx, _)| class_name[..idx].to_string())
+        .filter(|package| !package.is_empty())
+        .unwrap_or_else(|| String::from("<default>"))
+}
+
+fn resolve_class_loader_name(graph: &ObjectGraph, class_loader_id: ObjectId) -> String {
+    if class_loader_id == 0 {
+        return String::from("<bootstrap>");
+    }
+
+    graph
+        .objects
+        .get(&class_loader_id)
+        .and_then(|loader| graph.class_name(loader.class_id))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("<loader:{}>", class_loader_id))
 }
 
 /// Build `GraphMetrics` from a real dominator tree and object graph.
@@ -152,7 +344,7 @@ pub fn summarize_graph(summary: &HeapSummary) -> GraphMetrics {
 mod tests {
     use super::super::dominator::build_dominator_tree;
     use super::*;
-    use crate::hprof::{GcRoot, GcRootType, HeapObject, ObjectKind};
+    use crate::hprof::{ClassInfo, GcRoot, GcRootType, HeapObject, ObjectKind};
 
     fn make_test_graph(objects: &[(u64, u64, u32, &[u64])], gc_roots: &[u64]) -> ObjectGraph {
         let mut graph = ObjectGraph::new(8);
@@ -175,6 +367,21 @@ mod tests {
             });
         }
         graph
+    }
+
+    fn add_class(graph: &mut ObjectGraph, class_id: u64, name: &str, class_loader_id: u64) {
+        graph.classes.insert(
+            class_id,
+            ClassInfo {
+                class_obj_id: class_id,
+                super_class_id: 0,
+                class_loader_id,
+                instance_size: 16,
+                name: Some(name.into()),
+                instance_fields: Vec::new(),
+                static_references: Vec::new(),
+            },
+        );
     }
 
     #[test]
@@ -226,5 +433,104 @@ mod tests {
                 "summarize_graph nodes must have zero retained_size"
             );
         }
+    }
+
+    #[test]
+    fn histogram_groups_by_class() {
+        let mut graph = make_test_graph(
+            &[(1, 100, 10, &[2]), (2, 100, 20, &[]), (3, 200, 30, &[])],
+            &[1, 3],
+        );
+        add_class(&mut graph, 100, "com.example.Cache", 0);
+        add_class(&mut graph, 200, "com.example.Listener", 0);
+
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Class);
+
+        assert_eq!(histogram.total_instances, 3);
+        assert_eq!(histogram.total_shallow_size, 60);
+        assert_eq!(histogram.entries.len(), 2);
+        assert_eq!(histogram.entries[0].key, "com.example.Cache");
+        assert_eq!(histogram.entries[0].instance_count, 2);
+        assert_eq!(histogram.entries[0].shallow_size, 30);
+        assert_eq!(histogram.entries[0].retained_size, 50);
+        assert_eq!(histogram.entries[1].key, "com.example.Listener");
+    }
+
+    #[test]
+    fn histogram_groups_by_package_prefix() {
+        let mut graph = make_test_graph(
+            &[(1, 100, 10, &[]), (2, 200, 20, &[]), (3, 300, 30, &[])],
+            &[1, 2, 3],
+        );
+        add_class(&mut graph, 100, "com.example.cache.CacheA", 0);
+        add_class(&mut graph, 200, "com.example.cache.CacheB", 0);
+        add_class(&mut graph, 300, "DefaultClass", 0);
+
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Package);
+
+        assert_eq!(histogram.entries.len(), 2);
+        let cache_group = histogram
+            .entries
+            .iter()
+            .find(|entry| entry.key == "com.example.cache")
+            .unwrap();
+        let default_group = histogram
+            .entries
+            .iter()
+            .find(|entry| entry.key == "<default>")
+            .unwrap();
+        assert_eq!(cache_group.instance_count, 2);
+        assert_eq!(default_group.instance_count, 1);
+    }
+
+    #[test]
+    fn histogram_handles_empty_graph() {
+        let graph = ObjectGraph::new(8);
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Class);
+
+        assert_eq!(histogram.total_instances, 0);
+        assert_eq!(histogram.total_shallow_size, 0);
+        assert!(histogram.entries.is_empty());
+    }
+
+    #[test]
+    fn finds_unreachable_objects() {
+        let mut graph = make_test_graph(
+            &[
+                (1, 100, 10, &[2]),
+                (2, 200, 20, &[]),
+                (3, 300, 30, &[4]),
+                (4, 300, 40, &[]),
+            ],
+            &[1],
+        );
+        add_class(&mut graph, 100, "com.example.Root", 0);
+        add_class(&mut graph, 200, "com.example.Live", 0);
+        add_class(&mut graph, 300, "com.example.Dead", 0);
+
+        let unreachable = find_unreachable_objects(&graph);
+
+        assert_eq!(unreachable.total_count, 2);
+        assert_eq!(unreachable.total_shallow_size, 70);
+        assert_eq!(unreachable.by_class.len(), 1);
+        assert_eq!(unreachable.by_class[0].class_name, "com.example.Dead");
+        assert_eq!(unreachable.by_class[0].count, 2);
+        assert_eq!(unreachable.by_class[0].shallow_size, 70);
+    }
+
+    #[test]
+    fn fully_reachable_graph_has_no_unreachable_objects() {
+        let mut graph = make_test_graph(&[(1, 100, 10, &[2]), (2, 200, 20, &[])], &[1]);
+        add_class(&mut graph, 100, "com.example.Root", 0);
+        add_class(&mut graph, 200, "com.example.Live", 0);
+
+        let unreachable = find_unreachable_objects(&graph);
+
+        assert_eq!(unreachable.total_count, 0);
+        assert_eq!(unreachable.total_shallow_size, 0);
+        assert!(unreachable.by_class.is_empty());
     }
 }

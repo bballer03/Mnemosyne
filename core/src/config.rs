@@ -36,6 +36,7 @@ pub struct AnalysisConfig {
     pub min_severity: LeakSeverity,
     pub packages: Vec<String>,
     pub leak_types: Vec<LeakKind>,
+    pub accumulation_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -85,6 +86,7 @@ impl Default for AnalysisConfig {
             min_severity: LeakSeverity::High,
             packages: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         }
     }
 }

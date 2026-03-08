@@ -1,7 +1,7 @@
 # Architecture
 
 > **Last Updated:** March 8, 2026  
-> **Version:** 0.1.1 (alpha)  
+> **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
 ## 📋 Table of Contents
@@ -49,24 +49,25 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 
 ### Shipped today
 - **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
+- **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, and GC-root types, and the graph-backed parser now populates them for instances, arrays, and roots.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. CLI surfaces provenance markers for `leaks`, `gc-path`, and `fix` output.
-- **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails.
-- **Graph metrics:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, while `core::graph::summarize_graph()` remains the lightweight preview fallback for summary-only paths.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, prints a grouped histogram table in text mode, and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
+- **Graph metrics:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, plus grouped histograms and unreachable-object summaries. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
 - **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
-- **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.1.1 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
-- **Validation scaffolding:** Synthetic HPROF fixture builders, the `test-fixtures` cargo feature, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 87 passing tests, including 23 CLI integration tests.
+- **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
+- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, `scripts/measure_rss.sh` for max-RSS capture, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 110 passing tests.
 
 ### Still in progress
-- **Extending graph-backed analysis into remaining surfaces**, especially diffing and richer MAT-style suspect ranking.
+- **Remaining MAT-parity work**, especially thread inspection, classloader analysis, collection inspection, and OQL-style querying.
 - **Config-driven AI task runner** (e.g., YAML-defined prompts with selective context injection).
-- **Richer diffing and higher-level visualizations** beyond the current record-level diff and shared report exporters.
+- **Large-dump scaling validation**: the initial benchmark baseline is published (`docs/performance/memory-scaling.md`) covering parser throughput, dominator-tree timing, and RSS measurements on 156 MB fixtures. Larger dump validation (500 MB, 1 GB+) is future work.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
-The sections below describe the intended architecture; status callouts highlight where the current v0.1.1 build diverges so contributors know which pieces still need implementation work.
+The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
 
 ### Project Structure
 
@@ -82,6 +83,7 @@ core/
    │   ├── mod.rs
    │   ├── parser.rs       # Streaming summary parser (was heap.rs)
    │   ├── binary_parser.rs # Binary HPROF -> ObjectGraph (was hprof_parser.rs)
+   │   ├── tags.rs         # Shared HPROF top-level + sub-record tag constants
    │   ├── object_graph.rs
    │   └── test_fixtures.rs
    ├── graph/              # Object graph analysis domain
@@ -107,11 +109,87 @@ core/
       └── server.rs       # Was mcp.rs
 ```
 
+Repository-level performance tooling now lives alongside the core crate: `core/benches/` holds Criterion benchmarks for parser throughput, graph construction, and dominator computation, while `scripts/measure_rss.sh` captures max RSS for CLI parse runs so the M3 memory-scaling decision can be grounded in measurements rather than assumptions.
+
 ## System Architecture Overview (Layered Design)
 
 Mnemosyne's architecture is organized into clear layers, separating the concerns of user interaction, orchestration, analysis, and external integration. This layered design improves maintainability and allows independent evolution of components (for example, swapping the AI backend or parser without affecting other parts). Below is a high-level overview of the system structure:
 
-![Mnemosyne Architecture](resources/architecture.svg)
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        PRESENTATION LAYER                               │
+│                                                                         │
+│  ┌────────────────────────┐       ┌─────────────────────────────────┐  │
+│  │    CLI  (clap-based)   │       │  MCP Server (stdio JSON-RPC)   │  │
+│  │ parse · leaks · analyze│       │ parse_heap · detect_leaks      │  │
+│  │ diff · map · fix       │       │ map_to_code · find_gc_path     │  │
+│  │ gc-path · serve        │       │ explain_leak · propose_fix     │  │
+│  │ --format text|md|html  │       │ apply_fix                      │  │
+│  │   |toon|json           │       │                                │  │
+│  └───────────┬────────────┘       └──────────────┬──────────────────┘  │
+│              │                                   │                      │
+└──────────────┼───────────────────────────────────┼──────────────────────┘
+               │        Shared Core API            │
+               │   (lib.rs public re-exports)      │
+               └──────────────┬────────────────────┘
+                              │
+┌─────────────────────────────┼───────────────────────────────────────────┐
+│                       CONTROL LAYER                                     │
+│                                                                         │
+│  ┌──────────────────────────┴────────────────────────────────────────┐  │
+│  │                    Orchestration  (lib.rs)                        │  │
+│  │  analyze_heap()  detect_leaks()  find_gc_path()  propose_fix()   │  │
+│  │  parse_heap()    parse_hprof()   diff_heaps()    map_to_code()   │  │
+│  └──────┬──────────────┬──────────────────┬──────────────┬──────────┘  │
+│         │              │                  │              │              │
+└─────────┼──────────────┼──────────────────┼──────────────┼──────────────┘
+          │              │                  │              │
+┌─────────┼──────────────┼──────────────────┼──────────────┼──────────────┐
+│         │         ANALYSIS LAYER          │              │              │
+│         ▼              ▼                  ▼              ▼              │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐  │
+│  │  hprof/      │ │  graph/      │ │  analysis/   │ │  mapper/     │  │
+│  │              │ │              │ │              │ │  source.rs   │  │
+│  │ parser.rs    │ │ dominator.rs │ │ engine.rs    │ │  (Java/Kt    │  │
+│  │  (streaming  │ │  (Lengauer-  │ │  (leak det.  │ │   git blame) │  │
+│  │   summary)   │ │   Tarjan     │ │   heap anal.)│ │              │  │
+│  │              │ │   retained)  │ │              │ ├──────────────┤  │
+│  │ binary_      │ │              │ │ ai.rs        │ │  fix/        │  │
+│  │  parser.rs   │ │ gc_path.rs   │ │  (LLM stub)  │ │  generator   │  │
+│  │  (object     │ │  (BFS +      │ │              │ │  .rs         │  │
+│  │   graph)     │ │   fallback)  │ │              │ │  (template   │  │
+│  │              │ │              │ │              │ │   patches)   │  │
+│  │ object_      │ │ metrics.rs   │ └──────────────┘ │              │  │
+│  │  graph.rs    │ │  (graph      │                   ├──────────────┤  │
+│  │  (model)     │ │   summaries) │                   │  report/     │  │
+│  │              │ └──────────────┘                   │  renderer.rs │  │
+│  │ test_        │                                    │  (Text, Md,  │  │
+│  │  fixtures.rs │                                    │   HTML, TOON,│  │
+│  └──────────────┘                                    │   JSON)      │  │
+│                                                      └──────────────┘  │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                   Cross-Cutting Concerns                         │  │
+│  │  config.rs (AppConfig, AiConfig, ParserConfig, AnalysisConfig)  │  │
+│  │  errors.rs (CoreError, CoreResult)                               │  │
+│  │  ProvenanceKind / ProvenanceMarker  (Synthetic|Partial|Fallback  │  │
+│  │                                      |Placeholder)               │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+          │
+┌─────────┼───────────────────────────────────────────────────────────────┐
+│         │           INTEGRATION LAYER                                   │
+│         ▼                                                               │
+│  ┌──────────────────────┐  ┌────────────────────────────────────────┐  │
+│  │  LLM Backend         │  │  External Systems                     │  │
+│  │  (stubbed today —    │  │  • File I/O  (HPROF dumps, reports)   │  │
+│  │   config plumbing    │  │  • Git       (blame, commit lookup)   │  │
+│  │   exists for OpenAI  │  │  • IDE       (MCP ↔ VS Code/Cursor/  │  │
+│  │   /Anthropic/local)  │  │               Zed/JetBrains/ChatGPT) │  │
+│  └──────────────────────┘  │  • CI/CD     (JSON/TOON consumption)  │  │
+│                            └────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Layer Responsibilities:
 
@@ -252,6 +330,48 @@ Because the Report Generator is modular, adding a new output format later (say, 
 > **Status (Mar 2026):** Text, Markdown, HTML, TOON, and JSON reports are rendered via the shared `render_report` helper with `--output-file` support. HTML output is XSS-hardened; TOON values are properly escaped. Provenance markers are rendered in all non-JSON formats. GUI visualizations remain future work.
 
 ## Execution Flow (from CLI to AI and Back)
+
+```
+ User
+  │
+  ▼
+┌──────────────────────┐
+│  1. CLI / MCP Entry  │  parse args, load config, validate input
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  2. Heap Dump Parse  │  parser.rs (summary)  OR  binary_parser.rs (full graph)
+│     ┌────────────┐   │
+│     │ HeapSummary│   │  ← streaming summary: record histogram, class stats
+│     ├────────────┤   │
+│     │ObjectGraph │   │  ← full graph: objects, refs, classes, GC roots
+│     └────────────┘   │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  3. Graph Analysis   │  dominator tree → retained sizes → leak ranking
+│     (if graph avail) │  GC root path BFS → edge labels
+│                      │  Falls back to heuristics w/ provenance markers
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  4. AI Insights      │  Currently: deterministic template text
+│     (stubbed)        │  Future: LLM-backed context-aware explanations
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  5. Report / Output  │  Text │ Markdown │ HTML │ TOON │ JSON
+│     + Provenance     │  --output-file or stdout
+│                      │  ProvenanceKind markers on every surface
+└──────────┬───────────┘
+           │
+           ▼
+ User / CI / MCP client
+```
 
 This section describes how all the components work together during a typical run of Mnemosyne. The following is the execution flow for the primary use case – analyzing a heap dump via the CLI:
 

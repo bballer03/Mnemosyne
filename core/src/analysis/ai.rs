@@ -1,5 +1,5 @@
 use super::engine::LeakInsight;
-use crate::{config::AiConfig, hprof::HeapSummary};
+use crate::{config::AiConfig, hprof::HeapSummary, CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -51,6 +51,21 @@ pub fn focus_leaks(leaks: &[LeakInsight], leak_id: Option<&str>) -> Vec<LeakInsi
     }
 
     leaks.to_vec()
+}
+
+/// Validate that a given leak ID exists in the leak set.
+/// Returns an error if the ID is specified but not found.
+pub fn validate_leak_id(leaks: &[LeakInsight], leak_id: &str) -> CoreResult<()> {
+    if leaks
+        .iter()
+        .any(|leak| leak.id == leak_id || leak.class_name == leak_id)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidInput(format!(
+            "no leak found matching identifier '{leak_id}'"
+        )))
+    }
 }
 
 /// Generate a deterministic, heuristic "AI" insight so that higher layers can
@@ -245,6 +260,8 @@ mod tests {
             leak_kind: LeakKind::Cache,
             severity: LeakSeverity::High,
             retained_size_bytes: 256 * 1024 * 1024,
+            shallow_size_bytes: None,
+            suspect_score: None,
             instances: 42,
             description: "Half the heap".into(),
             provenance: Vec::new(),
@@ -279,6 +296,8 @@ mod tests {
                 leak_kind: LeakKind::Cache,
                 severity: LeakSeverity::Low,
                 retained_size_bytes: 1,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances: 1,
                 description: String::new(),
                 provenance: Vec::new(),
@@ -289,6 +308,8 @@ mod tests {
                 leak_kind: LeakKind::Thread,
                 severity: LeakSeverity::High,
                 retained_size_bytes: 2,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances: 2,
                 description: String::new(),
                 provenance: Vec::new(),
@@ -302,5 +323,45 @@ mod tests {
         // Fallback to all leaks when no match.
         let fallback = focus_leaks(&leaks, Some("missing"));
         assert_eq!(fallback.len(), leaks.len());
+    }
+
+    #[test]
+    fn validates_matching_leak_id() {
+        let leaks = vec![LeakInsight {
+            id: "LeakA::1".into(),
+            class_name: "LeakA".into(),
+            leak_kind: LeakKind::Cache,
+            severity: LeakSeverity::Low,
+            retained_size_bytes: 1,
+            shallow_size_bytes: None,
+            suspect_score: None,
+            instances: 1,
+            description: String::new(),
+            provenance: Vec::new(),
+        }];
+
+        assert!(validate_leak_id(&leaks, "LeakA::1").is_ok());
+        assert!(validate_leak_id(&leaks, "LeakA").is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_leak_id() {
+        let leaks = vec![LeakInsight {
+            id: "LeakA::1".into(),
+            class_name: "LeakA".into(),
+            leak_kind: LeakKind::Cache,
+            severity: LeakSeverity::Low,
+            retained_size_bytes: 1,
+            shallow_size_bytes: None,
+            suspect_score: None,
+            instances: 1,
+            description: String::new(),
+            provenance: Vec::new(),
+        }];
+
+        let err = validate_leak_id(&leaks, "missing").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("no leak found matching identifier"));
     }
 }

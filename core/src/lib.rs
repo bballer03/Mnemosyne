@@ -15,16 +15,19 @@ pub mod report;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat, AnalyzeRequest,
-    AnalyzeResponse, LeakDetectionOptions, ProvenanceKind, ProvenanceMarker,
+    AnalyzeResponse, LeakDetectionOptions, LeakSuspect, ProvenanceKind, ProvenanceMarker,
 };
 pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
 pub use errors::{CoreError, CoreResult};
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use graph::{
-    build_dominator_tree, find_gc_path, DominatorNode, DominatorTree, GcPathNode, GcPathRequest,
-    GcPathResult, GraphMetrics, VIRTUAL_ROOT_ID,
+    build_dominator_tree, build_histogram, find_gc_path, find_unreachable_objects, DominatorNode,
+    DominatorTree, GcPathNode, GcPathRequest, GcPathResult, GraphMetrics, HistogramEntry,
+    HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
-pub use hprof::{parse_heap, parse_hprof, HeapDiff, HeapParseJob, HeapSummary, HprofHeader};
+pub use hprof::{
+    parse_heap, parse_hprof, ClassLevelDelta, HeapDiff, HeapParseJob, HeapSummary, HprofHeader,
+};
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};
 

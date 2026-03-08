@@ -137,10 +137,10 @@ export OPENAI_API_KEY="sk-..."
 Then run AI analysis:
 
 ```bash
-mnemosyne analyze heap.hprof --ai
+mnemosyne analyze heap.hprof --group-by package --ai
 ```
 
-When full HPROF object-graph parsing succeeds, `analyze` now computes retained sizes from the dominator tree and includes graph-backed dominator metrics in the report. If parsing or filters prevent that path, Mnemosyne falls back to the summary-driven preview and labels the response accordingly.
+When full HPROF object-graph parsing succeeds, `analyze` now computes retained sizes from the dominator tree and includes graph-backed dominator metrics in the report. It also emits a grouped histogram section and, when present, an unreachable-object breakdown. Use `--group-by class|package|classloader` to change the histogram aggregation. If parsing or filters prevent that path, Mnemosyne falls back to the summary-driven preview and labels the response accordingly.
 
 Output:
 
@@ -195,6 +195,7 @@ temperature = 0.2
 min_severity = "MEDIUM"
 packages = ["com.example", "org.demo"]
 leak_types = ["CACHE", "THREAD"]
+accumulation_threshold = 10.0
 ```
 
 When Mnemosyne starts it resolves configuration in this order:
@@ -275,7 +276,13 @@ Heap diff: before.hprof -> after.hprof
     - com.example.UserSession: -296.00 MB (before 385.00 MB -> after 89.00 MB)
     - java.lang.String[]: -23.00 MB (before 421.00 MB -> after 398.00 MB)
     - byte[]: +22.00 MB (before 312.00 MB -> after 334.00 MB)
+  Class-level retained deltas:
+    Class                           Instances  Shallow                 Retained Delta
+    com.example.UserSession          -156789   385.00 -> 89.00 MB     -296.00 MB
+    java.lang.String[]                 -1200   421.00 -> 398.00 MB     -23.00 MB
 ```
+
+When both heaps build object graphs successfully, `diff` now keeps the existing summary view and adds class-level instance, shallow-size, and retained-size deltas below it.
 
 ### Filtering by Package
 

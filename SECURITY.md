@@ -13,7 +13,7 @@ not open a public issue.
 
 Report it privately using one of these channels:
 
-- Email the project maintainers at opensource@mnemosyne.dev
+- Email the project maintainers at yousufsarfaraz484@gmail.com
 - Open a private GitHub security advisory for the repository
 
 When possible, include:

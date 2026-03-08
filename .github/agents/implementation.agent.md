@@ -72,9 +72,11 @@ When GitHub MCP tools are available in the runtime:
 - if GitHub tools are unavailable, proceed without them — they are optional
 
 ## Preconditions
+- **Design Consulting Agent has returned READY or READY AFTER DOC UPDATE** — implementation must not begin until the design gate is satisfied
+- the design doc identified by the Design Consulting Agent is the source of truth for implementation scope
 - architecture review approved the touched surface (for non-trivial changes)
 - file ownership is explicit and non-overlapping
-- for small fixes and direct user requests, orchestration overhead may be skipped
+- for small fixes and direct user requests, orchestration overhead may be skipped, but design alignment must still be verified
 
 ## Allowed scope
 Only files explicitly assigned by orchestration for this batch, or files directly relevant to a user's coding request.

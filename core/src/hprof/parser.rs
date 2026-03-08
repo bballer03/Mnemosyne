@@ -1,3 +1,4 @@
+use super::tags::tag_name;
 use crate::errors::{CoreError, CoreResult};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,8 @@ pub struct HeapDiff {
     pub delta_bytes: i64,
     pub delta_objects: i64,
     pub changed_classes: Vec<ClassDelta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_diff: Option<Vec<ClassLevelDelta>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,17 @@ pub struct ClassDelta {
     pub name: String,
     pub before_bytes: u64,
     pub after_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassLevelDelta {
+    pub class_name: String,
+    pub before_instances: u64,
+    pub after_instances: u64,
+    pub before_shallow_bytes: u64,
+    pub after_shallow_bytes: u64,
+    pub before_retained_bytes: u64,
+    pub after_retained_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,31 +191,12 @@ fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
     Ok(())
 }
 
-fn tag_name(tag: u8) -> &'static str {
+fn object_record_category_name(tag: u8) -> Option<&'static str> {
     match tag {
-        0x01 => "STRING_IN_UTF8",
-        0x02 => "LOAD_CLASS",
-        0x03 => "UNLOAD_CLASS",
-        0x04 => "STACK_FRAME",
-        0x05 => "STACK_TRACE",
-        0x06 => "ALLOC_SITES",
-        0x07 => "HEAP_SUMMARY",
-        0x0A => "START_THREAD",
-        0x0B => "END_THREAD",
-        0x0C => "HEAP_DUMP",
-        0x0D => "HEAP_DUMP_SEGMENT",
-        0x0E => "HEAP_DUMP_END",
-        0x1C => "CPU_SAMPLES",
-        0x1D => "CONTROL_SETTINGS",
-        0x1E => "ROOT_UNKNOWN",
-        0x1F => "ROOT_JNI_GLOBAL",
-        0x20 => "ROOT_JNI_LOCAL",
-        0x21 => "INSTANCE_DUMP",
-        0x22 => "OBJECT_ARRAY_DUMP",
-        0x23 => "PRIMITIVE_ARRAY_DUMP",
-        0x24 => "HEAP_DUMP_INFO",
-        0x2C => "HEAP_DUMP_SEGMENT_EXT",
-        _ => "UNKNOWN",
+        0x21 => Some("INSTANCE_DUMP"),
+        0x22 => Some("OBJECT_ARRAY_DUMP"),
+        0x23 => Some("PRIMITIVE_ARRAY_DUMP"),
+        _ => None,
     }
 }
 
@@ -214,18 +209,19 @@ fn summarize_class_stats(record_stats: &[RecordStat], total_size_bytes: u64) -> 
     record_stats
         .iter()
         .filter(|stat| matches!(stat.tag, 0x21..=0x23))
-        .map(|stat| {
+        .filter_map(|stat| {
+            let name = object_record_category_name(stat.tag)?;
             let percentage = if stat.bytes == 0 {
                 0.0
             } else {
                 ((stat.bytes as f64 / total_bytes) * 100.0) as f32
             };
-            ClassStat {
-                name: stat.name.clone(),
+            Some(ClassStat {
+                name: name.into(),
                 instances: stat.count,
                 total_size_bytes: stat.bytes,
                 percentage,
-            }
+            })
         })
         .collect()
 }
@@ -262,6 +258,7 @@ impl HeapDiff {
                 before_bytes: 385_000_000,
                 after_bytes: 89_000_000,
             }],
+            class_diff: None,
         }
     }
 }
@@ -269,6 +266,9 @@ impl HeapDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hprof::tags::{
+        TAG_CONTROL_SETTINGS, TAG_CPU_SAMPLES, TAG_HEAP_DUMP_END, TAG_HEAP_DUMP_SEGMENT,
+    };
 
     #[test]
     fn summarizes_class_stats_from_records() {
@@ -305,5 +305,26 @@ mod tests {
     fn handles_zero_length_heaps() {
         let classes = summarize_class_stats(&[], 0);
         assert!(classes.is_empty());
+    }
+
+    #[test]
+    fn tag_names_follow_hprof_top_level_spec() {
+        assert_eq!(tag_name(TAG_CPU_SAMPLES), "CPU_SAMPLES");
+        assert_eq!(tag_name(TAG_CONTROL_SETTINGS), "CONTROL_SETTINGS");
+        assert_eq!(tag_name(TAG_HEAP_DUMP_SEGMENT), "HEAP_DUMP_SEGMENT");
+        assert_eq!(tag_name(TAG_HEAP_DUMP_END), "HEAP_DUMP_END");
+        assert_eq!(tag_name(0x21), "UNKNOWN");
+        assert_eq!(tag_name(0x24), "UNKNOWN");
+    }
+
+    #[test]
+    fn object_record_category_names_stay_human_readable() {
+        assert_eq!(object_record_category_name(0x21), Some("INSTANCE_DUMP"));
+        assert_eq!(object_record_category_name(0x22), Some("OBJECT_ARRAY_DUMP"));
+        assert_eq!(
+            object_record_category_name(0x23),
+            Some("PRIMITIVE_ARRAY_DUMP")
+        );
+        assert_eq!(object_record_category_name(0x1C), None);
     }
 }

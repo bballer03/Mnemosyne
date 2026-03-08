@@ -31,7 +31,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-generated fi
 It brings total clarity to complex Java/Kotlin heap dumps by combining:
 
 - ⚡ High-performance Rust-based heap parsing
-- 🧩 Object-graph parsing plus dominator-backed retained sizes in `analyze` and `leaks`, with heuristic fallback when full graph parsing is unavailable
+- 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level diffing in the graph-backed analysis path
 - 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, leak reproduction, forecasting, and more
@@ -47,6 +47,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
 - `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
+- `mnemosyne analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
@@ -62,6 +63,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
   - ClassLoader leaks
   - Cache & collection leaks
 - `mnemosyne analyze` and `mnemosyne leaks` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with provenance markers when graph parsing is unavailable
+- Graph-backed suspect ranking now scores leaks using retained/shallow ratio, accumulation-point detection, dominated-object counts, and short reference-chain context while preserving backward compatibility via optional response fields
 - AI-generated code fixes
 - Leak reproduction snippet generator
 
@@ -101,7 +103,7 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ## 🛠 Installation
 
-> Mnemosyne v0.1.1 (alpha) is now available.
+> Mnemosyne v0.2.0 (alpha) is now available.
 > Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, the repository includes a Homebrew formula for macOS release archives, and tagged releases publish a Docker image to `ghcr.io/bballer03/mnemosyne`.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
@@ -132,16 +134,16 @@ Tagged releases now publish a container image to GHCR with version, major.minor,
 
 ```bash
 # Use a specific version tag instead of :latest for reproducibility
-docker pull ghcr.io/bballer03/mnemosyne:0.1.1
+docker pull ghcr.io/bballer03/mnemosyne:0.2.0
 
 # Parse a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 parse /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 parse /data/heap.hprof
 
 # Analyze a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 analyze /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 analyze /data/heap.hprof
 
 # Detect leaks
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.1.1 leaks /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 leaks /data/heap.hprof
 ```
 
 The image runs as a non-root user, uses `/data` as its working directory, and sets `mnemosyne-cli` as the entrypoint so heap dumps can be mounted directly into the container.
@@ -181,11 +183,14 @@ Need consistent leak filtering defaults for every command? Add an `[analysis]` b
 min_severity = "MEDIUM"
 packages = ["com.example", "org.demo"]
 leak_types = ["CACHE", "THREAD", "HTTP_RESPONSE"]
+accumulation_threshold = 10.0
 ```
 
 CLI flags such as `--min-severity` or `--package` still win, but the config keeps the day-one experience aligned across local runs, CI, and MCP.
 
 Leaks below `min_severity` are filtered out, so noisy low-priority signals stay out of your reports.
+
+`accumulation_threshold` controls when a graph-backed suspect is flagged as an accumulation point. Lower values make Mnemosyne more aggressive about highlighting small objects that retain disproportionately large subgraphs.
 
 When you specify multiple `packages`, Mnemosyne first treats them as an allow-list for real classes (only matching histograms become leak candidates) and then rotates through them as it synthesizes fallback identifiers so each category stays easy to trace back to its service/module.
 
@@ -281,6 +286,8 @@ mnemosyne leaks heap.hprof --package com.example --package org.demo
 Under the hood Mnemosyne now filters real class stats with those package prefixes before it ever synthesizes candidates, which keeps the CLI/MCP output focused on the code you actually own.
 
 Both `mnemosyne leaks` and `mnemosyne analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `mnemosyne analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
+
+When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`) and an unreachable-object summary, while `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
 
 #### Map a leak to source code
 ```bash
@@ -430,6 +437,9 @@ mnemosyne analyze heap.hprof --package com.example,org.demo
 # Focus on selected leak kinds
 mnemosyne analyze heap.hprof --leak-kind cache,thread
 
+# Group the analysis histogram by package
+mnemosyne analyze heap.hprof --group-by package
+
 # Export HTML report
 mnemosyne analyze heap.hprof --format html --output-file report.html
 
@@ -465,9 +475,13 @@ Heap diff: before.hprof -> after.hprof
   Top changes:
     - INSTANCE_DUMP: +96.00 MB (before 384.00 MB -> after 480.00 MB)
     - OBJECT_ARRAY_DUMP: +32.00 MB (before 256.00 MB -> after 288.00 MB)
+  Class-level retained deltas:
+    Class                           Instances  Shallow                 Retained Delta
+    com.example.UserSessionCache        +820   45.00 -> 97.00 MB      +213.00 MB
+    java.lang.String                    +410  398.00 -> 421.00 MB      +44.00 MB
 ```
 
-The diff command parses both snapshots, normalizes their record/class histograms, and highlights the heaviest movers so you can spot regressions quickly. Use it inside CI (see `docs/examples`) to fail builds when heap growth crosses your budget.
+The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) to fail builds when heap growth crosses your budget.
 
 ---
 
@@ -591,14 +605,26 @@ Mnemosyne is built for speed and efficiency:
 
 ### Benchmarks
 
-> **Note:** Formal benchmarks have not been published yet. The figures below describe design goals, not measured results.
+> **Captured:** 2026-03-08 on a 156 MB Kotlin + Spring Boot heap dump (`resources/test-fixtures/heap.hprof`)
 
-**Design Targets:**
-- Streaming architecture processes dumps larger than available RAM
-- Rust-native parsing avoids GC pauses that affect Java-based tools (MAT, VisualVM)
-- `petgraph`-backed dominator computation with Lengauer-Tarjan algorithm
+**Measured results (Criterion, release profile):**
 
-Criterion benchmarks and comparative numbers will be published once the analysis pipeline stabilizes.
+| Benchmark | Median | Throughput | Notes |
+|---|---|---|---|
+| Streaming parser (real heap) | 67.2 ms | 2.25 GiB/s | Record-level scanning, ~3.5 MB peak RSS |
+| Binary parser -> ObjectGraph | 1.71 s | 90.5 MiB/s | Full graph construction |
+| Dominator tree (Lengauer-Tarjan) | 1.85 s | -- | Full retained-size computation |
+| Graph reference lookup | 26.7 ns | -- | Single-object outgoing refs |
+| Retained-size top-N query | 712 us | -- | On real 156 MB heap |
+
+**Memory usage (RSS:dump ratio):**
+
+| Command | Peak RSS | Ratio | Notes |
+|---|---|---|---|
+| `parse` (streaming) | ~3.5 MB | 0.02x | Minimal memory, scales to any dump size |
+| `analyze` / `leaks` (full graph) | ~555 MB | 3.56x | Within 4x safety threshold |
+
+Full benchmark details: [`docs/performance/memory-scaling.md`](docs/performance/memory-scaling.md)
 
 ### Why is Mnemosyne so fast?
 

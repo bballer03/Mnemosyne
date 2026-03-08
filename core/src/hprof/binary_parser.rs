@@ -7,34 +7,12 @@ use super::object_graph::{
     field_types, field_value_size, ClassId, ClassInfo, FieldDescriptor, GcRoot, GcRootType,
     HeapObject, LoadedClass, ObjectGraph, ObjectKind,
 };
+use super::tags::*;
 use crate::errors::{CoreError, CoreResult};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read};
-
-// ── Top-level record tags ──────────────────────────────────────────
-const TAG_STRING_IN_UTF8: u8 = 0x01;
-const TAG_LOAD_CLASS: u8 = 0x02;
-const TAG_HEAP_DUMP: u8 = 0x0C;
-const TAG_HEAP_DUMP_SEGMENT: u8 = 0x0D;
-
-// ── Heap-dump sub-record tags (standard HPROF spec values) ─────────
-const SUB_ROOT_JNI_GLOBAL: u8 = 0x01;
-const SUB_ROOT_JNI_LOCAL: u8 = 0x02;
-const SUB_ROOT_JAVA_FRAME: u8 = 0x03;
-const SUB_ROOT_NATIVE_STACK: u8 = 0x04;
-const SUB_ROOT_STICKY_CLASS: u8 = 0x05;
-const SUB_ROOT_THREAD_BLOCK: u8 = 0x06;
-const SUB_ROOT_MONITOR_USED: u8 = 0x07;
-const SUB_ROOT_THREAD_OBJECT: u8 = 0x08;
-const SUB_HEAP_DUMP_INFO: u8 = 0xFE;
-const SUB_PRIMITIVE_ARRAY_NODATA: u8 = 0xFF;
-
-const SUB_CLASS_DUMP: u8 = 0x20;
-const SUB_INSTANCE_DUMP: u8 = 0x21;
-const SUB_OBJ_ARRAY_DUMP: u8 = 0x22;
-const SUB_PRIM_ARRAY_DUMP: u8 = 0x23;
 
 /// Parse an HPROF binary from a byte slice into an [`ObjectGraph`].
 pub fn parse_hprof(data: &[u8]) -> CoreResult<ObjectGraph> {
@@ -626,13 +604,40 @@ fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::build_simple_fixture;
+    use crate::hprof::test_fixtures::{build_segment_fixture, build_simple_fixture};
+
+    #[test]
+    fn test_tag_constants_match_hprof_spec() {
+        // Verify tag constants match the HPROF binary format spec.
+        // These were previously incorrect (0x0D/0x1C swap), causing the
+        // binary parser to skip all heap data in real-world JVM dumps.
+        assert_eq!(TAG_HEAP_DUMP, 0x0C);
+        assert_eq!(TAG_HEAP_DUMP_SEGMENT, 0x1C);
+    }
 
     #[test]
     fn test_parse_simple_fixture_header() {
         let data = build_simple_fixture();
         let graph = parse_hprof(&data).expect("parse should succeed");
         assert_eq!(graph.identifier_size, 8);
+    }
+
+    #[test]
+    fn test_parse_heap_dump_segment() {
+        let data = build_segment_fixture();
+        let graph = parse_hprof(&data).expect("segment parse should succeed");
+
+        assert!(
+            !graph.objects.is_empty(),
+            "segment fixture should populate objects"
+        );
+
+        let node_class = graph
+            .classes
+            .get(&0x200)
+            .expect("Node class should exist in segment fixture");
+        assert_eq!(node_class.name.as_deref(), Some("com/example/Node"));
+        assert_eq!(node_class.instance_fields.len(), 2);
     }
 
     #[test]

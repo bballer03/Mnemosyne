@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-08
+
+### Added
+- `validate_leak_id()` for strict leak-ID matching; `explain`, `fix`, and MCP `explain_leak` now return errors for unknown or invalid leak IDs instead of silently falling back
+- `build_segment_fixture()` test fixture builder for `HEAP_DUMP_SEGMENT` (tag `0x1C`) coverage
+- 14 new tests (5 in M1.5-B1, 9 in M1.5-B2), bringing the workspace total to 101 tests including 30 CLI integration tests
+- Real-world HPROF integration tests validating the `parse`, `analyze`, `leaks`, and `gc-path` pipeline end to end against actual JVM heap dumps
+- Heuristic fallback validation test confirming `synthesize_leaks()` still produces candidates when graph-backed analysis results are filtered away
+- `core::hprof::tags` as the shared source of truth for HPROF top-level record tags, heap-dump sub-record tags, and `tag_name()` mappings
+- Criterion benchmark targets in `core/benches/` covering parser throughput, object-graph construction, and dominator-tree computation
+- `scripts/measure_rss.sh` for max-RSS capture during CLI parse runs, plus `docs/design/memory-scaling.md` as the memory-scaling decision template
+- Graph-backed histogram grouping by class, package, and classloader via `HistogramEntry`, `HistogramGroupBy`, and `HistogramResult`
+- MAT-style leak suspect ranking via `LeakSuspect`, including retained/shallow ratio, accumulation-point detection, short reference-chain context, and composite score-based ordering
+- Unreachable-object summaries via `UnreachableSet` and `UnreachableClassEntry`, with per-class counts and shallow-size totals
+- Class-level heap diff output via optional `HeapDiff::class_diff` / `ClassLevelDelta` plus CLI table rendering
+- `AnalysisConfig.accumulation_threshold` and CLI `analyze --group-by class|package|classloader`
+- 9 new tests for histogram grouping, suspect scoring, unreachable objects, and enhanced diff, bringing the workspace total to 110 passing tests
+- Published first benchmark baseline with Criterion throughput data and RSS measurements in `docs/performance/memory-scaling.md`; updated `docs/design/memory-scaling.md` with real measured data and architectural decision
+
+### Changed
+- `explain --leak-id`, `fix --leak-id`, and MCP `explain_leak` with `leak_id` now fail fast with a descriptive error when the specified leak identifier does not match any detected leak, instead of silently falling back to the full leak set
+- `core::hprof::parser`, `core::hprof::binary_parser`, `core::hprof::test_fixtures`, and `core::graph::gc_path` now import shared HPROF tag constants instead of maintaining duplicated local values
+- `analyze_heap()` now attaches optional histogram and unreachable-object sections, and `LeakInsight` gained optional `shallow_size_bytes` / `suspect_score` fields with `skip_serializing_if` for backward compatibility
+- `diff_heaps()` now preserves the existing record-level diff and adds graph-backed class-level deltas when both snapshots parse into object graphs
+
+### Fixed
+- **Critical HPROF tag-constant bug:** corrected `TAG_HEAP_DUMP_SEGMENT` from `0x0D` to `0x1C` across `binary_parser.rs`, `parser.rs`, and `gc_path.rs`; real-world JVM heap dumps using `HEAP_DUMP_SEGMENT` records are now parsed correctly
+- Corrected `tag_name()` mappings: `0x0D` → `CPU_SAMPLES`, `0x0E` → `CONTROL_SETTINGS`, `0x1C` → `HEAP_DUMP_SEGMENT`, `0x2C` → `HEAP_DUMP_END`
+- Preserved incoming field labels when reconstructing GC paths from `ObjectGraph` BFS parents, fixing the edge-label regression uncovered during tag-centralization work
+
 ## [0.1.1] - 2026-03-08
 
 ### Changed

@@ -50,11 +50,12 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 | **GitHub Ops** | Owns GitHub Actions, CI/CD, PR/issue/branch, and workflow investigation. | GitHub MCP tools, terminal (git, gh CLI), codebase search, workflow file read/write |
 | **Testing** | Writes and runs tests after implementation. Executes cargo check/test via terminal. | file edit (test files only), terminal (cargo check, cargo test), codebase search |
 | **Orchestration** | Routes tasks, assigns files, grants tools. Never codes. | agent dispatch, codebase search, fetch |
+| **Design Consulting** | Pre-coding design gate. Creates milestone design docs, owns architecture docs, links roadmap to implementation design. | changes, codebase, editFiles (architecture/design docs only), search, usages |
 | **Architecture Review** | Design review only. | read only |
-| **Static Analysis** | Post-test risk pass. | read + diagnostics |
+| **Static Analysis** | Post-test risk pass. | read + diagnostics, terminal (cargo clippy, cargo fmt --check, cargo check) |
 | **Security** | Security audit and remediation. Reviews code, dependencies, configs, and workflows for security risks. | read + search + codebase + changes + usages; write (editFiles) only when remediation approved |
 | **API Contract** | Contract alignment across CLI/MCP/docs. | read; write for docs/schemas when assigned |
-| **Documentation Sync** | Updates docs after successful implementation batches. | read + write for doc files only |
+| **Documentation Sync** | Impact-driven doc updater. Automatically determines which docs to update based on changed files and batch context. | read + write for doc files only |
 | **Tech PM** | Roadmap, milestones, feature planning. | read + write for `docs/roadmap.md` only |
 
 ### Routing expectations
@@ -63,11 +64,14 @@ This repository uses an **orchestrated multi-agent model** where each agent has 
 - **Build/test/lint/format execution** → **Implementation Agent** (small scope) or **Testing Agent** (broad scope)
 - **Running `cargo check` / `cargo test` / integration tests** → **Testing Agent**
 - **Running `cargo clippy`** → **Static Analysis Agent**
-- **Running `cargo fmt`** → **Implementation Agent**
+- **Running `cargo fmt --check`** (format validation) → **Static Analysis Agent**
+- **Running `cargo fmt`** (apply formatting) → **Implementation Agent**
 - **CI failures, GitHub Actions issues, workflow investigation** → **GitHub Ops Agent**
 - **PR/issue/branch state questions** → **GitHub Ops Agent**
 - **Architecture-only review** → **Architecture Review Agent**
-- **Documentation updates after code changes** → **Documentation Sync Agent**
+- **Pre-coding design gate / milestone design docs** → **Design Consulting Agent**
+- **Architecture and design doc ownership** → **Design Consulting Agent**
+- **Documentation updates after code changes** → **Documentation Sync Agent** (auto-selects impacted docs)
 - **Roadmap and milestone planning** → **Tech PM Agent**
 - **Security audit, vulnerability review, secret scanning** → **Security Agent**
 - **Approved security remediation** → **Security Agent** (review) + **Implementation Agent** (code fixes)
@@ -123,7 +127,14 @@ Once a scoped batch is approved by orchestration:
 1. Agents must stay within the declared scope and non-scope boundaries.
 2. Agents must not restart full-repo analysis unless new evidence invalidates the batch.
 3. Implementation requests must not degrade into planning when the runtime can execute.
-4. Execution order is: decomposition → ownership → tool grants → edits → tests → static analysis → consolidation.
+4. Execution order is: decomposition → **design gate** → ownership → tool grants → edits → tests → static analysis → **documentation sync** → consolidation.
+
+### Impact-driven documentation sync
+- The Documentation Sync Agent works in **impact-driven mode**. It automatically determines which docs need updating based on changed files, milestone status, validation results, and design/architecture changes.
+- Users should **not** need to manually specify every markdown file for documentation updates.
+- After every successful implementation, release, validation, or design batch, the Orchestration Agent must invoke the Documentation Sync Agent with the impact-driven handoff payload: batch name, files changed, summary, validation results, and boolean flags for release/architecture/user-facing changes.
+- The agent auto-selects impacted docs, fixes cross-doc drift, updates stale metrics/counts, and reports its decisions.
+- Stale references (e.g., outdated test counts, feature lists, status markers) are corrected automatically when the batch touches the underlying data — no manual file list needed.
 
 ### Runtime capability awareness
 - Before assigning execution, orchestration must confirm the runtime has the required capability.
@@ -146,9 +157,23 @@ Every sub-agent must return exactly these fields:
 Every batch must name its non-scope items. Agents must not expand scope because a nearby issue looks related. If scope must change, the agent stops and returns to orchestration for re-scoping.
 
 ### Execution sequencing
-- **May run in parallel:** architecture review, API review, DB review, observability review, testing gap analysis, static analysis review, security audit (read-only mode)
+- **May run in parallel:** architecture review, design consulting (read-only inspection), API review, DB review, observability review, testing gap analysis, static analysis review, security audit (read-only mode)
 - **Must be sequential:** implementation edits, shared-model changes, same-file edits, testing after edits, static analysis after testing, refactor after correctness is stable, security remediation followed by testing then static analysis
 - **Forbidden:** two writing agents on the same file; Implementation + Refactor on the same module; implementation + contract review changing the same runtime file simultaneously; security remediation + implementation on the same file without explicit ownership transfer
+
+---
+
+## Mandatory Pre-Coding Design Gate
+
+This repository uses a mandatory pre-coding design gate:
+
+1. **Roadmap work must be translated into design artifacts before implementation.** The Design Consulting Agent translates milestone goals and roadmap entries into concrete technical design documents.
+2. **Milestone design docs are required.** Every milestone or major implementation phase must have a design doc under `docs/design/` before coding begins.
+3. **Implementation must follow the linked design reference.** Each milestone entry in `docs/roadmap.md` should point to its design reference document. The Implementation Agent must use the design doc as its source of truth.
+4. **The Orchestration Agent must invoke the Design Consulting Agent** before every coding task. Coding may not begin until the Design Consulting Agent returns **READY** or **READY AFTER DOC UPDATE**.
+5. If the verdict is **BLOCKED UNTIL DESIGN COMPLETES**, implementation is halted until design work finishes.
+
+Design doc location: `docs/design/<milestone-or-feature-name>.md`
 
 ---
 

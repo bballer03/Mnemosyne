@@ -1,18 +1,8 @@
+use super::tags::*;
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Write;
 
 const HPROF_HEADER: &[u8] = b"JAVA PROFILE 1.0.2\0";
-
-const TAG_STRING_IN_UTF8: u8 = 0x01;
-const TAG_LOAD_CLASS: u8 = 0x02;
-const TAG_HEAP_DUMP: u8 = 0x0C;
-
-const SUBTAG_GC_ROOT_JAVA_FRAME: u8 = 0x03;
-const SUBTAG_GC_ROOT_THREAD_OBJ: u8 = 0x08;
-const SUBTAG_CLASS_DUMP: u8 = 0x20;
-const SUBTAG_INSTANCE_DUMP: u8 = 0x21;
-const SUBTAG_OBJ_ARRAY_DUMP: u8 = 0x22;
-const SUBTAG_PRIM_ARRAY_DUMP: u8 = 0x23;
 
 const TYPE_OBJECT: u8 = 2;
 const TYPE_INT: u8 = 10;
@@ -84,6 +74,10 @@ impl HprofBuilder {
         self.push_record(TAG_HEAP_DUMP, sub_records)
     }
 
+    pub(crate) fn add_heap_dump_segment(&mut self, sub_records: Vec<u8>) -> &mut Self {
+        self.push_record(TAG_HEAP_DUMP_SEGMENT, sub_records)
+    }
+
     pub(crate) fn build(&self) -> Vec<u8> {
         let mut buf = self.buf.clone();
         for record in &self.records {
@@ -114,7 +108,7 @@ impl HeapDumpBuilder {
         thread_serial: u32,
         stack_serial: u32,
     ) -> &mut Self {
-        self.buf.write_u8(SUBTAG_GC_ROOT_THREAD_OBJ).unwrap();
+        self.buf.write_u8(SUB_ROOT_THREAD_OBJECT).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(thread_serial).unwrap();
         self.buf.write_u32::<BigEndian>(stack_serial).unwrap();
@@ -127,7 +121,7 @@ impl HeapDumpBuilder {
         thread_serial: u32,
         frame: u32,
     ) -> &mut Self {
-        self.buf.write_u8(SUBTAG_GC_ROOT_JAVA_FRAME).unwrap();
+        self.buf.write_u8(SUB_ROOT_JAVA_FRAME).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(thread_serial).unwrap();
         self.buf.write_u32::<BigEndian>(frame).unwrap();
@@ -141,7 +135,7 @@ impl HeapDumpBuilder {
         instance_size: u32,
         instance_fields: &[(u64, u8)],
     ) -> &mut Self {
-        self.buf.write_u8(SUBTAG_CLASS_DUMP).unwrap();
+        self.buf.write_u8(SUB_CLASS_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, class_obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(0).unwrap();
         HprofBuilder::write_id(&mut self.buf, super_class_id, self.id_size);
@@ -167,7 +161,7 @@ impl HeapDumpBuilder {
         class_obj_id: u64,
         field_bytes: &[u8],
     ) -> &mut Self {
-        self.buf.write_u8(SUBTAG_INSTANCE_DUMP).unwrap();
+        self.buf.write_u8(SUB_INSTANCE_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(0).unwrap();
         HprofBuilder::write_id(&mut self.buf, class_obj_id, self.id_size);
@@ -184,7 +178,7 @@ impl HeapDumpBuilder {
         array_class_id: u64,
         elements: &[u64],
     ) -> &mut Self {
-        self.buf.write_u8(SUBTAG_OBJ_ARRAY_DUMP).unwrap();
+        self.buf.write_u8(SUB_OBJ_ARRAY_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(0).unwrap();
         self.buf
@@ -198,7 +192,7 @@ impl HeapDumpBuilder {
     }
 
     pub(crate) fn add_prim_array_dump_i32(&mut self, obj_id: u64, values: &[i32]) -> &mut Self {
-        self.buf.write_u8(SUBTAG_PRIM_ARRAY_DUMP).unwrap();
+        self.buf.write_u8(SUB_PRIM_ARRAY_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
         self.buf.write_u32::<BigEndian>(0).unwrap();
         self.buf
@@ -270,15 +264,54 @@ pub fn build_graph_fixture() -> Vec<u8> {
     builder.build()
 }
 
+pub fn build_segment_fixture() -> Vec<u8> {
+    let mut builder = HprofBuilder::new(8);
+    builder
+        .add_string(1, "java/lang/Object")
+        .add_string(2, "com/example/Node")
+        .add_string(3, "next")
+        .add_string(4, "value")
+        .add_string(5, "[Lcom/example/Node;")
+        .add_load_class(1, 0x100, 0, 1)
+        .add_load_class(2, 0x200, 0, 2)
+        .add_load_class(3, 0x300, 0, 5);
+
+    let mut heap = HeapDumpBuilder::new(8);
+    heap.add_gc_root_thread_obj(0x1000, 1, 0)
+        .add_class_dump(0x100, 0, 0, &[])
+        .add_class_dump(0x200, 0x100, 16, &[(3, TYPE_OBJECT), (4, TYPE_INT)])
+        .add_instance_dump(0x2001, 0x200, &build_node_instance_bytes(8, 0x2002, 42))
+        .add_instance_dump(0x2002, 0x200, &build_node_instance_bytes(8, 0x2003, 99))
+        .add_instance_dump(0x2003, 0x200, &build_node_instance_bytes(8, 0, 7))
+        .add_obj_array_dump(0x3000, 0x300, &[0x2001, 0x2002])
+        .add_prim_array_dump_i32(0x4000, &[10, 20, 30]);
+
+    builder.add_heap_dump_segment(heap.build());
+    builder.build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hprof::parse_hprof;
 
     #[test]
     fn test_simple_fixture_is_valid_hprof() {
         let bytes = build_simple_fixture();
         assert!(bytes.starts_with(b"JAVA PROFILE 1.0.2\0"));
         assert!(bytes.len() > 100);
+    }
+
+    #[test]
+    fn test_parse_heap_dump_segment() {
+        let bytes = build_segment_fixture();
+        let graph = parse_hprof(&bytes).expect("segment fixture should parse");
+
+        assert!(!graph.objects.is_empty());
+
+        let node_class = graph.classes.get(&0x200).expect("Node class should exist");
+        assert_eq!(node_class.name.as_deref(), Some("com/example/Node"));
+        assert_eq!(node_class.instance_fields.len(), 2);
     }
 
     #[test]

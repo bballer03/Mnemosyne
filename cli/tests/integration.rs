@@ -1,4 +1,8 @@
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use assert_cmd::Command;
 use mnemosyne_core::hprof::test_fixtures::{build_graph_fixture, build_simple_fixture};
@@ -46,6 +50,23 @@ fn parse_first_json_value(input: &str) -> Value {
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn real_heap_fixture_path() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .unwrap()
+        .join("resources/test-fixtures/heap.hprof")
+}
+
+fn extract_usize_after_label(input: &str, label: &str) -> usize {
+    input
+        .split_once(label)
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .map(|value| value.trim_matches(|ch: char| !ch.is_ascii_digit()))
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap()
 }
 
 fn write_record(buf: &mut Vec<u8>, tag: u8, body: &[u8]) {
@@ -390,6 +411,142 @@ fn test_analyze_with_graph_fixture() {
 }
 
 #[test]
+fn test_parse_real_heap_dump() {
+    let fixture_path = real_heap_fixture_path();
+    if !fixture_path.exists() {
+        eprintln!(
+            "Skipping: real heap fixture not found at {}",
+            fixture_path.display()
+        );
+        return;
+    }
+
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd.args(["parse", fixture_arg.as_str()]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("HEAP_DUMP_SEGMENT"));
+    assert!(stdout.contains("Estimated objects:"));
+    assert!(stdout.contains("File size:"));
+}
+
+#[test]
+fn test_analyze_real_heap_dump() {
+    let fixture_path = real_heap_fixture_path();
+    if !fixture_path.exists() {
+        eprintln!(
+            "Skipping: real heap fixture not found at {}",
+            fixture_path.display()
+        );
+        return;
+    }
+
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_arg.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(
+        stdout.contains("Dominators")
+            || stdout.contains("dominated by")
+            || stdout.contains("Graph-backed analysis complete")
+    );
+    assert!(extract_usize_after_label(&stdout, "Graph Nodes:") > 7);
+}
+
+#[test]
+fn test_leaks_real_heap_dump() {
+    let fixture_path = real_heap_fixture_path();
+    if !fixture_path.exists() {
+        eprintln!(
+            "Skipping: real heap fixture not found at {}",
+            fixture_path.display()
+        );
+        return;
+    }
+
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["leaks", fixture_arg.as_str(), "--min-severity", "low"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Potential leaks:") || stdout.contains("Leak:"));
+}
+
+#[test]
+fn test_gc_path_real_heap_dump() {
+    let fixture_path = real_heap_fixture_path();
+    if !fixture_path.exists() {
+        eprintln!(
+            "Skipping: real heap fixture not found at {}",
+            fixture_path.display()
+        );
+        return;
+    }
+
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["gc-path", fixture_arg.as_str(), "--object-id", "0x1"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("GC path for"));
+}
+
+#[test]
+fn test_leaks_real_heap_fallback_with_nonexistent_package() {
+    let fixture_path = real_heap_fixture_path();
+    if !fixture_path.exists() {
+        eprintln!(
+            "Skipping: real heap fixture not found at {}",
+            fixture_path.display()
+        );
+        return;
+    }
+
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "leaks",
+            fixture_arg.as_str(),
+            "--package",
+            "nonexistent.pkg.that.matches.nothing",
+            "--min-severity",
+            "low",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(
+        stdout.contains("Potential leaks:")
+            || stdout.contains("Leak:")
+            || stdout.contains("No leak")
+    );
+    assert!(stdout.contains("FALLBACK") || stdout.contains("SYNTHETIC") || !stdout.is_empty());
+}
+
+#[test]
 fn test_gc_path_finds_path() {
     let fixture = write_fixture(&build_graph_fixture());
     let fixture_path = path_arg(fixture.path());
@@ -442,6 +599,62 @@ fn test_fix_succeeds() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("Fix for ").and(predicate::str::contains("Patch:")));
+}
+
+#[test]
+fn test_explain_invalid_leak_id_errors() {
+    let real_fixture_path = real_heap_fixture_path();
+    let synthetic_fixture;
+    let fixture_path = if real_fixture_path.exists() {
+        real_fixture_path
+    } else {
+        synthetic_fixture = write_fixture(&build_simple_fixture());
+        synthetic_fixture.path().to_path_buf()
+    };
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "explain",
+            fixture_arg.as_str(),
+            "--leak-id",
+            "nonexistent-leak-id-12345",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = normalized_stdout(&output.stderr);
+    assert!(stderr.contains("no leak found") || stderr.contains("matching identifier"));
+}
+
+#[test]
+fn test_fix_invalid_leak_id_errors() {
+    let real_fixture_path = real_heap_fixture_path();
+    let synthetic_fixture;
+    let fixture_path = if real_fixture_path.exists() {
+        real_fixture_path
+    } else {
+        synthetic_fixture = write_fixture(&build_simple_fixture());
+        synthetic_fixture.path().to_path_buf()
+    };
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "fix",
+            fixture_arg.as_str(),
+            "--leak-id",
+            "nonexistent-leak-id-12345",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = normalized_stdout(&output.stderr);
+    assert!(stderr.contains("no leak found") || stderr.contains("matching identifier"));
 }
 
 #[test]

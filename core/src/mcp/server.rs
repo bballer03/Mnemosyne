@@ -1,7 +1,7 @@
 use crate::{
     analysis::{
-        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights, AnalyzeRequest,
-        LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights, validate_leak_id,
+        AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
     errors::{CoreError, CoreResult},
@@ -9,6 +9,7 @@ use crate::{
     graph::{find_gc_path, GcPathRequest},
     hprof::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
+    HistogramGroupBy,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -224,8 +225,12 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 config: config.clone(),
                 leak_options,
                 enable_ai: true,
+                histogram_group_by: HistogramGroupBy::Class,
             })
             .await?;
+            if let Some(ref target) = params.leak_id {
+                validate_leak_id(&analysis.leaks, target)?;
+            }
             let focused = focus_leaks(&analysis.leaks, params.leak_id.as_deref());
             let ai = generate_ai_insights(&analysis.summary, &focused, &config.ai);
             Ok(serde_json::to_value(ai)?)

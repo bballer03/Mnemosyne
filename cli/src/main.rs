@@ -17,12 +17,13 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_insights, AnalyzeRequest,
-        LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
+        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_insights,
+        validate_leak_id, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+        ProvenanceKind,
     },
     config::{AppConfig, OutputFormat},
     fix::{propose_fix, FixRequest, FixStyle},
-    graph::{find_gc_path, GcPathRequest},
+    graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
     hprof::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
@@ -93,6 +94,8 @@ struct AnalyzeArgs {
     heap: PathBuf,
     #[arg(long, value_enum, default_value_t = OutputFormatArg::Text)]
     format: OutputFormatArg,
+    #[arg(long = "group-by", value_enum, default_value_t = GroupByArg::Class)]
+    group_by: GroupByArg,
     #[arg(short = 'o', long = "output-file", value_name = "FILE")]
     output: Option<PathBuf>,
     #[arg(long)]
@@ -197,6 +200,14 @@ enum LeakKindArg {
     Listener,
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum GroupByArg {
+    Class,
+    Package,
+    #[value(name = "classloader")]
+    Classloader,
+}
+
 impl From<SeverityArg> for LeakSeverity {
     fn from(value: SeverityArg) -> Self {
         match value {
@@ -241,6 +252,16 @@ impl From<LeakKindArg> for LeakKind {
             LeakKindArg::ClassLoader => LeakKind::ClassLoader,
             LeakKindArg::Collection => LeakKind::Collection,
             LeakKindArg::Listener => LeakKind::Listener,
+        }
+    }
+}
+
+impl From<GroupByArg> for HistogramGroupBy {
+    fn from(value: GroupByArg) -> Self {
+        match value {
+            GroupByArg::Class => HistogramGroupBy::Class,
+            GroupByArg::Package => HistogramGroupBy::Package,
+            GroupByArg::Classloader => HistogramGroupBy::ClassLoader,
         }
     }
 }
@@ -383,14 +404,16 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         config: config.clone(),
         leak_options,
         enable_ai: use_ai,
+        histogram_group_by: args.group_by.into(),
     })
     .await
     .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))?;
     finish_spinner(&pb, "Analysis complete.");
 
+    let output_format = config.output.clone();
     let report = render_report(&ReportRequest {
-        analysis: response,
-        format: config.output,
+        analysis: response.clone(),
+        format: output_format.clone(),
     })?;
 
     if let Some(path) = args.output {
@@ -406,6 +429,13 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         );
     } else {
         println!("{}", report.contents);
+        if matches!(output_format, OutputFormat::Text) {
+            if let Some(histogram) = &response.histogram {
+                println!();
+                println!("{}", bold_label("Histogram:"));
+                println!("{}", build_histogram_table(histogram));
+            }
+        }
     }
     Ok(())
 }
@@ -460,6 +490,13 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
                 before_mb,
                 after_mb
             );
+        }
+    }
+
+    if let Some(class_diff) = &diff.class_diff {
+        if !class_diff.is_empty() {
+            println!("  {}", bold_label("Class-level retained deltas:"));
+            println!("{}", build_class_diff_table(class_diff));
         }
     }
     Ok(())
@@ -561,6 +598,7 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
         config: config.clone(),
         leak_options,
         enable_ai: true,
+        histogram_group_by: HistogramGroupBy::Class,
     })
     .await
     .with_context(|| {
@@ -569,6 +607,10 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
             args.heap.display()
         )
     })?;
+
+    if let Some(ref target) = args.leak_id {
+        validate_leak_id(&response.leaks, target)?;
+    }
 
     let targeted = focus_leaks(&response.leaks, args.leak_id.as_deref());
     let ai = generate_ai_insights(&response.summary, &targeted, &config.ai);
@@ -963,6 +1005,54 @@ fn build_leaks_table(leaks: &[mnemosyne_core::analysis::LeakInsight]) -> LeaksTa
     (table, truncated_leak_ids, truncated_classes)
 }
 
+fn build_histogram_table(histogram: &mnemosyne_core::HistogramResult) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Group", CellAlignment::Left),
+        header_cell("Instances", CellAlignment::Right),
+        header_cell("Shallow", CellAlignment::Right),
+        header_cell("Retained", CellAlignment::Right),
+    ]);
+
+    for entry in histogram.entries.iter().take(10) {
+        table.add_row(vec![
+            Cell::new(entry.key.as_str()).set_alignment(CellAlignment::Left),
+            right_cell(entry.instance_count),
+            right_cell(format_megabytes(entry.shallow_size)),
+            right_cell(format_megabytes(entry.retained_size)),
+        ]);
+    }
+
+    table
+}
+
+fn build_class_diff_table(class_diff: &[mnemosyne_core::ClassLevelDelta]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Class", CellAlignment::Left),
+        header_cell("Instances", CellAlignment::Right),
+        header_cell("Shallow", CellAlignment::Right),
+        header_cell("Retained Delta", CellAlignment::Right),
+    ]);
+
+    for entry in class_diff.iter().take(10) {
+        let instance_delta = entry.after_instances as i64 - entry.before_instances as i64;
+        let retained_delta = entry.after_retained_bytes as i64 - entry.before_retained_bytes as i64;
+        table.add_row(vec![
+            Cell::new(entry.class_name.as_str()).set_alignment(CellAlignment::Left),
+            right_cell(format_signed_count(instance_delta)),
+            right_cell(format!(
+                "{:.2} -> {:.2} MB",
+                entry.before_shallow_bytes as f64 / (1024.0 * 1024.0),
+                entry.after_shallow_bytes as f64 / (1024.0 * 1024.0)
+            )),
+            right_cell(format_signed_megabytes(retained_delta)),
+        ]);
+    }
+
+    table
+}
+
 fn base_table() -> Table {
     let mut table = Table::new();
     table.load_preset(ASCII_BORDERS_ONLY_CONDENSED);
@@ -1061,4 +1151,12 @@ fn styled_delta_count(delta: i64) -> StyledObject<String> {
         std::cmp::Ordering::Less => style(text).green(),
         std::cmp::Ordering::Equal => style(text),
     }
+}
+
+fn format_signed_megabytes(delta_bytes: i64) -> String {
+    format!("{:+.2} MB", delta_bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn format_signed_count(delta: i64) -> String {
+    format!("{delta:+}")
 }

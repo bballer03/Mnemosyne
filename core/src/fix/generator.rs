@@ -1,10 +1,11 @@
 use crate::{
     analysis::{
-        analyze_heap, focus_leaks, AnalyzeRequest, LeakInsight, LeakSeverity, ProvenanceKind,
-        ProvenanceMarker,
+        analyze_heap, focus_leaks, validate_leak_id, AnalyzeRequest, LeakInsight, LeakSeverity,
+        ProvenanceKind, ProvenanceMarker,
     },
     config::AppConfig,
     errors::CoreResult,
+    HistogramGroupBy,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -56,8 +57,13 @@ pub async fn propose_fix(request: FixRequest) -> CoreResult<FixResponse> {
         config: config.clone(),
         leak_options: crate::analysis::LeakDetectionOptions::new(LeakSeverity::Low),
         enable_ai: true,
+        histogram_group_by: HistogramGroupBy::Class,
     })
     .await?;
+
+    if let Some(ref target) = request.leak_id {
+        validate_leak_id(&analysis.leaks, target)?;
+    }
 
     let leaks = focus_leaks(&analysis.leaks, request.leak_id.as_deref());
     let suggestions = leaks
@@ -173,6 +179,8 @@ mod tests {
             leak_kind: LeakKind::Cache,
             severity: LeakSeverity::High,
             retained_size_bytes: 10,
+            shallow_size_bytes: None,
+            suspect_score: None,
             instances: 2,
             description: String::new(),
             provenance: Vec::new(),

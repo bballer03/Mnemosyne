@@ -25,4 +25,20 @@ byteorder.workspace = true
 petgraph.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 tempfile.workspace = true
+
+[[bench]]
+name = "parser_bench"
+harness = false
+required-features = ["test-fixtures"]
+
+[[bench]]
+name = "graph_bench"
+harness = false
+required-features = ["test-fixtures"]
+
+[[bench]]
+name = "dominator_bench"
+harness = false
+required-features = ["test-fixtures"]

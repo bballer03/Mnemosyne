@@ -17,7 +17,7 @@ clap.workspace = true
 comfy-table = "7.1"
 console.workspace = true
 indicatif.workspace = true
-mnemosyne-core = { path = "../core", version = "0.1.1" }
+mnemosyne-core = { path = "../core", version = "0.2.0" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
@@ -30,4 +30,4 @@ toml.workspace = true
 assert_cmd = "2"
 predicates = "3"
 tempfile.workspace = true
-mnemosyne-core = { path = "../core", version = "0.1.1", features = ["test-fixtures"] }
+mnemosyne-core = { path = "../core", version = "0.2.0", features = ["test-fixtures"] }

@@ -108,6 +108,17 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
                 "retained_mb",
                 format!("{:.2}", leak.retained_size_bytes as f64 / (1024.0 * 1024.0)),
             );
+            if let Some(shallow_size) = leak.shallow_size_bytes {
+                push_kv(
+                    &mut doc,
+                    4,
+                    "shallow_mb",
+                    format!("{:.2}", shallow_size as f64 / (1024.0 * 1024.0)),
+                );
+            }
+            if let Some(score) = leak.suspect_score {
+                push_kv(&mut doc, 4, "suspect_score", format!("{score:.2}"));
+            }
             push_kv(&mut doc, 4, "instances", leak.instances);
             push_kv(&mut doc, 4, "description", &leak.description);
             for (pidx, marker) in leak.provenance.iter().enumerate() {
@@ -119,6 +130,42 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
                     format!("{}: {}", provenance_label(marker.kind), detail),
                 );
             }
+        }
+    }
+
+    if let Some(histogram) = &analysis.histogram {
+        doc.push_str("section histogram\n");
+        push_kv(&mut doc, 2, "group_by", format!("{:?}", histogram.group_by));
+        push_kv(&mut doc, 2, "total_instances", histogram.total_instances);
+        push_kv(
+            &mut doc,
+            2,
+            "total_shallow_size",
+            histogram.total_shallow_size,
+        );
+        for (idx, entry) in histogram.entries.iter().take(10).enumerate() {
+            doc.push_str(&format!("  entry#{idx}\n"));
+            push_kv(&mut doc, 4, "key", &entry.key);
+            push_kv(&mut doc, 4, "instance_count", entry.instance_count);
+            push_kv(&mut doc, 4, "shallow_size", entry.shallow_size);
+            push_kv(&mut doc, 4, "retained_size", entry.retained_size);
+        }
+    }
+
+    if let Some(unreachable) = &analysis.unreachable {
+        doc.push_str("section unreachable\n");
+        push_kv(&mut doc, 2, "total_count", unreachable.total_count);
+        push_kv(
+            &mut doc,
+            2,
+            "total_shallow_size",
+            unreachable.total_shallow_size,
+        );
+        for (idx, entry) in unreachable.by_class.iter().take(10).enumerate() {
+            doc.push_str(&format!("  class#{idx}\n"));
+            push_kv(&mut doc, 4, "class_name", &entry.class_name);
+            push_kv(&mut doc, 4, "count", entry.count);
+            push_kv(&mut doc, 4, "shallow_size", entry.shallow_size);
         }
     }
 
@@ -224,6 +271,31 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(histogram) = &analysis.histogram {
+        body.push_str("\nHistogram\n---------\n");
+        body.push_str(&format!("Grouped by {:?}\n", histogram.group_by));
+        for entry in histogram.entries.iter().take(10) {
+            body.push_str(&format!(
+                "{}: {} instances, shallow {} bytes, retained {} bytes\n",
+                entry.key, entry.instance_count, entry.shallow_size, entry.retained_size
+            ));
+        }
+    }
+
+    if let Some(unreachable) = &analysis.unreachable {
+        body.push_str("\nUnreachable Objects\n-------------------\n");
+        body.push_str(&format!(
+            "Total unreachable: {} objects / {} bytes\n",
+            unreachable.total_count, unreachable.total_shallow_size
+        ));
+        for entry in unreachable.by_class.iter().take(10) {
+            body.push_str(&format!(
+                "{}: {} objects, {} bytes\n",
+                entry.class_name, entry.count, entry.shallow_size
+            ));
+        }
+    }
+
     if let Some(ai) = &analysis.ai {
         body.push_str("\nAI Insights\n-----------\n");
         body.push_str(&format!(
@@ -297,6 +369,31 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
             doc.push_str(&format!(
                 "- `{}` immediately dominated by `{}` ({} descendants)\n",
                 dom.name, parent, dom.dominates
+            ));
+        }
+    }
+
+    if let Some(histogram) = &analysis.histogram {
+        doc.push_str("\n## Histogram\n");
+        doc.push_str(&format!("- Grouped by `{:?}`\n", histogram.group_by));
+        for entry in histogram.entries.iter().take(10) {
+            doc.push_str(&format!(
+                "- `{}`: {} instances, shallow {} bytes, retained {} bytes\n",
+                entry.key, entry.instance_count, entry.shallow_size, entry.retained_size
+            ));
+        }
+    }
+
+    if let Some(unreachable) = &analysis.unreachable {
+        doc.push_str("\n## Unreachable Objects\n");
+        doc.push_str(&format!(
+            "- Total unreachable: {} objects / {} bytes\n",
+            unreachable.total_count, unreachable.total_shallow_size
+        ));
+        for entry in unreachable.by_class.iter().take(10) {
+            doc.push_str(&format!(
+                "- `{}`: {} objects, {} bytes\n",
+                entry.class_name, entry.count, entry.shallow_size
             ));
         }
     }
@@ -404,6 +501,50 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         format!("<section class=\"provenance\"><h2>Provenance</h2><ul>{items}</ul></section>")
     };
 
+    let histogram_block = analysis.histogram.as_ref().map(|histogram| {
+        let items: String = histogram
+            .entries
+            .iter()
+            .take(10)
+            .map(|entry| {
+                format!(
+                    "<li><strong>{}</strong>: {} instances, shallow {} bytes, retained {} bytes</li>",
+                    escape_html(&entry.key),
+                    entry.instance_count,
+                    entry.shallow_size,
+                    entry.retained_size
+                )
+            })
+            .collect();
+        format!(
+            "<section><h2>Histogram</h2><p><strong>Grouped by:</strong> {:?}</p><ul>{}</ul></section>",
+            histogram.group_by,
+            items
+        )
+    }).unwrap_or_default();
+
+    let unreachable_block = analysis.unreachable.as_ref().map(|unreachable| {
+        let items: String = unreachable
+            .by_class
+            .iter()
+            .take(10)
+            .map(|entry| {
+                format!(
+                    "<li><strong>{}</strong>: {} objects, {} bytes</li>",
+                    escape_html(&entry.class_name),
+                    entry.count,
+                    entry.shallow_size
+                )
+            })
+            .collect();
+        format!(
+            "<section><h2>Unreachable Objects</h2><p><strong>Total:</strong> {} objects / {} bytes</p><ul>{}</ul></section>",
+            unreachable.total_count,
+            unreachable.total_shallow_size,
+            items
+        )
+    }).unwrap_or_default();
+
     format!(
         r#"<section>
   <h1>Mnemosyne Analysis</h1>
@@ -413,6 +554,8 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     <p><strong>Leak Count:</strong> {leaks}</p>
     <p><strong>Graph Nodes:</strong> {nodes}</p>
     <div><strong>Leaks:</strong> {leak_list}</div>
+            {histogram_block}
+            {unreachable_block}
       {ai_block}
             {provenance_block}
 </section>"#,
@@ -422,6 +565,8 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         leaks = analysis.leaks.len(),
         nodes = analysis.graph.node_count,
         leak_list = leak_list,
+        histogram_block = histogram_block,
+        unreachable_block = unreachable_block,
         provenance_block = provenance_block
     )
 }
@@ -479,6 +624,8 @@ mod tests {
                 leak_kind: LeakKind::Cache,
                 severity: LeakSeverity::High,
                 retained_size_bytes: 512,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances: 5,
                 description: "test leak".into(),
                 provenance: vec![ProvenanceMarker::new(
@@ -490,6 +637,8 @@ mod tests {
             elapsed: Duration::from_millis(42),
             graph: GraphMetrics::default(),
             ai: None,
+            histogram: None,
+            unreachable: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response provenance",
@@ -535,6 +684,8 @@ mod tests {
                 leak_kind: LeakKind::Cache,
                 severity: LeakSeverity::High,
                 retained_size_bytes: 512,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances: 5,
                 description: "test leak".into(),
                 provenance: vec![ProvenanceMarker::new(
@@ -546,6 +697,8 @@ mod tests {
             elapsed: Duration::from_millis(42),
             graph: GraphMetrics::default(),
             ai: None,
+            histogram: None,
+            unreachable: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response detail",
@@ -593,6 +746,8 @@ mod tests {
                 leak_kind: LeakKind::Cache,
                 severity: LeakSeverity::High,
                 retained_size_bytes: 512,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances: 5,
                 description: "test leak".into(),
                 provenance: vec![ProvenanceMarker::new(
@@ -604,6 +759,8 @@ mod tests {
             elapsed: Duration::from_millis(42),
             graph: GraphMetrics::default(),
             ai: None,
+            histogram: None,
+            unreachable: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "html response detail",

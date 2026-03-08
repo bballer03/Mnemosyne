@@ -3,12 +3,13 @@ use crate::{
     config::{AnalysisConfig, AppConfig},
     errors::{CoreError, CoreResult},
     graph::{
-        build_dominator_tree, build_graph_metrics_from_dominator, summarize_graph, DominatorTree,
-        GraphMetrics,
+        build_dominator_tree, build_graph_metrics_from_dominator, build_histogram,
+        find_unreachable_objects, summarize_graph, DominatorTree, GraphMetrics, HistogramGroupBy,
+        HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
     hprof::{
-        parse_heap, parse_hprof_file, ClassDelta, ClassStat, HeapDiff, HeapParseJob, HeapSummary,
-        ObjectGraph,
+        parse_heap, parse_hprof_file, ClassDelta, ClassLevelDelta, ClassStat, HeapDiff,
+        HeapParseJob, HeapSummary, ObjectGraph, ObjectId,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,8 @@ pub struct LeakDetectionOptions {
     pub package_filters: Vec<String>,
     /// Explicit leak kinds to emit. Empty = auto-detect a single kind.
     pub leak_types: Vec<LeakKind>,
+    /// Minimum retained/shallow ratio to flag accumulation points.
+    pub accumulation_threshold: f64,
 }
 
 /// High-level request for the multi-stage `analyze` workflow.
@@ -39,6 +42,7 @@ pub struct AnalyzeRequest {
     pub config: AppConfig,
     pub leak_options: LeakDetectionOptions,
     pub enable_ai: bool,
+    pub histogram_group_by: HistogramGroupBy,
 }
 
 /// Explicit provenance metadata for synthetic, partial, fallback, or placeholder output.
@@ -90,9 +94,26 @@ pub struct AnalyzeResponse {
     pub elapsed: Duration,
     pub graph: GraphMetrics,
     pub ai: Option<AiInsights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram: Option<HistogramResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreachable: Option<UnreachableSet>,
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeakSuspect {
+    pub object_id: ObjectId,
+    pub class_name: String,
+    pub shallow_size: u64,
+    pub retained_size: u64,
+    pub ratio: f64,
+    pub is_accumulation_point: bool,
+    pub dominated_count: u64,
+    pub reference_chain: Vec<String>,
+    pub score: f64,
 }
 
 /// Machine- and human-readable leak record.
@@ -103,6 +124,10 @@ pub struct LeakInsight {
     pub leak_kind: LeakKind,
     pub severity: LeakSeverity,
     pub retained_size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shallow_size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspect_score: Option<f64>,
     pub instances: u64,
     pub description: String,
     /// Provenance markers for this individual leak (e.g. synthetic / fallback).
@@ -185,21 +210,36 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     // Attempt graph-backed analysis
     let dominator_result = try_build_dominator(&request.heap_path);
 
-    let (graph, leaks, provenance) = if let Some((ref obj_graph, ref dom)) = dominator_result {
-        let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
-        let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
-        // If graph-backed produced no leaks (e.g. all filtered), fall back
-        if graph_leaks.is_empty() {
-            let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
-            (graph_metrics, fallback_leaks, fallback_provenance())
+    let (graph, leaks, histogram, unreachable, provenance) =
+        if let Some((ref obj_graph, ref dom)) = dominator_result {
+            let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+            let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+            let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+            let unreachable = Some(find_unreachable_objects(obj_graph));
+            // If graph-backed produced no leaks (e.g. all filtered), fall back
+            if graph_leaks.is_empty() {
+                let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
+                (
+                    graph_metrics,
+                    fallback_leaks,
+                    histogram,
+                    unreachable,
+                    fallback_provenance(),
+                )
+            } else {
+                (
+                    graph_metrics,
+                    graph_leaks,
+                    histogram,
+                    unreachable,
+                    Vec::new(),
+                )
+            }
         } else {
-            (graph_metrics, graph_leaks, Vec::new())
-        }
-    } else {
-        let graph = summarize_graph(&summary);
-        let leaks = synthesize_leaks(&summary, &request.leak_options);
-        (graph, leaks, heuristic_provenance())
-    };
+            let graph = summarize_graph(&summary);
+            let leaks = synthesize_leaks(&summary, &request.leak_options);
+            (graph, leaks, None, None, heuristic_provenance())
+        };
 
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
@@ -225,6 +265,8 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         elapsed: start.elapsed(),
         graph,
         ai,
+        histogram,
+        unreachable,
         provenance,
     })
 }
@@ -247,7 +289,22 @@ pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapD
     let before_summary = parse_heap(&before_job)?;
     let after_summary = parse_heap(&after_job)?;
 
-    Ok(build_heap_diff(before_summary, after_summary))
+    let mut diff = build_heap_diff(before_summary, after_summary);
+
+    let before_graph = try_build_dominator(before_path);
+    let after_graph = try_build_dominator(after_path);
+    if let (Some((before_graph, before_dom)), Some((after_graph, after_dom))) =
+        (before_graph, after_graph)
+    {
+        diff.class_diff = Some(compute_class_level_diff(
+            &before_graph,
+            &before_dom,
+            &after_graph,
+            &after_dom,
+        ));
+    }
+
+    Ok(diff)
 }
 
 /// Kick off leak detection without the rest of the analysis pipeline.
@@ -288,6 +345,7 @@ impl From<&AnalysisConfig> for LeakDetectionOptions {
         let mut options = LeakDetectionOptions::new(value.min_severity);
         options.package_filters = value.packages.clone();
         options.leak_types = value.leak_types.clone();
+        options.accumulation_threshold = value.accumulation_threshold;
         options
     }
 }
@@ -310,6 +368,7 @@ impl LeakDetectionOptions {
             min_severity,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         }
     }
 }
@@ -341,25 +400,25 @@ fn graph_backed_leaks(
     graph: &ObjectGraph,
     options: &LeakDetectionOptions,
 ) -> Vec<LeakInsight> {
-    let top = dom.top_retained(20);
-    let mut leaks = Vec::new();
+    build_leak_suspects(dom, graph, options)
+        .into_iter()
+        .map(|suspect| leak_insight_from_suspect(&suspect))
+        .collect()
+}
 
-    for &(obj_id, retained) in &top {
+fn build_leak_suspects(
+    dom: &DominatorTree,
+    graph: &ObjectGraph,
+    options: &LeakDetectionOptions,
+) -> Vec<LeakSuspect> {
+    let mut suspects = Vec::new();
+
+    for (&obj_id, obj) in &graph.objects {
         let class_name = graph
-            .objects
-            .get(&obj_id)
-            .and_then(|obj| graph.class_name(obj.class_id))
+            .class_name(obj.class_id)
             .unwrap_or("<unknown>")
             .to_string();
-
-        // Apply package filters
-        if !options.package_filters.is_empty()
-            && class_name.contains('.')
-            && !options
-                .package_filters
-                .iter()
-                .any(|pkg| class_name.starts_with(pkg))
-        {
+        if !matches_package_filters(&class_name, &options.package_filters) {
             continue;
         }
 
@@ -368,34 +427,137 @@ fn graph_backed_leaks(
             continue;
         }
 
-        let severity = severity_from_size(retained);
+        let retained_size = dom.retained_size(obj_id);
+        let shallow_size = u64::from(obj.shallow_size);
+        let ratio = retained_size as f64 / shallow_size.max(1) as f64;
+        let severity = severity_from_size(retained_size);
         if severity < options.min_severity {
             continue;
         }
 
-        let instances = dom.dominated_by(obj_id).len() as u64 + 1;
-        let leak_id = make_leak_id(&class_name, leak_kind);
+        let dominated_count = dominated_subtree_count(dom, obj_id);
+        let score = retained_size as f64 * (ratio + 1.0_f64).log2();
 
-        leaks.push(LeakInsight {
-            id: leak_id,
-            class_name: class_name.clone(),
-            leak_kind,
-            severity,
-            retained_size_bytes: retained,
-            instances,
-            description: format!(
-                "{} retains {} bytes across {} dominated objects (graph-backed analysis)",
-                class_name, retained, instances
-            ),
-            provenance: Vec::new(), // Real data — no provenance markers needed
+        suspects.push(LeakSuspect {
+            object_id: obj_id,
+            class_name,
+            shallow_size,
+            retained_size,
+            ratio,
+            is_accumulation_point: ratio > options.accumulation_threshold && dominated_count > 1,
+            dominated_count,
+            reference_chain: build_reference_chain(dom, graph, obj_id),
+            score,
         });
-
-        if leaks.len() >= 10 {
-            break;
-        }
     }
 
-    leaks
+    suspects.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(cmp::Ordering::Equal)
+            .then_with(|| b.retained_size.cmp(&a.retained_size))
+            .then_with(|| a.class_name.cmp(&b.class_name))
+    });
+    suspects.truncate(10);
+    suspects
+}
+
+fn leak_insight_from_suspect(suspect: &LeakSuspect) -> LeakInsight {
+    let leak_kind = infer_kind_from_class_name(&suspect.class_name);
+    let accumulation_note = if suspect.is_accumulation_point {
+        " accumulation point"
+    } else {
+        ""
+    };
+    let reference_chain = if suspect.reference_chain.is_empty() {
+        String::from("reference chain unavailable")
+    } else {
+        suspect.reference_chain.join(" -> ")
+    };
+
+    LeakInsight {
+        id: make_leak_id(&suspect.class_name, leak_kind),
+        class_name: suspect.class_name.clone(),
+        leak_kind,
+        severity: severity_from_size(suspect.retained_size),
+        retained_size_bytes: suspect.retained_size,
+        shallow_size_bytes: Some(suspect.shallow_size),
+        suspect_score: Some(suspect.score),
+        instances: suspect.dominated_count + 1,
+        description: format!(
+            "{} retains {} bytes with shallow size {} (ratio {:.2}, score {:.2}, {} dominated objects,{}). Chain: {}",
+            suspect.class_name,
+            suspect.retained_size,
+            suspect.shallow_size,
+            suspect.ratio,
+            suspect.score,
+            suspect.dominated_count,
+            accumulation_note,
+            reference_chain
+        ),
+        provenance: Vec::new(),
+    }
+}
+
+fn matches_package_filters(class_name: &str, package_filters: &[String]) -> bool {
+    if package_filters.is_empty() {
+        return true;
+    }
+
+    if class_name.contains('.') || class_name.contains('/') {
+        return package_filters
+            .iter()
+            .any(|pkg| class_name.starts_with(pkg));
+    }
+
+    true
+}
+
+fn dominated_subtree_count(dom: &DominatorTree, root_id: ObjectId) -> u64 {
+    let mut count = 0_u64;
+    let mut stack = dom.dominated_by(root_id).to_vec();
+
+    while let Some(obj_id) = stack.pop() {
+        count += 1;
+        stack.extend_from_slice(dom.dominated_by(obj_id));
+    }
+
+    count
+}
+
+fn build_reference_chain(
+    dom: &DominatorTree,
+    graph: &ObjectGraph,
+    obj_id: ObjectId,
+) -> Vec<String> {
+    let mut chain = vec![class_name_for_object(graph, obj_id)];
+    let mut current = obj_id;
+    let mut ancestors = 0_usize;
+
+    while ancestors < 3 {
+        let Some(parent_id) = dom.immediate_dominator(current) else {
+            break;
+        };
+        if parent_id == VIRTUAL_ROOT_ID {
+            chain.push(String::from("GC Root"));
+            break;
+        }
+        chain.push(class_name_for_object(graph, parent_id));
+        current = parent_id;
+        ancestors += 1;
+    }
+
+    chain.reverse();
+    chain
+}
+
+fn class_name_for_object(graph: &ObjectGraph, obj_id: ObjectId) -> String {
+    graph
+        .objects
+        .get(&obj_id)
+        .and_then(|obj| graph.class_name(obj.class_id))
+        .unwrap_or("<unknown>")
+        .to_string()
 }
 
 fn synthesize_leaks(summary: &HeapSummary, options: &LeakDetectionOptions) -> Vec<LeakInsight> {
@@ -502,6 +664,8 @@ fn synthesize_synthetic_leaks(
                 leak_kind,
                 severity,
                 retained_size_bytes,
+                shallow_size_bytes: None,
+                suspect_score: None,
                 instances,
                 description: description.clone(),
                 provenance: synthetic_leak_provenance(),
@@ -545,6 +709,8 @@ fn build_class_leak(
         leak_kind,
         severity,
         retained_size_bytes: class.total_size_bytes,
+        shallow_size_bytes: None,
+        suspect_score: None,
         instances: cmp::max(class.instances, 1),
         description: describe_class_leak(summary, class),
         provenance: Vec::new(),
@@ -716,7 +882,95 @@ fn build_heap_diff(before: HeapSummary, after: HeapSummary) -> HeapDiff {
         delta_bytes: after.total_size_bytes as i64 - before.total_size_bytes as i64,
         delta_objects: after.total_objects as i64 - before.total_objects as i64,
         changed_classes,
+        class_diff: None,
     }
+}
+
+fn compute_class_level_diff(
+    before_graph: &ObjectGraph,
+    before_dom: &DominatorTree,
+    after_graph: &ObjectGraph,
+    after_dom: &DominatorTree,
+) -> Vec<ClassLevelDelta> {
+    let before = collect_class_level_stats(before_graph, before_dom);
+    let after = collect_class_level_stats(after_graph, after_dom);
+    let mut merged: HashMap<String, ClassLevelDelta> = HashMap::new();
+
+    for (class_name, stats) in before {
+        merged.insert(
+            class_name.clone(),
+            ClassLevelDelta {
+                class_name,
+                before_instances: stats.instances,
+                after_instances: 0,
+                before_shallow_bytes: stats.shallow_bytes,
+                after_shallow_bytes: 0,
+                before_retained_bytes: stats.retained_bytes,
+                after_retained_bytes: 0,
+            },
+        );
+    }
+
+    for (class_name, stats) in after {
+        let entry = merged.entry(class_name.clone()).or_insert(ClassLevelDelta {
+            class_name,
+            before_instances: 0,
+            after_instances: 0,
+            before_shallow_bytes: 0,
+            after_shallow_bytes: 0,
+            before_retained_bytes: 0,
+            after_retained_bytes: 0,
+        });
+        entry.after_instances = stats.instances;
+        entry.after_shallow_bytes = stats.shallow_bytes;
+        entry.after_retained_bytes = stats.retained_bytes;
+    }
+
+    let mut deltas: Vec<ClassLevelDelta> = merged
+        .into_values()
+        .filter(|entry| {
+            entry.before_instances != entry.after_instances
+                || entry.before_shallow_bytes != entry.after_shallow_bytes
+                || entry.before_retained_bytes != entry.after_retained_bytes
+        })
+        .collect();
+
+    deltas.sort_by(|a, b| {
+        let delta_a = (a.after_retained_bytes as i128 - a.before_retained_bytes as i128).abs();
+        let delta_b = (b.after_retained_bytes as i128 - b.before_retained_bytes as i128).abs();
+        delta_b
+            .cmp(&delta_a)
+            .then_with(|| a.class_name.cmp(&b.class_name))
+    });
+    deltas.truncate(20);
+    deltas
+}
+
+#[derive(Default)]
+struct ClassLevelStats {
+    instances: u64,
+    shallow_bytes: u64,
+    retained_bytes: u64,
+}
+
+fn collect_class_level_stats(
+    graph: &ObjectGraph,
+    dom: &DominatorTree,
+) -> HashMap<String, ClassLevelStats> {
+    let mut stats: HashMap<String, ClassLevelStats> = HashMap::new();
+
+    for (&obj_id, obj) in &graph.objects {
+        let class_name = graph
+            .class_name(obj.class_id)
+            .unwrap_or("<unknown>")
+            .to_string();
+        let entry = stats.entry(class_name).or_default();
+        entry.instances += 1;
+        entry.shallow_bytes += u64::from(obj.shallow_size);
+        entry.retained_bytes += dom.retained_size(obj_id);
+    }
+
+    stats
 }
 
 fn collect_changed_classes(before: &HeapSummary, after: &HeapSummary) -> Vec<ClassDelta> {
@@ -787,7 +1041,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hprof::{ClassStat, RecordStat};
+    use crate::hprof::{ClassInfo, ClassStat, RecordStat};
     use std::time::SystemTime;
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
@@ -843,6 +1097,7 @@ mod tests {
             min_severity: LeakSeverity::High,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -856,6 +1111,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: vec!["com.example".into()],
             leak_types: vec![LeakKind::Cache, LeakKind::Thread],
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -872,6 +1128,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: vec!["com.one".into(), "org.two".into()],
             leak_types: vec![LeakKind::Cache, LeakKind::Thread, LeakKind::Listener],
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -888,6 +1145,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_synthetic_leaks(&summary, &options);
@@ -921,6 +1179,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -959,6 +1218,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -984,6 +1244,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: vec!["org.demo".into()],
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = synthesize_leaks(&summary, &options);
@@ -1099,6 +1360,21 @@ mod tests {
         graph
     }
 
+    fn add_class(graph: &mut ObjectGraph, class_id: u64, name: &str) {
+        graph.classes.insert(
+            class_id,
+            ClassInfo {
+                class_obj_id: class_id,
+                super_class_id: 0,
+                class_loader_id: 0,
+                instance_size: 16,
+                name: Some(name.into()),
+                instance_fields: Vec::new(),
+                static_references: Vec::new(),
+            },
+        );
+    }
+
     #[test]
     fn graph_backed_leaks_uses_retained_sizes() {
         // Root(1) → A(2) → B(3); shallow sizes: 10, 20, 30
@@ -1111,11 +1387,14 @@ mod tests {
             ],
             &[1],
         );
+        let mut obj_graph = obj_graph;
+        add_class(&mut obj_graph, 0x100, "com.example.CacheNode");
         let dom = build_dominator_tree(&obj_graph);
         let options = LeakDetectionOptions {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
@@ -1124,18 +1403,22 @@ mod tests {
         assert_eq!(leaks[0].retained_size_bytes, 60);
         assert_eq!(leaks[1].retained_size_bytes, 50);
         assert_eq!(leaks[2].retained_size_bytes, 30);
+        assert!(leaks[0].suspect_score.is_some());
+        assert_eq!(leaks[0].shallow_size_bytes, Some(10));
     }
 
     #[test]
     fn graph_backed_leaks_respects_package_filter() {
         // All objects use class_id 0x100 which resolves to None → "<unknown>".
         // "<unknown>" does not contain '.', so package filter should NOT exclude it.
-        let obj_graph = make_test_graph(&[(1, 0x100, 10, &[2]), (2, 0x100, 20, &[])], &[1]);
+        let mut obj_graph = make_test_graph(&[(1, 0x100, 10, &[2]), (2, 0x100, 20, &[])], &[1]);
+        add_class(&mut obj_graph, 0x100, "<unknown>");
         let dom = build_dominator_tree(&obj_graph);
         let options = LeakDetectionOptions {
             min_severity: LeakSeverity::Low,
             package_filters: vec!["com.example".into()],
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
@@ -1145,12 +1428,14 @@ mod tests {
 
     #[test]
     fn graph_backed_leaks_have_empty_provenance() {
-        let obj_graph = make_test_graph(&[(1, 0x100, 10, &[])], &[1]);
+        let mut obj_graph = make_test_graph(&[(1, 0x100, 10, &[])], &[1]);
+        add_class(&mut obj_graph, 0x100, "com.example.CacheRoot");
         let dom = build_dominator_tree(&obj_graph);
         let options = LeakDetectionOptions {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = graph_backed_leaks(&dom, &obj_graph, &options);
@@ -1205,6 +1490,7 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let leaks = detect_leaks(file.path().to_str().unwrap(), options)
@@ -1241,10 +1527,136 @@ mod tests {
             min_severity: LeakSeverity::Low,
             package_filters: Vec::new(),
             leak_types: Vec::new(),
+            accumulation_threshold: 10.0,
         };
 
         let result = detect_leaks(file.path().to_str().unwrap(), options).await;
         // Should succeed via heuristic path (may produce empty results for tiny files)
         assert!(result.is_ok(), "heuristic fallback should not error");
+    }
+
+    #[test]
+    fn suspect_scoring_orders_by_score() {
+        let mut obj_graph = make_test_graph(
+            &[
+                (1, 0x100, 100, &[2]),
+                (2, 0x200, 10, &[3, 4]),
+                (3, 0x300, 200, &[]),
+                (4, 0x300, 200, &[]),
+            ],
+            &[1],
+        );
+        add_class(&mut obj_graph, 0x100, "com.example.Root");
+        add_class(&mut obj_graph, 0x200, "com.example.Accumulator");
+        add_class(&mut obj_graph, 0x300, "com.example.Payload");
+        let dom = build_dominator_tree(&obj_graph);
+        let suspects = build_leak_suspects(
+            &dom,
+            &obj_graph,
+            &LeakDetectionOptions::new(LeakSeverity::Low),
+        );
+
+        assert!(!suspects.is_empty());
+        assert_eq!(suspects[0].class_name, "com.example.Accumulator");
+        assert!(suspects[0].score > suspects[1].score);
+    }
+
+    #[test]
+    fn suspect_marks_accumulation_points() {
+        let mut obj_graph = make_test_graph(
+            &[
+                (1, 0x100, 64, &[2]),
+                (2, 0x200, 4, &[3, 4]),
+                (3, 0x300, 128, &[]),
+                (4, 0x300, 128, &[]),
+            ],
+            &[1],
+        );
+        add_class(&mut obj_graph, 0x100, "com.example.Root");
+        add_class(&mut obj_graph, 0x200, "com.example.BufferOwner");
+        add_class(&mut obj_graph, 0x300, "com.example.Payload");
+        let dom = build_dominator_tree(&obj_graph);
+        let suspects = build_leak_suspects(
+            &dom,
+            &obj_graph,
+            &LeakDetectionOptions::new(LeakSeverity::Low),
+        );
+
+        let accumulation = suspects
+            .iter()
+            .find(|suspect| suspect.class_name == "com.example.BufferOwner")
+            .unwrap();
+        assert!(accumulation.is_accumulation_point);
+        assert!(accumulation.ratio > 10.0);
+        assert!(accumulation.dominated_count > 1);
+    }
+
+    #[test]
+    fn suspect_extracts_reference_chain() {
+        let mut obj_graph = make_test_graph(
+            &[
+                (1, 0x100, 64, &[2]),
+                (2, 0x200, 32, &[3]),
+                (3, 0x300, 16, &[]),
+            ],
+            &[1],
+        );
+        add_class(&mut obj_graph, 0x100, "com.example.Root");
+        add_class(&mut obj_graph, 0x200, "com.example.Manager");
+        add_class(&mut obj_graph, 0x300, "com.example.Leak");
+        let dom = build_dominator_tree(&obj_graph);
+        let suspects = build_leak_suspects(
+            &dom,
+            &obj_graph,
+            &LeakDetectionOptions::new(LeakSeverity::Low),
+        );
+
+        let leak = suspects
+            .iter()
+            .find(|suspect| suspect.class_name == "com.example.Leak")
+            .unwrap();
+        assert_eq!(
+            leak.reference_chain,
+            vec![
+                "GC Root",
+                "com.example.Root",
+                "com.example.Manager",
+                "com.example.Leak"
+            ]
+        );
+    }
+
+    #[test]
+    fn class_level_diff_computes_graph_deltas() {
+        let mut before_graph = make_test_graph(&[(1, 0x100, 10, &[2]), (2, 0x200, 20, &[])], &[1]);
+        add_class(&mut before_graph, 0x100, "com.example.Root");
+        add_class(&mut before_graph, 0x200, "com.example.Cache");
+        let before_dom = build_dominator_tree(&before_graph);
+
+        let mut after_graph = make_test_graph(
+            &[
+                (1, 0x100, 10, &[2, 3]),
+                (2, 0x200, 25, &[]),
+                (3, 0x200, 25, &[]),
+            ],
+            &[1],
+        );
+        add_class(&mut after_graph, 0x100, "com.example.Root");
+        add_class(&mut after_graph, 0x200, "com.example.Cache");
+        let after_dom = build_dominator_tree(&after_graph);
+
+        let diff = compute_class_level_diff(&before_graph, &before_dom, &after_graph, &after_dom);
+
+        assert_eq!(diff.len(), 2);
+        let cache = diff
+            .iter()
+            .find(|entry| entry.class_name == "com.example.Cache")
+            .unwrap();
+        assert_eq!(cache.before_instances, 1);
+        assert_eq!(cache.after_instances, 2);
+        assert_eq!(cache.before_shallow_bytes, 20);
+        assert_eq!(cache.after_shallow_bytes, 50);
+        assert_eq!(cache.before_retained_bytes, 20);
+        assert_eq!(cache.after_retained_bytes, 50);
     }
 }

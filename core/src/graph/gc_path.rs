@@ -1,7 +1,23 @@
 use crate::{
     analysis::{ProvenanceKind, ProvenanceMarker},
     errors::{CoreError, CoreResult},
-    hprof::{parse_heap, parse_hprof_file, HeapParseJob, HeapSummary, ObjectGraph},
+    hprof::{
+        parse_heap, parse_hprof_file, HeapParseJob, HeapSummary, ObjectGraph,
+        SUB_CLASS_DUMP as CLASS_DUMP_SUBTAG, SUB_HEAP_DUMP_INFO as ROOT_HEAP_DUMP_INFO,
+        SUB_INSTANCE_DUMP as INSTANCE_DUMP_SUBTAG, SUB_OBJ_ARRAY_DUMP as OBJECT_ARRAY_DUMP_SUBTAG,
+        SUB_PRIMITIVE_ARRAY_NODATA as ROOT_PRIMITIVE_ARRAY_NODATA,
+        SUB_PRIM_ARRAY_DUMP as PRIMITIVE_ARRAY_DUMP_SUBTAG, SUB_ROOT_DEBUGGER as ROOT_DEBUGGER,
+        SUB_ROOT_FINALIZING as ROOT_FINALIZING, SUB_ROOT_INTERNED_STRING as ROOT_INTERNED_STRING,
+        SUB_ROOT_JAVA_FRAME as ROOT_JAVA_FRAME, SUB_ROOT_JNI_GLOBAL as ROOT_JNI_GLOBAL,
+        SUB_ROOT_JNI_LOCAL as ROOT_JNI_LOCAL, SUB_ROOT_JNI_MONITOR as ROOT_JNI_MONITOR,
+        SUB_ROOT_MONITOR_USED as ROOT_MONITOR_USED, SUB_ROOT_NATIVE_STACK as ROOT_NATIVE_STACK,
+        SUB_ROOT_REFERENCE_CLEANUP as ROOT_REFERENCE_CLEANUP,
+        SUB_ROOT_STICKY_CLASS as ROOT_STICKY_CLASS, SUB_ROOT_THREAD_BLOCK as ROOT_THREAD_BLOCK,
+        SUB_ROOT_THREAD_OBJECT as ROOT_THREAD_OBJECT, SUB_ROOT_UNKNOWN as ROOT_UNKNOWN,
+        SUB_ROOT_UNREACHABLE as ROOT_UNREACHABLE, SUB_ROOT_VM_INTERNAL as ROOT_VM_INTERNAL,
+        TAG_HEAP_DUMP as HEAP_DUMP_TAG, TAG_HEAP_DUMP_SEGMENT as HEAP_DUMP_SEGMENT_TAG,
+        TAG_LOAD_CLASS, TAG_STRING_IN_UTF8,
+    },
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -36,32 +52,6 @@ pub struct GcPathResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
 }
-
-const HEAP_DUMP_TAG: u8 = 0x0C;
-const HEAP_DUMP_SEGMENT_TAG: u8 = 0x0D;
-const CLASS_DUMP_SUBTAG: u8 = 0x20;
-const INSTANCE_DUMP_SUBTAG: u8 = 0x21;
-const OBJECT_ARRAY_DUMP_SUBTAG: u8 = 0x22;
-const PRIMITIVE_ARRAY_DUMP_SUBTAG: u8 = 0x23;
-
-const ROOT_UNKNOWN: u8 = 0x01;
-const ROOT_JNI_GLOBAL: u8 = 0x02;
-const ROOT_JNI_LOCAL: u8 = 0x03;
-const ROOT_JAVA_FRAME: u8 = 0x04;
-const ROOT_NATIVE_STACK: u8 = 0x05;
-const ROOT_STICKY_CLASS: u8 = 0x06;
-const ROOT_THREAD_BLOCK: u8 = 0x07;
-const ROOT_MONITOR_USED: u8 = 0x08;
-const ROOT_THREAD_OBJECT: u8 = 0x09;
-const ROOT_INTERNED_STRING: u8 = 0x0A;
-const ROOT_FINALIZING: u8 = 0x0B;
-const ROOT_DEBUGGER: u8 = 0x0C;
-const ROOT_REFERENCE_CLEANUP: u8 = 0x0D;
-const ROOT_VM_INTERNAL: u8 = 0x0E;
-const ROOT_JNI_MONITOR: u8 = 0x0F;
-const ROOT_UNREACHABLE: u8 = 0x10;
-const ROOT_HEAP_DUMP_INFO: u8 = 0xFE;
-const ROOT_PRIMITIVE_ARRAY_NODATA: u8 = 0xFF;
 
 const BASIC_TYPE_OBJECT: u8 = 2;
 
@@ -217,7 +207,10 @@ fn trace_on_object_graph(
     let mut current = target_id;
     chain.push((current, None::<String>));
     while let Some((parent, field_name)) = parents.get(&current) {
-        chain.push((*parent, field_name.clone()));
+        if let Some((_, incoming_field)) = chain.last_mut() {
+            *incoming_field = field_name.clone();
+        }
+        chain.push((*parent, None));
         current = *parent;
     }
     chain.reverse();
@@ -659,8 +652,8 @@ impl GcGraphBuilder {
             let _time = reader.read_u32::<BigEndian>()?;
             let length = reader.read_u32::<BigEndian>()?;
             match tag {
-                0x01 => self.read_string(reader, length)?,
-                0x02 => self.read_load_class(reader)?,
+                TAG_STRING_IN_UTF8 => self.read_string(reader, length)?,
+                TAG_LOAD_CLASS => self.read_load_class(reader)?,
                 HEAP_DUMP_TAG | HEAP_DUMP_SEGMENT_TAG => {
                     self.read_heap_dump_segment(reader, length)?
                 }

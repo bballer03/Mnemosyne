@@ -26,13 +26,15 @@ The orchestrator must not become the default coder.
 
 Once a batch is approved, this is the only valid execution order:
 
-1. **Scoped decomposition** — orchestrator breaks the work into sub-tasks
-2. **Owner assignment** — orchestrator declares file ownership per sub-task
-3. **Tool grants** — orchestrator assigns minimum tools per agent
-4. **Edits** — Implementation Agent (or the explicitly assigned execution agent) performs changes
-5. **Tests** — Testing Agent validates after edits
-6. **Static analysis** — Static Analysis Agent performs final risk pass after tests
-7. **Consolidation** — orchestrator merges results and decides next actions
+1. **Design gate** — Orchestrator invokes the Design Consulting Agent to inspect roadmap, review existing design docs, create or update the relevant design artifact, link it in `roadmap.md`, and return an implementation readiness verdict (**READY** / **READY AFTER DOC UPDATE** / **BLOCKED UNTIL DESIGN COMPLETES**). If blocked, stop here.
+2. **Scoped decomposition** — orchestrator breaks the work into sub-tasks
+3. **Owner assignment** — orchestrator declares file ownership per sub-task
+4. **Tool grants** — orchestrator assigns minimum tools per agent
+5. **Edits** — Implementation Agent (or the explicitly assigned execution agent) performs changes, using the design doc as the source of truth
+6. **Tests** — Testing Agent validates after edits
+7. **Static analysis** — Static Analysis Agent performs final risk pass after tests
+8. **Documentation sync** — Documentation Sync Agent receives the impact-driven handoff payload and auto-determines which docs to update
+9. **Consolidation** — orchestrator merges results and decides next actions
 
 Any deviation from this order requires explicit orchestration justification.
 
@@ -41,7 +43,7 @@ After security remediation is approved and applied:
 1. **Security Agent** applies approved fixes (remediation mode) or hands off code changes to **Implementation Agent**
 2. **Testing Agent** runs `cargo check` + `cargo test` to validate remediation
 3. **Static Analysis Agent** runs `cargo clippy` for post-fix risk pass
-4. **Documentation Sync Agent** updates docs if remediation changed user-visible behavior or security guidance
+4. **Documentation Sync Agent** receives the impact-driven handoff payload and auto-determines which docs to update
 5. **Security Agent** (optional) confirms findings are resolved via follow-up audit
 
 ## Agent Routing Rules
@@ -55,6 +57,9 @@ After security remediation is approved and applied:
 | Database or persistence changes | Database Migration |
 | Test work | Testing |
 | Lint/build diagnosis | Static Analysis |
+| Pre-coding design gate | Design Consulting |
+| Technical design creation / milestone design docs | Design Consulting |
+| Architecture/design doc ownership | Design Consulting |
 | Design review | Architecture Review |
 | Logs/metrics/tracing | Observability |
 | Cleanup after correctness is stable | Refactor |
@@ -97,14 +102,16 @@ If validation is required after remediation but terminal tools are unavailable:
 
 | Role | Default access |
 |---|---|
+| Design Consulting | read + write for architecture/design docs (`ARCHITECTURE.md`, `docs/design/*`, `docs/roadmap.md` design refs, `STATUS.md` design sections) |
 | Architecture Review | read only |
-| Static Analysis | read + execute (diagnostics) |
+| Static Analysis | read + execute (diagnostics), terminal (cargo clippy, cargo fmt --check, cargo check) |
 | API Contract | read only; write only when docs/schemas are explicitly assigned |
 | Database Migration | read only; write + execute only for approved persistence work |
 | Implementation | read + write; execute only when explicitly needed |
 | Testing | read + execute; write only for test files |
 | Observability | read only; write only for approved instrumentation |
 | Refactor | read only; write only after correctness is stable |
+| Documentation Sync | read + write for docs only; operates in impact-driven mode (auto-selects impacted docs) |
 | Security | read + search + codebase + changes + usages; write (editFiles) only in remediation mode when explicitly approved |
 
 Tools are granted per task, not permanently.
@@ -157,6 +164,7 @@ Once a scoped batch is approved:
 
 ### May run in parallel
 - architecture review
+- design consulting (read-only inspection phase)
 - API review
 - database review
 - observability review
@@ -165,6 +173,7 @@ Once a scoped batch is approved:
 - security audit (read-only mode)
 
 ### Must be sequential
+- design gate before any implementation edits
 - shared model edits
 - core business logic edits
 - shared interface changes

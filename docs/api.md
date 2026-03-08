@@ -281,7 +281,7 @@ Get an AI-generated explanation for a detected leak.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `heap_path` | string | Yes | Heap dump to inspect |
-| `leak_id` | string | No | Target leak ID or class (falls back to top leak) |
+| `leak_id` | string | No | Target leak ID or class; when omitted, Mnemosyne explains the top leak |
 | `min_severity` | string | No | Minimum severity to consider (default: LOW) |
 
 #### Response
@@ -309,6 +309,8 @@ Get an AI-generated explanation for a detected leak.
 
 The `wire` block always contains the exact TOON payload Mnemosyne would send to (and expect from) a real LLM. Clients that want to broker their own AI requests can forward this payload without parsing human-readable prose.
 
+If `leak_id` is provided but does not match any detected leak ID or class name, the server returns `INVALID_PARAMS` instead of silently widening to the top leak.
+
 ---
 
 ### propose_fix
@@ -334,7 +336,7 @@ Generate code fix suggestions for a leak.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `heap_path` | string | Yes | Heap dump used for leak context |
-| `leak_id` | string | No | Target leak ID/class (defaults to top leak) |
+| `leak_id` | string | No | Target leak ID/class; when omitted, Mnemosyne uses the top leak |
 | `project_root` | string | No | Source root for path hints |
 | `style` | string | No | MINIMAL, DEFENSIVE, or COMPREHENSIVE (default: MINIMAL) |
 
