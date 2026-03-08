@@ -38,10 +38,7 @@ pub fn parse_hprof_file(path: &str) -> CoreResult<ObjectGraph> {
 }
 
 /// Parse an HPROF file into an [`ObjectGraph`] with explicit options.
-pub fn parse_hprof_file_with_options(
-    path: &str,
-    options: ParseOptions,
-) -> CoreResult<ObjectGraph> {
+pub fn parse_hprof_file_with_options(path: &str, options: ParseOptions) -> CoreResult<ObjectGraph> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     parse_hprof_reader(&mut reader, options)

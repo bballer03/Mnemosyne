@@ -83,7 +83,7 @@ pub fn inspect_collections(
     let empty_collections = collections.iter().filter(|info| info.size == 0).count();
     let oversized_collections = collections
         .iter()
-            .filter(|info| info.fill_ratio.is_some_and(|ratio| ratio <= 0.25))
+        .filter(|info| info.fill_ratio.is_some_and(|ratio| ratio <= 0.25))
         .cloned()
         .collect();
 

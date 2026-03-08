@@ -467,12 +467,7 @@ fn try_build_dominator(
     heap_path: &str,
     retain_field_data: bool,
 ) -> Option<(ObjectGraph, DominatorTree)> {
-    match parse_hprof_file_with_options(
-        heap_path,
-        ParseOptions {
-            retain_field_data,
-        },
-    ) {
+    match parse_hprof_file_with_options(heap_path, ParseOptions { retain_field_data }) {
         Ok(graph) => {
             if graph.objects.is_empty() {
                 return None;
