@@ -27,8 +27,8 @@ pub use graph::{
 };
 pub use hprof::{
     parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options,
-    parse_hprof_with_options, ClassLevelDelta, HeapDiff, HeapParseJob, HeapSummary,
-    HprofHeader, ParseOptions,
+    parse_hprof_with_options, ClassLevelDelta, HeapDiff, HeapParseJob, HeapSummary, HprofHeader,
+    ParseOptions,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};
