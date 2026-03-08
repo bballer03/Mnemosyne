@@ -1,6 +1,6 @@
 # Mnemosyne Performance Baseline - Memory Scaling
 
-> **Captured:** 2026-03-08 (post M3-P1-B2)
+> **Captured:** 2026-03-09 (post Step 11 remediation)
 > **Environment:** Linux (WSL2), Rust 1.x release profile
 > **Heap fixture:** `resources/test-fixtures/heap.hprof` - 156 MB Kotlin + Spring Boot heap dump
 
@@ -38,11 +38,27 @@
 
 ## RSS Measurements
 
+### Current (post-remediation)
+
 | Command | Dump Size | Peak RSS | RSS:Dump Ratio | Notes |
 |---|---|---|---|---|
-| `parse` (streaming) | 156 MB | ~3.5 MB | **0.02x** | Streaming record-level scanning; minimal RAM |
-| `analyze` (full graph) | 156 MB | ~555 MB | **3.56x** | Full ObjectGraph + dominator tree + retained sizes |
-| `leaks` (full graph) | 156 MB | ~555 MB | **3.55x** | Same graph-backed pipeline as analyze |
+| `parse` (streaming) | 156 MB | 5.12 MiB | **0.03x** | Streaming record-level scanning; minimal RAM |
+| `analyze` (default) | 156 MB | 656.65 MiB | **4.23x** | Lean graph-backed path with `retain_field_data = false` |
+| `leaks` (default) | 156 MB | 656.46 MiB | **4.23x** | Same lean graph-backed path as default `analyze` |
+| `analyze --strings --threads --collections` | 156 MB | ~741 MiB | **4.78x** | Opt-in higher-memory investigation path |
+
+### Historical (Step 11 trigger before remediation)
+
+| Command | Dump Size | Peak RSS | RSS:Dump Ratio | Notes |
+|---|---|---|---|---|
+| `analyze` (unconditional field retention) | 156 MB | 741 MiB | **4.78x** | Historical post-Phase-2 re-baseline before `ParseOptions` remediation |
+| `leaks` (unconditional field retention) | 156 MB | 741 MiB | **4.78x** | Historical post-Phase-2 re-baseline before `ParseOptions` remediation |
+
+### Historical (pre-Phase-2 baseline)
+
+| Command | Dump Size | Peak RSS | RSS:Dump Ratio | Notes |
+|---|---|---|---|---|
+| `analyze` / `leaks` (pre-Phase-2) | 156 MB | ~555 MB | **3.56x** | Kept for comparison; no longer the current default-path measurement |
 
 ---
 
@@ -50,33 +66,37 @@
 
 ### Key Observations
 
-1. **Streaming parser is extremely efficient**: The `parse` command processes a 156 MB heap dump in ~67 ms at 2.25 GiB/s with only ~3.5 MB peak RSS. This path scales to arbitrarily large dumps.
+1. **Streaming parse remains extremely efficient.** `parse` still processes the 156 MB heap in ~67 ms at 2.25 GiB/s with only 5.12 MiB peak RSS.
 
-2. **Full graph-backed analysis uses ~3.5x dump size in RAM**: For a 156 MB heap, peak RSS is ~555 MB. This is within the 4x target threshold established in the design template.
+2. **Step 11 confirmed the Phase 2 regression and partially remediated it.** Unconditional `field_data` retention pushed graph-backed runs to 4.78x RSS:dump. The current `ParseOptions` split reduces default `analyze`/`leaks` back to 4.23x by keeping raw field retention disabled unless thread, string, or collection analysis is explicitly requested.
 
-3. **Dominator tree is the bottleneck**: Building the dominator tree takes ~1.85s on the 156 MB fixture - comparable to the binary parser's ~1.71s. Together, full graph-backed analysis of a 156 MB dump takes ~3.5s wall time.
+3. **The default graph-backed path is improved but still above the original 4.0x target.** Default `analyze`/`leaks` now sit only slightly above threshold, which is acceptable for the 156 MB fixture as a partial remediation, but it does not close the large-dump question.
 
-4. **Graph queries are sub-microsecond**: Once built, reference lookups (~27 ns) and referrer lookups (~15 ns) are effectively instantaneous. Top retained-size queries complete in ~712 us.
+4. **Investigation-heavy runs intentionally cost more.** `analyze --threads --strings --collections` still measures ~4.78x because those analyzers need raw object field data and selected primitive-array contents.
 
-5. **Binary parser throughput**: ~90 MiB/s on real data vs ~240 MiB/s on synthetic fixtures. The gap reflects the complexity of real HPROF binary records (strings, classes, instances, arrays) vs minimal synthetic fixtures.
+5. **Dominator work remains the main time bottleneck.** Building the dominator tree (~1.85 s) is still comparable to full binary parsing (~1.71 s). Together they keep full graph-backed analysis near ~3.5 s wall time on the 156 MB fixture.
 
-### Projected Scaling
+6. **Graph queries remain cheap after construction.** Reference lookups (~27 ns), referrer lookups (~15 ns), and top retained-size queries (~712 us) are still effectively instantaneous once the graph exists.
+
+### Projected Scaling (default 4.23x path)
 
 | Dump Size | Estimated RSS | Estimated Parse+Dom Time | Feasibility |
 |---|---|---|---|
-| 156 MB | ~555 MB | ~3.5 s | ✅ Comfortable on any workstation |
-| 500 MB | ~1.8 GB | ~11 s | ✅ Fine on modern laptops (16 GB+) |
-| 1 GB | ~3.6 GB | ~22 s | ⚠️ Needs 8 GB+ free RAM |
-| 2 GB | ~7.1 GB | ~45 s | ⚠️ Needs 16 GB+ system |
-| 4 GB | ~14.2 GB | ~90 s | ❌ Exceeds most workstations; need streaming or mmap |
+| 156 MB | ~656 MiB | ~3.5 s | ✅ Comfortable on any workstation |
+| 500 MB | ~2.1 GB | ~11 s | ⚠️ Slightly above the original 4x target; still practical on 16 GB+ systems |
+| 1 GB | ~4.2 GB | ~23 s | ⚠️ Needs 8 GB+ free RAM and remains above target |
+| 2 GB | ~8.5 GB | ~46 s | ⚠️ Needs 16 GB+ system and careful headroom |
+| 4 GB | ~16.9 GB | ~91 s | ❌ Exceeds most workstations; alternative architecture likely required |
+
+For opt-in investigation runs, a 4.78x ratio is the better working projection until larger-tier measurements are available.
 
 ### Decision
 
-Based on measured data:
-- **Current architecture is sound for dumps up to ~1-2 GB** on modern developer workstations with 16-32 GB RAM.
-- **The 3.5x RSS:dump ratio is within the 4x safety threshold.**
-- **No immediate action required** - the streaming parser already provides a low-memory fallback path.
-- **For 4 GB+ dumps**, investigate `memmap2` or disk-backed index as described in the design template. This is future M4+ work.
+Based on the current measured data:
+- **Step 11 is partially complete.** The script enhancement, re-baseline, and conditional field-retention remediation are done; 500 MB / 1 GB / 2 GB validation tiers are still pending.
+- **`ParseOptions` is the current architectural mitigation.** Default graph-backed commands stay on the lean path, while `--threads`, `--strings`, and `--collections` explicitly opt into higher memory usage.
+- **The default path is no longer catastrophically regressed, but it is still above the 4.0x target.** Current reality is 4.23x, not the old 3.56x baseline.
+- **No further architectural rewrite is justified yet, but the decision is not closed.** Multi-tier validation must determine whether the 4.23x default path holds acceptably at 500 MB+ or whether streaming overview mode / memory-mapped / disk-backed work becomes mandatory.
 
 ---
 
@@ -84,7 +104,8 @@ Based on measured data:
 
 - All benchmarks run on release profile with optimizations.
 - Criterion collected 100 samples per benchmark.
-- RSS captured via `/proc/PID/status` sampling at 100ms intervals (peak tracking).
-- `/usr/bin/time` was not available in the WSL2 environment; manual `/proc` sampling was used instead.
-- Gnuplot not installed; Criterion used plotters backend for HTML reports saved to `target/criterion/`.
-- Benchmark regression detection is available via Criterion's built-in comparison - the `change:` lines show delta vs previous runs.
+- `scripts/measure_rss.sh` now profiles `parse`, `analyze`, and `leaks` in one pass and computes RSS:dump ratios automatically.
+- The script falls back to `/proc/PID/status` VmHWM sampling when `/usr/bin/time` is unavailable.
+- The script now emits pass/warn/fail markers for the current 4.0x / 6.0x thresholds.
+- Gnuplot was not installed; Criterion used the plotters backend for HTML reports saved to `target/criterion/`.
+- Benchmark regression detection remains available through Criterion's built-in comparison output.

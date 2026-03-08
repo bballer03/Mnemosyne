@@ -2,7 +2,8 @@ use crate::{
     analysis::{ProvenanceKind, ProvenanceMarker},
     errors::{CoreError, CoreResult},
     hprof::{
-        parse_heap, parse_hprof_file, HeapParseJob, HeapSummary, ObjectGraph,
+        parse_heap, parse_hprof_file_with_options, HeapParseJob, HeapSummary, ObjectGraph,
+        ParseOptions,
         SUB_CLASS_DUMP as CLASS_DUMP_SUBTAG, SUB_HEAP_DUMP_INFO as ROOT_HEAP_DUMP_INFO,
         SUB_INSTANCE_DUMP as INSTANCE_DUMP_SUBTAG, SUB_OBJ_ARRAY_DUMP as OBJECT_ARRAY_DUMP_SUBTAG,
         SUB_PRIMITIVE_ARRAY_NODATA as ROOT_PRIMITIVE_ARRAY_NODATA,
@@ -70,7 +71,7 @@ pub fn find_gc_path(request: &GcPathRequest) -> CoreResult<GcPathResult> {
 
     // Primary path: full ObjectGraph via hprof_parser
     if target_id != 0 {
-        match parse_hprof_file(&request.heap_path) {
+        match parse_hprof_file_with_options(&request.heap_path, ParseOptions::default()) {
             Ok(graph) if !graph.objects.is_empty() => {
                 if let Some(result) = trace_on_object_graph(&graph, target_id, depth_limit) {
                     info!(target = target_id, "resolved GC path via full ObjectGraph");

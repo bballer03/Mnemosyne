@@ -1,5 +1,7 @@
+use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Cursor;
 
 /// Unique identifier for a heap object (HPROF object ID).
 /// Using u64 to support both 4-byte and 8-byte identifier sizes.
@@ -29,6 +31,12 @@ pub struct ObjectGraph {
     /// LOAD_CLASS entries: class serial → (class_obj_id, name_string_id).
     pub loaded_classes: HashMap<u32, LoadedClass>,
 
+    /// Parsed STACK_TRACE records keyed by trace serial.
+    pub stack_traces: HashMap<u32, StackTrace>,
+
+    /// Parsed STACK_FRAME records keyed by frame ID.
+    pub stack_frames: HashMap<ObjectId, StackFrame>,
+
     /// The identifier size from the HPROF header (4 or 8 bytes).
     pub identifier_size: u8,
 }
@@ -52,8 +60,30 @@ pub struct HeapObject {
     /// For PRIM_ARRAY_DUMP: empty (no outgoing references).
     pub references: Vec<ObjectId>,
 
+    /// Raw instance field data from INSTANCE_DUMP, or primitive array content
+    /// for PRIM_ARRAY_DUMP. Empty if field data was not retained.
+    pub field_data: Vec<u8>,
+
     /// What kind of object this is.
     pub kind: ObjectKind,
+}
+
+/// Parsed STACK_TRACE record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StackTrace {
+    pub serial: u32,
+    pub thread_serial: u32,
+    pub frame_ids: Vec<ObjectId>,
+}
+
+/// Parsed STACK_FRAME record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StackFrame {
+    pub frame_id: ObjectId,
+    pub method_name: String,
+    pub class_name: String,
+    pub source_file: Option<String>,
+    pub line_number: i32,
 }
 
 /// Discriminant for the type of heap object.
@@ -175,6 +205,20 @@ pub mod field_types {
     pub const LONG: u8 = 11;
 }
 
+/// Typed representation of a single field value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldValue {
+    Boolean(bool),
+    Byte(i8),
+    Char(u16),
+    Short(i16),
+    Int(i32),
+    Long(i64),
+    Float(f32),
+    Double(f64),
+    ObjectRef(Option<ObjectId>),
+}
+
 /// Returns the size in bytes of a value of the given HPROF field type.
 /// For object references, returns the identifier_size.
 pub fn field_value_size(field_type: u8, identifier_size: u8) -> Option<u8> {
@@ -188,6 +232,129 @@ pub fn field_value_size(field_type: u8, identifier_size: u8) -> Option<u8> {
     }
 }
 
+/// Read a single named field from a HeapObject's field_data.
+/// Returns None if the field is not found or field_data is empty.
+pub fn read_field(
+    object: &HeapObject,
+    classes: &HashMap<ClassId, ClassInfo>,
+    field_name: &str,
+    id_size: u8,
+) -> Option<FieldValue> {
+    if object.field_data.is_empty() {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    for descriptor in class_field_layout(classes, object.class_id) {
+        let width = usize::from(field_value_size(descriptor.field_type, id_size)?);
+        if offset + width > object.field_data.len() {
+            return None;
+        }
+
+        if descriptor.name.as_deref() == Some(field_name) {
+            return read_field_value(
+                &object.field_data[offset..offset + width],
+                descriptor.field_type,
+                id_size,
+            );
+        }
+
+        offset += width;
+    }
+
+    None
+}
+
+/// Read all fields from a HeapObject.
+pub fn read_all_fields(
+    object: &HeapObject,
+    classes: &HashMap<ClassId, ClassInfo>,
+    id_size: u8,
+) -> Vec<(String, FieldValue)> {
+    if object.field_data.is_empty() {
+        return Vec::new();
+    }
+
+    let mut fields = Vec::new();
+    let mut offset = 0usize;
+
+    for (index, descriptor) in class_field_layout(classes, object.class_id)
+        .into_iter()
+        .enumerate()
+    {
+        let Some(width) = field_value_size(descriptor.field_type, id_size).map(usize::from) else {
+            break;
+        };
+        if offset + width > object.field_data.len() {
+            break;
+        }
+
+        if let Some(value) = read_field_value(
+            &object.field_data[offset..offset + width],
+            descriptor.field_type,
+            id_size,
+        ) {
+            let name = descriptor
+                .name
+                .unwrap_or_else(|| format!("<unnamed_field_{index}>"));
+            fields.push((name, value));
+        }
+
+        offset += width;
+    }
+
+    fields
+}
+
+fn class_field_layout(
+    classes: &HashMap<ClassId, ClassInfo>,
+    class_id: ClassId,
+) -> Vec<FieldDescriptor> {
+    fn collect(
+        classes: &HashMap<ClassId, ClassInfo>,
+        class_id: ClassId,
+        fields: &mut Vec<FieldDescriptor>,
+    ) {
+        if class_id == 0 {
+            return;
+        }
+
+        let Some(class_info) = classes.get(&class_id) else {
+            return;
+        };
+
+        collect(classes, class_info.super_class_id, fields);
+        fields.extend(class_info.instance_fields.iter().cloned());
+    }
+
+    let mut fields = Vec::new();
+    collect(classes, class_id, &mut fields);
+    fields
+}
+
+fn read_field_value(bytes: &[u8], field_type: u8, id_size: u8) -> Option<FieldValue> {
+    let mut cursor = Cursor::new(bytes);
+    match field_type {
+        field_types::BOOLEAN => Some(FieldValue::Boolean(bytes.first().copied()? != 0)),
+        field_types::BYTE => Some(FieldValue::Byte(bytes.first().copied()? as i8)),
+        field_types::CHAR => Some(FieldValue::Char(cursor.read_u16::<BigEndian>().ok()?)),
+        field_types::SHORT => Some(FieldValue::Short(cursor.read_i16::<BigEndian>().ok()?)),
+        field_types::INT => Some(FieldValue::Int(cursor.read_i32::<BigEndian>().ok()?)),
+        field_types::LONG => Some(FieldValue::Long(cursor.read_i64::<BigEndian>().ok()?)),
+        field_types::FLOAT => Some(FieldValue::Float(cursor.read_f32::<BigEndian>().ok()?)),
+        field_types::DOUBLE => Some(FieldValue::Double(cursor.read_f64::<BigEndian>().ok()?)),
+        field_types::OBJECT => {
+            let id = match id_size {
+                4 => u64::from(cursor.read_u32::<BigEndian>().ok()?),
+                8 => cursor.read_u64::<BigEndian>().ok()?,
+                _ => return None,
+            };
+            Some(FieldValue::ObjectRef((id != 0).then_some(id)))
+        }
+        _ => None,
+    }
+}
+
 impl ObjectGraph {
     /// Create an empty object graph.
     pub fn new(identifier_size: u8) -> Self {
@@ -197,6 +364,8 @@ impl ObjectGraph {
             gc_roots: Vec::new(),
             strings: HashMap::new(),
             loaded_classes: HashMap::new(),
+            stack_traces: HashMap::new(),
+            stack_frames: HashMap::new(),
             identifier_size,
         }
     }
@@ -254,6 +423,34 @@ impl ObjectGraph {
 mod tests {
     use super::*;
 
+    fn add_class(
+        graph: &mut ObjectGraph,
+        class_obj_id: ClassId,
+        super_class_id: ClassId,
+        fields: Vec<FieldDescriptor>,
+    ) {
+        graph.classes.insert(
+            class_obj_id,
+            ClassInfo {
+                class_obj_id,
+                super_class_id,
+                class_loader_id: 0,
+                instance_size: 0,
+                name: Some(format!("Class{class_obj_id}")),
+                instance_fields: fields,
+                static_references: Vec::new(),
+            },
+        );
+    }
+
+    fn encode_test_field_data() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&42i32.to_be_bytes());
+        bytes.extend_from_slice(&0x99u64.to_be_bytes());
+        bytes.push(1);
+        bytes
+    }
+
     fn make_test_graph() -> ObjectGraph {
         let mut graph = ObjectGraph::new(8);
 
@@ -264,6 +461,7 @@ mod tests {
                 class_id: 100,
                 shallow_size: 32,
                 references: vec![2, 3],
+                field_data: Vec::new(),
                 kind: ObjectKind::Instance,
             },
         );
@@ -274,6 +472,7 @@ mod tests {
                 class_id: 100,
                 shallow_size: 16,
                 references: vec![3],
+                field_data: Vec::new(),
                 kind: ObjectKind::Instance,
             },
         );
@@ -284,6 +483,7 @@ mod tests {
                 class_id: 100,
                 shallow_size: 8,
                 references: vec![],
+                field_data: Vec::new(),
                 kind: ObjectKind::Instance,
             },
         );
@@ -319,5 +519,104 @@ mod tests {
         assert_eq!(referrers, vec![1, 2]);
         let referrers1 = graph.get_referrers(1);
         assert!(referrers1.is_empty());
+    }
+
+    #[test]
+    fn read_field_walks_inherited_layout() {
+        let mut graph = ObjectGraph::new(8);
+        add_class(
+            &mut graph,
+            100,
+            0,
+            vec![FieldDescriptor {
+                name: Some("count".into()),
+                field_type: field_types::INT,
+            }],
+        );
+        add_class(
+            &mut graph,
+            200,
+            100,
+            vec![
+                FieldDescriptor {
+                    name: Some("next".into()),
+                    field_type: field_types::OBJECT,
+                },
+                FieldDescriptor {
+                    name: Some("active".into()),
+                    field_type: field_types::BOOLEAN,
+                },
+            ],
+        );
+
+        let object = HeapObject {
+            id: 1,
+            class_id: 200,
+            shallow_size: 0,
+            references: vec![0x99],
+            field_data: encode_test_field_data(),
+            kind: ObjectKind::Instance,
+        };
+
+        assert_eq!(
+            read_field(&object, &graph.classes, "count", 8),
+            Some(FieldValue::Int(42))
+        );
+        assert_eq!(
+            read_field(&object, &graph.classes, "next", 8),
+            Some(FieldValue::ObjectRef(Some(0x99)))
+        );
+        assert_eq!(
+            read_field(&object, &graph.classes, "active", 8),
+            Some(FieldValue::Boolean(true))
+        );
+        assert_eq!(read_field(&object, &graph.classes, "missing", 8), None);
+    }
+
+    #[test]
+    fn read_all_fields_returns_declared_order() {
+        let mut graph = ObjectGraph::new(8);
+        add_class(
+            &mut graph,
+            100,
+            0,
+            vec![FieldDescriptor {
+                name: Some("count".into()),
+                field_type: field_types::INT,
+            }],
+        );
+        add_class(
+            &mut graph,
+            200,
+            100,
+            vec![
+                FieldDescriptor {
+                    name: Some("next".into()),
+                    field_type: field_types::OBJECT,
+                },
+                FieldDescriptor {
+                    name: Some("active".into()),
+                    field_type: field_types::BOOLEAN,
+                },
+            ],
+        );
+
+        let object = HeapObject {
+            id: 1,
+            class_id: 200,
+            shallow_size: 0,
+            references: vec![0x99],
+            field_data: encode_test_field_data(),
+            kind: ObjectKind::Instance,
+        };
+
+        let fields = read_all_fields(&object, &graph.classes, 8);
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0], ("count".into(), FieldValue::Int(42)));
+        assert_eq!(
+            fields[1],
+            ("next".into(), FieldValue::ObjectRef(Some(0x99)))
+        );
+        assert_eq!(fields[2], ("active".into(), FieldValue::Boolean(true)));
     }
 }

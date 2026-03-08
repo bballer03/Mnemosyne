@@ -22,7 +22,9 @@ First published benchmark data on a 156 MB real-world heap dump:
 - Binary parser → ObjectGraph: **90.5 MiB/s**
 - Dominator tree (Lengauer–Tarjan): **1.85s** for 156 MB dump
 - Graph queries: **sub-microsecond** (27 ns references, 15 ns referrers)
-- Full graph analysis RSS: **~555 MB** (3.56x dump size, within 4x safety threshold)
+- Release-time full graph analysis RSS: **~555 MB** (3.56x dump size, within the original 4x safety threshold)
+
+> Post-release note (2026-03-09): Step 11 large-dump re-baselining later found a 4.78x regression after Phase 2 field retention landed. A follow-up remediation introduced `ParseOptions` and restored default `analyze`/`leaks` runs to ~656 MiB / 4.23x on the same 156 MB fixture, while opt-in investigation runs remain ~741 MiB / 4.78x. See `docs/performance/memory-scaling.md` for the current measurements.
 
 ### Bug Fixes
 - **Critical HPROF tag-constant fix**: `TAG_HEAP_DUMP_SEGMENT` corrected from `0x0D` to `0x1C` — real-world JVM dumps now parse correctly

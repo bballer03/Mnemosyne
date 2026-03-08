@@ -4,8 +4,12 @@ use std::io::Write;
 
 const HPROF_HEADER: &[u8] = b"JAVA PROFILE 1.0.2\0";
 
+#[cfg(test)]
+const TYPE_CHAR: u8 = 5;
 const TYPE_OBJECT: u8 = 2;
 const TYPE_INT: u8 = 10;
+#[cfg(test)]
+const TYPE_BYTE: u8 = 8;
 
 /// Builder for small synthetic HPROF binaries used by unit tests.
 pub(crate) struct HprofBuilder {
@@ -76,6 +80,43 @@ impl HprofBuilder {
 
     pub(crate) fn add_heap_dump_segment(&mut self, sub_records: Vec<u8>) -> &mut Self {
         self.push_record(TAG_HEAP_DUMP_SEGMENT, sub_records)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_stack_frame(
+        &mut self,
+        frame_id: u64,
+        method_name_id: u64,
+        signature_id: u64,
+        source_file_id: u64,
+        class_serial: u32,
+        line_number: i32,
+    ) -> &mut Self {
+        let mut body = Vec::new();
+        Self::write_id(&mut body, frame_id, self.id_size);
+        Self::write_id(&mut body, method_name_id, self.id_size);
+        Self::write_id(&mut body, signature_id, self.id_size);
+        Self::write_id(&mut body, source_file_id, self.id_size);
+        body.write_u32::<BigEndian>(class_serial).unwrap();
+        body.write_i32::<BigEndian>(line_number).unwrap();
+        self.push_record(TAG_STACK_FRAME, body)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_stack_trace(
+        &mut self,
+        serial: u32,
+        thread_serial: u32,
+        frame_ids: &[u64],
+    ) -> &mut Self {
+        let mut body = Vec::new();
+        body.write_u32::<BigEndian>(serial).unwrap();
+        body.write_u32::<BigEndian>(thread_serial).unwrap();
+        body.write_u32::<BigEndian>(frame_ids.len() as u32).unwrap();
+        for &frame_id in frame_ids {
+            Self::write_id(&mut body, frame_id, self.id_size);
+        }
+        self.push_record(TAG_STACK_TRACE, body)
     }
 
     pub(crate) fn build(&self) -> Vec<u8> {
@@ -201,6 +242,34 @@ impl HeapDumpBuilder {
         self.buf.write_u8(TYPE_INT).unwrap();
         for &value in values {
             self.buf.write_i32::<BigEndian>(value).unwrap();
+        }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_prim_array_dump_bytes(&mut self, obj_id: u64, values: &[u8]) -> &mut Self {
+        self.buf.write_u8(SUB_PRIM_ARRAY_DUMP).unwrap();
+        HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
+        self.buf.write_u32::<BigEndian>(0).unwrap();
+        self.buf
+            .write_u32::<BigEndian>(values.len() as u32)
+            .unwrap();
+        self.buf.write_u8(TYPE_BYTE).unwrap();
+        self.buf.write_all(values).unwrap();
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_prim_array_dump_chars(&mut self, obj_id: u64, values: &[u16]) -> &mut Self {
+        self.buf.write_u8(SUB_PRIM_ARRAY_DUMP).unwrap();
+        HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
+        self.buf.write_u32::<BigEndian>(0).unwrap();
+        self.buf
+            .write_u32::<BigEndian>(values.len() as u32)
+            .unwrap();
+        self.buf.write_u8(TYPE_CHAR).unwrap();
+        for &value in values {
+            self.buf.write_u16::<BigEndian>(value).unwrap();
         }
         self
     }

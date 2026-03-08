@@ -238,6 +238,24 @@ fn test_leaks_with_severity_filter() {
 }
 
 #[test]
+fn test_leaks_prints_confirmation_when_no_suspects_match() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["leaks", fixture_path.as_str(), "--min-severity", "critical"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("No leak suspects detected."));
+    assert!(!stdout.contains("Potential leaks:"));
+}
+
+#[test]
 fn test_leaks_emits_table_and_readable_detail_blocks() {
     let fixture = write_fixture(&build_fallback_leak_fixture());
     let fixture_path = path_arg(fixture.path());
@@ -408,6 +426,64 @@ fn test_analyze_with_graph_fixture() {
     cmd.assert().success().stdout(
         predicate::str::contains("Dominators").and(predicate::str::contains("dominated by")),
     );
+}
+
+#[test]
+fn test_analyze_with_top_instances_flag() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--top-instances"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Top Instances by Size:"));
+}
+
+#[test]
+fn test_analyze_with_threads_flag() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--threads"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Thread Report ("));
+}
+
+#[test]
+fn test_analyze_with_all_phase_two_flags() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "analyze",
+            fixture_path.as_str(),
+            "--threads",
+            "--strings",
+            "--collections",
+            "--top-instances",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Thread Report ("));
+    assert!(stdout.contains("String Analysis ("));
+    assert!(stdout.contains("Collection Report ("));
+    assert!(stdout.contains("Top Instances by Size:"));
 }
 
 #[test]

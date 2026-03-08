@@ -356,6 +356,7 @@ mod tests {
                     class_id,
                     shallow_size: size,
                     references: refs.to_vec(),
+                    field_data: Vec::new(),
                     kind: ObjectKind::Instance,
                 },
             );

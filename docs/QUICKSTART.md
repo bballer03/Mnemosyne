@@ -2,7 +2,7 @@
 
 Get up and running with Mnemosyne in 5 minutes!
 
-Current release: v0.1.1. The core crate is now organized into grouped module directories under `core/src/`, but the CLI workflow shown here is unchanged.
+Current release: v0.2.0. The core crate is organized into grouped module directories under `core/src/`, and the CLI workflow now includes optional Phase 2 investigation reports on `analyze`.
 
 ## Prerequisites
 
@@ -86,7 +86,7 @@ Top record tags:
  STACK_FRAME                  0x04     5678    0.10 MB
 ```
 
-These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which record categories dominate the dump. `mnemosyne leaks` still uses this fast histogram path directly, while `mnemosyne analyze` can now upgrade to full object-graph parsing and real dominator-backed retained sizes when the heap contains enough detail.
+These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which record categories dominate the dump. `mnemosyne leaks` now uses the same graph-backed dominator pipeline as `analyze` when parsing succeeds, but keeps raw field retention disabled by default so leak detection stays on the lean path.
 
 ### Step 3: Detect Leaks
 
@@ -116,6 +116,8 @@ Potential leaks:
 
 When class names or leak IDs are too long for the table, Mnemosyne truncates them inline and prints a disclosure section beneath with the full values keyed by row number.
 
+If no candidates survive filtering, Mnemosyne now prints `No leak suspects detected.` so a successful zero-result run is explicit.
+
 Limit the output to specific categories whenever you need deterministic CI signals:
 
 ```bash
@@ -124,7 +126,7 @@ mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
 
 Because the leak engine now consumes the parsed class histogram, package or severity filters operate on real data first and only fall back to synthetic names if the heap lacks useful symbols.
 
-The dedicated `leaks` command remains summary-driven today. If you need retained sizes backed by the actual object graph and dominator tree, run `mnemosyne analyze` and check the response/report provenance to see whether the graph-backed path succeeded.
+The dedicated `leaks` command is no longer summary-driven by default. It now uses the lean graph-backed path and real dominator-backed retained sizes when parsing succeeds, while still falling back with provenance if the heap lacks enough detail.
 
 ### Step 4: Get AI Insights (Optional)
 
@@ -137,10 +139,14 @@ export OPENAI_API_KEY="sk-..."
 Then run AI analysis:
 
 ```bash
-mnemosyne analyze heap.hprof --group-by package --ai
+mnemosyne analyze heap.hprof --group-by package --threads --strings --collections --top-instances --top-n 10 --min-capacity 32 --ai
 ```
 
 When full HPROF object-graph parsing succeeds, `analyze` now computes retained sizes from the dominator tree and includes graph-backed dominator metrics in the report. It also emits a grouped histogram section and, when present, an unreachable-object breakdown. Use `--group-by class|package|classloader` to change the histogram aggregation. If parsing or filters prevent that path, Mnemosyne falls back to the summary-driven preview and labels the response accordingly.
+
+The new investigation flags append focused reports to the same analysis run: `--threads` shows per-thread retained memory plus parsed stack frames, `--strings` reports duplicate groups and dedup savings, `--collections` highlights oversized or under-filled collections, and `--top-instances` ranks the largest retained objects. `--top-n` controls report depth, and `--min-capacity` filters out tiny collection backings.
+
+Those investigation flags intentionally cost more memory than the default path. In the current Step 11 measurements on the 156 MB fixture, default `analyze`/`leaks` runs measured about 4.23x RSS:dump, while `analyze --threads --strings --collections` measured about 4.78x because it opts into retaining raw field data for those analyzers.
 
 Output:
 
@@ -362,10 +368,11 @@ export OPENAI_API_KEY="sk-..."
 
 ### Slow parsing on large heaps
 
-Enable memory-mapped I/O and increase threads:
+Start with the lightweight streaming overview, then selectively enable deeper investigation reports only when you need them:
 
 ```bash
-mnemosyne parse heap.hprof --threads 16
+mnemosyne parse heap.hprof
+mnemosyne analyze heap.hprof --top-instances --top-n 20
 ```
 
 ---
@@ -417,10 +424,11 @@ export OPENAI_API_KEY="sk-..."
 
 ### Slow parsing on large heaps
 
-Enable memory-mapped I/O and increase threads:
+Start with the lightweight streaming overview, then selectively enable deeper investigation reports only when you need them:
 
 ```bash
-mnemosyne parse heap.hprof --threads 16
+mnemosyne parse heap.hprof
+mnemosyne analyze heap.hprof --top-instances --top-n 20
 ```
 
 ---

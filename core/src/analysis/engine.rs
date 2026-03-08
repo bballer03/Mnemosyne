@@ -1,4 +1,8 @@
 use super::ai::{generate_ai_insights, AiInsights};
+use super::{
+    analyze_strings, find_top_instances, inspect_collections, inspect_threads, CollectionReport,
+    StringReport, ThreadReport, TopInstancesReport,
+};
 use crate::{
     config::{AnalysisConfig, AppConfig},
     errors::{CoreError, CoreResult},
@@ -8,8 +12,8 @@ use crate::{
         HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
     hprof::{
-        parse_heap, parse_hprof_file, ClassDelta, ClassLevelDelta, ClassStat, HeapDiff,
-        HeapParseJob, HeapSummary, ObjectGraph, ObjectId,
+        parse_heap, parse_hprof_file_with_options, ClassDelta, ClassLevelDelta, ClassStat,
+        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, ParseOptions,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -43,6 +47,32 @@ pub struct AnalyzeRequest {
     pub leak_options: LeakDetectionOptions,
     pub enable_ai: bool,
     pub histogram_group_by: HistogramGroupBy,
+    pub enable_threads: bool,
+    pub enable_strings: bool,
+    pub enable_collections: bool,
+    pub enable_top_instances: bool,
+    pub top_n: usize,
+    pub min_collection_capacity: usize,
+    pub min_duplicate_count: usize,
+}
+
+impl Default for AnalyzeRequest {
+    fn default() -> Self {
+        Self {
+            heap_path: String::new(),
+            config: AppConfig::default(),
+            leak_options: LeakDetectionOptions::default(),
+            enable_ai: false,
+            histogram_group_by: HistogramGroupBy::Class,
+            enable_threads: false,
+            enable_strings: false,
+            enable_collections: false,
+            enable_top_instances: false,
+            top_n: 10,
+            min_collection_capacity: 16,
+            min_duplicate_count: 2,
+        }
+    }
 }
 
 /// Explicit provenance metadata for synthetic, partial, fallback, or placeholder output.
@@ -98,6 +128,14 @@ pub struct AnalyzeResponse {
     pub histogram: Option<HistogramResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unreachable: Option<UnreachableSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_report: Option<ThreadReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_report: Option<CollectionReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_report: Option<StringReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_instances: Option<TopInstancesReport>,
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
@@ -206,40 +244,86 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         max_objects: request.config.parser.max_objects,
     };
     let summary = parse_heap(&parse_job)?;
+    let retain_field_data =
+        request.enable_strings || request.enable_collections || request.enable_threads;
 
     // Attempt graph-backed analysis
-    let dominator_result = try_build_dominator(&request.heap_path);
+    let dominator_result = try_build_dominator(&request.heap_path, retain_field_data);
 
-    let (graph, leaks, histogram, unreachable, provenance) =
-        if let Some((ref obj_graph, ref dom)) = dominator_result {
-            let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
-            let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
-            let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
-            let unreachable = Some(find_unreachable_objects(obj_graph));
-            // If graph-backed produced no leaks (e.g. all filtered), fall back
-            if graph_leaks.is_empty() {
-                let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
-                (
-                    graph_metrics,
-                    fallback_leaks,
-                    histogram,
-                    unreachable,
-                    fallback_provenance(),
-                )
-            } else {
-                (
-                    graph_metrics,
-                    graph_leaks,
-                    histogram,
-                    unreachable,
-                    Vec::new(),
-                )
-            }
+    let (
+        graph,
+        leaks,
+        histogram,
+        unreachable,
+        thread_report,
+        collection_report,
+        string_report,
+        top_instances,
+        provenance,
+    ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
+        let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+        let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+        let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+        let unreachable = Some(find_unreachable_objects(obj_graph));
+        let thread_report = request
+            .enable_threads
+            .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+        let collection_report = request
+            .enable_collections
+            .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
+        let string_report = request.enable_strings.then(|| {
+            analyze_strings(
+                obj_graph,
+                Some(dom),
+                request.top_n,
+                request.min_duplicate_count,
+            )
+        });
+        let top_instances = request
+            .enable_top_instances
+            .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+        // If graph-backed produced no leaks (e.g. all filtered), fall back
+        if graph_leaks.is_empty() {
+            let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
+            (
+                graph_metrics,
+                fallback_leaks,
+                histogram,
+                unreachable,
+                thread_report,
+                collection_report,
+                string_report,
+                top_instances,
+                fallback_provenance(),
+            )
         } else {
-            let graph = summarize_graph(&summary);
-            let leaks = synthesize_leaks(&summary, &request.leak_options);
-            (graph, leaks, None, None, heuristic_provenance())
-        };
+            (
+                graph_metrics,
+                graph_leaks,
+                histogram,
+                unreachable,
+                thread_report,
+                collection_report,
+                string_report,
+                top_instances,
+                Vec::new(),
+            )
+        }
+    } else {
+        let graph = summarize_graph(&summary);
+        let leaks = synthesize_leaks(&summary, &request.leak_options);
+        (
+            graph,
+            leaks,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            heuristic_provenance(),
+        )
+    };
 
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
@@ -267,6 +351,10 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         ai,
         histogram,
         unreachable,
+        thread_report,
+        collection_report,
+        string_report,
+        top_instances,
         provenance,
     })
 }
@@ -291,8 +379,8 @@ pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapD
 
     let mut diff = build_heap_diff(before_summary, after_summary);
 
-    let before_graph = try_build_dominator(before_path);
-    let after_graph = try_build_dominator(after_path);
+    let before_graph = try_build_dominator(before_path, false);
+    let after_graph = try_build_dominator(after_path, false);
     if let (Some((before_graph, before_dom)), Some((after_graph, after_dom))) =
         (before_graph, after_graph)
     {
@@ -318,7 +406,7 @@ pub async fn detect_leaks(
     info!(%heap_path, ?options, "detecting leaks");
 
     // Try graph-backed path first
-    if let Some((obj_graph, dom)) = try_build_dominator(heap_path) {
+    if let Some((obj_graph, dom)) = try_build_dominator(heap_path, false) {
         info!(%heap_path, "graph-backed leak detection succeeded");
         let graph_leaks = graph_backed_leaks(&dom, &obj_graph, &options);
         if !graph_leaks.is_empty() {
@@ -375,8 +463,16 @@ impl LeakDetectionOptions {
 
 /// Attempt to parse the HPROF file into an object graph and build a dominator tree.
 /// Returns None if parsing fails (graceful fallback to heuristic path).
-fn try_build_dominator(heap_path: &str) -> Option<(ObjectGraph, DominatorTree)> {
-    match parse_hprof_file(heap_path) {
+fn try_build_dominator(
+    heap_path: &str,
+    retain_field_data: bool,
+) -> Option<(ObjectGraph, DominatorTree)> {
+    match parse_hprof_file_with_options(
+        heap_path,
+        ParseOptions {
+            retain_field_data,
+        },
+    ) {
         Ok(graph) => {
             if graph.objects.is_empty() {
                 return None;
@@ -1347,6 +1443,7 @@ mod tests {
                     class_id,
                     shallow_size: size,
                     references: refs.to_vec(),
+                    field_data: Vec::new(),
                     kind: ObjectKind::Instance,
                 },
             );

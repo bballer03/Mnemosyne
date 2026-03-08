@@ -226,6 +226,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 leak_options,
                 enable_ai: true,
                 histogram_group_by: HistogramGroupBy::Class,
+                ..AnalyzeRequest::default()
             })
             .await?;
             if let Some(ref target) = params.leak_id {

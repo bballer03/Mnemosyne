@@ -639,6 +639,10 @@ mod tests {
             ai: None,
             histogram: None,
             unreachable: None,
+            thread_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response provenance",
@@ -699,6 +703,10 @@ mod tests {
             ai: None,
             histogram: None,
             unreachable: None,
+            thread_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response detail",
@@ -761,6 +769,10 @@ mod tests {
             ai: None,
             histogram: None,
             unreachable: None,
+            thread_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "html response detail",

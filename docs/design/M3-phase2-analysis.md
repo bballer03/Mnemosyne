@@ -1,6 +1,6 @@
 # M3 Phase 2+ Analysis Architecture Design
 
-> **Status:** Draft
+> **Status:** Design Complete, Implementation Pending
 > **Owner:** Design Consulting Agent
 > **Created:** 2026-03-08
 > **Last Updated:** 2026-03-08
@@ -10,9 +10,9 @@
 
 ## 1. Overview
 
-This document defines the architecture for Mnemosyne's M3 Phase 2+ analysis capabilities: Thread Inspection, ClassLoader Analysis, Collection Inspection, String Analysis, and an OQL Query Engine. These features close the remaining MAT-parity gaps and position Mnemosyne as a credible alternative to Eclipse MAT for production heap analysis.
+This document defines the architecture for Mnemosyne's M3 Phase 2+ analysis capabilities: Thread Inspection, ClassLoader Analysis, Collection Inspection, String Analysis, Top-N Largest Instances, and an OQL Query Engine. These features close the remaining MAT-parity gaps and position Mnemosyne as a credible alternative to Eclipse MAT for production heap analysis.
 
-All new analyzers consume the existing `ObjectGraph` model from `core::hprof::object_graph` and the `DominatorTree` from `core::graph::dominator`. No changes to the core parsing pipeline are required — only new analysis consumers.
+New analyzers consume the `ObjectGraph` model from `core::hprof::object_graph` and the `DominatorTree` from `core::graph::dominator`. **However, a foundational prerequisite (Phase 2a) must extend the binary parser and `HeapObject` struct before most analyzers can operate** — instance field data and primitive array content are currently discarded after reference extraction. See Section 12 and Section 13 for details.
 
 ---
 
@@ -25,8 +25,8 @@ All new analyzers consume the existing `ObjectGraph` model from `core::hprof::ob
 │                   Analysis Orchestrator                   │
 │              (core::analysis::engine)                     │
 ├───────┬──────┬──────┬──────┬──────┬──────┬──────────────┤
-│Thread │Class │Coll. │String│ OQL  │Leak  │ Histogram    │
-│Inspect│Loader│Insp. │Anal. │Engine│Detect│ /Unreachable │
+│Thread │Class │Coll. │String│Top-N │ OQL  │Leak  │ Histogram    │
+│Inspect│Loader│Insp. │Anal. │Inst. │Engine│Detect│ /Unreachable │
 ├───────┴──────┴──────┴──────┴──────┴──────┴──────────────┤
 │                   Shared Analysis Core                    │
 │           ObjectGraph + DominatorTree + GcPath            │
@@ -55,7 +55,8 @@ core/src/
 │   ├── thread.rs                # NEW — Thread inspection
 │   ├── classloader.rs           # NEW — ClassLoader analysis
 │   ├── collection.rs            # NEW — Collection inspection
-│   └── string_analysis.rs       # NEW — String deduplication/waste
+│   ├── string_analysis.rs       # NEW — String deduplication/waste
+│   └── top_instances.rs         # NEW — Top-N largest instances
 ├── query/                        # NEW module
 │   ├── mod.rs                   # Re-exports
 │   ├── parser.rs                # OQL query parser
@@ -79,7 +80,7 @@ HPROF records already parsed by `binary_parser`:
 
 ### 4.2 Required ObjectGraph Extensions
 
-The binary parser currently parses `STACK_TRACE` and `STACK_FRAME` records but does not store them in `ObjectGraph`. New fields needed:
+The binary parser currently **skips** `STACK_TRACE` (tag 0x05) and `STACK_FRAME` (tag 0x04) records — they fall through to the `_ => skip_bytes(reader, length)` branch in the top-level record loop. Phase 2a must add parsing handlers for these tags. New `ObjectGraph` fields needed:
 
 ```rust
 // In ObjectGraph:
@@ -134,6 +135,51 @@ pub fn inspect_threads(
 - Thread names are extracted from the `name` field (char array or String reference)
 - Thread-local retention is computed by walking objects dominated by the thread object
 - Stack traces are correlated via `ROOT_THREAD_OBJECT` → stack trace serial mapping
+
+---
+
+## 4a. Top-N Largest Instances
+
+### 4a.1 Purpose
+
+Answers the question: *"Which single object is eating 2 GB?"* This is a high-value, low-effort triage feature that complements per-class histograms (which show aggregate size) by drilling into individual instance sizes.
+
+### 4a.2 Data Sources
+- `ObjectGraph::objects` — all heap objects with `shallow_size`
+- `DominatorTree` — retained sizes per object (when available)
+- `ObjectGraph::classes` — for resolving class names
+
+### 4a.3 Analysis API
+
+```rust
+// core::analysis::top_instances
+
+pub struct LargestInstance {
+    pub object_id: ObjectId,
+    pub class_name: String,
+    pub shallow_size: u64,
+    pub retained_size: u64,
+}
+
+pub struct TopInstancesReport {
+    pub global_top: Vec<LargestInstance>,      // top-N across all classes
+    pub per_class_top: HashMap<String, Vec<LargestInstance>>,  // top-N per class
+}
+
+pub fn find_top_instances(
+    graph: &ObjectGraph,
+    dominator: &DominatorTree,
+    global_top_n: usize,
+    per_class_top_n: usize,
+) -> TopInstancesReport;
+```
+
+### 4a.4 Implementation Notes
+- Global top-N: iterate all objects, maintain a min-heap of size N sorted by retained_size descending. O(n log N) time.
+- Per-class top-N: group objects by `class_id`, apply the same min-heap within each group.
+- **Does NOT require field extraction** — uses only `shallow_size` from `HeapObject` and `retained_size` from `DominatorTree`. Can be implemented independently of Phase 2a.
+- CLI integration: `mnemosyne analyze heap.hprof --top-instances --top-n 20`
+- AnalyzeResponse extension: `pub top_instances: Option<TopInstancesReport>`
 
 ---
 
@@ -244,11 +290,11 @@ pub fn inspect_collections(
 ```
 
 ### 6.3 Implementation Notes
-- Field values must be extracted from `HeapObject::field_data` raw bytes using `ClassInfo::field_descriptors`
+- **`HeapObject` does NOT currently have a `field_data` field.** The binary parser reads instance field bytes into a temporary buffer (see `parse_instance_dump()` in `binary_parser.rs`), extracts only reference-type field values into `references: Vec<ObjectId>`, and discards the raw bytes. Phase 2a must add a `field_data: Vec<u8>` field to `HeapObject` and retain the raw instance bytes so that collection, string, and thread analyzers can extract typed field values.
 - Array lengths come from primitive/object array HPROF records (already parsed)
+- **Primitive array data is also discarded** — `parse_prim_array_dump()` calls `skip_bytes()` over element data. String analysis requires reading `char[]`/`byte[]` content. Phase 2a must selectively retain primitive array data (at minimum for byte/char arrays).
 - Waste calculation: `(capacity - size) * element_size` for array-backed collections
 - Fill ratio thresholds: empty (0.0), sparse (<0.25), normal (0.25-0.75), dense (>0.75)
-- The binary parser needs to preserve field data layout for instance field extraction — this may require enhancing `HeapObject` to include parsed field values or a field accessor API
 
 ---
 
@@ -304,6 +350,7 @@ pub fn analyze_strings(
 
 ### 7.3 Implementation Notes
 - String value extraction requires reading the `value` field reference → char[]/byte[] content
+- **Prerequisite:** Phase 2a must retain both (a) instance `field_data` on `HeapObject` (to read the `value` field reference and `coder` field) and (b) primitive array element data (to read the actual char[]/byte[] backing content). Both are currently discarded by the parser.
 - Java 9+ uses compact strings: Latin-1 (1 byte/char) by default, UTF-16 when needed
 - Java 8 always uses char[] (2 bytes/char)
 - The `coder` field (Java 9+) indicates encoding: 0 = Latin-1, 1 = UTF-16
@@ -549,6 +596,9 @@ pub struct AnalyzeResponse {
     
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_report: Option<StringReport>,
+    
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_instances: Option<TopInstancesReport>,
 }
 ```
 
@@ -575,8 +625,12 @@ mnemosyne analyze heap.hprof --strings --top-n 50
 # OQL query (new subcommand)
 mnemosyne query heap.hprof "SELECT @objectId, @retainedSize FROM \"java.util.HashMap\" WHERE @retainedSize > 1048576"
 
+# Top-N largest instances
+mnemosyne analyze heap.hprof --top-instances
+mnemosyne analyze heap.hprof --top-instances --top-n 20
+
 # Combined analysis
-mnemosyne analyze heap.hprof --threads --collections --strings
+mnemosyne analyze heap.hprof --threads --collections --strings --top-instances
 ```
 
 ---
@@ -584,13 +638,20 @@ mnemosyne analyze heap.hprof --threads --collections --strings
 ## 12. Implementation Sequence
 
 ### Phase 2a — Foundation (prerequisite)
-1. **Enhance HeapObject field extraction** — Add a field accessor API that can read typed field values from `HeapObject::field_data` using `ClassInfo::field_descriptors`. This is required by Collection Inspection, String Analysis, and Thread Inspection.
+The binary parser currently discards all non-reference data during instance parsing and skips primitive array content entirely. Before any new analyzer can read field values, the following foundational work is required:
+
+1. **Add `field_data: Vec<u8>` to `HeapObject`** — Retain raw instance field bytes during `parse_instance_dump()`. Currently the local `data` buffer is discarded after reference extraction. Default to empty `Vec` for arrays and objects where field data is not applicable.
+2. **Retain primitive array element data** — Add a `data: Option<Vec<u8>>` or similar field to `HeapObject` for `PrimitiveArray` variants. At minimum, retain `byte[]` (type 8) and `char[]` (type 5) arrays, which are needed for string analysis. Consider opt-in retention via a parser config flag to manage memory impact.
+3. **Parse STACK_TRACE (0x05) and STACK_FRAME (0x04) top-level records** — These are currently skipped by the `_ => skip_bytes()` fallback in the top-level record loop. Add handlers that populate new `ObjectGraph` fields: `stack_traces: HashMap<u32, StackTrace>` and `stack_frames: HashMap<u64, StackFrame>`.
+4. **Implement the typed field extraction API** — `FieldValue` enum + `read_field()` / `read_all_fields()` functions that interpret `HeapObject::field_data` bytes using `ClassInfo::instance_fields` layout. This is the shared prerequisite for collection, string, and thread analyzers.
+5. **Memory impact assessment** — Measure RSS delta on the 156 MB test fixture with field_data retention enabled vs. disabled. If the RSS:dump ratio exceeds 5x, implement opt-in retention or selective storage for target classes only.
 
 ### Phase 2b — Individual Analyzers (parallelizable after 2a)
 2. **String Analysis** — Highest value-to-effort ratio. String waste is common and easy to detect.
 3. **Collection Inspection** — Second highest impact. Collection waste is the #1 finding in most MAT sessions.
 4. **Thread Inspection** — Requires stack trace storage extension in ObjectGraph.
-5. **ClassLoader Analysis** — Niche but critical for app-server environments.
+5. **Top-N Largest Instances** — Per-class top-N by retained size (see Section 4a).
+6. **ClassLoader Analysis** — Niche but critical for app-server environments. (May be deferred to Phase 3 per roadmap Step 12.)
 
 ### Phase 2c — Query Engine
 6. **OQL Parser** — Recursive descent, well-defined grammar.
@@ -609,6 +670,7 @@ mnemosyne analyze heap.hprof --threads --collections --strings
 | Analyzer | Requires ObjectGraph | Requires DominatorTree | Requires Field Extraction | Requires ObjectGraph Extension |
 |---|---|---|---|---|
 | Thread Inspection | ✅ | ✅ (for retained sizes) | ✅ (thread name) | ✅ (stack traces) |
+| **Top-N Largest Instances** | **✅** | **✅** | **❌** | **❌** |
 | ClassLoader Analysis | ✅ | ✅ | ❌ | ❌ (class_loader_id exists) |
 | Collection Inspection | ✅ | ✅ | ✅ (size, table fields) | ❌ |
 | String Analysis | ✅ | ✅ | ✅ (value field) | ❌ |
@@ -616,7 +678,7 @@ mnemosyne analyze heap.hprof --threads --collections --strings
 
 ### Critical Prerequisite: Field Extraction API
 
-The biggest shared dependency is a **typed field extraction API** for `HeapObject`. Currently `field_data` is raw bytes. Before any analyzer can inspect instance fields, we need:
+The biggest shared dependency is a **typed field extraction API** for `HeapObject`. Currently `HeapObject` does **not** store field data at all — the binary parser reads instance bytes into a temporary buffer, extracts reference-type fields, and discards the raw data. Phase 2a must first add `field_data: Vec<u8>` storage, then build the typed accessor API on top of it:
 
 ```rust
 // In core::hprof::object_graph or a new field_reader module
@@ -656,6 +718,8 @@ This is the **gating prerequisite** for Phase 2b/2c work.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Field extraction complexity | High — many analyzers blocked | Implement as Phase 2a prerequisite |
+| **`field_data` retention increases RSS** | **Resolved in Step 11 (partial)** — unconditional retention did raise the 156 MB fixture from 3.56x to 4.78x RSS:dump. The current implementation now uses `ParseOptions { retain_field_data: false }` by default and only opts into field retention for thread, string, and collection analyzers, bringing default `analyze`/`leaks` runs down to 4.23x. | **Keep validating at larger tiers.** Multi-tier Step 11 runs at 500 MB / 1 GB / 2 GB are still pending; if larger dumps regress further, evaluate streaming overview mode or disk-backed storage. |
+| **Primitive array data retention** | **Reduced by Step 11 remediation** — `byte[]` and `char[]` payloads are now only retained when field-data retention is explicitly enabled, so default `leaks` and default `analyze` runs no longer pay that overhead. | Keep the existing array-size cap, keep retention opt-in, and re-measure investigation-heavy runs during multi-tier validation. |
 | Memory overhead from string materialization | Medium — string analysis reads all string values | Stream and hash without full retention |
 | OQL injection/abuse | Low — local tool, not a web service | Validate query structure, enforce LIMIT |
 | HPROF version differences (Java 8 vs 17) | Medium — field layouts differ | Test with both Java 8 and 17+ dumps |

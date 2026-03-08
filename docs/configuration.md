@@ -258,12 +258,23 @@ mnemosyne analyze [OPTIONS] <HEAP_FILE>
 
 Options:
   --ai                   Force-enable AI analysis (otherwise driven by config)
-  --format <FMT>         Override output format (text|toon|markdown|html)
+  --format <FMT>         Override output format (text|toon|markdown|html|json)
+  --group-by <MODE>      Group histogram output by class, package, or classloader
+  --threads              Enable thread inspection
+  --strings              Enable string analysis (duplicate detection + waste)
+  --collections          Enable collection inspection (fill ratio + waste)
+  --top-instances        Show the top-N largest instances
+  --top-n <N>            Result count for top-instance, thread, and string reports
+  --min-capacity <N>     Minimum collection backing capacity to report
   --package <PKG>...     Restrict to specific packages (repeat flag or comma-separated list)
   --leak-kind <KIND>...  Restrict leak kinds (repeat flag or comma list)
 ```
 
 `[analysis]` settings (e.g., `min_severity`, `packages`, `leak_types`) are picked up automatically.
+
+When any of the investigation flags are enabled, `mnemosyne analyze` appends the corresponding report sections to the main graph-backed analysis output instead of invoking a separate command.
+
+Default `analyze`, `leaks`, and `gc-path` runs now keep parser field retention disabled through `ParseOptions { retain_field_data: false }`. Enabling `--threads`, `--strings`, or `--collections` opts `analyze` into retaining raw field data so those analyzers can read object contents, which increases RSS but preserves the lean default path for everyday runs.
 
 ### Leaks Command
 

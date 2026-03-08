@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** March 8, 2026  
+> **Last Updated:** March 9, 2026  
 > **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -50,21 +50,21 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 ### Shipped today
 - **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
-- **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, and GC-root types, and the graph-backed parser now populates them for instances, arrays, and roots.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, prints a grouped histogram table in text mode, and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; prints grouped histogram and investigation tables in text mode; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
-- **Graph metrics:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, plus grouped histograms and unreachable-object summaries. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
+- **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
 - **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
 - **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
-- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, `scripts/measure_rss.sh` for max-RSS capture, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 110 passing tests.
+- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 129 passing tests.
 
 ### Still in progress
-- **Remaining MAT-parity work**, especially thread inspection, classloader analysis, collection inspection, and OQL-style querying.
+- **Remaining MAT-parity work**, especially classloader analysis and OQL-style querying.
 - **Config-driven AI task runner** (e.g., YAML-defined prompts with selective context injection).
-- **Large-dump scaling validation**: the initial benchmark baseline is published (`docs/performance/memory-scaling.md`) covering parser throughput, dominator-tree timing, and RSS measurements on 156 MB fixtures. Larger dump validation (500 MB, 1 GB+) is future work.
+- **Large-dump scaling validation**: the initial benchmark baseline is published (`docs/performance/memory-scaling.md`) covering parser throughput, dominator-tree timing, and RSS measurements on 156 MB fixtures. Step 11 re-baselining found a 4.78x regression after unconditional field retention, and the current remediation now restores default `analyze`/`leaks` runs to 4.23x while leaving the heavier investigation path opt-in at 4.78x. Larger dump validation (500 MB, 1 GB+) is still future work.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
 The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
@@ -94,6 +94,10 @@ core/
    ├── analysis/           # Leak detection + AI orchestration
    │   ├── mod.rs
    │   ├── engine.rs       # Analysis engine (was analysis.rs)
+   │   ├── thread.rs       # Thread inspection + stack trace correlation
+   │   ├── string_analysis.rs # Duplicate strings + top strings by size
+   │   ├── collection.rs   # HashMap/ArrayList/etc. waste inspection
+   │   ├── top_instances.rs # Largest-instance ranking
    │   └── ai.rs
    ├── mapper/             # Source code mapping
    │   ├── mod.rs
@@ -109,7 +113,7 @@ core/
       └── server.rs       # Was mcp.rs
 ```
 
-Repository-level performance tooling now lives alongside the core crate: `core/benches/` holds Criterion benchmarks for parser throughput, graph construction, and dominator computation, while `scripts/measure_rss.sh` captures max RSS for CLI parse runs so the M3 memory-scaling decision can be grounded in measurements rather than assumptions.
+Repository-level performance tooling now lives alongside the core crate: `core/benches/` holds Criterion benchmarks for parser throughput, graph construction, and dominator computation, while `scripts/measure_rss.sh` profiles `parse`, `analyze`, and `leaks`, computes RSS:dump ratios, and falls back to `/proc/PID/status` VmHWM sampling when `/usr/bin/time` is unavailable so the M3 memory-scaling decision can be grounded in measurements rather than assumptions.
 
 ## System Architecture Overview (Layered Design)
 

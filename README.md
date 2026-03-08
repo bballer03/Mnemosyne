@@ -48,10 +48,12 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Suitable for multi-gigabyte heap dumps
 - `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
+- Optional investigation reports now hang off the same graph-backed path: `mnemosyne analyze --threads --strings --collections --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, and top-instance ranking in one run
+- `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
-- Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`)
+- Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
 ### 🧠 AI-Powered Leak Diagnostics
@@ -287,7 +289,9 @@ Under the hood Mnemosyne now filters real class stats with those package prefixe
 
 Both `mnemosyne leaks` and `mnemosyne analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `mnemosyne analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
 
-When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`) and an unreachable-object summary, while `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
+When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`), an unreachable-object summary, optional thread/string/collection/top-instance reports, and `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
+
+If no candidates survive filtering, `mnemosyne leaks` now prints `No leak suspects detected.` so zero-result runs are explicit instead of silent.
 
 #### Map a leak to source code
 ```bash
@@ -356,7 +360,7 @@ Mnemosyne now resolves GC paths by trying full `ObjectGraph` BFS first via `trac
 
 #### Full AI-powered analysis
 ```bash
-mnemosyne analyze heap.hprof --ai
+mnemosyne analyze heap.hprof --ai --threads --strings --collections --top-instances --top-n 10 --min-capacity 32
 ```
 
 **Example output:**
@@ -376,6 +380,8 @@ Code Fix Available: Run 'mnemosyne fix heap.hprof' to generate patch
 ```
 
 When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. This currently uses deterministic heuristics so the UX stays consistent offline.
+
+Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, and the largest retained instances via `--threads`, `--strings`, `--collections`, and `--top-instances`.
 
 #### Output TOON (for CI/CD)
 ```bash
@@ -439,6 +445,9 @@ mnemosyne analyze heap.hprof --leak-kind cache,thread
 
 # Group the analysis histogram by package
 mnemosyne analyze heap.hprof --group-by package
+
+# Add investigation reports to the same analysis run
+mnemosyne analyze heap.hprof --threads --strings --collections --top-instances --top-n 15 --min-capacity 32
 
 # Export HTML report
 mnemosyne analyze heap.hprof --format html --output-file report.html
@@ -574,7 +583,7 @@ mnemosyne/
 │ ├── src/
 │ │ ├── hprof/           # HPROF parsing (streaming + binary + object graph)
 │ │ ├── graph/           # Dominator tree, GC paths, graph metrics
-│ │ ├── analysis/        # Leak detection engine + AI insights
+│ │ ├── analysis/        # Leak detection, investigation analyzers, and AI insights
 │ │ ├── mapper/          # Source code mapping + Git integration
 │ │ ├── report/          # Report rendering (Text/MD/HTML/TOON/JSON)
 │ │ ├── fix/             # Fix generation
@@ -605,13 +614,13 @@ Mnemosyne is built for speed and efficiency:
 
 ### Benchmarks
 
-> **Captured:** 2026-03-08 on a 156 MB Kotlin + Spring Boot heap dump (`resources/test-fixtures/heap.hprof`)
+> **Captured:** 2026-03-09 on a 156 MB Kotlin + Spring Boot heap dump (`resources/test-fixtures/heap.hprof`)
 
 **Measured results (Criterion, release profile):**
 
 | Benchmark | Median | Throughput | Notes |
 |---|---|---|---|
-| Streaming parser (real heap) | 67.2 ms | 2.25 GiB/s | Record-level scanning, ~3.5 MB peak RSS |
+| Streaming parser (real heap) | 67.2 ms | 2.25 GiB/s | Record-level scanning, 5.12 MiB peak RSS in the latest Step 11 run |
 | Binary parser -> ObjectGraph | 1.71 s | 90.5 MiB/s | Full graph construction |
 | Dominator tree (Lengauer-Tarjan) | 1.85 s | -- | Full retained-size computation |
 | Graph reference lookup | 26.7 ns | -- | Single-object outgoing refs |
@@ -621,16 +630,21 @@ Mnemosyne is built for speed and efficiency:
 
 | Command | Peak RSS | Ratio | Notes |
 |---|---|---|---|
-| `parse` (streaming) | ~3.5 MB | 0.02x | Minimal memory, scales to any dump size |
-| `analyze` / `leaks` (full graph) | ~555 MB | 3.56x | Within 4x safety threshold |
+| `parse` (streaming) | 5.12 MiB | 0.03x | Minimal memory, scales to any dump size |
+| `analyze` (default) | 656.65 MiB | 4.23x | Lean graph-backed path; slightly above the original 4x target |
+| `leaks` (default) | 656.46 MiB | 4.23x | Same lean graph-backed path with real dominator-backed retained sizes |
+| `analyze --strings --threads --collections` | ~741 MiB | 4.78x | Opt-in field-data retention for investigation analyzers |
 
 Full benchmark details: [`docs/performance/memory-scaling.md`](docs/performance/memory-scaling.md)
+
+Default graph-backed runs now keep raw field retention disabled unless thread, string, or collection investigation is requested. That split is implemented through `ParseOptions`, which keeps the higher-memory path opt-in instead of making every `analyze` or `leaks` run pay the full Phase 2 cost.
 
 ### Why is Mnemosyne so fast?
 
 - **Streaming parsing**: BufReader-based sequential processing with low memory overhead
 - **Rust performance**: Near-C speeds with memory safety guarantees
 - **Streaming architecture**: Processes dumps larger than available RAM
+- **Conditional field retention**: default `analyze`/`leaks` stay on a lean parser path while deeper investigation flags opt into raw field retention only when needed
 - **Efficient graph algorithms**: `petgraph` with Lengauer-Tarjan dominator computation
 
 ---

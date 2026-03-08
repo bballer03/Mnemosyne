@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Graph-backed investigation analyzers for thread inspection, string analysis, collection inspection, and top-N largest instances in `core::analysis`
+- Retained instance field bytes, selective `byte[]` / `char[]` payload retention, parsed `STACK_TRACE` / `STACK_FRAME` records, and typed field readers (`FieldValue`, `read_field()`, `read_all_fields()`) in `core::hprof::object_graph`
+- CLI `analyze` flags `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`, plus text-mode rendering for the new analyzer sections
+- `ParseOptions` with `retain_field_data`, plus `parse_hprof_file_with_options()` and `parse_hprof_with_options()` in `core::hprof::binary_parser`
+- Enhanced `scripts/measure_rss.sh` with multi-command profiling, `/proc/PID/status` VmHWM fallback sampling, automatic RSS:dump ratio computation, and pass/warn/fail markers
+- Additional integration coverage for zero-leak confirmation and M3 Phase 2 analyze flags, bringing the validated workspace total to 129 tests
+
+### Changed
+- `AnalyzeRequest` and `AnalyzeResponse` now carry optional investigation-feature enable flags and result sections for thread, string, collection, and top-instance reports
+- `core::fix::generator` and `core::mcp::server` now construct the expanded `AnalyzeRequest` contract used by the shared analysis engine
+- Default binary HPROF parsing no longer retains instance `field_data` or primitive `byte[]` / `char[]` content unless callers opt in through `ParseOptions { retain_field_data: true }`
+- `analyze_heap()` now enables field-data retention only when string, collection, or thread analysis is requested; default `analyze`, `leaks`, and `gc-path` runs now use the lean parser path
+
+### Fixed
+- `mnemosyne leaks` now prints `No leak suspects detected.` when analysis completes without any leak candidates instead of exiting successfully with silent output
+- Collection oversized-threshold handling now uses inclusive `<= 0.25` fill ratio instead of strict `< 0.25`
+- String analysis now reports logical character count for `char[]`-backed strings instead of raw UTF-16 byte count
+
 ## [0.2.0] - 2026-03-08
 
 ### Added
@@ -17,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Heuristic fallback validation test confirming `synthesize_leaks()` still produces candidates when graph-backed analysis results are filtered away
 - `core::hprof::tags` as the shared source of truth for HPROF top-level record tags, heap-dump sub-record tags, and `tag_name()` mappings
 - Criterion benchmark targets in `core/benches/` covering parser throughput, object-graph construction, and dominator-tree computation
-- `scripts/measure_rss.sh` for max-RSS capture during CLI parse runs, plus `docs/design/memory-scaling.md` as the memory-scaling decision template
+- Initial `scripts/measure_rss.sh` support for max-RSS capture during CLI parse runs, plus `docs/design/memory-scaling.md` as the memory-scaling decision template
 - Graph-backed histogram grouping by class, package, and classloader via `HistogramEntry`, `HistogramGroupBy`, and `HistogramResult`
 - MAT-style leak suspect ranking via `LeakSuspect`, including retained/shallow ratio, accumulation-point detection, short reference-chain context, and composite score-based ordering
 - Unreachable-object summaries via `UnreachableSet` and `UnreachableClassEntry`, with per-class counts and shallow-size totals

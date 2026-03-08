@@ -58,6 +58,7 @@ pub async fn propose_fix(request: FixRequest) -> CoreResult<FixResponse> {
         leak_options: crate::analysis::LeakDetectionOptions::new(LeakSeverity::Low),
         enable_ai: true,
         histogram_group_by: HistogramGroupBy::Class,
+        ..AnalyzeRequest::default()
     })
     .await?;
 

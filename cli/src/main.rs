@@ -100,6 +100,24 @@ struct AnalyzeArgs {
     output: Option<PathBuf>,
     #[arg(long)]
     ai: bool,
+    /// Enable thread inspection
+    #[arg(long)]
+    threads: bool,
+    /// Enable string analysis (duplicate detection, waste quantification)
+    #[arg(long)]
+    strings: bool,
+    /// Enable collection inspection (fill ratio, waste detection)
+    #[arg(long)]
+    collections: bool,
+    /// Show top-N largest instances
+    #[arg(long = "top-instances")]
+    top_instances: bool,
+    /// Number of results for top-N queries (threads, strings, top-instances)
+    #[arg(long = "top-n", default_value_t = 10)]
+    top_n: usize,
+    /// Minimum collection backing capacity to report
+    #[arg(long = "min-capacity", default_value_t = 16)]
+    min_capacity: usize,
     #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
@@ -375,6 +393,8 @@ async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
             }
             println!();
         }
+    } else {
+        println!("{}", bold_label("No leak suspects detected."));
     }
     Ok(())
 }
@@ -405,6 +425,13 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         leak_options,
         enable_ai: use_ai,
         histogram_group_by: args.group_by.into(),
+        enable_threads: args.threads,
+        enable_strings: args.strings,
+        enable_collections: args.collections,
+        enable_top_instances: args.top_instances,
+        top_n: args.top_n,
+        min_collection_capacity: args.min_capacity,
+        min_duplicate_count: 2,
     })
     .await
     .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))?;
@@ -434,6 +461,69 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("Histogram:"));
                 println!("{}", build_histogram_table(histogram));
+            }
+
+            if let Some(top_instances) = &response.top_instances {
+                println!();
+                println!("{}", bold_label("Top Instances by Size:"));
+                println!("{}", build_top_instances_table(top_instances));
+            }
+
+            if let Some(threads) = &response.thread_report {
+                println!();
+                println!(
+                    "{}",
+                    bold_label(&format!(
+                        "Thread Report ({} threads):",
+                        threads.total_thread_count
+                    ))
+                );
+                println!(
+                    "  {} {}",
+                    bold_label("Total retained:"),
+                    format_megabytes(threads.total_thread_retained)
+                );
+                println!("{}", build_thread_table(threads));
+                print_thread_stacks(threads);
+            }
+
+            if let Some(strings) = &response.string_report {
+                println!();
+                println!(
+                    "{}",
+                    bold_label(&format!(
+                        "String Analysis ({} strings, {} unique):",
+                        strings.total_strings, strings.unique_strings
+                    ))
+                );
+                println!(
+                    "  {} {}",
+                    bold_label("Total duplicate waste:"),
+                    format_megabytes(strings.total_duplicate_waste)
+                );
+                println!("{}", build_string_duplicates_table(strings));
+            }
+
+            if let Some(collections) = &response.collection_report {
+                println!();
+                println!(
+                    "{}",
+                    bold_label(&format!(
+                        "Collection Report ({} collections):",
+                        collections.total_collections
+                    ))
+                );
+                println!(
+                    "  {} {}",
+                    bold_label("Total waste:"),
+                    format_megabytes(collections.total_waste_bytes)
+                );
+                println!(
+                    "  {} {}",
+                    bold_label("Empty collections:"),
+                    collections.empty_collections
+                );
+                println!("{}", build_collection_table(collections));
             }
         }
     }
@@ -599,6 +689,7 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
         leak_options,
         enable_ai: true,
         histogram_group_by: HistogramGroupBy::Class,
+        ..AnalyzeRequest::default()
     })
     .await
     .with_context(|| {
@@ -909,6 +1000,10 @@ const PARSE_SUMMARY_NAME_WIDTH: usize = 44;
 const RECORD_TAG_NAME_WIDTH: usize = 34;
 const LEAK_ID_WIDTH: usize = 20;
 const LEAK_CLASS_NAME_WIDTH: usize = 34;
+const TOP_INSTANCE_CLASS_WIDTH: usize = 40;
+const THREAD_NAME_WIDTH: usize = 32;
+const STRING_VALUE_WIDTH: usize = 36;
+const COLLECTION_TYPE_WIDTH: usize = 38;
 
 fn build_parse_summary_table(summary: &HeapSummary) -> (Table, Vec<(String, String)>) {
     let mut table = base_table();
@@ -1020,6 +1115,127 @@ fn build_histogram_table(histogram: &mnemosyne_core::HistogramResult) -> Table {
             right_cell(entry.instance_count),
             right_cell(format_megabytes(entry.shallow_size)),
             right_cell(format_megabytes(entry.retained_size)),
+        ]);
+    }
+
+    table
+}
+
+fn build_top_instances_table(report: &mnemosyne_core::analysis::TopInstancesReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Rank", CellAlignment::Right),
+        header_cell("Class", CellAlignment::Left),
+        header_cell("Shallow", CellAlignment::Right),
+        header_cell("Retained", CellAlignment::Right),
+    ]);
+
+    for (idx, instance) in report.instances.iter().enumerate() {
+        let class_cell = truncate_for_table(&instance.class_name, TOP_INSTANCE_CLASS_WIDTH);
+        table.add_row(vec![
+            right_cell(idx + 1),
+            Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(format_megabytes(instance.shallow_size)),
+            right_cell(format_megabytes(
+                instance.retained_size.unwrap_or(instance.shallow_size),
+            )),
+        ]);
+    }
+
+    table
+}
+
+fn build_thread_table(report: &mnemosyne_core::analysis::ThreadReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Name", CellAlignment::Left),
+        header_cell("Retained", CellAlignment::Right),
+        header_cell("Thread Locals", CellAlignment::Right),
+    ]);
+
+    for thread in &report.top_retainers {
+        let name_cell = truncate_for_table(&thread.name, THREAD_NAME_WIDTH);
+        table.add_row(vec![
+            Cell::new(name_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(format_megabytes(thread.retained_bytes)),
+            right_cell(thread.thread_local_count),
+        ]);
+    }
+
+    table
+}
+
+fn print_thread_stacks(report: &mnemosyne_core::analysis::ThreadReport) {
+    for thread in &report.top_retainers {
+        let Some(stack_trace) = &thread.stack_trace else {
+            continue;
+        };
+
+        println!();
+        println!("{} {}", bold_label("Stack:"), thread.name);
+        for frame in stack_trace {
+            match (&frame.source_file, frame.line_number) {
+                (Some(source_file), line) if line > 0 => {
+                    println!(
+                        "  at {}.{}({}:{})",
+                        frame.class_name, frame.method_name, source_file, line
+                    );
+                }
+                (Some(source_file), _) => {
+                    println!(
+                        "  at {}.{}({})",
+                        frame.class_name, frame.method_name, source_file
+                    );
+                }
+                (None, _) => {
+                    println!("  at {}.{}", frame.class_name, frame.method_name);
+                }
+            }
+        }
+    }
+}
+
+fn build_string_duplicates_table(report: &mnemosyne_core::analysis::StringReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Value", CellAlignment::Left),
+        header_cell("Count", CellAlignment::Right),
+        header_cell("Waste", CellAlignment::Right),
+    ]);
+
+    for group in report.duplicate_groups.iter().take(10) {
+        let value_cell = truncate_for_table(&group.value, STRING_VALUE_WIDTH);
+        table.add_row(vec![
+            Cell::new(value_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(group.count),
+            right_cell(format_megabytes(group.total_wasted_bytes)),
+        ]);
+    }
+
+    table
+}
+
+fn build_collection_table(report: &mnemosyne_core::analysis::CollectionReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Type", CellAlignment::Left),
+        header_cell("Size", CellAlignment::Right),
+        header_cell("Capacity", CellAlignment::Right),
+        header_cell("Fill", CellAlignment::Right),
+        header_cell("Waste", CellAlignment::Right),
+    ]);
+
+    for collection in report.oversized_collections.iter().take(10) {
+        let type_cell = truncate_for_table(&collection.collection_type, COLLECTION_TYPE_WIDTH);
+        table.add_row(vec![
+            Cell::new(type_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(collection.size),
+            right_cell(collection.capacity.unwrap_or(0)),
+            right_cell(format!(
+                "{:.0}%",
+                collection.fill_ratio.unwrap_or(0.0) * 100.0
+            )),
+            right_cell(format_megabytes(collection.waste_bytes)),
         ]);
     }
 

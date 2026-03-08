@@ -5,7 +5,7 @@
 
 use super::object_graph::{
     field_types, field_value_size, ClassId, ClassInfo, FieldDescriptor, GcRoot, GcRootType,
-    HeapObject, LoadedClass, ObjectGraph, ObjectKind,
+    HeapObject, LoadedClass, ObjectGraph, ObjectKind, StackFrame, StackTrace,
 };
 use super::tags::*;
 use crate::errors::{CoreError, CoreResult};
@@ -14,17 +14,37 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read};
 
+const MAX_RETAINED_PRIMITIVE_ARRAY_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Default)]
+pub struct ParseOptions {
+    pub retain_field_data: bool,
+}
+
 /// Parse an HPROF binary from a byte slice into an [`ObjectGraph`].
 pub fn parse_hprof(data: &[u8]) -> CoreResult<ObjectGraph> {
+    parse_hprof_with_options(data, ParseOptions::default())
+}
+
+/// Parse an HPROF binary from a byte slice into an [`ObjectGraph`] with explicit options.
+pub fn parse_hprof_with_options(data: &[u8], options: ParseOptions) -> CoreResult<ObjectGraph> {
     let mut cursor = Cursor::new(data);
-    parse_hprof_reader(&mut cursor)
+    parse_hprof_reader(&mut cursor, options)
 }
 
 /// Parse an HPROF file into an [`ObjectGraph`].
 pub fn parse_hprof_file(path: &str) -> CoreResult<ObjectGraph> {
+    parse_hprof_file_with_options(path, ParseOptions::default())
+}
+
+/// Parse an HPROF file into an [`ObjectGraph`] with explicit options.
+pub fn parse_hprof_file_with_options(
+    path: &str,
+    options: ParseOptions,
+) -> CoreResult<ObjectGraph> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    parse_hprof_reader(&mut reader)
+    parse_hprof_reader(&mut reader, options)
 }
 
 // ── Internal parser state ──────────────────────────────────────────
@@ -46,9 +66,10 @@ struct ParserState {
     raw_classes: HashMap<ClassId, RawClassInfo>,
     /// Cache of fully-resolved field layouts (super fields first).
     layout_cache: HashMap<ClassId, Vec<RawFieldDescriptor>>,
+    retain_field_data: bool,
 }
 
-fn parse_hprof_reader<R: Read>(reader: &mut R) -> CoreResult<ObjectGraph> {
+fn parse_hprof_reader<R: Read>(reader: &mut R, options: ParseOptions) -> CoreResult<ObjectGraph> {
     // ── Header ─────────────────────────────────────────────────────
     // Read null-terminated format string.
     let mut header_bytes: Vec<u8> = Vec::new();
@@ -80,6 +101,7 @@ fn parse_hprof_reader<R: Read>(reader: &mut R) -> CoreResult<ObjectGraph> {
         graph: ObjectGraph::new(id_size),
         raw_classes: HashMap::new(),
         layout_cache: HashMap::new(),
+        retain_field_data: options.retain_field_data,
     };
 
     // ── Top-level record loop ──────────────────────────────────────
@@ -95,6 +117,8 @@ fn parse_hprof_reader<R: Read>(reader: &mut R) -> CoreResult<ObjectGraph> {
         match tag {
             TAG_STRING_IN_UTF8 => read_string(reader, &mut state, length)?,
             TAG_LOAD_CLASS => read_load_class(reader, &mut state, id_size)?,
+            TAG_STACK_FRAME => read_stack_frame(reader, &mut state, id_size, length)?,
+            TAG_STACK_TRACE => read_stack_trace(reader, &mut state, id_size, length)?,
             TAG_HEAP_DUMP | TAG_HEAP_DUMP_SEGMENT => {
                 read_heap_dump(reader, &mut state, id_size, length)?;
             }
@@ -143,6 +167,86 @@ fn read_load_class<R: Read>(
             name_string_id,
         },
     );
+    Ok(())
+}
+
+fn read_stack_frame<R: Read>(
+    reader: &mut R,
+    state: &mut ParserState,
+    id_size: u8,
+    length: u32,
+) -> CoreResult<()> {
+    let mut body = vec![0u8; length as usize];
+    reader.read_exact(&mut body)?;
+    let mut cursor = Cursor::new(body);
+
+    let frame_id = read_id(&mut cursor, id_size)?;
+    let method_name_id = read_id(&mut cursor, id_size)?;
+    let _signature_id = read_id(&mut cursor, id_size)?;
+    let source_file_id = read_id(&mut cursor, id_size)?;
+    let class_serial = cursor.read_u32::<BigEndian>()?;
+    let line_number = cursor.read_i32::<BigEndian>()?;
+
+    let method_name = state
+        .graph
+        .strings
+        .get(&method_name_id)
+        .cloned()
+        .unwrap_or_else(|| format!("<unknown_method_{method_name_id}>"));
+    let class_name = state
+        .graph
+        .loaded_classes
+        .get(&class_serial)
+        .and_then(|loaded_class| state.graph.strings.get(&loaded_class.name_string_id))
+        .cloned()
+        .unwrap_or_else(|| format!("<unknown_class_serial_{class_serial}>"));
+    let source_file = if source_file_id == 0 {
+        None
+    } else {
+        state.graph.strings.get(&source_file_id).cloned()
+    };
+
+    state.graph.stack_frames.insert(
+        frame_id,
+        StackFrame {
+            frame_id,
+            method_name,
+            class_name,
+            source_file,
+            line_number,
+        },
+    );
+
+    Ok(())
+}
+
+fn read_stack_trace<R: Read>(
+    reader: &mut R,
+    state: &mut ParserState,
+    id_size: u8,
+    length: u32,
+) -> CoreResult<()> {
+    let mut body = vec![0u8; length as usize];
+    reader.read_exact(&mut body)?;
+    let mut cursor = Cursor::new(body);
+
+    let serial = cursor.read_u32::<BigEndian>()?;
+    let thread_serial = cursor.read_u32::<BigEndian>()?;
+    let frame_count = cursor.read_u32::<BigEndian>()?;
+    let mut frame_ids = Vec::with_capacity(frame_count as usize);
+    for _ in 0..frame_count {
+        frame_ids.push(read_id(&mut cursor, id_size)?);
+    }
+
+    state.graph.stack_traces.insert(
+        serial,
+        StackTrace {
+            serial,
+            thread_serial,
+            frame_ids,
+        },
+    );
+
     Ok(())
 }
 
@@ -389,32 +493,67 @@ fn parse_instance_dump<R: Read>(
     let class_id = read_id(reader, id_size)?;
     let data_len = reader.read_u32::<BigEndian>()?;
 
-    let mut data = vec![0u8; data_len as usize];
-    reader.read_exact(&mut data)?;
-
     // Resolve full field layout (inherited fields first).
     let layout = resolve_layout(&state.raw_classes, &mut state.layout_cache, class_id);
 
     let mut references = Vec::new();
-    if let Some(fields) = &layout {
-        let mut offset = 0usize;
-        for field in fields {
-            let width = match field_value_size(field.field_type, id_size) {
-                Some(w) => w as usize,
-                None => break,
-            };
-            if offset + width > data.len() {
-                break;
-            }
-            if field.field_type == field_types::OBJECT {
-                let ref_id = read_id_from_slice(&data[offset..offset + width]);
-                if ref_id != 0 {
-                    references.push(ref_id);
+    let field_data = if state.retain_field_data {
+        let mut data = vec![0u8; data_len as usize];
+        reader.read_exact(&mut data)?;
+
+        if let Some(fields) = &layout {
+            let mut offset = 0usize;
+            for field in fields {
+                let width = match field_value_size(field.field_type, id_size) {
+                    Some(w) => w as usize,
+                    None => break,
+                };
+                if offset + width > data.len() {
+                    break;
                 }
+                if field.field_type == field_types::OBJECT {
+                    let ref_id = read_id_from_slice(&data[offset..offset + width]);
+                    if ref_id != 0 {
+                        references.push(ref_id);
+                    }
+                }
+                offset += width;
             }
-            offset += width;
         }
-    }
+
+        data
+    } else {
+        if let Some(fields) = &layout {
+            let mut consumed = 0u32;
+            for field in fields {
+                let width = match field_value_size(field.field_type, id_size) {
+                    Some(w) => u32::from(w),
+                    None => break,
+                };
+                if consumed + width > data_len {
+                    break;
+                }
+
+                if field.field_type == field_types::OBJECT {
+                    let ref_id = read_id(reader, id_size)?;
+                    if ref_id != 0 {
+                        references.push(ref_id);
+                    }
+                } else {
+                    skip_bytes(reader, u64::from(width))?;
+                }
+                consumed += width;
+            }
+
+            if consumed < data_len {
+                skip_bytes(reader, u64::from(data_len - consumed))?;
+            }
+        } else {
+            skip_bytes(reader, u64::from(data_len))?;
+        }
+
+        Vec::new()
+    };
 
     let shallow_size = state
         .graph
@@ -430,6 +569,7 @@ fn parse_instance_dump<R: Read>(
             class_id,
             shallow_size,
             references,
+            field_data,
             kind: ObjectKind::Instance,
         },
     );
@@ -463,6 +603,7 @@ fn parse_obj_array_dump<R: Read>(
             class_id: array_class_id,
             shallow_size,
             references,
+            field_data: Vec::new(),
             kind: ObjectKind::ObjectArray {
                 length: num_elements,
             },
@@ -483,7 +624,17 @@ fn parse_prim_array_dump<R: Read>(
 
     let elem_width = field_value_size(element_type, id_size).unwrap_or(0) as u64;
     let total_data = num_elements as u64 * elem_width;
-    skip_bytes(reader, total_data)?;
+    let retain_data = state.retain_field_data
+        && matches!(element_type, field_types::BYTE | field_types::CHAR)
+        && total_data <= MAX_RETAINED_PRIMITIVE_ARRAY_BYTES;
+    let field_data = if retain_data {
+        let mut data = vec![0u8; total_data as usize];
+        reader.read_exact(&mut data)?;
+        data
+    } else {
+        skip_bytes(reader, total_data)?;
+        Vec::new()
+    };
 
     let shallow_size = (num_elements as u64 * elem_width) as u32;
 
@@ -494,6 +645,7 @@ fn parse_prim_array_dump<R: Read>(
             class_id: 0,
             shallow_size,
             references: Vec::new(),
+            field_data,
             kind: ObjectKind::PrimitiveArray {
                 element_type,
                 length: num_elements,
@@ -604,7 +756,17 @@ fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hprof::test_fixtures::{build_segment_fixture, build_simple_fixture};
+    use crate::hprof::test_fixtures::{
+        build_segment_fixture, build_simple_fixture, HeapDumpBuilder, HprofBuilder,
+    };
+
+    fn encode_node_instance(next_id: u64, value: i32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&next_id.to_be_bytes());
+        bytes.extend_from_slice(&value.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes
+    }
 
     #[test]
     fn test_tag_constants_match_hprof_spec() {
@@ -701,6 +863,17 @@ mod tests {
         assert_eq!(obj1.class_id, 0x200);
         assert_eq!(obj1.kind, ObjectKind::Instance);
         assert_eq!(obj1.references, vec![0x2002]);
+        assert!(obj1.field_data.is_empty());
+
+        let graph = parse_hprof_with_options(
+            &data,
+            ParseOptions {
+                retain_field_data: true,
+            },
+        )
+        .expect("parse should succeed");
+        let obj1 = graph.objects.get(&0x2001).expect("0x2001 should exist");
+        assert_eq!(obj1.field_data, encode_node_instance(0x2002, 42));
 
         // 0x2002: next=0x2003
         let obj2 = graph.objects.get(&0x2002).expect("0x2002 should exist");
@@ -737,6 +910,115 @@ mod tests {
             }
         );
         assert!(arr.references.is_empty());
+        assert!(arr.field_data.is_empty());
+    }
+
+    #[test]
+    fn test_parse_small_byte_array_retains_field_data() {
+        let mut builder = HprofBuilder::new(8);
+        let mut heap = HeapDumpBuilder::new(8);
+        heap.add_prim_array_dump_bytes(0x5000, b"hello");
+        builder.add_heap_dump(heap.build());
+
+        let graph = parse_hprof_with_options(
+            &builder.build(),
+            ParseOptions {
+                retain_field_data: true,
+            },
+        )
+        .expect("parse should succeed");
+        let array = graph.objects.get(&0x5000).expect("byte array should exist");
+
+        assert_eq!(array.field_data, b"hello");
+    }
+
+    #[test]
+    fn test_parse_small_char_array_retains_field_data() {
+        let mut builder = HprofBuilder::new(8);
+        let mut heap = HeapDumpBuilder::new(8);
+        heap.add_prim_array_dump_chars(0x5002, &[b'H' as u16, b'i' as u16]);
+        builder.add_heap_dump(heap.build());
+
+        let graph = parse_hprof_with_options(
+            &builder.build(),
+            ParseOptions {
+                retain_field_data: true,
+            },
+        )
+        .expect("parse should succeed");
+        let array = graph.objects.get(&0x5002).expect("char array should exist");
+
+        assert_eq!(array.field_data, vec![0, b'H', 0, b'i']);
+    }
+
+    #[test]
+    fn test_parse_oversized_byte_array_skips_field_data() {
+        let oversized = vec![0xAB; (MAX_RETAINED_PRIMITIVE_ARRAY_BYTES as usize) + 1];
+        let mut builder = HprofBuilder::new(8);
+        let mut heap = HeapDumpBuilder::new(8);
+        heap.add_prim_array_dump_bytes(0x5001, &oversized);
+        builder.add_heap_dump(heap.build());
+
+        let graph = parse_hprof_with_options(
+            &builder.build(),
+            ParseOptions {
+                retain_field_data: true,
+            },
+        )
+        .expect("parse should succeed");
+        let array = graph.objects.get(&0x5001).expect("byte array should exist");
+
+        assert!(array.field_data.is_empty());
+    }
+
+    #[test]
+    fn test_parse_defaults_to_not_retaining_field_data() {
+        let data = build_simple_fixture();
+        let graph = parse_hprof(&data).expect("parse should succeed");
+        let instance = graph.objects.get(&0x2001).expect("instance should exist");
+        assert!(instance.field_data.is_empty());
+
+        let mut builder = HprofBuilder::new(8);
+        let mut heap = HeapDumpBuilder::new(8);
+        heap.add_prim_array_dump_bytes(0x5000, b"hello");
+        builder.add_heap_dump(heap.build());
+
+        let graph = parse_hprof(&builder.build()).expect("parse should succeed");
+        let array = graph.objects.get(&0x5000).expect("byte array should exist");
+        assert!(array.field_data.is_empty());
+    }
+
+    #[test]
+    fn test_parse_stack_frame_and_trace_records() {
+        let mut builder = HprofBuilder::new(8);
+        builder
+            .add_string(1, "com/example/Worker")
+            .add_string(2, "run")
+            .add_string(3, "()V")
+            .add_string(4, "Worker.java")
+            .add_load_class(7, 0x200, 0, 1)
+            .add_stack_frame(0x9000, 2, 3, 4, 7, 123)
+            .add_stack_trace(77, 9, &[0x9000]);
+
+        let graph = parse_hprof(&builder.build()).expect("parse should succeed");
+
+        let frame = graph
+            .stack_frames
+            .get(&0x9000)
+            .expect("stack frame should be parsed");
+        assert_eq!(frame.frame_id, 0x9000);
+        assert_eq!(frame.method_name, "run");
+        assert_eq!(frame.class_name, "com/example/Worker");
+        assert_eq!(frame.source_file.as_deref(), Some("Worker.java"));
+        assert_eq!(frame.line_number, 123);
+
+        let trace = graph
+            .stack_traces
+            .get(&77)
+            .expect("stack trace should be parsed");
+        assert_eq!(trace.serial, 77);
+        assert_eq!(trace.thread_serial, 9);
+        assert_eq!(trace.frame_ids, vec![0x9000]);
     }
 
     #[test]
