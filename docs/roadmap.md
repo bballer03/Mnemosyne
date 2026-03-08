@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap & Milestones
 
-> **Last updated:** 2026-03-08 (post M3-P1-B2 — histogram grouping, suspect ranking, unreachable objects, and class-level diff landed)
+> **Last updated:** 2026-03-08 (post v0.2.0 release — deployed to GitHub Releases, GHCR Docker, crates.io, Homebrew; real-world validation complete)
 > **Owner:** Tech PM Agent
 > **Status:** Living document — updated after each major implementation batch
 
@@ -32,9 +32,9 @@ Mnemosyne has the foundations to become **the first Rust-native, AI-assisted hea
 
 Five properties position Mnemosyne to stand out in a crowded JVM tooling ecosystem: **(1)** Rust performance enabling streaming analysis of heap dumps that exceed host RAM; **(2)** a provenance system unique among heap analyzers, giving users and automation confidence in result trustworthiness; **(3)** MCP-first architecture that makes heap analysis a conversation in the developer's IDE rather than a separate tool; **(4)** AI-native design with well-shaped type contracts (`AiInsights`, `AiWireExchange`, config plumbing) ready for LLM wiring; and **(5)** automation-friendly structured output (JSON, TOON) enabling CI regression detection with machine-readable leak signals.
 
-**M1.5 update (2026-03-08): The critical HPROF tag-constant bug has been fixed and the graph-backed pipeline is now validated on real-world data.** The tag constants in `binary_parser.rs`, `parser.rs`, and `gc_path.rs` have been corrected (`TAG_HEAP_DUMP_SEGMENT` = `0x1C`). Real-world Kotlin + Spring Boot heap dumps (~110MB, ~150MB) now parse correctly into populated object graphs, produce meaningful dominator trees with real retained sizes, and generate non-synthetic GC paths. Leak-ID validation has been added to `explain`, `fix`, and MCP `explain_leak`. The workspace now carries 101 passing tests (66 core + 5 CLI unit + 30 CLI integration), including 4 real-world HPROF integration tests that validate the end-to-end pipeline against actual JVM dumps.
+**v0.2.0 update (2026-03-08): v0.2.0 is deployed to all channels and real-world validated.** v0.2.0 is published on GitHub Releases (5 binary targets), GHCR Docker (`ghcr.io/bballer03/mnemosyne:0.2.0`), crates.io (`mnemosyne-core` 0.2.0 + `mnemosyne-cli` 0.2.0), and Homebrew (formula updated with correct SHA256 digests). A comprehensive real-world validation against a 150MB Spring Boot production heap dump confirmed: 110 tests passing (75 core + 35 CLI), zero clippy warnings, clean formatting, all 11 CLI subcommands functional, and graph-backed analysis producing real dominator trees with retained sizes on production data. The first benchmark baseline is published: streaming parser at 2.25 GiB/s, binary parser at 90 MiB/s, dominator tree in 1.85s, and a 3.56x RSS:dump ratio (within the 4x safety threshold).
 
-Honest assessment: **the analytical foundation is sound and real-world-validated, but significant feature work remains** to deliver on the full vision. The core pipeline — object graph, dominator tree, retained sizes, unified leak detection, GC paths, provenance system — works correctly on production data. The distribution story is solid: v0.1.1 is published on crates.io, GitHub Releases, Homebrew, and Docker. The AI module remains 100% stubbed. v0.1.1 completed the internal `core/src/` restructure from flat files into grouped module directories (`hprof/`, `graph/`, `analysis/`, `mapper/`, `report/`, `fix/`, `mcp/`) while preserving public API re-exports in `lib.rs`. Benchmarks, performance data, and analysis feature parity with Eclipse MAT are the primary remaining gaps. **The immediate priority is shipping a v0.2.0 correctness release, establishing a benchmark baseline, and then delivering M3 core analysis features (MAT-style suspects, histogram grouping, enhanced diff, thread inspection) that make Mnemosyne a credible MAT alternative.**
+Honest assessment: **the analytical foundation is strong, real-world-validated, and shipping to users — but significant feature work remains** to deliver on the full vision. The core pipeline — object graph, dominator tree, retained sizes, histogram grouping, MAT-style suspects, unreachable objects, class-level diff, unified leak detection, GC paths, and provenance system — all work correctly on production data. The distribution story is excellent: v0.2.0 is live across five channels. The AI module remains 100% stubbed. Benchmark data is now published. **The immediate priorities are: (1) completing M3 Phase 2 investigation features (thread inspection, collection inspection, string analysis, OQL), (2) validating scaling at 1GB+ dump sizes, and (3) wiring real AI to the now-robust analysis pipeline.** These three tracks close the MAT parity gap, validate scalability, and deliver on the "AI-powered" promise that differentiates Mnemosyne in the market.
 
 ---
 
@@ -44,10 +44,13 @@ Honest assessment: **the analytical foundation is sound and real-world-validated
 
 | Capability | Status | Honest Assessment |
 |---|---|---|
-| HPROF streaming parser | ✅ Validated | Two-tier parsing: `core::hprof::parser` streams headers + record tags for fast class histograms. `core::hprof::binary_parser` parses binary HPROF records into `ObjectGraph`. Tag constants corrected in M1.5 — both `HEAP_DUMP` (0x0C) and `HEAP_DUMP_SEGMENT` (0x1C) records are now parsed correctly. Validated on real-world Kotlin+Spring Boot dumps (~110MB, ~150MB). |
-| Leak detection | ✅ Graph-backed + heuristic fallback | `detect_leaks()` attempts the graph-backed path first (ObjectGraph → dominator → retained sizes), then falls back to heuristics with provenance markers. Both paths validated on real-world data. Leak-ID validation added in M1.5 — unknown IDs now return errors. |
-| Graph / dominator tree | ✅ Real-world validated | `core::graph::dominator::build_dominator_tree()` runs Lengauer–Tarjan over the full object reference graph with virtual super-root. Validated on both synthetic fixtures and real-world JVM dumps. Produces meaningful retained sizes from real object data. |
+| HPROF streaming parser | ✅ Validated | Two-tier parsing: `core::hprof::parser` streams headers + record tags at 2.25 GiB/s for fast class histograms. `core::hprof::binary_parser` parses binary HPROF records into `ObjectGraph` at 90 MiB/s. Tag constants corrected in M1.5 — both `HEAP_DUMP` (0x0C) and `HEAP_DUMP_SEGMENT` (0x1C) records are now parsed correctly. Validated on real-world Kotlin+Spring Boot dumps (150MB). First benchmark baseline published. |
+| Leak detection | ✅ Graph-backed + heuristic fallback | `detect_leaks()` attempts the graph-backed path first (ObjectGraph → dominator → retained sizes), then falls back to heuristics with provenance markers. MAT-style suspect ranking with retained/shallow ratio, accumulation-point detection, dominated-count context, and composite scoring delivered in M3-P1-B2. Both paths validated on real-world data. Leak-ID validation enforced. |
+| Graph / dominator tree | ✅ Real-world validated + benchmarked | `core::graph::dominator::build_dominator_tree()` runs Lengauer–Tarjan over the full object reference graph with virtual super-root. Validated on both synthetic fixtures and real-world JVM dumps. Produces meaningful retained sizes. Dominator tree builds in 1.85s on 156 MB dump. RSS at 3.56x dump size (within 4x threshold). |
 | GC root path tracing | ✅ Real-world validated | `core::graph::gc_path` tries `ObjectGraph` BFS first, then budget-limited `GcGraph`, then synthetic paths. Primary BFS path activates on real-world dumps. Provenance labels honestly indicate data quality. |
+| Histogram grouping | ✅ Delivered | Graph-backed grouping by class, package, classloader with instance counts, shallow sizes, and retained sizes. CLI `analyze --group-by` renders grouped output. |
+| Unreachable objects | ✅ Delivered | BFS/DFS from GC roots identifies unreachable objects with total count/shallow size and per-class breakdown. |
+| Enhanced heap diff | ✅ Delivered | Record-level diff preserved; class-level deltas (instance, shallow-byte, retained-byte) added when both snapshots build object graphs. |
 | AI / LLM insights | ❌ Stubbed | `core::analysis::generate_ai_insights()` returns deterministic template text. No HTTP client in `Cargo.toml`, no API calls, no LLM SDK. Config plumbing exists (`AiConfig` with provider/model/temperature fields) but terminates at the stub. The "AI-powered" claim in README is aspirational until M5. |
 | Fix suggestions | ⚠️ Template only | `core::fix::propose_fix()` generates template patches in three styles (Minimal, Defensive, Comprehensive). No AI involvement, no code analysis. Useful scaffolding with provenance markers. Leak-ID validation now enforced. |
 | Source mapping | ✅ Implemented | `core::mapper::map_to_code()` scans project dirs for `.java`/`.kt` files, runs `git blame` for metadata. Basic but functional for local projects. |
@@ -55,50 +58,62 @@ Honest assessment: **the analytical foundation is sound and real-world-validated
 | MCP server | ✅ Wired | `core::mcp::serve()` runs a stdio JSON-RPC loop with async Tokio I/O. Handles 7 methods. Works end-to-end; analysis quality now backed by real graph-based results on real dumps. AI insights remain stubbed. |
 | Config system | ✅ Implemented | `cli::config_loader` reads TOML files from 5 locations + env vars + CLI flags. `core::config` defines `AppConfig`, `AiConfig`, `ParserConfig`, `AnalysisConfig`. Clean, well-layered. |
 | Provenance system | ✅ Implemented | `ProvenanceKind` (Synthetic, Partial, Fallback, Placeholder) + `ProvenanceMarker` on `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, `FixResponse`. Rendered in all report formats and CLI output. Unique feature in the heap-analysis space. |
+| Distribution | ✅ Full deployment | v0.2.0 live on GitHub Releases (5 targets), GHCR Docker, crates.io (both crates), Homebrew. Docker build validation in CI. |
+| Benchmarking | ✅ Baseline published | Criterion benchmarks for parser, graph, dominator. RSS measurements. Scaling projections. Published in `docs/performance/memory-scaling.md`. |
 
 ### Technical Strengths
 
-- **Rust performance model**: streaming parser with `BufReader`, no GC, predictable memory. Can handle files larger than RAM in principle.
+- **Rust performance model**: streaming parser at 2.25 GiB/s with `BufReader`, no GC, predictable memory. Full graph analysis at 3.56x RSS:dump ratio. Can handle files larger than RAM via the streaming path.
+- **Published benchmark baseline**: Criterion benchmarks + RSS measurements against a 156 MB real-world fixture. Parser throughput, dominator timing, graph query latency, and memory scaling projections all documented.
 - **Clean module separation**: grouped implementation domains in `core/src/` (`hprof/`, `graph/`, `analysis/`, `mapper/`, `report/`, `fix/`, `mcp/`) plus shared `config.rs`, `errors.rs`, and `lib.rs` re-exports.
-- **Real object graph (real-world validated)**: `core::hprof::binary_parser` parses binary HPROF records into an `ObjectGraph` with objects, reference edges, class metadata, and GC roots. Validated on both synthetic fixtures (0x0C) and real-world Kotlin+Spring Boot dumps (0x1C).
-- **Real dominator tree (real-world validated)**: `core::graph::dominator` implements Lengauer–Tarjan over the full object graph with virtual super-root. Computes retained sizes via post-order accumulation. Validated on real data.
-- **Graph-backed analysis pipeline (real-world validated)**: `analyze_heap()` and `detect_leaks()` both attempt object-graph → dominator-tree → retained-size analysis first, with automatic fallback to heuristics and provenance markers. Pipeline activates and produces meaningful results on real-world dumps.
+- **Real object graph (real-world validated)**: `core::hprof::binary_parser` parses binary HPROF records into an `ObjectGraph` with objects, reference edges, class metadata, and GC roots. Validated on real-world Kotlin+Spring Boot dumps (150MB).
+- **Real dominator tree (benchmarked)**: `core::graph::dominator` implements Lengauer–Tarjan over the full object graph with virtual super-root. Computes retained sizes via post-order accumulation. 1.85s on 156 MB fixture.
+- **Graph-backed analysis pipeline (production-validated)**: `analyze_heap()` and `detect_leaks()` both attempt object-graph → dominator-tree → retained-size analysis first, with automatic fallback to heuristics and provenance markers. Pipeline activates and produces meaningful results on real-world production dumps.
+- **MAT-style suspect ranking**: Retained/shallow ratio, accumulation-point detection, dominated-count context, short reference chains, and composite scoring.
+- **Histogram grouping**: Graph-backed grouping by class, package prefix, and classloader with instance, shallow-size, and retained-size totals.
+- **Unreachable object analysis**: GC-root reachability traversal with per-class unreachable count and shallow-size breakdown.
+- **Class-level heap diff**: Instance, shallow-byte, and retained-byte deltas between snapshots when both build object graphs.
 - **Streaming design**: `core::hprof::parser` processes HPROF records sequentially without loading the full dump. Foundation for scaling to multi-GB files.
 - **Provenance system**: genuinely novel for a heap analyzer. Labels every synthetic/heuristic output surface so consumers know what to trust.
 - **Multi-format output**: 5 report formats with consistent provenance rendering. HTML is XSS-hardened. TOON enables compact CI consumption.
-- **101-test suite with CI**: 66 core + 5 CLI unit + 30 CLI integration tests running in GitHub Actions, including 4 real-world HPROF validation tests. Synthetic and segment HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, end-to-end CLI testing, and targeted error-path coverage.
+- **110-test suite with CI**: 75 core + 35 CLI tests running in GitHub Actions, including real-world HPROF validation tests. Synthetic and segment HPROF test fixtures plus the `test-fixtures` cargo feature enable deterministic parser, graph, end-to-end CLI testing, and targeted error-path coverage.
 - **Config hierarchy**: TOML + env vars + CLI flags with clear precedence. Production-ready design pattern.
 - **MCP integration**: stdio JSON-RPC server with 7 handlers. First-mover for heap analysis in the MCP ecosystem.
 - **Type contracts**: well-shaped request/response types (`AnalyzeRequest`, `AnalyzeResponse`, `GcPathResult`, `FixResponse`, etc.) that establish stable contracts between CLI, MCP, and core.
-- **Distribution**: v0.1.1 published on crates.io, GitHub Releases (5 targets), Homebrew, Docker (GHCR). All channels functional.
+- **Full distribution**: v0.2.0 published on crates.io, GitHub Releases (5 targets), Homebrew, Docker (GHCR). Docker build validation in CI. All channels functional and validated.
 
 ### Major Weaknesses
 
 - **AI is 100% stubbed**: `generate_ai_insights()` returns hardcoded template strings. There are zero HTTP client dependencies in `Cargo.toml`. The `AiConfig` fields (provider, model, temperature, API key) exist but connect to nothing. Every "AI-powered" claim in documentation is marketing ahead of implementation.
-- **Benchmark infrastructure exists, but no published baseline exists yet**: `criterion` benches now cover parser throughput, graph construction, and dominator computation, and `scripts/measure_rss.sh` can capture CLI parse RSS. Throughput and RSS at scale are still unknown because the initial baseline has not been collected or published.
-- **Memory scaling unknown at 1GB+**: validated on 110-150MB dumps. In-memory `ObjectGraph` may blow up on multi-GB dumps. No data yet.
-- **MAT parity gap remains**: thread inspection, collection inspection, OQL, deeper ClassLoader analysis, and large-dump ergonomics are still missing. M3-P1-B2 closed histogram grouping, MAT-style suspect ranking, unreachable-object reporting, and class-level diff.
-- **Diff is record-level, not object-level**: `diff_heaps()` compares aggregate record/class statistics. It cannot track individual object migration or reference chain changes.
+- **Memory scaling unknown at 1GB+**: validated on 150MB dumps with 3.56x RSS ratio. Linear projection suggests 1GB dumps need ~3.6GB RSS and 4GB dumps need ~14GB, exceeding most workstations. No empirical data beyond 156 MB.
+- **MAT parity gap remains for investigation features**: thread inspection, collection inspection, ClassLoader analysis, string analysis, and OQL-style querying are still missing. These are the features that make MAT indispensable for deep investigation. M3-P1 closed the core analysis gap (histogram grouping, suspect ranking, unreachable objects, class-level diff) but investigative depth lags.
+- **`leaks` produces no output on zero leaks**: exit 0 but silent. Users need an explicit "No leaks detected" message for UX confidence. (Observed during v0.2.0 validation.)
+- **`fix` produces output when `analyze` reports 0 leaks**: the fix surface operates on dominator analysis independently of the leak filter, which can confuse users. Fix output is correctly labeled `[SYNTHETIC] [PLACEHOLDER]` but the workflow disconnect is a UX issue.
+- **Diff is class-level, not object-level**: `diff_heaps()` now shows class-level deltas (instance, shallow, retained) but cannot track individual object migration or reference chain changes between snapshots.
 - **Graph module naming is misleading**: `summarize_graph()` still exists as a lightweight fallback that builds a synthetic tree from top-12 entries. Its name suggests more than it delivers, though the real dominator tree now exists alongside it.
 - **No sample real-world data for tutorials**: real-world validation exists in CI (optional fixture), but no example `.hprof` files for documentation or onboarding.
+- **`docs/api.md` is placeholder scaffolding**: no real MCP JSON-RPC documentation exists. Contributors expect an API reference and find a stub.
+- **`docs/examples/` is placeholder**: no real CLI workflow or MCP integration examples exist.
 
 ### Maturity Assessment
 
 | Subsystem | Maturity | Rationale |
 |---|---|---|
-| Parser | Alpha+ | Both streaming (record-level stats) and binary (full object graph) parsers validated on real-world HPROF files. Tag constants correct. Lacks benchmarks, threading, and multi-GB validation. |
-| Leak detection | Alpha+ | Graph-backed + heuristic fallback both validated on real data. Leak-ID validation enforced. MAT-style suspect ranking, accumulation-point detection, and short reference-chain context landed in M3-P1-B2. |
-| Graph / Dominator | Alpha+ | Lengauer–Tarjan validated on real-world object graphs. Retained sizes correct. M3-P1-B2 added histogram grouping and unreachable-object analysis; the main remaining gap is a browsable dominator/explorer view. |
+| Parser | Beta- | Both streaming (2.25 GiB/s) and binary (90 MiB/s) parsers validated on real-world HPROF files. First benchmark baseline published. Lacks threading and multi-GB validation. |
+| Leak detection | Beta- | Graph-backed + heuristic fallback both validated on real data. MAT-style suspect ranking with composite scoring. Leak-ID validation enforced. Silent output on zero leaks is a UX gap. |
+| Graph / Dominator | Beta- | Lengauer–Tarjan validated on real-world object graphs. Retained sizes correct. Benchmarked at 1.85s on 156 MB. Histogram grouping and unreachable-object analysis delivered. Main remaining gap: browsable dominator/explorer view. |
 | AI | Pre-alpha | Fully stubbed. Returns deterministic text. Not wired to any model. |
 | GC root paths | Alpha+ | `ObjectGraph` BFS activates on real dumps. Triple fallback with honest provenance. |
 | Fix suggestions | Alpha | Template-based scaffolding with leak-ID validation. No code analysis or AI. |
 | Source mapping | Alpha | Works for basic cases. No IDE integration beyond file scanning. |
 | Reporting | Beta | 5 formats, XSS hardening, provenance rendering, well-tested. Ready for use. |
-| MCP server | Alpha+ | Wired, functional, and backed by real graph-based analysis on real dumps. AI insights remain stubbed. |
+| MCP server | Alpha+ | Wired, functional, and backed by real graph-based analysis on real dumps. AI insights remain stubbed. Needs proper tool descriptions and streaming support. |
 | Config | Beta | Clean hierarchy, env + TOML + CLI. Production-ready pattern. |
 | Provenance | Beta | Unique, well-integrated across all surfaces. Novel in the space. |
-| Testing | Beta- | 110 tests across the workspace, including real-world HPROF validation plus dedicated histogram/suspect/unreachable/diff coverage. Reusable `test-fixtures` feature, GitHub Actions CI, and Criterion benchmark targets for parser/graph/dominator workloads. No property-based testing and no published performance baseline yet. |
-| CI/CD | Beta- | GitHub Actions CI runs check + test + clippy + fmt. Tagged release workflow cross-compiles for 5 targets + Docker. Nightly builds still absent. |
+| Testing | Beta- | 110 tests across the workspace, including real-world HPROF validation plus dedicated histogram/suspect/unreachable/diff coverage. Criterion benchmarks published. No property-based testing or coverage tracking. |
+| CI/CD | Beta | GitHub Actions CI runs check + test + clippy + fmt. Release workflow cross-compiles 5 targets + Docker + crates.io. Docker build validation added. Nightly builds still absent. |
+| Distribution | Beta | v0.2.0 live on GitHub Releases, crates.io, GHCR Docker, Homebrew. All channels validated. |
+| Benchmarking | Alpha+ | First baseline published with Criterion data + RSS measurements + scaling projections. Lacks comparative benchmarks vs MAT/hprof-slurp and 1GB+ validation. |
 
 ---
 
@@ -509,8 +524,9 @@ Each of these views corresponds to a core analysis capability and should be desi
 > | M1 — Stability & Trust | [milestone-1-stability-and-trust.md](design/milestone-1-stability-and-trust.md) | ✅ Complete (real-world validated via M1.5) |
 > | M1.5 — Real-World Hardening | [milestone-1.5-real-world-hardening.md](design/milestone-1.5-real-world-hardening.md) | ✅ Complete |
 > | M2 — Packaging, Releases, DX | [milestone-2-packaging-releases-dx.md](design/milestone-2-packaging-releases-dx.md) | ✅ Complete |
-> | M3 — Core Heap Analysis Parity | [milestone-3-core-heap-analysis-parity.md](design/milestone-3-core-heap-analysis-parity.md) | ⚬ In Progress (M3-P1-B1 and M3-P1-B2 complete) |
+> | M3 — Core Heap Analysis Parity | [milestone-3-core-heap-analysis-parity.md](design/milestone-3-core-heap-analysis-parity.md) | ⚬ In Progress (M3-P1 complete, P2-P3 pending) |
 > | M3-P1-B2 — Core Analysis Features | [m3-p1-b2-core-analysis-features.md](design/m3-p1-b2-core-analysis-features.md) | ✅ Complete |
+> | M3-P2 — Advanced Analysis | [M3-phase2-analysis.md](design/M3-phase2-analysis.md) | ⚬ Design Complete, Implementation Pending |
 > | M4 — UI & Usability | [milestone-4-ui-and-usability.md](design/milestone-4-ui-and-usability.md) | ⚬ Pending |
 > | M5 — AI / MCP / Differentiation | [milestone-5-ai-mcp-differentiation.md](design/milestone-5-ai-mcp-differentiation.md) | ⚬ Pending |
 > | M6 — Ecosystem & Community | [milestone-6-ecosystem-and-community.md](design/milestone-6-ecosystem-and-community.md) | ⚬ Pending |
@@ -652,7 +668,7 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 **Why it matters:** Users choose heap analysis tools based on what they can answer. MAT is the benchmark. Mnemosyne needs to answer the same questions, better.
 
-**Status:** ⚬ In Progress — Phase 1 batches M3-P1-B1 and M3-P1-B2 are complete. Benchmark scaffolding, RSS tooling, histogram grouping, MAT-style suspect ranking, unreachable-object analysis, and class-level diff are all landed. Remaining M3 work centers on thread inspection, ClassLoader analysis, collection inspection, OQL, and large-dump scaling.
+**Status:** ⚬ In Progress — Phase 1 complete (v0.2.0 shipped). Benchmark baseline published. Phase 2 design doc ready ([M3-phase2-analysis.md](design/M3-phase2-analysis.md)). Remaining M3 work centers on thread inspection, ClassLoader analysis, collection inspection, string analysis, OQL, and large-dump scaling validation.
 
 **Key Deliverables:**
 1. MAT-style leak suspects algorithm — objects with disproportionate retained vs shallow size
@@ -1009,21 +1025,21 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 
 | # | Item | Priority | Impact | Effort | Dependencies | Milestone | Status |
 |---|---|---|---|---|---|---|---|
-| 1 | Object graph parser | P0 | High | XL | None | M1 | ✅ Done (synthetic) |
-| 2 | Dominator tree algorithm | P0 | High | L | Object graph | M1 | ✅ Done (synthetic) |
-| 3 | Retained size computation | P0 | High | M | Dominator tree | M1 | ✅ Done (synthetic) |
+| 1 | Object graph parser | P0 | High | XL | None | M1 | ✅ Done |
+| 2 | Dominator tree algorithm | P0 | High | L | Object graph | M1 | ✅ Done |
+| 3 | Retained size computation | P0 | High | M | Dominator tree | M1 | ✅ Done |
 | 4 | Sample HPROF test fixtures | P0 | High | M | None | M1 | ✅ Done |
 | 5 | CI pipeline (GitHub Actions) | P0 | High | M | None | M1 | ✅ Done |
-| 6 | Unify `detect_leaks()` onto graph path | P0 | High | L | Object graph + retained sizes | M1 | ✅ Done (synthetic) |
-| 7 | Rewrite GC path over full object graph | P0 | High | M | Object graph | M1 | ✅ Done (synthetic) |
+| 6 | Unify `detect_leaks()` onto graph path | P0 | High | L | Object graph + retained sizes | M1 | ✅ Done |
+| 7 | Rewrite GC path over full object graph | P0 | High | M | Object graph | M1 | ✅ Done |
 | 8 | Object graph navigation API | P0 | High | M | Object graph | M1 | ✅ Done |
 | 9 | Integration tests via reusable synthetic HPROF fixtures | P0 | High | L | Test fixtures + CI | M1 | ✅ Done |
-| **9a** | **Fix HPROF tag constants (0x0D/0x1C swap)** | **P0** | **Critical** | **S** | **None** | **M1.5** | **✅ Done** |
-| **9b** | **Add HEAP_DUMP_SEGMENT (0x1C) parsing support** | **P0** | **Critical** | **M** | **Tag fix (9a)** | **M1.5** | **✅ Done** |
-| **9c** | **Real-world HPROF test fixture + validation tests** (all 87 tests are synthetic-only — this gap directly allowed the tag bug to ship) | **P0** | **Critical** | **M** | **Tag fix (9a)** | **M1.5** | **✅ Done** |
-| **9d** | **End-to-end pipeline validation on real dumps** | **P0** | **High** | **M** | **9a + 9b + 9c** | **M1.5** | **✅ Done** |
-| **9e** | **Investigate heuristic fallback zero-results on real data** | **P1** | **High** | **M** | **Tag fix (9a)** | **M1.5** | **✅ Done** |
-| **9f** | **Leak-ID validation for explain/fix commands** | **P1** | **Medium** | **S** | **None** | **M1.5** | **✅ Done** |
+| 9a | Fix HPROF tag constants (0x0D/0x1C swap) | P0 | Critical | S | None | M1.5 | ✅ Done |
+| 9b | Add HEAP_DUMP_SEGMENT (0x1C) parsing support | P0 | Critical | M | Tag fix (9a) | M1.5 | ✅ Done |
+| 9c | Real-world HPROF test fixture + validation tests | P0 | Critical | M | Tag fix (9a) | M1.5 | ✅ Done |
+| 9d | End-to-end pipeline validation on real dumps | P0 | High | M | 9a + 9b + 9c | M1.5 | ✅ Done |
+| 9e | Investigate heuristic fallback zero-results on real data | P1 | High | M | Tag fix (9a) | M1.5 | ✅ Done |
+| 9f | Leak-ID validation for explain/fix commands | P1 | Medium | S | None | M1.5 | ✅ Done |
 | 10 | Release binaries | P1 | High | M | CI pipeline (✅) | M2 | ✅ Done |
 | 11 | cargo install support | P1 | High | S | Release setup | M2 | ✅ Done |
 | 12 | CLI progress bars + colors | P1 | Medium | S | None | M2 | ✅ Done |
@@ -1031,129 +1047,135 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 | 13 | MAT-style leak suspects | P1 | High | L | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 14 | Histogram by class/package/classloader | P1 | High | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 15 | Homebrew formula | P1 | Medium | S | Release binaries | M2 | ✅ Done |
-| 16 | LLM integration (real API calls) | P1 | High | L | M1.5 ✅ + M3 analysis context | M5 | ⚬ Pending |
+| 16 | LLM integration (real API calls) | P1 | High | L | M3 analysis context | M5 | ⚬ Pending |
 | 17 | Enhanced heap diff | P1 | Medium | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 18 | Static interactive HTML reports | P2 | High | L | Reporting exists | M4 | ⚬ Pending |
-| 19 | OQL query engine | P2 | High | XL | M3 histogram/suspects | M3 | ⚬ Pending |
-| 20 | Thread inspection | P2 | Medium | L | M1.5 ✅ | M3 | ⚬ Pending |
+| 19 | OQL query engine | P2 | High | XL | M3 Phase 2 data model | M3 | ⚬ Pending |
+| 20 | Thread inspection | P1 | High | L | M1.5 ✅ | M3 | ⚬ Pending |
 | 21 | ClassLoader analysis | P2 | Medium | L | M1.5 ✅ | M3 | ⚬ Pending |
 | 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ⚬ Pending |
-| 23 | Collection inspection | P2 | Medium | M | M1.5 ✅ | M3 | ⚬ Pending |
+| 23 | Collection inspection | P1 | High | M | M1.5 ✅ | M3 | ⚬ Pending |
 | 24 | Unreachable objects | P2 | Medium | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 25 | Configurable prompt/task runner | P2 | Medium | L | LLM integration | M5 | ⚬ Pending |
 | 26 | AI conversation mode | P2 | Medium | L | LLM integration | M5 | ⚬ Pending |
 | 27 | Docker image | P2 | Medium | S | Release automation | M2 | ✅ Done |
 | 28 | Example projects + sample dumps | P2 | Medium | M | Test fixtures (✅) | M6 | ⚬ Pending |
-| 29 | Benchmark suite (`criterion`) | P1 | Medium | M | M1.5 ✅ | M3 | ⚠️ Partial — Criterion bench targets landed in M3-P1-B1 |
+| 29 | Benchmark suite (`criterion`) | P1 | Medium | M | M1.5 ✅ | M3 | ✅ Done — baseline published in `docs/performance/memory-scaling.md` |
 | 30 | Plugin/extension system | P3 | Medium | XL | Stable APIs (M3+) | M6 | ⚬ Pending |
 | 31 | Full interactive heap browser | P3 | High | XL | Web UI + OQL | M4 | ⚬ Pending |
 | 32 | Local LLM support | P3 | Medium | L | LLM integration | M5 | ⚬ Pending |
-| 33 | Real MCP API documentation for `docs/api.md` (JSON-RPC signatures, schemas, examples) | P2 | Medium | M | MCP server (✅) | M3 | ⚬ Pending |
-| 34 | Real usage examples in `docs/examples/` (CLI workflows, analysis sessions, MCP integration) | P2 | Medium | M | M1.5 ✅ | M3/M6 | ⚬ Pending |
+| 33 | Real MCP API documentation for `docs/api.md` | P2 | Medium | M | MCP server (✅) | M3 | ⚬ Pending |
+| 34 | Real usage examples in `docs/examples/` | P2 | Medium | M | M1.5 ✅ | M3/M6 | ⚬ Pending |
 | 35 | README badge version qualifier (`v0.2.0-alpha`) | P3 | Low | S | None | M3 | ⚬ Pending |
-| 36 | Dockerfile base image CVE triage (`debian:bookworm-slim` known vulnerabilities) | P2 | Medium | S | None | M3 | ⚬ Pending — route to Security Agent |
-| **37** | **Streaming "overview" mode — bounded-memory class/instance stats without full graph (inspired by hprof-slurp)** | **P2** | **High** | **L** | **M1.5 ✅** | **M3** | **⚬ Pending** |
-| **38** | **Thread stack trace extraction — parse STACK_TRACE + STACK_FRAME + ROOT_THREAD_OBJECT (inspired by hprof-slurp)** | **P1** | **High** | **L** | **M1.5 ✅** | **M3** | **⚬ Pending** |
-| **39** | **Benchmark infrastructure — `criterion` micro-benchmarks + `hyperfine` CLI timing + `heaptrack` memory profiling** | **P1** | **High** | **M** | **M1.5 ✅** | **M3** | **⚠️ Partial — Criterion benches landed; `hyperfine`/`heaptrack` still pending** |
-| **40** | **Top-N largest instances report — per-class largest single instance size** | **P2** | **Medium** | **S** | **Object graph ✅** | **M3** | **⚬ Pending** |
-| **41** | **String analysis — list strings, detect duplicates, quantify dedup savings** | **P2** | **Medium** | **M** | **Object graph ✅** | **M3** | **⚬ Pending** |
-| **42** | **Threaded I/O pipeline — prefetch reader with 64MB chunked read-ahead via channels** | **P2** | **Medium** | **L** | **Benchmark baseline (39)** | **M3** | **⚬ Pending** |
-| **43** | **Memory-bounded object store evaluation — measure RSS at various dump sizes, evaluate memmap2 or disk-backed index if >4× ratio** | **P1** | **High** | **M** | **M1.5 ✅** | **M3** | **⚠️ Partial — RSS script + decision template landed; baseline data pending** |
-| **44** | **Large-dump validation program — source/generate dumps at multiple size tiers from diverse JVMs** | **P1** | **High** | **M** | **M1.5 ✅** | **M3/M6** | **⚬ Pending** |
-| **45** | **`nom` parser evaluation — prototype `nom`-based binary parser, compare throughput to current `byteorder` approach** | **P2** | **Medium** | **L** | **Benchmark baseline (39)** | **M3** | **⚬ Pending** |
-| **46** | **Configurable analysis profiles — `--profile ci-regression` vs `--profile incident-response` vs `--profile overview`** | **P2** | **Medium** | **M** | **Dual-mode parser (37)** | **M3/M5** | **⚬ Pending** |
-| **47** | **IntelliJ stacktrace format compatibility — format thread stack output for IntelliJ's "Analyze stacktrace"** | **P3** | **Low** | **S** | **Thread stacks (38)** | **M3** | **⚬ Pending** |
-| **48** | **Index/cache file for fast re-queries — write a disk-backed index during initial parse** | **P3** | **Medium** | **XL** | **M3 analysis features** | **M4/M6** | **⚬ Pending** |
+| 36 | Dockerfile base image CVE triage | P2 | Medium | S | None | M3 | ⚬ Pending — route to Security Agent |
+| 37 | Streaming "overview" mode — bounded-memory class/instance stats without full graph | P2 | High | L | Scaling validation (11) | M3 | ⚬ Pending — gated on Step 11 decision |
+| 38 | Thread stack trace extraction — STACK_TRACE + STACK_FRAME + ROOT_THREAD_OBJECT | P1 | High | L | M1.5 ✅ | M3 | ⚬ Pending |
+| 39 | Benchmark infrastructure — `hyperfine` CLI timing + `heaptrack` memory profiling | P2 | Medium | M | Criterion baseline (✅) | M3 | ⚬ Pending — Criterion done, `hyperfine`/`heaptrack` still pending |
+| 40 | Top-N largest instances report — per-class largest single instance size | P1 | Medium | S | Object graph ✅ | M3 | ⚬ Pending |
+| 41 | String analysis — list strings, detect duplicates, quantify dedup savings | P1 | High | M | Object graph ✅ | M3 | ⚬ Pending |
+| 42 | Threaded I/O pipeline — prefetch reader with 64MB chunked read-ahead | P2 | Medium | L | Scaling validation (11) | M3 | ⚬ Pending |
+| 43 | Memory-bounded object store evaluation — measure RSS at 1GB+ | P1 | High | M | Benchmark baseline (✅) | M3 | ⚠️ Partial — baseline published for 156 MB; 1GB+ data pending |
+| 44 | Large-dump validation program — dumps at 500MB/1GB/2GB/5GB tiers | P1 | High | M | M1.5 ✅ | M3 | ⚬ Pending |
+| 45 | `nom` parser evaluation — prototype, compare throughput | P3 | Medium | L | Scaling validation (11) | M3 | ⚬ Pending |
+| 46 | Configurable analysis profiles — `--profile ci-regression|incident-response|overview` | P2 | Medium | M | M3 Phase 3 | M3/M5 | ⚬ Pending |
+| 47 | IntelliJ stacktrace format compatibility | P3 | Low | S | Thread stacks (38) | M3 | ⚬ Pending |
+| 48 | Index/cache file for fast re-queries | P3 | Medium | XL | M3 analysis features | M4/M6 | ⚬ Pending |
+| **49** | **`leaks` command: explicit "No leaks detected" message when zero leaks** | **P1** | **Medium** | **S** | **None** | **M3** | **⚬ Pending — observed in v0.2.0 validation** |
+| **50** | **`fix` command: clearer UX when no leaks detected** | **P2** | **Low** | **S** | **None** | **M3** | **⚬ Pending — observed in v0.2.0 validation** |
+| **51** | **Docker build validation in CI** | **P1** | **Medium** | **S** | **None** | **M2** | **✅ Done — added to CI pipeline** |
+| **52** | **v0.2.0 multi-channel deployment** | **P0** | **High** | **M** | **M3-P1 + benchmarks** | **M2** | **✅ Done — GitHub Releases, GHCR Docker, crates.io, Homebrew** |
 
 ---
 
 ## Section 11 — Recommended Immediate Next Steps
 
-**✅ M1, M1.5, and M2 are all COMPLETE.** The graph-backed pipeline is validated on real-world HPROF files, distribution is live, and M3 is fully unblocked. The workspace carries 101 passing tests (66 core + 5 CLI unit + 30 CLI integration).
+**✅ M1, M1.5, M2, M3 Phase 1, and v0.2.0 release are all COMPLETE.** v0.2.0 is deployed to all channels (GitHub Releases, GHCR Docker, crates.io, Homebrew). The graph-backed pipeline is production-validated, benchmark data is published, and 110 tests pass. M3 Phase 2 is fully unblocked.
 
-### Previously Completed Steps (M1.5)
+### Previously Completed Steps
 1. ✅ Fix HPROF tag constants — `TAG_HEAP_DUMP_SEGMENT` corrected to `0x1C`
 2. ✅ Add HEAP_DUMP_SEGMENT (0x1C) to binary parser dispatch
 3. ✅ Real-world HPROF test fixture + validation — 4 integration tests against real JVM dumps
 4. ✅ Investigate heuristic fallback zero-results — validated with nonexistent-package filter test
 5. ✅ Leak-ID validation for explain/fix — `validate_leak_id()` wired into CLI and MCP
 6. ✅ HEAP_DUMP_SEGMENT unit tests — `build_segment_fixture()` + dedicated parser tests
+7. ✅ v0.2.0 release + benchmark baseline — all M1.5+M3-P1 fixes released, Criterion benchmarks published, RSS measurements documented, scaling projections written
+8. ✅ M3 Phase 1 — histogram grouping, MAT-style suspects, unreachable objects, class-level diff
 
-### Step 6 (NEXT): v0.2.0 Correctness Release + Benchmark Baseline
-**Why first:** v0.1.1 users who tried real dumps got broken output due to the tag bug. The M1.5 fixes must be released. A lightweight benchmark baseline prevents future regressions as M3 features land.
+### Step 9 (NEXT): Quick UX Wins from v0.2.0 Validation
+**Why first:** The real-world validation revealed two UX gaps that are trivial to fix and materially improve the user experience. Ship these before investing in larger M3 Phase 2 features.
 **Actions:**
-  - (a) Tag and release v0.2.0 containing all M1.5 fixes (tag correction, leak-ID validation, real-world tests)
-  - (b) Run the newly added Criterion benchmarks for parser throughput, graph construction, and dominator computation, then publish the first baseline (backlog #29/#39)
-  - (c) Use `scripts/measure_rss.sh` to measure RSS on the existing 110-150MB real-world test dumps and fill in `docs/design/memory-scaling.md` (backlog #43 — partial)
-  - (d) Update CHANGELOG and metadata for v0.2.0
-**Files:** `Cargo.toml` (version), `CHANGELOG.md`, new `benches/` directory
+  - (a) **`leaks` command: print "No leak suspects detected" when zero leaks found** — currently exits 0 but produces no output, which confuses users who can't tell success from a broken pipe
+  - (b) **`fix` command: skip output when `analyze` reports zero leaks** — or add a clear message explaining that fix suggestions are based on dominator analysis, not leak detection
+**Files:** `cli/src/main.rs`
 **Owner:** Implementation Agent
-**Effort:** Small
-**Dependencies:** None — all M1.5 work is merged
+**Effort:** Small (< 1 batch)
+**Dependencies:** None
 
-### Step 7: M3 Phase 1 — Core Analysis Features
-**Status:** ✅ Complete in M3-P1-B2.
-**Delivered:**
-  - (a) **MAT-style leak suspects** (backlog #13) — ranking by retained/shallow size ratio, accumulation-point detection, dominated-count context, short reference-chain context, and composite suspect score
-  - (b) **Histogram improvements** (backlog #14) — graph-backed grouping by FQN class, package prefix, and classloader via `mnemosyne analyze --group-by class|package|classloader`
-  - (c) **Enhanced heap diff** (backlog #17) — class-level instance/shallow/retained deltas layered on top of the existing record-level comparison
-  - (d) **Unreachable objects** (backlog #24) — reachability traversal from GC roots with total count/shallow size and per-class breakdown
-**Files:** `core/src/analysis/engine.rs`, `core/src/graph/metrics.rs`, `core/src/hprof/parser.rs`, `core/src/config.rs`, `core/src/report/renderer.rs`, `core/src/mcp/server.rs`, `cli/src/main.rs`
-**Owner:** Implementation Agent
-**Effort:** Completed across one implementation batch
-**Dependencies:** Satisfied by M1.5 graph-backed parsing and M3-P1-B1 benchmark/test scaffolding
-
-### Step 8: M3 Phase 2 — Investigation Features
-**Why next:** These features complete the investigative toolkit, bridging the gap with both hprof-slurp (thread stacks, top-N) and MAT (collection inspection, string analysis).
+### Step 10: M3 Phase 2 — Investigation Features
+**Why next:** These features complete the investigative toolkit needed for MAT parity, bridging the gap with both hprof-slurp (thread stacks, top-N) and MAT (collection inspection, string analysis). They unlock the "deep investigation" use case.
 **Actions:**
-  - (a) **Thread inspection** (backlog #20/#38) — parse STACK_TRACE + STACK_FRAME + ROOT_THREAD_OBJECT, link threads to retained objects, new `mnemosyne threads` command
-  - (b) **Top-N largest instances** (backlog #40) — per-class largest single instance; useful for quick triage
-  - (c) **String analysis** (backlog #41) — list string objects, detect duplicates, quantify dedup savings
-  - (d) **Collection inspection** (backlog #23) — detect HashMap/ArrayList/etc., compute fill ratio, report waste
-**Files:** new `core/src/thread/` module, `core/src/hprof/binary_parser.rs` (STACK_TRACE parsing), `core/src/graph/metrics.rs`, `cli/src/main.rs`
+  - (a) **Thread inspection** (backlog #20/#38) — parse STACK_TRACE + STACK_FRAME + ROOT_THREAD_OBJECT, link threads to retained objects, new `mnemosyne threads` command. Design doc: [M3-phase2-analysis.md](design/M3-phase2-analysis.md)
+  - (b) **Top-N largest instances** (backlog #40) — per-class largest single instance; useful for quick triage of "which single object is eating 2GB?"
+  - (c) **String analysis** (backlog #41) — list string objects, detect duplicates, quantify dedup savings. Highly actionable for production optimization.
+  - (d) **Collection inspection** (backlog #23) — detect HashMap/ArrayList/etc., compute fill ratio, report waste. Addresses the #1 most common memory waste pattern in Java applications.
+**Files:** new `core/src/analysis/thread.rs`, new `core/src/analysis/string_analysis.rs`, new `core/src/analysis/collection.rs`, `core/src/hprof/binary_parser.rs` (STACK_TRACE/STACK_FRAME parsing), `core/src/hprof/object_graph.rs` (StackTrace/StackFrame types), `core/src/analysis/engine.rs`, `cli/src/main.rs`
 **Owner:** Implementation Agent
 **Effort:** Large (2-3 batches)
-**Dependencies:** Step 7 (Phase 1 provides histogram/suspects infrastructure); can partially overlap
+**Dependencies:** M3 Phase 1 (✅ delivered) — histogram/suspects infrastructure
 
-### Step 9 (parallel with Step 8): Performance & Scalability Assessment
-**Why here:** After M3 Phase 1 adds more analysis features, we need to confirm the pipeline scales. Before building OQL or the web UI, we must know memory behavior on 1GB+ dumps.
+### Step 11 (parallel with Step 10): Large-Dump Scaling Validation
+**Why now:** v0.2.0 benchmark data shows 3.56x RSS:dump ratio on 156 MB. Before building advanced features that add memory overhead, we must validate the architecture at 1GB+ scale. This is a decision gate for whether streaming overview mode or disk-backed indexing is needed.
 **Actions:**
-  - (a) **Large-dump validation** (backlog #44) — source/generate dumps at 100MB/500MB/1GB/5GB tiers
+  - (a) **Large-dump validation** (backlog #44) — source/generate dumps at 500MB/1GB/2GB/5GB tiers from OpenJDK 17/21 + Spring Boot
   - (b) **Memory-bounded evaluation** (backlog #43 — full) — RSS profiling at each tier; if >4× ratio, evaluate alternatives
-  - (c) **Streaming overview mode** (backlog #37) — implement bounded-memory "overview" mode if large-dump testing reveals scaling issues
-  - (d) Decision point: if RSS is acceptable up to 1-2GB dumps, defer streaming overview to post-M3; if RSS blows up, address before M3 Phase 2
-**Files:** `benches/`, `core/src/hprof/binary_parser.rs`, potentially `core/src/hprof/parser.rs`
+  - (c) **Decision gate:** if RSS is acceptable up to 1-2GB dumps on 16GB workstations, defer streaming mode; if RSS exceeds projections, prioritize streaming overview mode (backlog #37) or memmap2 evaluation before M3 Phase 3
+**Files:** `scripts/`, `docs/performance/memory-scaling.md`
 **Owner:** Implementation Agent + Testing Agent
-**Effort:** Medium-Large
-**Dependencies:** Step 6 (benchmark baseline)
+**Effort:** Medium
+**Dependencies:** Benchmark baseline (✅ published)
 
-### Step 10: M3 Phase 3 — Advanced Features (after Phase 1 + 2)
+### Step 12: M3 Phase 3 — Advanced Query + ClassLoader
+**Why after Phase 2:** OQL requires the data model enrichments from thread + collection + string analysis. ClassLoader analysis completes the MAT parity story.
 **Actions:**
-  - (a) **ClassLoader analysis** (backlog #21) — parse classloader hierarchy, per-loader stats, leak detection
-  - (b) **OQL query engine** (backlog #19) — mini-query language over the object graph
-  - (c) **Configurable analysis profiles** (backlog #46) — `--profile ci-regression|incident-response`
+  - (a) **ClassLoader analysis** (backlog #21) — parse classloader hierarchy, per-loader stats, leak detection. Design doc: [M3-phase2-analysis.md](design/M3-phase2-analysis.md)
+  - (b) **OQL query engine** (backlog #19) — mini-query language over the object graph. The highest-effort single feature remaining. Design doc: [M3-phase2-analysis.md](design/M3-phase2-analysis.md)
+  - (c) **Configurable analysis profiles** (backlog #46) — `--profile ci-regression|incident-response|overview`
 **Owner:** Implementation Agent
 **Effort:** Very Large (OQL alone is XL)
-**Dependencies:** Steps 7-8 (M3 Phase 1 + 2 provide the data model and analysis surfaces)
+**Dependencies:** Steps 10 (data model) + 11 (scaling validation)
+
+### Step 13: v0.3.0 Release — MAT-Parity Analysis
+**Why here:** After M3 Phases 1-3 complete, Mnemosyne will have core MAT-parity analysis features. This is a significant milestone worth a named release because it transitions Mnemosyne from "interesting alpha" to "credible MAT alternative."
+**Actions:**
+  - Tag and release v0.3.0 with all M3 features
+  - Update CHANGELOG, release notes, README feature list
+  - Publish comparative analysis: what Mnemosyne can do vs MAT in table form
+**Owner:** Implementation Agent + Documentation Sync
+**Effort:** Small
+**Dependencies:** Steps 10-12
 
 ### Post-M3 Sequence
-After M3 completes, the recommended order is:
-1. **v0.3.0 release** — first release with MAT-parity analysis features
-2. **M5 (AI/MCP Differentiation)** — wire real LLM calls to the now-meaningful analysis data
-3. **M4 (UI & Usability)** — build interactive HTML reports and web UI on top of rich M3 analysis
-4. **M6 (Ecosystem & Community)** — docs, examples, benchmarks, community infrastructure
+After M3 completes, the recommended milestone order is:
+1. **M5 (AI/MCP Differentiation)** — wire real LLM calls to the now-robust analysis data. This is the key differentiator.
+2. **M4 (UI & Usability)** — build interactive HTML reports and web UI on top of rich M3 analysis + AI insights
+3. **M6 (Ecosystem & Community)** — docs, examples, benchmarks, community infrastructure
 
-**Note on M4/M5 ordering:** M5 (AI) is recommended before M4 (web UI) because:
+**Rationale for M5 before M4:**
 - AI integration adds value to existing CLI/MCP surfaces immediately (no new UI needed)
-- The web UI benefits from showing AI-generated insights alongside traditional analysis
+- The web UI (M4) benefits enormously from showing AI-generated insights alongside traditional analysis
 - MCP handler output quality improves dramatically once AI is wired, improving the IDE copilot experience
-- M4 is the largest remaining milestone; M5 can deliver value while M4 is designed
+- M4 is the largest remaining milestone and has the longest design/build cycle; M5 can deliver value in parallel
+- The "AI-powered" marketing claim becomes honest once M5 ships — this matters for credibility
 
-### Pre-M3 Debt Items (tracked)
-The following items should be addressed alongside or shortly after M3 Phase 1:
-- **`docs/api.md` placeholder scaffolding** — needs real MCP API documentation (backlog #33)
-- **`docs/examples/` placeholder** — needs real CLI/MCP usage examples (backlog #34)
-- **Dockerfile base image CVEs** — `debian:bookworm-slim` has known vulnerabilities; route to Security Agent (backlog #36)
+**v0.4.0 target:** M5 AI integration
+**v0.5.0 target:** M4 interactive HTML reports + web UI
+**v1.0.0 target:** M6 ecosystem maturity — the "recommend to your colleagues" release
+
+### Documentation Debt (track alongside feature work)
+- **`docs/api.md`** — needs real MCP JSON-RPC documentation (backlog #33). Should be addressed during M3 Phase 2 when MCP handlers are being extended.
+- **`docs/examples/`** — needs real CLI/MCP usage examples (backlog #34). Best done after M3 Phase 2 adds investigation commands.
+- **Dockerfile base image CVEs** — route to Security Agent for assessment (backlog #36).
+- **README version badge** — update to `v0.2.0-alpha` (backlog #35). Low priority.
 
 ---
 
@@ -1163,33 +1185,40 @@ The following items should be addressed alongside or shortly after M3 Phase 1:
 
 | Risk | Impact | Likelihood | Mitigation |
 |---|---|---|---|
-| **In-memory ObjectGraph may not scale to 1GB+ dumps** | High | High | M1.5 validated on 110-150MB dumps. A 10GB dump with 100M+ objects could require 20-40GB RSS. Benchmark baseline (Step 6) measures current RSS. If >4× ratio at 500MB, evaluate memmap2/disk-backed alternatives before M3 Phase 2. Streaming overview mode (backlog #37) is the fallback architecture. |
+| **In-memory ObjectGraph may not scale to 1GB+ dumps** | High | High | Measured 3.56x RSS:dump ratio on 156 MB (555 MB RSS). Linear projection: 1GB dump → ~3.6GB RSS, 4GB dump → ~14GB RSS. First data point is within 4x threshold but 4GB+ dumps will exceed most workstations. Step 11 (large-dump validation) is the decision gate. If >4x ratio at 1GB, evaluate memmap2/disk-backed alternatives before M3 Phase 3. Streaming overview mode (backlog #37) is the fallback architecture. |
 | **Dockerfile base image (`debian:bookworm-slim`) has known CVEs** | Medium | High | Base image carries known vulnerabilities per container scanning. Route to Security Agent for assessment. Options: update to latest bookworm-slim, switch to distroless, or pin a patched digest. |
-| **M3 scope is very large (15 features across 3 phases)** | Medium | High | Phased approach mitigates: Phase 1 (4 features) delivers core value before committing to Phases 2-3. Strict scope discipline required — no scope expansion without orchestration approval. |
-| **Parser throughput may be significantly below hprof-slurp baseline** | Medium | High | hprof-slurp achieves ~2GB/s with multithreaded `nom`-based parsing. Mnemosyne's single-threaded `byteorder` approach is likely 2-5× slower. Step 6 benchmark baseline will quantify the gap. Threaded I/O (backlog #42) and `nom` evaluation (backlog #45) are mitigation paths. |
-| **Other HPROF sub-record types may have parsing bugs** | Medium | Medium | Real-world dumps may contain sub-record types not covered by current fixtures. M3 Phase 2 (thread inspection) will exercise STACK_TRACE/STACK_FRAME records, expanding coverage. Large-dump validation (Step 9) further mitigates. |
-| **hprof-slurp may add analysis depth features** | Low | Low | hprof-slurp is actively maintained. If it adds dominator tree/retained sizes, Mnemosyne's "analysis depth" differentiator narrows. Mitigation: deliver M3 analysis features + AI integration to establish the depth+AI moat. |
+| **M3 Phase 2-3 scope is large** | Medium | High | Phase 2 has 4 investigation features; Phase 3 has OQL + ClassLoader + profiles. Phased approach ensures incremental delivery. Each phase gate checks that previous phase is shipping and tested before committing to the next. |
+| **`leaks` silent on zero results is a UX concern for new users** | Low | High | Simple fix: print "No leak suspects detected" on zero results. Tracked as backlog #49. Should ship before M3 Phase 2 to avoid user confusion in the v0.2.0 release window. |
+| **AI integration is entirely unvalidated** | Medium | Medium | No urgency until M3 Phase 2+ provides richer analysis context to send to an LLM. M5 is sequenced after M3 specifically for this reason. The risk is that LLM integration proves harder than expected or that prompt engineering for heap data is a research problem, not an engineering problem. Mitigation: prototype with a single provider (OpenAI) first before building the full abstraction layer. |
+| **Other HPROF sub-record types may have parsing bugs** | Medium | Medium | Real-world dumps may contain sub-record types not covered by current fixtures. M3 Phase 2 (thread inspection) will exercise STACK_TRACE/STACK_FRAME records, expanding coverage. Large-dump validation further mitigates. |
+| **hprof-slurp may add analysis depth features** | Low | Low | hprof-slurp is actively maintained. If it adds dominator tree/retained sizes, Mnemosyne's "analysis depth" differentiator narrows. Mitigation: deliver M3 investigation features + AI integration to establish the depth+AI moat. |
 | **Eclipse MAT may modernize its CLI/API** | Low | Low | MAT recently moved to GitHub and shipped parallelism improvements. If MAT adds a modern CLI or AI features, Mnemosyne's DX differentiator narrows. Mitigation: move quickly on MCP, AI, and modern CLI to establish the DX moat. |
-| **AI integration is entirely unvalidated** | Medium | Low (deferred) | No urgency until M3 provides meaningful analysis data to send to an LLM. M5 is sequenced after M3 specifically for this reason. |
 
 ### Resolved Risks
 
 | Risk | Resolution |
 |---|---|
-| **Tag-constant bug (P0 correctness)** | ✅ Fixed in M1.5-B1: `TAG_HEAP_DUMP_SEGMENT` corrected to `0x1C`. `tag_name()` mappings corrected. 4 real-world integration tests prevent regression. |
-| **Heuristic fallback tuning** | ✅ Validated in M1.5-B2: fallback path produces candidates when graph results are filtered. Tested with nonexistent-package filter. |
-| **Leak-ID commands return generic responses** | ✅ Fixed in M1.5-B2: `validate_leak_id()` returns `CoreError::InvalidInput` for unknown IDs. 2 integration tests + 2 unit tests. |
+| **Tag-constant bug (P0 correctness)** | ✅ Fixed in M1.5-B1: `TAG_HEAP_DUMP_SEGMENT` corrected to `0x1C`. Validated end-to-end on real-world data. |
+| **Heuristic fallback tuning** | ✅ Validated in M1.5-B2: fallback path produces candidates when graph results are filtered. |
+| **Leak-ID commands return generic responses** | ✅ Fixed in M1.5-B2: `validate_leak_id()` returns `CoreError::InvalidInput` for unknown IDs. |
+| **No benchmark data (can't detect regressions)** | ✅ Resolved in v0.2.0: Criterion benchmarks + RSS measurements published. Baseline: 2.25 GiB/s streaming, 90 MiB/s binary parse, 1.85s dominator, 3.56x RSS:dump ratio. |
+| **v0.1.1 tag bug shipped to users** | ✅ Resolved: v0.2.0 released with tag fix to all channels. No breaking API changes. |
+| **Distribution gaps** | ✅ Resolved: v0.2.0 fully deployed to GitHub Releases (5 targets), GHCR Docker, crates.io, Homebrew. Docker build validation added to CI. |
 
-### Lessons Learned (v0.1.1 Real-World Validation)
+### Lessons Learned (v0.2.0 Release + Validation)
 
 1. **Synthetic-only test coverage creates false confidence.** All 87 tests passed, clippy was clean, CI was green — but the tool produced incorrect output on every real-world dump. Lesson: real-world HPROF test fixtures are mandatory, not nice-to-have.
 2. **Tag constant errors are insidious.** The HPROF spec uses sequential hex values (0x0C, 0x0D, 0x0E) for unrelated record types and then jumps to 0x1C/0x2C for segment/end. This is a spec design that invites off-by-one style errors. Multiple independent sources map these tags differently. Lesson: verify tag constants against the authoritative JDK source (`hprof_b_spec.h`), not third-party reference docs.
 3. **Silent fallback can mask critical bugs.** The provenance system correctly labeled outputs as `[PARTIAL]` and `[FALLBACK]`, but the user experience was "analyze works, just with limited data" rather than "the parser is completely failing on your dump." Lesson: consider adding a warning when the graph-backed path fails entirely and ALL results are fallback.
 4. **The features that work well are genuinely good.** `parse`, `diff`, `config`, reporting formats, error handling, and the provenance system all performed correctly on real-world data. The issue is specifically in the HPROF binary parser’s tag dispatch, not in the overall architecture or downstream pipeline.
-5. **Cross-platform builds work.** Windows binary confirmed functional on real Kotlin+Spring Boot dumps. This is a meaningful achievement for a Rust CLI tool targeting JVM developers.
+5. **Cross-platform builds work.** 5-target cross-compilation producing working binaries demonstrates the Rust cross-compilation story is mature.
+6. **Multi-channel deployment validates confidence.** v0.2.0 being live on 5 channels (GitHub Releases, Docker, crates.io, Homebrew, CI) means early users immediately benefit from the critical tag fix. Lesson: invest in release automation early.
+7. **Benchmark baselines prevent regression creep.** Publishing the first Criterion + RSS baseline (streaming at 2.25 GiB/s, 3.56x RSS ratio) provides a concrete performance contract. Lesson: measure early, even if preliminary.
+8. **Zero-output on zero-results is a UX anti-pattern.** v0.2.0 validation revealed that `leaks` exits 0 but prints nothing when no leaks are found. Users cannot tell success from a broken pipe. Lesson: always print confirmation messages.
+9. **Fix/analyze workflow disconnect needs attention.** `fix` produces suggestions even when `analyze` reports zero leaks because it operates on dominator data, not leak filter output. Labels are correct but the workflow is confusing.
 
 ---
 
 *This roadmap is a living document. Update it after each major batch completion.*
-*Last review: post-M3-P1-B1 documentation sync — benchmark scaffolding, RSS tooling, and tag-centralization status aligned (2026-03-08).*
-*Next review: after v0.2.0 release + first published benchmark/RSS baseline.*
+*Last review: post-v0.2.0 full deployment + real-world validation. All 15 validation steps passed (2026-03-08).*
+*Next review: after M3 Phase 2 investigation features land or after large-dump scaling validation (Step 11).*
