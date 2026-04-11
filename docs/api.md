@@ -7,6 +7,8 @@ This document describes all available Model Context Protocol (MCP) commands for 
 - [Connection](#connection)
 - [Commands](#commands)
   - [parse_heap](#parse_heap)
+  - [analyze_heap](#analyze_heap)
+  - [query_heap](#query_heap)
   - [detect_leaks](#detect_leaks)
   - [map_to_code](#map_to_code)
   - [find_gc_path](#find_gc_path)
@@ -146,6 +148,148 @@ Detect potential memory leaks in a parsed heap dump.
   }
 }
 ```
+
+---
+
+### analyze_heap
+
+Run the full analysis pipeline and return the same `AnalyzeResponse` shape used by the CLI report layer.
+
+#### Request
+
+```json
+{
+  "method": "analyze_heap",
+  "params": {
+    "heap_path": "/path/to/heap.hprof",
+    "histogram_group_by": "class",
+    "enable_ai": false,
+    "enable_classloaders": true,
+    "enable_threads": false,
+    "enable_strings": false,
+    "enable_collections": false,
+    "enable_top_instances": false,
+    "top_n": 10,
+    "min_collection_capacity": 16,
+    "min_duplicate_count": 2,
+    "packages": [],
+    "leak_types": []
+  }
+}
+```
+
+#### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `heap_path` | string | Yes | Path to the heap dump |
+| `histogram_group_by` | string | No | Histogram grouping: `class`, `package`, or `classloader` |
+| `enable_ai` | boolean | No | Include AI insight generation (default: false) |
+| `enable_classloaders` | boolean | No | Include `classloader_report` when graph-backed parsing succeeds |
+| `enable_threads` | boolean | No | Include `thread_report` when graph-backed parsing succeeds |
+| `enable_strings` | boolean | No | Include `string_report` when graph-backed parsing succeeds |
+| `enable_collections` | boolean | No | Include `collection_report` when graph-backed parsing succeeds |
+| `enable_top_instances` | boolean | No | Include `top_instances` when graph-backed parsing succeeds |
+| `top_n` | number | No | Limit for thread/string/top-instance detail lists |
+| `min_collection_capacity` | number | No | Minimum collection capacity to report |
+| `min_duplicate_count` | number | No | Minimum duplicate string count to report |
+| `min_severity` | string | No | Minimum emitted leak severity: LOW, MEDIUM, HIGH, CRITICAL |
+| `packages` | array | No | Optional package filters applied to leak detection |
+| `leak_types` | array | No | Optional leak kinds to emit |
+
+#### Response
+
+```json
+{
+  "success": true,
+  "result": {
+    "summary": {
+      "heap_path": "/path/to/heap.hprof",
+      "total_objects": 1234567,
+      "total_size_bytes": 2453291008
+    },
+    "leaks": [],
+    "graph": {
+      "node_count": 1234567,
+      "edge_count": 3456789,
+      "dominators": []
+    },
+    "classloader_report": {
+      "loaders": [
+        {
+          "object_id": 5000,
+          "class_name": "com.example.PluginClassLoader",
+          "loaded_class_count": 2,
+          "instance_count": 3,
+          "total_shallow_bytes": 448,
+          "retained_bytes": 512,
+          "parent_loader": 42
+        }
+      ],
+      "potential_leaks": [
+        {
+          "object_id": 7000,
+          "class_name": "com.example.LeakyPluginClassLoader",
+          "retained_bytes": 10485760,
+          "loaded_class_count": 1,
+          "reason": "Retains 10.00 MB but loads only 1 classes"
+        }
+      ]
+    }
+  },
+  "error": null
+}
+```
+
+`analyze_heap` is additive over the existing MCP surface: investigation payloads such as `classloader_report`, `thread_report`, `string_report`, `collection_report`, and `top_instances` are optional and omitted when their corresponding flags are disabled or when the analysis falls back to the heuristic path.
+
+---
+
+### query_heap
+
+Parse a heap dump, execute a minimal OQL-style query, and return tabular results.
+
+#### Request
+
+```json
+{
+  "method": "query_heap",
+  "params": {
+    "heap_path": "/path/to/heap.hprof",
+    "query": "SELECT @objectId, @className, @retainedSize FROM \"com.example.*\" LIMIT 10"
+  }
+}
+```
+
+#### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `heap_path` | string | Yes | Path to the heap dump |
+| `query` | string | Yes | Minimal OQL-style query string |
+
+#### Response
+
+```json
+{
+  "success": true,
+  "result": {
+    "columns": ["@objectId", "@className", "@retainedSize"],
+    "rows": [
+      [
+        { "Id": 4096 },
+        { "Str": "com.example.CacheEntry" },
+        { "Int": 8192 }
+      ]
+    ],
+    "total_matched": 17,
+    "truncated": true
+  },
+  "error": null
+}
+```
+
+`query_heap` currently supports the shipped minimal query surface: built-in fields such as `@objectId`, `@className`, `@shallowSize`, `@retainedSize`, `@objectAddress`, and `@toString`; quoted exact/glob class matches in `FROM`; optional `WHERE`; and optional `LIMIT`. Instance-field projection/filtering is still placeholder-only and currently evaluates as `null`.
 
 ---
 

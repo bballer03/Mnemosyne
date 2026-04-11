@@ -11,13 +11,16 @@ pub mod graph;
 pub mod hprof;
 pub mod mapper;
 pub mod mcp;
+pub mod query;
 pub mod report;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat, AnalyzeRequest,
     AnalyzeResponse, LeakDetectionOptions, LeakSuspect, ProvenanceKind, ProvenanceMarker,
 };
-pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
+pub use config::{
+    AiConfig, AiProvider, AnalysisConfig, AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
+};
 pub use errors::{CoreError, CoreResult};
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use graph::{

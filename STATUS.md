@@ -20,6 +20,7 @@ This document captures where the current alpha build stands versus the roadmap d
 - ✅ **Graph/dominator view** now supports real retained sizes in both `analyze_heap()` and `detect_leaks()`, with the lightweight summary preview retained only as fallback.
 - ✅ **GC path finder** now prefers full `ObjectGraph` BFS first, then falls back to a budget-limited `GcGraph`, then synthetic paths when the heap lacks enough detail.
 - ✅ **Object-graph navigation API** now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
+- ✅ **M3 Phase 3 parity features landed**: `analyze_heap()` now attaches optional classloader reports, shared report renderers include classloader sections, the CLI exposes `analyze --classloaders`, the core ships a minimal OQL parser + executor for built-in fields, the CLI exposes `query`, the MCP server exposes `analyze_heap` and `query_heap`, and `analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults.
 - ⚠️ **AI insights** are deterministic stubs; the configurable LLM-backed task runner is still to be wired up.
 - ✅ **Report/export** supports Text/Markdown/HTML/TOON/JSON with `--output-file`. HTML output is XSS-hardened; TOON values are properly escaped. Provenance markers are rendered in all non-JSON formats.
 - ✅ **Provenance system** labels synthetic, partial, fallback, and placeholder data across analysis responses, leak insights, GC paths, and fix suggestions. CLI and report renderers surface these markers to consumers.
@@ -57,9 +58,12 @@ This document captures where the current alpha build stands versus the roadmap d
 ## Remaining Must-Haves Before "Functionally Complete"
 Graph-backed leak detection unification, M3 Phase 2 investigation features, and regression-quality integration coverage are now complete. The remaining must-haves are:
 
-1. **M3 Phase 3 parity work** — ClassLoader analysis and OQL-style querying remain the largest analysis-depth gaps versus MAT.
+1. **Large-dump scaling validation** — validate the lean and investigation-heavy paths at 500 MB / 1 GB / 2 GB tiers and decide whether streaming overview mode or disk-backed storage is required.
 2. **Configurable AI task runner** (YAML- or TOML-driven) that can call an LLM or rule engine for higher-fidelity insights.
 3. **Richer exporters/visualizations** (e.g., protobuf or flame-graphs) layered atop the JSON writer and `--output-file` plumbing.
+
+## Newly Completed
+- **M3 Phase 3 classloader + OQL + profiles** — Added `analysis::classloader` with optional `classloader_report` integration in `analyze_heap()`, shared report-renderer support for classloader sections in text/markdown/html/TOON, CLI `analyze --classloaders`, MCP `analyze_heap`, a minimal OQL parser/executor under `core::query` for built-in fields, CLI `query`, MCP `query_heap`, and analyze profiles `overview`, `incident-response`, and `ci-regression`. Added parser/executor/core/MCP/CLI tests and kept the full workspace green.
 
 ## Recently Completed
 - **Step 11 large-dump scaling validation (partial) + analyzer fixes** — Enhanced `scripts/measure_rss.sh` to profile `parse`, `analyze`, and `leaks`, add `/proc/PID/status` VmHWM fallback sampling, compute RSS:dump ratios automatically, and mark results with pass/warn/fail indicators. Step 11 re-baselining found a 4.78x regression after unconditional `field_data` retention landed; remediation added public `ParseOptions` plus lean-by-default parser entry points so default `analyze`/`leaks` now measure ~656 MiB / 4.23x while `--threads --strings --collections` remains an opt-in ~741 MiB / 4.78x path. The batch also fixed collection oversized-threshold handling to use inclusive `<= 0.25` fill ratio and corrected string sizing for `char[]` backings to report logical character count. The workspace now validates at 129 passing tests.

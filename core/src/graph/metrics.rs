@@ -214,7 +214,7 @@ fn resolve_class_loader_name(graph: &ObjectGraph, class_loader_id: ObjectId) -> 
         .get(&class_loader_id)
         .and_then(|loader| graph.class_name(loader.class_id))
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("<loader:{}>", class_loader_id))
+        .unwrap_or_else(|| format!("<loader:{class_loader_id}>"))
 }
 
 /// Build `GraphMetrics` from a real dominator tree and object graph.

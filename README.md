@@ -48,7 +48,9 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Suitable for multi-gigabyte heap dumps
 - `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
-- Optional investigation reports now hang off the same graph-backed path: `mnemosyne analyze --threads --strings --collections --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, and top-instance ranking in one run
+- Optional investigation reports now hang off the same graph-backed path: `mnemosyne analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `mnemosyne query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields
+- `mnemosyne analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults without changing the underlying graph-backed analysis pipeline
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
@@ -86,6 +88,8 @@ Fully integrated with:
 
 Available MCP commands:
 - parse_heap
+- analyze_heap
+- query_heap
 - detect_leaks
 - map_to_code
 - find_gc_path
@@ -289,7 +293,7 @@ Under the hood Mnemosyne now filters real class stats with those package prefixe
 
 Both `mnemosyne leaks` and `mnemosyne analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `mnemosyne analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
 
-When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`), an unreachable-object summary, optional thread/string/collection/top-instance reports, and `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
+When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`), an unreachable-object summary, optional thread/string/collection/classloader/top-instance reports, and `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
 
 If no candidates survive filtering, `mnemosyne leaks` now prints `No leak suspects detected.` so zero-result runs are explicit instead of silent.
 
@@ -381,7 +385,7 @@ Code Fix Available: Run 'mnemosyne fix heap.hprof' to generate patch
 
 When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. This currently uses deterministic heuristics so the UX stays consistent offline.
 
-Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, and the largest retained instances via `--threads`, `--strings`, `--collections`, and `--top-instances`.
+Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
 #### Output TOON (for CI/CD)
 ```bash
@@ -565,6 +569,8 @@ Once configured, you can ask your AI assistant:
 | Command | Description |
 |---------|-------------|
 | `parse_heap` | Parse a heap dump and return summary |
+| `analyze_heap` | Run the full heap analysis pipeline and return `AnalyzeResponse` |
+| `query_heap` | Execute a minimal OQL-style query and return tabular results |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |

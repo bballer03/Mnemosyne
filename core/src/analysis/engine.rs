@@ -1,7 +1,8 @@
 use super::ai::{generate_ai_insights, AiInsights};
 use super::{
-    analyze_strings, find_top_instances, inspect_collections, inspect_threads, CollectionReport,
-    StringReport, ThreadReport, TopInstancesReport,
+    analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
+    inspect_threads, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
+    TopInstancesReport,
 };
 use crate::{
     config::{AnalysisConfig, AppConfig},
@@ -47,6 +48,7 @@ pub struct AnalyzeRequest {
     pub leak_options: LeakDetectionOptions,
     pub enable_ai: bool,
     pub histogram_group_by: HistogramGroupBy,
+    pub enable_classloaders: bool,
     pub enable_threads: bool,
     pub enable_strings: bool,
     pub enable_collections: bool,
@@ -64,6 +66,7 @@ impl Default for AnalyzeRequest {
             leak_options: LeakDetectionOptions::default(),
             enable_ai: false,
             histogram_group_by: HistogramGroupBy::Class,
+            enable_classloaders: false,
             enable_threads: false,
             enable_strings: false,
             enable_collections: false,
@@ -130,6 +133,8 @@ pub struct AnalyzeResponse {
     pub unreachable: Option<UnreachableSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_report: Option<ThreadReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classloader_report: Option<ClassLoaderReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_report: Option<CollectionReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,6 +261,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         histogram,
         unreachable,
         thread_report,
+        classloader_report,
         collection_report,
         string_report,
         top_instances,
@@ -268,6 +274,9 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         let thread_report = request
             .enable_threads
             .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+        let classloader_report = request
+            .enable_classloaders
+            .then(|| analyze_classloaders(obj_graph, Some(dom)));
         let collection_report = request
             .enable_collections
             .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
@@ -291,6 +300,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
                 histogram,
                 unreachable,
                 thread_report,
+                classloader_report,
                 collection_report,
                 string_report,
                 top_instances,
@@ -303,6 +313,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
                 histogram,
                 unreachable,
                 thread_report,
+                classloader_report,
                 collection_report,
                 string_report,
                 top_instances,
@@ -315,6 +326,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         (
             graph,
             leaks,
+            None,
             None,
             None,
             None,
@@ -352,6 +364,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         histogram,
         unreachable,
         thread_report,
+        classloader_report,
         collection_report,
         string_report,
         top_instances,

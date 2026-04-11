@@ -34,7 +34,7 @@ Five properties position Mnemosyne to stand out in a crowded JVM tooling ecosyst
 
 **v0.2.0 update (2026-03-08, refreshed 2026-03-09): v0.2.0 is deployed to all channels and real-world validated.** v0.2.0 is published on GitHub Releases (5 binary targets), GHCR Docker (`ghcr.io/bballer03/mnemosyne:0.2.0`), crates.io (`mnemosyne-core` 0.2.0 + `mnemosyne-cli` 0.2.0), and Homebrew (formula updated with correct SHA256 digests). A comprehensive real-world validation against a 150MB Spring Boot production heap dump plus M3 Phase 2 follow-through confirmed: 129 tests passing, zero clippy warnings, clean formatting, all 11 CLI subcommands functional, and graph-backed analysis producing real dominator trees with retained sizes, thread reports, string analysis, collection inspection, and top-instance rankings on production data. The benchmark baseline plus Step 11 re-baseline/remediation are now published: streaming parser at 2.25 GiB/s, binary parser at 90 MiB/s, dominator tree in 1.85s, default `analyze`/`leaks` at 4.23x RSS:dump after conditional field retention, and opt-in investigation runs at 4.78x.
 
-Honest assessment: **the analytical foundation is strong, real-world-validated, and shipping to users — but significant feature work remains** to deliver on the full vision. The core pipeline — object graph, dominator tree, retained sizes, histogram grouping, MAT-style suspects, unreachable objects, class-level diff, thread inspection, string analysis, collection inspection, top-instance ranking, unified leak detection, GC paths, and provenance system — all work correctly on production data. The distribution story is excellent: v0.2.0 is live across five channels. The AI module remains 100% stubbed. Benchmark data is now published. **The immediate priorities are: (1) finishing M3 Phase 3 analysis depth (ClassLoader analysis + OQL), (2) validating scaling at 1GB+ dump sizes, and (3) wiring real AI to the now-robust analysis pipeline.** These three tracks close the remaining MAT parity gap, validate scalability, and deliver on the "AI-powered" promise that differentiates Mnemosyne in the market.
+Honest assessment: **the analytical foundation is strong, real-world-validated, and shipping to users — but significant feature work remains** to deliver on the full vision. The core pipeline — object graph, dominator tree, retained sizes, histogram grouping, MAT-style suspects, unreachable objects, class-level diff, thread inspection, string analysis, collection inspection, top-instance ranking, unified leak detection, GC paths, provenance system, ClassLoader analysis, minimal OQL-style querying, and analyze profiles — all work correctly on production data. The distribution story is excellent: v0.2.0 is live across five channels. The AI module remains 100% stubbed. Benchmark data is now published. **The immediate priorities are: (1) validating scaling at 1GB+ dump sizes, (2) wiring real AI to the now-robust analysis pipeline, and (3) deepening explorer/query capabilities beyond the initial built-in-field OQL subset.** These three tracks validate scalability, deliver on the "AI-powered" promise, and expand the newly shipped M3 Phase 3 foundation.
 
 ---
 
@@ -86,7 +86,7 @@ Honest assessment: **the analytical foundation is strong, real-world-validated, 
 
 - **AI is 100% stubbed**: `generate_ai_insights()` returns hardcoded template strings. There are zero HTTP client dependencies in `Cargo.toml`. The `AiConfig` fields (provider, model, temperature, API key) exist but connect to nothing. Every "AI-powered" claim in documentation is marketing ahead of implementation.
 - **Memory scaling unknown at 1GB+**: validated on 150MB-class dumps with a current 4.23x default-path RSS ratio and 4.78x opt-in investigation ratio on the 156 MB fixture. Linear projection suggests 1GB dumps need ~4.2GB RSS on the lean path and more on the investigation path, exceeding comfortable headroom on many workstations. No empirical data beyond 156 MB yet.
-- **MAT parity gap remains for advanced explorer features**: ClassLoader analysis and OQL-style querying are still missing. M3 Phase 2 closed most of the investigation gap with thread inspection, collection inspection, string analysis, and top-instance reporting, but MAT still has deeper interactive exploration.
+- **MAT parity gap is now narrower**: M3 Phase 3 shipped ClassLoader analysis, a minimal OQL-style query engine, and analyze profiles. The remaining explorer gap is depth and breadth: richer OQL predicates, field access, hierarchy-aware querying, and more interactive browsing surfaces.
 - **`fix` produces output when `analyze` reports 0 leaks**: the fix surface operates on dominator analysis independently of the leak filter, which can confuse users. Fix output is correctly labeled `[SYNTHETIC] [PLACEHOLDER]` but the workflow disconnect is a UX issue.
 - **Diff is class-level, not object-level**: `diff_heaps()` now shows class-level deltas (instance, shallow, retained) but cannot track individual object migration or reference chain changes between snapshots.
 - **Graph module naming is misleading**: `summarize_graph()` still exists as a lightweight fallback that builds a synthetic tree from top-12 entries. Its name suggests more than it delivers, though the real dominator tree now exists alongside it.
@@ -202,7 +202,7 @@ The gap remains significant but the architectural path is clear. The object grap
 | Histogram by class/package/classloader | ✅ Delivered | M3-P1-B2 adds graph-backed grouping by class, package prefix, and classloader plus CLI `analyze --group-by` output | Reuse grouped histogram data in dedicated MCP and UI surfaces | Medium | High | M3 |
 | OQL / query language | ❌ Missing | No query capability | Design mini-query language or embed existing (e.g., SQL-like over object model) | Very High | High | M3 |
 | Thread inspection | ✅ Delivered | M3 Phase 2 parses `STACK_TRACE` / `STACK_FRAME`, correlates thread roots, and reports per-thread retained bytes plus stack frames | Extend into MCP and future explorer surfaces | High | Medium | M3 |
-| ClassLoader analysis | ❌ Missing | Not implemented | Parse classloader hierarchy from CLASS_DUMP records, detect leaks per classloader | High | Medium | M3 |
+| ClassLoader analysis | ✅ Delivered | Optional classloader reports now ship in `analyze_heap()`, CLI `analyze --classloaders`, shared report renderers, and MCP `analyze_heap` | Expand duplicate-class / hierarchy-depth analysis if needed | High | Medium | M3 |
 | Collection inspection | ✅ Delivered | M3 Phase 2 inspects `HashMap`, `HashSet`, `ArrayList`, and `ConcurrentHashMap` fill ratio and waste | Expand type coverage and reuse the summary in explorer surfaces | Medium | Medium | M3 |
 | Export / reporting | ✅ Implemented | Good for current scope | Already strong: 5 formats, provenance, XSS hardening. Add CSV, protobuf, flamegraph later | Low | Medium | M2 |
 | UI-based exploration | ❌ Missing | CLI only | Phase from TUI → static HTML → web UI → full explorer | Very High | High | M4 |
@@ -306,7 +306,7 @@ This section provides a structured competitive analysis of Mnemosyne against two
 | **Memory model** | ~500MB flat for 34GB dumps (streaming, no intermediary results stored) | High (Java heap + disk indexes; requires heap proportional to dump size) | Disk-backed (LevelDB); RAM usage bounded by index cache | Unknown at scale (in-memory `HashMap`-backed `ObjectGraph`), but validated on 150MB-class real data and currently benchmarked at 4.23x RSS:dump on the default path and 4.78x on the investigation path |
 | **Throughput** | ~2GB/s on 4+ cores (34GB in ~34s) | Slow initial parse, fast re-queries via indexes | Unknown (no benchmarks published) | Initial baseline published: 2.25 GiB/s streaming, 90.5 MiB/s binary parser on a 156 MB fixture |
 | **Threading** | Multithreaded: file reader → parser → stats recorder via channels; 3×64MB prefetch buffer | Parallel indexing in recent versions | Single-threaded | Single-threaded parser; Tokio runtime exists but parser is synchronous |
-| **Analysis depth** | Shallow: top-N classes, top-N instances, strings, thread stacks. No graph, no retained sizes, no leak detection | Deep: full dominator tree, retained sizes, OQL, leak suspects, collection inspection, thread analysis, classloader analysis | None — parser + index only, zero analysis logic | Medium-high: real dominator tree, retained sizes, leak detection, GC paths, thread inspection, string analysis, collection inspection, and top-instance ranking are validated; OQL and ClassLoader analysis remain missing |
+| **Analysis depth** | Shallow: top-N classes, top-N instances, strings, thread stacks. No graph, no retained sizes, no leak detection | Deep: full dominator tree, retained sizes, OQL, leak suspects, collection inspection, thread analysis, classloader analysis | None — parser + index only, zero analysis logic | Medium-high: real dominator tree, retained sizes, leak detection, GC paths, thread inspection, string analysis, collection inspection, top-instance ranking, ClassLoader analysis, and a minimal OQL/query surface are validated; deeper explorer semantics remain future work |
 | **Output** | Text + JSON | GUI + batch HTML/CSV reports | None (library only, no CLI or reporting) | Text + Markdown + HTML + TOON + JSON (5 formats) |
 | **IDE/AI integration** | None | Eclipse plugin only | None | MCP server (7 handlers), AI stub architecture |
 | **Provenance** | None | None | None | Full provenance system (unique) |
@@ -683,7 +683,7 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 **Why it matters:** Users choose heap analysis tools based on what they can answer. MAT is the benchmark. Mnemosyne needs to answer the same questions, better.
 
-**Status:** ⚬ In Progress — Phases 1 and 2 complete. Benchmark baseline published. Remaining M3 work centers on ClassLoader analysis, OQL, configuration profiles, and large-dump scaling validation.
+**Status:** ⚬ In Progress — Phases 1, 2, and core Phase 3 feature work complete. Benchmark baseline published. Remaining M3 work centers on large-dump scaling validation and any follow-on depth improvements to the newly shipped query/profile surfaces.
 
 **Key Deliverables:**
 1. MAT-style leak suspects algorithm — objects with disproportionate retained vs shallow size
@@ -719,7 +719,8 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 - `mnemosyne leaks` produces MAT-comparable leak suspect rankings
 - Histograms group by class, package, and classloader
 - `mnemosyne analyze --threads --strings --collections --top-instances` emits investigation reports from the graph-backed path
-- `mnemosyne query "SELECT * FROM com.example.* WHERE retained_size > 1MB"` or equivalent works
+- `mnemosyne query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" WHERE @retainedSize > 0 LIMIT 25"` or equivalent works
+- `mnemosyne analyze --profile overview|incident-response|ci-regression` applies documented investigation defaults
 - Thread inspection reports objects held per thread stack
 - All features have unit and integration tests
 
@@ -1072,7 +1073,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 | 18 | Static interactive HTML reports | P2 | High | L | Reporting exists | M4 | ⚬ Pending |
 | 19 | OQL query engine | P2 | High | XL | M3 Phase 2 data model | M3 | ⚬ Pending |
 | 20 | Thread inspection | P1 | High | L | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
-| 21 | ClassLoader analysis | P2 | Medium | L | M1.5 ✅ | M3 | ⚬ Pending |
+| 21 | ClassLoader analysis | P2 | Medium | L | M1.5 ✅ | M3 | ✅ Done |
 | 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ⚬ Pending |
 | 23 | Collection inspection | P1 | High | M | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
 | 24 | Unreachable objects | P2 | Medium | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
@@ -1097,7 +1098,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 | 43 | Memory-bounded object store evaluation — measure RSS at 1GB+ | P1 | High | M | Benchmark baseline (✅) | M3 | ⚠️ Partial — baseline published for 156 MB; 1GB+ data pending |
 | 44 | Large-dump validation program — dumps at 500MB/1GB/2GB/5GB tiers | P1 | High | M | M1.5 ✅ | M3 | ⚬ Pending |
 | 45 | `nom` parser evaluation — prototype, compare throughput | P3 | Medium | L | Scaling validation (11) | M3 | ⚬ Pending |
-| 46 | Configurable analysis profiles — `--profile ci-regression|incident-response|overview` | P2 | Medium | M | M3 Phase 3 | M3/M5 | ⚬ Pending |
+| 46 | Configurable analysis profiles — `--profile ci-regression|incident-response|overview` | P2 | Medium | M | M3 Phase 3 | M3/M5 | ✅ Done |
 | 47 | IntelliJ stacktrace format compatibility | P3 | Low | S | Thread stacks (38) | M3 | ⚬ Pending |
 | 48 | Index/cache file for fast re-queries | P3 | Medium | XL | M3 analysis features | M4/M6 | ⚬ Pending |
 | **49** | **`leaks` command: explicit "No leaks detected" message when zero leaks** | **P1** | **Medium** | **S** | **None** | **M3** | **✅ Done — `leaks` now prints `No leak suspects detected.`** |
@@ -1109,7 +1110,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 
 ## Section 11 — Recommended Immediate Next Steps
 
-**✅ M1, M1.5, M2, M3 Phase 1, M3 Phase 2, and v0.2.0 release are all COMPLETE.** v0.2.0 is deployed to all channels (GitHub Releases, GHCR Docker, crates.io, Homebrew). The graph-backed pipeline is production-validated, benchmark data is published, and 129 tests pass. Remaining M3 work is now Phase 3 plus multi-tier large-dump validation.
+**✅ M1, M1.5, M2, M3 Phase 1, M3 Phase 2, core M3 Phase 3 feature work, and v0.2.0 release are all COMPLETE.** v0.2.0 is deployed to all channels (GitHub Releases, GHCR Docker, crates.io, Homebrew). The graph-backed pipeline is production-validated, benchmark data is published, and the workspace test suite is green. Remaining M3 work is now multi-tier large-dump validation plus any follow-on depth work beyond the initial shipped query/profile surfaces.
 
 ### Previously Completed Steps
 1. ✅ Fix HPROF tag constants — `TAG_HEAP_DUMP_SEGMENT` corrected to `0x1C`

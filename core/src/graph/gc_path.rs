@@ -490,14 +490,14 @@ impl GcGraph {
                 .get(name_id)
                 .map(|name| name.replace('/', ".")),
             EdgeLabel::Field(None) => Some("<field>".into()),
-            EdgeLabel::ArrayIndex(idx) => Some(format!("[{}]", idx)),
+            EdgeLabel::ArrayIndex(idx) => Some(format!("[{idx}]")),
         }
     }
 
     fn root_label(&self, object_id: u64) -> Option<String> {
         self.roots
             .get(&object_id)
-            .map(|kind| format!("ROOT {:?}", kind))
+            .map(|kind| format!("ROOT {kind:?}"))
     }
 }
 
@@ -737,8 +737,7 @@ impl GcGraphBuilder {
             OBJECT_ARRAY_DUMP_SUBTAG => self.read_object_array_dump(reader),
             PRIMITIVE_ARRAY_DUMP_SUBTAG => self.read_primitive_array_dump(reader),
             _ => Err(CoreError::Unsupported(format!(
-                "unsupported HEAP_DUMP sub-tag 0x{:02X}",
-                sub_tag
+                "unsupported HEAP_DUMP sub-tag 0x{sub_tag:02X}"
             ))),
         }
     }
@@ -973,7 +972,7 @@ fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
 
 fn format_object_id(object_id: u64, id_size: usize) -> String {
     let width = id_size * 2;
-    format!("0x{object_id:0width$X}", width = width)
+    format!("0x{object_id:0width$X}")
 }
 
 fn prettify_class_name(raw: &str) -> String {

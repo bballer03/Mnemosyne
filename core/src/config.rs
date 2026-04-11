@@ -2,6 +2,15 @@ use crate::analysis::{LeakKind, LeakSeverity};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AnalysisProfile {
+    #[default]
+    Overview,
+    IncidentResponse,
+    CiRegression,
+}
+
 /// Root configuration shared across Mnemosyne surfaces.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -121,6 +130,19 @@ impl FromStr for AiProvider {
             "anthropic" => Ok(AiProvider::Anthropic),
             "local" => Ok(AiProvider::Local),
             other => Err(format!("unsupported AI provider '{other}'")),
+        }
+    }
+}
+
+impl FromStr for AnalysisProfile {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "overview" => Ok(AnalysisProfile::Overview),
+            "incident-response" | "incident_response" => Ok(AnalysisProfile::IncidentResponse),
+            "ci-regression" | "ci_regression" => Ok(AnalysisProfile::CiRegression),
+            other => Err(format!("unsupported analysis profile '{other}'")),
         }
     }
 }

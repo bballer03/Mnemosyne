@@ -9,6 +9,7 @@ use crate::{
     graph::{find_gc_path, GcPathRequest},
     hprof::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
+    query::{execute_query, parse_query},
     HistogramGroupBy,
 };
 use serde::{Deserialize, Serialize};
@@ -145,6 +146,43 @@ struct ExplainLeakParams {
     min_severity: Option<LeakSeverity>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct AnalyzeHeapParams {
+    heap_path: String,
+    #[serde(default)]
+    min_severity: Option<LeakSeverity>,
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    leak_types: Vec<LeakKind>,
+    #[serde(default)]
+    histogram_group_by: Option<HistogramGroupBy>,
+    #[serde(default)]
+    enable_ai: bool,
+    #[serde(default)]
+    enable_classloaders: bool,
+    #[serde(default)]
+    enable_threads: bool,
+    #[serde(default)]
+    enable_strings: bool,
+    #[serde(default)]
+    enable_collections: bool,
+    #[serde(default)]
+    enable_top_instances: bool,
+    #[serde(default)]
+    top_n: Option<usize>,
+    #[serde(default)]
+    min_collection_capacity: Option<usize>,
+    #[serde(default)]
+    min_duplicate_count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryHeapParams {
+    heap_path: String,
+    query: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProposeFixParams {
     heap_path: String,
@@ -192,6 +230,54 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             }
             let leaks = detect_leaks(&params.heap_path, options).await?;
             Ok(serde_json::to_value(leaks)?)
+        }
+        "analyze_heap" => {
+            let params: AnalyzeHeapParams = serde_json::from_value(packet.params)?;
+            let mut request_config = config.clone();
+            if !params.packages.is_empty() {
+                request_config.analysis.packages = params.packages.clone();
+            }
+            if !params.leak_types.is_empty() {
+                request_config.analysis.leak_types = params.leak_types.clone();
+            }
+            request_config.ai.enabled = params.enable_ai;
+
+            let mut leak_options = LeakDetectionOptions::from(&request_config.analysis);
+            if let Some(sev) = params.min_severity {
+                leak_options.min_severity = sev;
+            }
+
+            let analysis = analyze_heap(AnalyzeRequest {
+                heap_path: params.heap_path,
+                config: request_config,
+                leak_options,
+                enable_ai: params.enable_ai,
+                histogram_group_by: params.histogram_group_by.unwrap_or(HistogramGroupBy::Class),
+                enable_classloaders: params.enable_classloaders,
+                enable_threads: params.enable_threads,
+                enable_strings: params.enable_strings,
+                enable_collections: params.enable_collections,
+                enable_top_instances: params.enable_top_instances,
+                top_n: params.top_n.unwrap_or(AnalyzeRequest::default().top_n),
+                min_collection_capacity: params
+                    .min_collection_capacity
+                    .unwrap_or(AnalyzeRequest::default().min_collection_capacity),
+                min_duplicate_count: params
+                    .min_duplicate_count
+                    .unwrap_or(AnalyzeRequest::default().min_duplicate_count),
+            })
+            .await?;
+
+            Ok(serde_json::to_value(analysis)?)
+        }
+        "query_heap" => {
+            let params: QueryHeapParams = serde_json::from_value(packet.params)?;
+            let graph = crate::hprof::parse_hprof_file(&params.heap_path)?;
+            let dominator = crate::graph::build_dominator_tree(&graph);
+            let query = parse_query(&params.query)
+                .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
+            let result = execute_query(&query, &graph, Some(&dominator))?;
+            Ok(serde_json::to_value(result)?)
         }
         "map_to_code" => {
             let params: MapToCodeParams = serde_json::from_value(packet.params)?;
@@ -250,5 +336,69 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         other => Err(CoreError::InvalidInput(format!(
             "unsupported MCP method: {other}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_fixtures::build_graph_fixture;
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn handle_request_analyze_heap_includes_classloader_report_when_enabled() {
+        let fixture = build_graph_fixture();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "analyze_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "enable_classloaders": true,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let classloader_report = result
+            .get("classloader_report")
+            .and_then(Value::as_object)
+            .expect("classloader_report object");
+        assert!(classloader_report.contains_key("loaders"));
+        assert!(classloader_report.contains_key("potential_leaks"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_query_heap_returns_rows() {
+        let fixture = build_graph_fixture();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "query_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "query": r#"SELECT @objectId, @className FROM "com.example.BigCache""#,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let rows = result
+            .get("rows")
+            .and_then(Value::as_array)
+            .expect("rows array");
+        assert_eq!(rows.len(), 1);
     }
 }

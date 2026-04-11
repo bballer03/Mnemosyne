@@ -313,7 +313,7 @@ fn test_leaks_prints_full_ids_and_class_names_after_table_truncation() {
     assert_ne!(truncated_leak_id, full_leak_id);
     assert!(stdout.contains(&truncated_leak_id));
     assert!(stdout.contains("Full leak IDs for truncated rows:"));
-    assert!(stdout.contains(&format!("{} -> {}", truncated_leak_id, full_leak_id)));
+    assert!(stdout.contains(&format!("{truncated_leak_id} -> {full_leak_id}")));
     assert!(stdout.contains(&format!("Leak: {full_leak_id}")));
     assert!(stdout.contains(&truncated_class_name));
     assert!(stdout.contains("Full class names for truncated leak rows:"));
@@ -458,6 +458,99 @@ fn test_analyze_with_threads_flag() {
     assert!(output.status.success());
     let stdout = normalized_stdout(&output.stdout);
     assert!(stdout.contains("Thread Report ("));
+}
+
+#[test]
+fn test_analyze_with_classloaders_flag() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--classloaders"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("ClassLoader Report:"));
+}
+
+#[test]
+fn test_query_command_prints_matching_rows() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "query",
+            fixture_path.as_str(),
+            r#"SELECT @objectId, @className FROM "com.example.BigCache""#,
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Columns:"));
+    assert!(stdout.contains("@objectId"));
+    assert!(stdout.contains("com.example.BigCache"));
+}
+
+#[test]
+fn test_analyze_profile_overview_disables_optional_investigation_sections() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "analyze",
+            fixture_path.as_str(),
+            "--profile",
+            "overview",
+            "--threads",
+            "--strings",
+            "--collections",
+            "--top-instances",
+            "--classloaders",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(!stdout.contains("Thread Report ("));
+    assert!(!stdout.contains("String Analysis ("));
+    assert!(!stdout.contains("Collection Report ("));
+    assert!(!stdout.contains("Top Instances by Size:"));
+    assert!(!stdout.contains("ClassLoader Report:"));
+}
+
+#[test]
+fn test_analyze_profile_incident_response_enables_investigation_sections() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "analyze",
+            fixture_path.as_str(),
+            "--profile",
+            "incident-response",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Thread Report ("));
+    assert!(stdout.contains("String Analysis ("));
+    assert!(stdout.contains("Collection Report ("));
+    assert!(stdout.contains("Top Instances by Size:"));
+    assert!(stdout.contains("ClassLoader Report:"));
 }
 
 #[test]
