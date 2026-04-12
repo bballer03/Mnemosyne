@@ -561,6 +561,7 @@ fn test_chat_with_provider_mode_sends_chat_follow_up_prompt_and_renders_response
                 Err(err) => panic!("mock server accept failed: {err}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         let mut buf = [0_u8; 8192];
         let read = stream.read(&mut buf).unwrap();
         let request = String::from_utf8_lossy(&buf[..read]).into_owned();
