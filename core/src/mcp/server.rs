@@ -1,6 +1,6 @@
 use crate::{
     analysis::{
-        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights, validate_leak_id,
+        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights_async, validate_leak_id,
         AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
@@ -13,7 +13,7 @@ use crate::{
     HistogramGroupBy,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, info};
@@ -45,10 +45,10 @@ pub async fn serve(options: McpServerOptions, config: AppConfig) -> CoreResult<(
                 let id = packet.id.clone();
                 match handle_request(packet, &config).await {
                     Ok(value) => RpcResponse::success(id, value),
-                    Err(err) => RpcResponse::error(id, err.to_string()),
+                    Err(err) => RpcResponse::from_core_error(id, &err),
                 }
             }
-            Err(err) => RpcResponse::error(Value::Null, format!("invalid JSON: {err}")),
+            Err(err) => RpcResponse::invalid_json(Value::Null, format!("invalid JSON: {err}")),
         };
 
         let serialized = serde_json::to_string(&response)?;
@@ -76,6 +76,16 @@ struct RpcResponse {
     success: bool,
     result: Value,
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_details: Option<RpcErrorDetails>,
+}
+
+#[derive(Debug, Serialize)]
+struct RpcErrorDetails {
+    code: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
 }
 
 impl RpcResponse {
@@ -85,16 +95,103 @@ impl RpcResponse {
             success: true,
             result,
             error: None,
+            error_details: None,
         }
     }
 
-    fn error(id: Value, message: String) -> Self {
-        error!(%message, "MCP request failed");
+    fn invalid_json(id: Value, message: String) -> Self {
+        Self::from_error_details(
+            id,
+            RpcErrorDetails {
+                code: "invalid_json",
+                message,
+                details: None,
+            },
+        )
+    }
+
+    fn from_core_error(id: Value, error: &CoreError) -> Self {
+        Self::from_error_details(id, RpcErrorDetails::from_core_error(error))
+    }
+
+    fn from_error_details(id: Value, error_details: RpcErrorDetails) -> Self {
+        error!(code = error_details.code, message = %error_details.message, "MCP request failed");
         Self {
             id,
             success: false,
             result: Value::Null,
-            error: Some(message),
+            error: Some(error_details.message.clone()),
+            error_details: Some(error_details),
+        }
+    }
+}
+
+impl RpcErrorDetails {
+    fn from_core_error(error: &CoreError) -> Self {
+        let message = error.to_string();
+        match error {
+            CoreError::Io(source) => Self {
+                code: "io_error",
+                message,
+                details: Some(json!({ "detail": source.to_string() })),
+            },
+            CoreError::FileNotFound { path, suggestion } => Self {
+                code: "file_not_found",
+                message,
+                details: Some(json!({
+                    "path": path,
+                    "suggestion": suggestion,
+                })),
+            },
+            CoreError::NotAnHprof { path, detail } => Self {
+                code: "not_hprof",
+                message,
+                details: Some(json!({
+                    "path": path,
+                    "detail": detail,
+                })),
+            },
+            CoreError::HprofParseError { phase, detail } => Self {
+                code: "hprof_parse_error",
+                message,
+                details: Some(json!({
+                    "phase": phase,
+                    "detail": detail,
+                })),
+            },
+            CoreError::ConfigError { detail, suggestion } => Self {
+                code: "config_error",
+                message,
+                details: Some(json!({
+                    "detail": detail,
+                    "suggestion": suggestion,
+                })),
+            },
+            CoreError::InvalidInput(detail) => Self {
+                code: "invalid_input",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::NotImplemented(detail) => Self {
+                code: "not_implemented",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::Unsupported(detail) => Self {
+                code: "unsupported",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::SerdeJson(source) => Self {
+                code: "invalid_params",
+                message,
+                details: Some(json!({ "detail": source.to_string() })),
+            },
+            CoreError::Other(source) => Self {
+                code: "internal_error",
+                message,
+                details: Some(json!({ "detail": source.to_string() })),
+            },
         }
     }
 }
@@ -204,8 +301,106 @@ impl MapToCodeParams {
     }
 }
 
+fn tool_catalog() -> Value {
+    json!({
+        "tools": [
+            {
+                "name": "list_tools",
+                "description": "List the live MCP tools and their parameter shapes.",
+                "params": []
+            },
+            {
+                "name": "parse_heap",
+                "description": "Parse an HPROF file and return a lightweight heap summary.",
+                "params": [
+                    { "name": "path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "include_strings", "type": "boolean", "required": false, "description": "Accept string extraction in the request, although the summary remains lightweight." },
+                    { "name": "max_objects", "type": "number", "required": false, "description": "Optional object cap that falls back to parser.max_objects." }
+                ]
+            },
+            {
+                "name": "detect_leaks",
+                "description": "Run leak detection with optional severity and package filters.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "package", "type": "string", "required": false, "description": "Single package prefix filter for this MCP method." },
+                    { "name": "min_severity", "type": "string", "required": false, "description": "Minimum leak severity (LOW, MEDIUM, HIGH, CRITICAL)." },
+                    { "name": "leak_types", "type": "array<string>", "required": false, "description": "Optional leak-kind filter list." }
+                ]
+            },
+            {
+                "name": "analyze_heap",
+                "description": "Run the full analysis pipeline and return the serialized analysis response.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." },
+                    { "name": "packages", "type": "array<string>", "required": false, "description": "Optional package prefix filters." },
+                    { "name": "leak_types", "type": "array<string>", "required": false, "description": "Optional leak-kind filter list." },
+                    { "name": "histogram_group_by", "type": "string", "required": false, "description": "Histogram grouping: class, package, or class_loader." },
+                    { "name": "enable_ai", "type": "boolean", "required": false, "description": "Enable AI insights for the analysis response." },
+                    { "name": "enable_classloaders", "type": "boolean", "required": false, "description": "Attach classloader analysis." },
+                    { "name": "enable_threads", "type": "boolean", "required": false, "description": "Attach thread analysis." },
+                    { "name": "enable_strings", "type": "boolean", "required": false, "description": "Attach string analysis." },
+                    { "name": "enable_collections", "type": "boolean", "required": false, "description": "Attach collection analysis." },
+                    { "name": "enable_top_instances", "type": "boolean", "required": false, "description": "Attach the top-instances report." },
+                    { "name": "top_n", "type": "number", "required": false, "description": "Result count used by top-N analysis sections." },
+                    { "name": "min_collection_capacity", "type": "number", "required": false, "description": "Minimum collection capacity to report." },
+                    { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." }
+                ]
+            },
+            {
+                "name": "query_heap",
+                "description": "Execute a built-in-field OQL-style query against the heap graph.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "query", "type": "string", "required": true, "description": "Query text." }
+                ]
+            },
+            {
+                "name": "map_to_code",
+                "description": "Map a leak candidate to likely source files under a project root.",
+                "params": [
+                    { "name": "leak_id", "type": "string", "required": true, "description": "Leak identifier from analyze or detect_leaks." },
+                    { "name": "class", "type": "string", "required": false, "description": "Optional class-name override to bias source mapping." },
+                    { "name": "project_root", "type": "string", "required": true, "description": "Project directory to scan for source files." },
+                    { "name": "include_git_info", "type": "boolean", "required": false, "description": "Include git blame metadata when available." }
+                ]
+            },
+            {
+                "name": "find_gc_path",
+                "description": "Find a path from an object to a GC root.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "object_id", "type": "string", "required": true, "description": "Target object identifier, for example 0x1000." },
+                    { "name": "max_depth", "type": "number", "required": false, "description": "Optional traversal depth cap." }
+                ]
+            },
+            {
+                "name": "explain_leak",
+                "description": "Generate AI-backed leak explanations for a heap or a specific leak candidate.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "leak_id", "type": "string", "required": false, "description": "Optional leak identifier to focus the explanation." },
+                    { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." }
+                ]
+            },
+            {
+                "name": "propose_fix",
+                "description": "Generate heuristic fix suggestions for a heap or a specific leak candidate.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "leak_id", "type": "string", "required": false, "description": "Optional leak identifier to narrow the suggestion set." },
+                    { "name": "project_root", "type": "string", "required": false, "description": "Optional project directory used for file targeting." },
+                    { "name": "style", "type": "string", "required": false, "description": "Patch style: Minimal, Defensive, or Comprehensive." }
+                ]
+            }
+        ]
+    })
+}
+
 async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Value> {
     match packet.method.as_str() {
+        "list_tools" => Ok(tool_catalog()),
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
             let job = HeapParseJob {
@@ -319,7 +514,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 validate_leak_id(&analysis.leaks, target)?;
             }
             let focused = focus_leaks(&analysis.leaks, params.leak_id.as_deref());
-            let ai = generate_ai_insights(&analysis.summary, &focused, &config.ai);
+            let ai = generate_ai_insights_async(&analysis.summary, &focused, &config.ai).await?;
             Ok(serde_json::to_value(ai)?)
         }
         "propose_fix" => {
@@ -400,5 +595,74 @@ mod tests {
             .and_then(Value::as_array)
             .expect("rows array");
         assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_request_list_tools_returns_descriptions() {
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "list_tools".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        assert!(tools.iter().any(|tool| {
+            tool.get("name") == Some(&json!("analyze_heap"))
+                && tool
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|desc| desc.contains("full analysis"))
+        }));
+        assert!(tools.iter().any(|tool| {
+            tool.get("name") == Some(&json!("list_tools"))
+                && tool
+                    .get("params")
+                    .and_then(Value::as_array)
+                    .is_some_and(|params| params.is_empty())
+        }));
+    }
+
+    #[test]
+    fn rpc_response_error_includes_structured_details() {
+        let response = RpcResponse::from_core_error(
+            json!(7),
+            &CoreError::ConfigError {
+                detail: "missing API key".into(),
+                suggestion: Some("Set MNEMOSYNE_TEST_API_KEY before retrying.".into()),
+            },
+        );
+
+        let serialized = serde_json::to_value(&response).unwrap();
+        assert_eq!(serialized.get("id"), Some(&json!(7)));
+        assert_eq!(serialized.get("success"), Some(&json!(false)));
+        assert_eq!(
+            serialized.get("error"),
+            Some(&json!("Configuration error: missing API key"))
+        );
+
+        let details = serialized
+            .get("error_details")
+            .and_then(Value::as_object)
+            .expect("error_details object");
+        assert_eq!(details.get("code"), Some(&json!("config_error")));
+        assert_eq!(
+            details.get("message"),
+            Some(&json!("Configuration error: missing API key"))
+        );
+        assert_eq!(
+            details
+                .get("details")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("suggestion")),
+            Some(&json!("Set MNEMOSYNE_TEST_API_KEY before retrying."))
+        );
     }
 }

@@ -1,4 +1,4 @@
-use super::ai::{generate_ai_insights, AiInsights};
+use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
     analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
     inspect_threads, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
@@ -339,7 +339,7 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
 
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
-        Some(generate_ai_insights(&summary, &leaks, &request.config.ai))
+        Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
     } else {
         None
     };

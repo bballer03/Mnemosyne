@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `mnemosyne-cli chat <heap.hprof>` as a CLI-first leak-focused conversation mode that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`
+- `AiMode::Provider` plus provider runtime config fields (`endpoint`, `api_key_env`, `max_tokens`, `timeout_secs`) for real external AI execution
+- `core::llm` with an OpenAI-compatible chat-completions transport used by `AiMode::Provider`
+- `core::prompts` with a YAML-backed provider prompt-template loader, an embedded default `provider-insights.yaml`, and optional `[ai.prompts].template_dir` / `MNEMOSYNE_AI_PROMPT_TEMPLATE_DIR` overrides
+- AI unit coverage for missing API keys and TOON response parsing from a mock provider, plus a CLI integration regression covering `analyze --ai --format json` through provider mode
 - Graph-backed investigation analyzers for thread inspection, string analysis, collection inspection, and top-N largest instances in `core::analysis`
 - Retained instance field bytes, selective `byte[]` / `char[]` payload retention, parsed `STACK_TRACE` / `STACK_FRAME` records, and typed field readers (`FieldValue`, `read_field()`, `read_all_fields()`) in `core::hprof::object_graph`
 - CLI `analyze` flags `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`, plus text-mode rendering for the new analyzer sections
@@ -16,12 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional integration coverage for zero-leak confirmation and M3 Phase 2 analyze flags, bringing the validated workspace total to 129 tests
 
 ### Changed
+- `core::analysis::ai` now supports chat-turn generation while preserving the existing `AiInsights` / `AiWireExchange` TOON contract, and provider-mode chat reuses the same prompt-template, redaction, hashed audit-logging, and minimal prompt-budget guard path as one-shot explanations
+- `generate_ai_insights()` now returns `CoreResult<AiInsights>`, and async CLI/MCP call sites route provider mode through `spawn_blocking` so blocking provider transport does not panic inside the Tokio runtime
+- AI output now supports `rules` (default), `stub`, and `provider` modes while preserving the existing `AiInsights` / TOON response shape across CLI, MCP, and reports
+- Provider-mode prompt construction now renders the `section instructions` block from YAML template entries instead of a hardcoded builder while preserving the surrounding TOON request/response contract
 - `AnalyzeRequest` and `AnalyzeResponse` now carry optional investigation-feature enable flags and result sections for thread, string, collection, and top-instance reports
 - `core::fix::generator` and `core::mcp::server` now construct the expanded `AnalyzeRequest` contract used by the shared analysis engine
 - Default binary HPROF parsing no longer retains instance `field_data` or primitive `byte[]` / `char[]` content unless callers opt in through `ParseOptions { retain_field_data: true }`
 - `analyze_heap()` now enables field-data retention only when string, collection, or thread analysis is requested; default `analyze`, `leaks`, and `gc-path` runs now use the lean parser path
 
 ### Fixed
+- Provider-mode AI now fails honestly for missing API keys, unsupported providers, transport failures, and malformed TOON responses instead of silently pretending AI succeeded
 - `mnemosyne leaks` now prints `No leak suspects detected.` when analysis completes without any leak candidates instead of exiting successfully with silent output
 - Collection oversized-threshold handling now uses inclusive `<= 0.25` fill ratio instead of strict `< 0.25`
 - String analysis now reports logical character count for `char[]`-backed strings instead of raw UTF-16 byte count

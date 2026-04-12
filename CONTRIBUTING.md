@@ -36,7 +36,7 @@ Mnemosyne is maintained by **bballer03**. Contribute against the upstream reposi
 - **Rust** 1.70 or later
 - **Git**
 - **A JVM** (for testing with real heap dumps)
-- **Optional:** An OpenAI API key (for AI features)
+- **Optional:** AI provider credentials if you want to exercise provider-backed AI flows (`OPENAI_API_KEY` for OpenAI-compatible mode, `ANTHROPIC_API_KEY` for the in-progress Anthropic path)
 
 ### First-Time Setup
 
@@ -115,13 +115,13 @@ cargo clippy --fix
 
 ```bash
 # Parse a heap dump
-cargo run -- parse test.hprof
+cargo run -p mnemosyne-cli -- parse test.hprof
 
 # Run with debug logging
-RUST_LOG=debug cargo run -- analyze test.hprof
+RUST_LOG=debug cargo run -p mnemosyne-cli -- analyze test.hprof
 
 # Run MCP server
-cargo run -- serve
+cargo run -p mnemosyne-cli -- serve
 ```
 
 ---

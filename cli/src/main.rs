@@ -17,9 +17,9 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_insights,
-        validate_leak_id, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
-        ProvenanceKind,
+        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_chat_turn_async,
+        generate_ai_insights_async, validate_leak_id, AnalyzeRequest, LeakDetectionOptions,
+        LeakKind, LeakSeverity, ProvenanceKind,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix, FixRequest, FixStyle},
@@ -69,6 +69,8 @@ enum Commands {
     Query(QueryArgs),
     /// Generate AI explanations for a leak candidate.
     Explain(ExplainArgs),
+    /// Start a bounded leak-focused chat session.
+    Chat(ChatArgs),
     /// Generate patch suggestions for a leak candidate.
     Fix(FixArgs),
     /// Start the Model Context Protocol (MCP) server.
@@ -176,6 +178,11 @@ struct ExplainArgs {
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
     leak_kind: Vec<LeakKindArg>,
+}
+
+#[derive(Debug, Parser)]
+struct ChatArgs {
+    heap: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -356,6 +363,7 @@ async fn run() -> Result<()> {
         Commands::GcPath(args) => handle_gc_path(args).await?,
         Commands::Query(args) => handle_query(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
+        Commands::Chat(args) => handle_chat(args, &loaded_config.data).await?,
         Commands::Fix(args) => handle_fix(args).await?,
         Commands::Serve(args) => handle_serve(args, &loaded_config.data).await?,
         Commands::Config => handle_config(&loaded_config)?,
@@ -811,7 +819,7 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
     }
 
     let targeted = focus_leaks(&response.leaks, args.leak_id.as_deref());
-    let ai = generate_ai_insights(&response.summary, &targeted, &config.ai);
+    let ai = generate_ai_insights_async(&response.summary, &targeted, &config.ai).await?;
     finish_spinner(&pb, "Explanation complete.");
 
     println!(
@@ -825,6 +833,169 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
         println!("{}", bold_label("Recommendations:"));
         for rec in ai.recommendations {
             println!("- {rec}");
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ChatSession {
+    summary: HeapSummary,
+    leaks: Vec<mnemosyne_core::analysis::LeakInsight>,
+    focus_leak_id: Option<String>,
+    history: Vec<mnemosyne_core::analysis::AiChatTurn>,
+}
+
+fn print_chat_help() {
+    println!("Type a question about the current leak context.");
+    println!("Commands: /focus <leak-id>, /list, /help, /exit");
+}
+
+fn print_chat_shortlist(leaks: &[mnemosyne_core::analysis::LeakInsight]) {
+    let shortlist: Vec<_> = leaks.iter().take(3).cloned().collect();
+    println!("{}", bold_label("Top leak candidates:"));
+    if shortlist.is_empty() {
+        println!(
+            "No leak suspects detected. Ask questions about the healthy-heap summary or type /exit."
+        );
+        return;
+    }
+
+    let (table, truncated_ids, truncated_classes) = build_leaks_table(&shortlist);
+    println!("{table}");
+    print_full_value_section("Full leak IDs for truncated rows:", &truncated_ids);
+    print_full_value_section(
+        "Full class names for truncated leak rows:",
+        &truncated_classes,
+    );
+}
+
+fn chat_shortlist(
+    leaks: &[mnemosyne_core::analysis::LeakInsight],
+) -> Vec<mnemosyne_core::analysis::LeakInsight> {
+    leaks.iter().take(3).cloned().collect()
+}
+
+async fn handle_chat(args: ChatArgs, base_config: &AppConfig) -> Result<()> {
+    use std::io::{self, Write};
+
+    validate_heap_file(&args.heap)?;
+
+    let mut config = base_config.clone();
+    let mut startup_config = config.clone();
+    startup_config.ai.enabled = false;
+
+    let pb = start_spinner("Analyzing heap for chat...");
+    let response = analyze_heap(AnalyzeRequest {
+        heap_path: args.heap.to_string_lossy().into(),
+        config: startup_config,
+        leak_options: LeakDetectionOptions::from(&config.analysis),
+        enable_ai: false,
+        histogram_group_by: HistogramGroupBy::Class,
+        ..AnalyzeRequest::default()
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to start chat from heap dump: {}",
+            args.heap.display()
+        )
+    })?;
+    finish_spinner(&pb, "Chat context ready.");
+
+    config.ai.enabled = true;
+
+    let mut session = ChatSession {
+        summary: response.summary,
+        leaks: response.leaks,
+        focus_leak_id: None,
+        history: Vec::new(),
+    };
+
+    println!("{} {}", bold_label("Analyzed heap:"), args.heap.display());
+    print_chat_shortlist(&session.leaks);
+    print_chat_help();
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    loop {
+        write!(stdout, "chat> ")?;
+        stdout.flush()?;
+
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if input == "/exit" {
+            break;
+        }
+        if input == "/help" {
+            print_chat_help();
+            continue;
+        }
+        if input == "/list" {
+            print_chat_shortlist(&session.leaks);
+            continue;
+        }
+        if input == "/focus" {
+            println!("{} /focus <leak-id>", bold_label("Usage:"));
+            continue;
+        }
+        if let Some(target) = input.strip_prefix("/focus ") {
+            let target = target.trim();
+            match validate_leak_id(&session.leaks, target) {
+                Ok(()) => {
+                    session.focus_leak_id = Some(target.to_string());
+                    println!("{} {}", bold_label("Focused leak:"), target);
+                }
+                Err(err) => {
+                    let detail = match &err {
+                        CoreError::InvalidInput(detail) => detail.clone(),
+                        _ => err.to_string(),
+                    };
+                    println!("{} {detail}", bold_label("Focus error:"));
+                }
+            }
+            continue;
+        }
+
+        let targeted = match session.focus_leak_id.as_deref() {
+            Some(leak_id) => focus_leaks(&session.leaks, Some(leak_id)),
+            None => chat_shortlist(&session.leaks),
+        };
+        println!("{} {}", bold_label("Question:"), input);
+        let ai = generate_ai_chat_turn_async(
+            &session.summary,
+            &targeted,
+            input,
+            &session.history,
+            session.focus_leak_id.as_deref(),
+            &config.ai,
+        )
+        .await?;
+        println!("{}", bold_label("Answer:"));
+        println!("{}", ai.summary);
+        if !ai.recommendations.is_empty() {
+            println!("{}", bold_label("Recommendations:"));
+            for rec in &ai.recommendations {
+                println!("- {rec}");
+            }
+        }
+
+        session.history.push(mnemosyne_core::analysis::AiChatTurn {
+            question: input.to_string(),
+            answer_summary: ai.summary.clone(),
+        });
+        if session.history.len() > 3 {
+            let excess = session.history.len() - 3;
+            session.history.drain(0..excess);
         }
     }
 
@@ -915,6 +1086,7 @@ fn handle_config(loaded: &LoadedConfig) -> Result<()> {
 fn install_tracing() {
     let _ = tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .finish()
         .try_init();
     info!("Tracing initialized");

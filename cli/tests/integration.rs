@@ -26,6 +26,7 @@ fn cli_command() -> (Command, TempDir) {
     command.env_remove("MNEMOSYNE_AI_PROVIDER");
     command.env_remove("MNEMOSYNE_AI_MODEL");
     command.env_remove("MNEMOSYNE_AI_TEMPERATURE");
+    command.env_remove("MNEMOSYNE_AI_AUDIT_LOG");
     command.env_remove("MNEMOSYNE_MIN_SEVERITY");
     command.env_remove("MNEMOSYNE_PACKAGES");
     command.env_remove("MNEMOSYNE_LEAK_TYPES");
@@ -50,6 +51,10 @@ fn parse_first_json_value(input: &str) -> Value {
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn toml_path_arg(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn real_heap_fixture_path() -> PathBuf {
@@ -158,6 +163,10 @@ fn extract_all_between(input: &str, prefix: &str, suffix: &str) -> Vec<String> {
         .skip(1)
         .map(|segment| segment.split_once(suffix).unwrap().0.to_string())
         .collect()
+}
+
+fn count_occurrences(input: &str, needle: &str) -> usize {
+    input.match_indices(needle).count()
 }
 
 #[test]
@@ -367,6 +376,267 @@ fn test_leaks_discloses_colliding_truncated_ids_with_row_stable_mapping() {
 }
 
 #[test]
+fn test_chat_starts_with_shortlist_and_help() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("chat-low.toml");
+    fs::write(&config_path, "[analysis]\nmin_severity = \"LOW\"\n").unwrap();
+
+    let output = cmd
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Analyzed heap:"));
+    assert!(stdout.contains(&fixture_path));
+    assert!(stdout.contains("Top leak candidates:"));
+    assert!(stdout.contains("Leak ID Class Kind Severity Retained Instances"));
+    assert_eq!(
+        count_occurrences(&stdout, "Leak ID Class Kind Severity Retained Instances"),
+        1
+    );
+    assert!(stdout.contains("Commands: /focus <leak-id>, /list, /help, /exit"));
+}
+
+#[test]
+fn test_chat_answers_a_question_in_rules_mode() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("chat-low.toml");
+    fs::write(&config_path, "[analysis]\nmin_severity = \"LOW\"\n").unwrap();
+
+    let output = cmd
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("Why is this leaking?\n/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Question: Why is this leaking?"));
+    assert!(stdout.contains("Answer:"));
+    assert!(stdout.contains("com.example.CacheLeak"));
+}
+
+#[test]
+fn test_chat_focuses_on_selected_leak() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("chat-low.toml");
+    fs::write(&config_path, "[analysis]\nmin_severity = \"LOW\"\n").unwrap();
+
+    let output = cmd
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("/focus com.example.CacheLeak\nWhy is this leaking?\n/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Focused leak: com.example.CacheLeak"));
+    assert_eq!(
+        count_occurrences(&stdout, "Focused leak: com.example.CacheLeak"),
+        1
+    );
+    assert!(stdout.contains("Question: Why is this leaking?"));
+    assert!(stdout.contains("com.example.CacheLeak"));
+}
+
+#[test]
+fn test_chat_rejects_invalid_focus_target_and_continues() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("chat-low.toml");
+    fs::write(&config_path, "[analysis]\nmin_severity = \"LOW\"\n").unwrap();
+
+    let output = cmd
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("/focus missing::leak\n/help\n/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Focus error: no leak found matching identifier 'missing::leak'"));
+    assert_eq!(
+        count_occurrences(
+            &stdout,
+            "Focus error: no leak found matching identifier 'missing::leak'"
+        ),
+        1
+    );
+    assert!(stdout.contains("Commands: /focus <leak-id>, /list, /help, /exit"));
+}
+
+#[test]
+fn test_chat_bare_focus_prints_usage_and_does_not_ask_ai() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("chat-low.toml");
+    fs::write(&config_path, "[analysis]\nmin_severity = \"LOW\"\n").unwrap();
+
+    let output = cmd
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("/focus\n/help\n/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Usage: /focus <leak-id>"));
+    assert!(stdout.contains("Commands: /focus <leak-id>, /list, /help, /exit"));
+    assert!(!stdout.contains("Question: /focus"));
+}
+
+#[test]
+fn test_chat_with_provider_mode_sends_chat_follow_up_prompt_and_renders_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=provider-chat-model\n  confidence_pct=83\n  summary=Provider chat answer\nsection recommendations\n  item#0=Inspect the cache owner\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("mock server accept failed: {err}"),
+            }
+        };
+        let mut buf = [0_u8; 8192];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+        assert!(request.contains("intent=chat_leak_follow_up"), "{request}");
+        assert!(
+            request.contains("question=Why is this leaking?"),
+            "{request}"
+        );
+        assert!(request.contains("leak_sampled=3"), "{request}");
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("provider-chat.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[analysis]\nmin_severity = \"LOW\"\nleak_types = [\"CACHE\", \"THREAD\", \"HTTP_RESPONSE\", \"COLLECTION\"]\n\n[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-chat-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "chat",
+            fixture_path.as_str(),
+        ])
+        .write_stdin("Why is this leaking?\n/exit\n")
+        .output()
+        .unwrap();
+
+    server.join().unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Question: Why is this leaking?"));
+    assert!(stdout.contains("Provider chat answer"));
+    assert!(stdout.contains("Inspect the cache owner"));
+}
+
+#[test]
+fn test_chat_default_config_reports_healthy_heap_when_fallback_leaks_are_below_threshold() {
+    let fixture = write_fixture(&build_fallback_leak_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["chat", fixture_path.as_str()])
+        .write_stdin("/exit\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+
+    assert!(stdout.contains("Analyzed heap:"));
+    assert!(stdout.contains(&fixture_path));
+    assert!(stdout.contains(
+        "No leak suspects detected. Ask questions about the healthy-heap summary or type /exit."
+    ));
+    assert!(stdout.contains("Commands: /focus <leak-id>, /list, /help, /exit"));
+}
+
+#[test]
 fn test_analyze_text_format() {
     let fixture = write_fixture(&build_simple_fixture());
     let fixture_path = path_arg(fixture.path());
@@ -396,6 +666,388 @@ fn test_analyze_json_format() {
     let stdout = stdout_string(&output.stdout);
     let json = serde_json::from_str::<Value>(&stdout).unwrap();
     assert!(json.is_object());
+}
+
+#[test]
+fn test_analyze_json_with_ai_includes_ai_section() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--format", "json", "--ai"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let ai = json
+        .get("ai")
+        .and_then(Value::as_object)
+        .expect("ai object");
+    assert!(ai.contains_key("model"));
+    assert!(ai.contains_key("summary"));
+    assert!(ai.contains_key("recommendations"));
+    assert!(ai.contains_key("confidence"));
+    assert!(ai.contains_key("wire"));
+}
+
+#[test]
+fn test_analyze_json_with_provider_mode_ai_includes_provider_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=provider-test-model\n  confidence_pct=77\n  summary=Provider summary from CLI integration\nsection recommendations\n  item#0=First recommendation\n  item#1=Second recommendation\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 4096];
+        let _ = stream.read(&mut buf).unwrap();
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("provider.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-test-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "analyze",
+            fixture_path.as_str(),
+            "--format",
+            "json",
+            "--ai",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let ai = json
+        .get("ai")
+        .and_then(Value::as_object)
+        .expect("ai object");
+    assert_eq!(
+        ai.get("model").and_then(Value::as_str),
+        Some("provider-test-model")
+    );
+    assert_eq!(
+        ai.get("summary").and_then(Value::as_str),
+        Some("Provider summary from CLI integration")
+    );
+    let recommendations = ai
+        .get("recommendations")
+        .and_then(Value::as_array)
+        .expect("recommendations array");
+    assert_eq!(recommendations.len(), 2);
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_analyze_json_with_anthropic_provider_mode_includes_provider_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": "TOON v1\nsection response\n  model=claude-cli-test\n  confidence_pct=76\n  summary=Anthropic summary from CLI integration\nsection recommendations\n  item#0=First Anthropic recommendation\n  item#1=Second Anthropic recommendation\n"
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 4096];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+        assert!(request.contains("POST /v1/messages HTTP/1.1"), "{request}");
+        assert!(request.contains("x-api-key: dummy-key"), "{request}");
+        assert!(
+            request.contains("anthropic-version: 2023-06-01"),
+            "{request}"
+        );
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("anthropic-provider.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"anthropic\"\nmodel = \"claude-cli-test\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_ANTHROPIC_KEY\"\nmax_tokens = 512\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_ANTHROPIC_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "analyze",
+            fixture_path.as_str(),
+            "--format",
+            "json",
+            "--ai",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let ai = json
+        .get("ai")
+        .and_then(Value::as_object)
+        .expect("ai object");
+    assert_eq!(
+        ai.get("model").and_then(Value::as_str),
+        Some("claude-cli-test")
+    );
+    assert_eq!(
+        ai.get("summary").and_then(Value::as_str),
+        Some("Anthropic summary from CLI integration")
+    );
+    let recommendations = ai
+        .get("recommendations")
+        .and_then(Value::as_array)
+        .expect("recommendations array");
+    assert_eq!(recommendations.len(), 2);
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_analyze_json_with_provider_mode_ai_redacts_prompt_before_send() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=provider-test-model\n  confidence_pct=77\n  summary=Provider summary with privacy controls\nsection recommendations\n  item#0=First recommendation\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+        assert!(request.contains("heap_path=<REDACTED>"), "{request}");
+        assert!(request.contains("custom_secret=<REDACTED>"), "{request}");
+        assert!(!request.contains("secret-token-123"), "{request}");
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture_dir = tempdir().unwrap();
+    let fixture_path = fixture_dir.path().join("secret-token-123-heap.hprof");
+    fs::write(&fixture_path, build_graph_fixture()).unwrap();
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, sandbox) = cli_command();
+    let prompt_dir = sandbox.path().join("prompts");
+    fs::create_dir_all(&prompt_dir).unwrap();
+    fs::write(
+        prompt_dir.join("provider-insights.yaml"),
+        "version: 1\ninstructions:\n  - key: response_format\n    value: Return only TOON v1 with section response and section recommendations\n  - key: custom_secret\n    value: secret-token-123\n",
+    )
+    .unwrap();
+    let config_path = sandbox.path().join("provider-privacy.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-test-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n\n[ai.privacy]\nredact_heap_path = true\nredact_patterns = [\"secret-token-[0-9]+\"]\n\n[ai.prompts]\ntemplate_dir = \"{}\"\n",
+            toml_path_arg(&prompt_dir)
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "analyze",
+            fixture_arg.as_str(),
+            "--format",
+            "json",
+            "--ai",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let prompt = json
+        .get("ai")
+        .and_then(|ai| ai.get("wire"))
+        .and_then(|wire| wire.get("prompt"))
+        .and_then(Value::as_str)
+        .expect("ai.wire.prompt string");
+    assert!(prompt.contains("heap_path=<REDACTED>"));
+    assert!(prompt.contains("custom_secret=<REDACTED>"));
+    assert!(!prompt.contains("secret-token-123"));
+    assert!(!prompt.contains(fixture_arg.as_str()));
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_analyze_json_with_provider_mode_ai_emits_audit_log_without_prompt_content() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=provider-test-model\n  confidence_pct=77\n  summary=Provider summary with privacy audit logging\nsection recommendations\n  item#0=First recommendation\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let _ = stream.read(&mut buf).unwrap();
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture_dir = tempdir().unwrap();
+    let fixture_path = fixture_dir.path().join("secret-token-123-heap.hprof");
+    fs::write(&fixture_path, build_graph_fixture()).unwrap();
+    let fixture_arg = path_arg(&fixture_path);
+    let (mut cmd, sandbox) = cli_command();
+    let prompt_dir = sandbox.path().join("prompts");
+    fs::create_dir_all(&prompt_dir).unwrap();
+    fs::write(
+        prompt_dir.join("provider-insights.yaml"),
+        "version: 1\ninstructions:\n  - key: response_format\n    value: Return only TOON v1 with section response and section recommendations\n  - key: custom_secret\n    value: secret-token-123\n",
+    )
+    .unwrap();
+    let config_path = sandbox.path().join("provider-audit.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-test-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n\n[ai.privacy]\nredact_heap_path = true\nredact_patterns = [\"secret-token-[0-9]+\"]\naudit_log = true\n\n[ai.prompts]\ntemplate_dir = \"{}\"\n",
+            toml_path_arg(&prompt_dir)
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .env("RUST_LOG", "mnemosyne_core::analysis::ai=info")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "analyze",
+            fixture_arg.as_str(),
+            "--format",
+            "json",
+            "--ai",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stderr = strip_ansi(&stdout_string(&output.stderr));
+    assert!(
+        stderr.contains("provider_ai_audit"),
+        "missing provider audit marker: {stderr}"
+    );
+    assert!(
+        stderr.contains("prompt_sha256="),
+        "missing prompt hash metadata: {stderr}"
+    );
+    assert!(
+        stderr.contains("prompt_bytes="),
+        "missing prompt length metadata: {stderr}"
+    );
+    assert!(
+        !stderr.contains("secret-token-123"),
+        "stderr leaked raw secret: {stderr}"
+    );
+    assert!(
+        !stderr.contains("custom_secret="),
+        "stderr leaked prompt content: {stderr}"
+    );
+
+    server.join().unwrap();
 }
 
 #[test]
@@ -838,6 +1490,218 @@ fn test_config_prints_json() {
     assert!(json.is_object());
     assert!(json.get("parser").is_some());
     assert!(json.get("analysis").is_some());
+}
+
+#[test]
+fn test_config_json_includes_ai_prompt_template_dir() {
+    let (mut cmd, sandbox) = cli_command();
+    let template_dir = sandbox.path().join("prompt-overrides");
+    let config_path = sandbox.path().join("prompts.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\n\n[ai.prompts]\ntemplate_dir = \"{}\"\n",
+            toml_path_arg(&template_dir)
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "config"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(
+        json.get("ai")
+            .and_then(|ai| ai.get("prompts"))
+            .and_then(|prompts| prompts.get("template_dir"))
+            .and_then(Value::as_str),
+        Some(toml_path_arg(&template_dir).as_str())
+    );
+}
+
+#[test]
+fn test_analyze_json_with_provider_mode_ai_uses_prompt_template_override() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=provider-test-model\n  confidence_pct=77\n  summary=Provider summary from prompt override test\nsection recommendations\n  item#0=First recommendation\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+        assert!(
+            request.contains("custom_prompt_marker=prompt-template-override"),
+            "request did not contain template override marker: {request}"
+        );
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let prompt_dir = sandbox.path().join("prompts");
+    fs::create_dir_all(&prompt_dir).unwrap();
+    fs::write(
+        prompt_dir.join("provider-insights.yaml"),
+        "version: 1\ninstructions:\n  - key: response_format\n    value: Return only TOON v1 with section response and section recommendations\n  - key: required_model\n    value: \"{{model}}\"\n  - key: custom_prompt_marker\n    value: prompt-template-override\n",
+    )
+    .unwrap();
+    let config_path = sandbox.path().join("provider-prompts.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-test-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n\n[ai.prompts]\ntemplate_dir = \"{}\"\n",
+            toml_path_arg(&prompt_dir)
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "analyze",
+            fixture_path.as_str(),
+            "--format",
+            "json",
+            "--ai",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let prompt = json
+        .get("ai")
+        .and_then(|ai| ai.get("wire"))
+        .and_then(|wire| wire.get("prompt"))
+        .and_then(Value::as_str)
+        .expect("ai.wire.prompt string");
+    assert!(prompt.contains("custom_prompt_marker=prompt-template-override"));
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_serve_list_tools_returns_catalog() {
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .arg("serve")
+        .write_stdin("{\"id\":1,\"method\":\"list_tools\",\"params\":{}}\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+
+    let tools = json
+        .get("result")
+        .and_then(|result| result.get("tools"))
+        .and_then(Value::as_array)
+        .expect("result.tools array");
+    assert!(tools.iter().any(|tool| {
+        tool.get("name") == Some(&Value::String("list_tools".into()))
+            && tool
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains("parameter shapes"))
+    }));
+    assert!(tools.iter().any(|tool| {
+        tool.get("name") == Some(&Value::String("analyze_heap".into()))
+            && tool
+                .get("params")
+                .and_then(Value::as_array)
+                .is_some_and(|params| !params.is_empty())
+    }));
+}
+
+#[test]
+fn test_serve_unsupported_method_includes_error_details() {
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .arg("serve")
+        .write_stdin("{\"id\":2,\"method\":\"nope\",\"params\":{}}\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error").and_then(Value::as_str),
+        Some("Invalid input: unsupported MCP method: nope")
+    );
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("invalid_input")
+    );
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("details"))
+            .and_then(|details| details.get("detail"))
+            .and_then(Value::as_str),
+        Some("unsupported MCP method: nope")
+    );
+}
+
+#[test]
+fn test_serve_invalid_json_includes_error_details() {
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .arg("serve")
+        .write_stdin("{not valid json}\n")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(json.get("id"), Some(&Value::Null));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("invalid_json")
+    );
+    assert!(json
+        .get("error")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.contains("invalid JSON")));
 }
 
 #[test]

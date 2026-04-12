@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** March 9, 2026  
+> **Last Updated:** April 12, 2026
 > **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -45,26 +45,26 @@ Mnemosyne aims to be a one-stop solution for analyzing Java heap dumps (HPROF fi
 
 By meeting these goals, Mnemosyne helps engineers identify memory leaks, understand heap composition, and save time in debugging complex Java applications.
 
-## Current Implementation Snapshot (March 2026)
+## Current Implementation Snapshot (April 2026)
 
 ### Shipped today
 - **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `fix`, `gc-path`, and `serve` entry points all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; prints grouped histogram and investigation tables in text mode; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
 - **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
-- **AI insights:** Currently deterministic stub text so that CLI/MCP outputs have the right shape even without live LLM calls.
+- **AI insights:** `core::analysis::ai` now supports `rules`, `stub`, and `provider` modes plus chat-turn generation that still returns `AiInsights` / `AiWireExchange` in TOON. `provider` mode uses a small `core::llm` transport for OpenAI-compatible chat-completions endpoints, renders provider instruction sections from `core::prompts` YAML templates (embedded default plus optional override directory), redacts `heap_path` and regex-matched content from the fully rendered outbound prompt via `[ai.privacy]` before external calls, emits opt-in hashed audit metadata for the redacted prompt, applies a minimal `max_tokens` prompt-budget guard, and parses strict TOON responses back into the existing contract, while `rules` remains the default offline-safe path.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
 - **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 129 passing tests.
 
 ### Still in progress
-- **Remaining MAT-parity work**, especially classloader analysis and OQL-style querying.
-- **Config-driven AI task runner** (e.g., YAML-defined prompts with selective context injection).
-- **Large-dump scaling validation**: the initial benchmark baseline is published (`docs/performance/memory-scaling.md`) covering parser throughput, dominator-tree timing, and RSS measurements on 156 MB fixtures. Step 11 re-baselining found a 4.78x regression after unconditional field retention, and the current remediation now restores default `analyze`/`leaks` runs to 4.23x while leaving the heavier investigation path opt-in at 4.78x. Larger dump validation (500 MB, 1 GB+) is still future work.
+- **Remaining MAT-parity work**, especially deeper query/explorer coverage beyond the current minimal OQL-style surface.
+- **Prompt/provider hardening for AI** (e.g., broader audit/token-budget controls, richer MCP/session semantics after the CLI-first conversation slice, and AI-driven fix generation).
+- **Large-dump follow-through**: Step 11 is complete. The current benchmark baseline now includes dense synthetic validation at roughly 500 MB / 1 GB / 2 GB, with default-path RSS around 2.87x-2.90x and investigation-path RSS around 3.89x-3.92x. Additional real-world large-dump validation is still useful, but the Step 11 gate is no longer open.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
 The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
@@ -124,12 +124,12 @@ Mnemosyne's architecture is organized into clear layers, separating the concerns
 │                        PRESENTATION LAYER                               │
 │                                                                         │
 │  ┌────────────────────────┐       ┌─────────────────────────────────┐  │
-│  │    CLI  (clap-based)   │       │  MCP Server (stdio JSON-RPC)   │  │
-│  │ parse · leaks · analyze│       │ parse_heap · detect_leaks      │  │
-│  │ diff · map · fix       │       │ map_to_code · find_gc_path     │  │
-│  │ gc-path · serve        │       │ explain_leak · propose_fix     │  │
-│  │ --format text|md|html  │       │ apply_fix                      │  │
-│  │   |toon|json           │       │                                │  │
+│  │    CLI  (clap-based)   │       │ MCP Server (stdio JSON lines)  │  │
+│  │ parse · leaks · analyze│       │ list_tools · parse_heap        │  │
+│  │ diff · map · fix       │       │ detect_leaks · analyze_heap    │  │
+│  │ gc-path · serve        │       │ query_heap · map_to_code       │  │
+│  │ --format text|md|html  │       │ find_gc_path · explain_leak    │  │
+│  │   |toon|json           │       │ propose_fix                    │  │
 │  └───────────┬────────────┘       └──────────────┬──────────────────┘  │
 │              │                                   │                      │
 └──────────────┼───────────────────────────────────┼──────────────────────┘
@@ -186,10 +186,10 @@ Mnemosyne's architecture is organized into clear layers, separating the concerns
 │         ▼                                                               │
 │  ┌──────────────────────┐  ┌────────────────────────────────────────┐  │
 │  │  LLM Backend         │  │  External Systems                     │  │
-│  │  (stubbed today —    │  │  • File I/O  (HPROF dumps, reports)   │  │
-│  │   config plumbing    │  │  • Git       (blame, commit lookup)   │  │
-│  │   exists for OpenAI  │  │  • IDE       (MCP ↔ VS Code/Cursor/  │  │
-│  │   /Anthropic/local)  │  │               Zed/JetBrains/ChatGPT) │  │
+│  │  (OpenAI-compatible  │  │  • File I/O  (HPROF dumps, reports)   │  │
+│  │   / Anthropic /      │  │  • Git       (blame, commit lookup)   │  │
+│  │   local providers)   │  │  • IDE       (MCP ↔ VS Code/Cursor/  │  │
+│  │                      │  │               Zed/JetBrains/ChatGPT) │  │
 │  └──────────────────────┘  │  • CI/CD     (JSON/TOON consumption)  │  │
 │                            └────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -225,7 +225,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
 
-> **Status (Mar 2026):** The clap-based CLI is fully wired with `--output-file` support, `--format` selection (text/markdown/html/toon/json), and provenance display for `leaks`/`gc-path`/`fix` output. Richer progress UI remains future work.
+> **Status (Apr 2026):** The clap-based CLI is fully wired with `--output-file` support, `--format` selection (text/markdown/html/toon/json), provenance display for `leaks`/`gc-path`/`fix` output, and a CLI-first `chat` command for bounded leak-focused follow-up. Richer progress UI and non-CLI conversation surfaces remain future work.
 
 ### 2. Master Control Program (Orchestrator - MCP)
 
@@ -291,7 +291,7 @@ If multiple tasks are needed, they can be defined in a data-driven way (e.g. a Y
 
 Overall, the AI Analysis Engine transforms raw data into expert insights. It's like having a knowledgeable assistant review the heap dump and point out "interesting" things. By scripting these inquiries, Mnemosyne can provide a rich analysis that goes beyond what traditional tools offer, which often require the developer to manually deduce issues from raw statistics.
 
-> **Status (Mar 2026):** The current alpha build emits deterministic, template-driven insights so the CLI/MCP interface is stable. The configurable prompt/task runner described here is the next major milestone.
+> **Status (Apr 2026):** The current alpha build supports deterministic `rules`, compatibility `stub`, and provider-backed AI execution while preserving the stable `AiInsights` / `AiWireExchange` contract. A CLI-first `chat` flow now reuses the same AI pipeline for bounded leak-focused follow-up; MCP session semantics and AI-driven fix generation remain future work.
 
 ### 5. LLM Integration Module (AI Service Connector)
 
@@ -311,7 +311,7 @@ This component abstracts the connection to external AI models or services. We an
 
 In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By isolating this, we make it easy to update the tool as AI technology evolves (e.g., switching to a new API or adding support for an on-prem LLM) without affecting the rest of the system. This design choice follows a flexible approach seen in similar tools like KCPilot, which abstracts LLM communication and anticipates future model integrations.
 
-> **Status (Mar 2026):** Configuration plumbing (provider/model/temperature) already exists, but calls currently terminate in a stubbed `generate_ai_insights` routine. Wiring the abstraction to a real LLM backend – or a local model – remains open work.
+> **Status (Apr 2026):** `core::llm` now backs real OpenAI-compatible, local, and Anthropic provider execution. Prompt-template overrides, provider-mode redaction, hashed audit logging, and a minimal prompt-budget guard are in place. Local-model follow-through beyond OpenAI-compatible endpoints, plus broader streaming/session semantics, remain open work.
 
 ### 6. Report Generator (Output Formatter)
 
@@ -362,8 +362,8 @@ Because the Report Generator is modular, adding a new output format later (say, 
            │
            ▼
 ┌──────────────────────┐
-│  4. AI Insights      │  Currently: deterministic template text
-│     (stubbed)        │  Future: LLM-backed context-aware explanations
+│  4. AI Insights      │  rules / stub / provider TOON pipeline
+│     + Chat Turns     │  CLI-first chat reuses the same contract
 └──────────┬───────────┘
            │
            ▼
@@ -444,7 +444,7 @@ In summary, Mnemosyne is not an isolated tool – it's built to play well with e
 
 While the current design of Mnemosyne provides a robust foundation for JVM heap analysis, we envision many enhancements and extensions that can be built on top of it. The modular architecture makes it easier to implement these in the future:
 
-**Interactive Analysis Mode**: A possible future feature is an interactive REPL or chat mode. In this mode, a developer could ask follow-up questions to the AI about the heap after the initial analysis. For example, "Why are there so many XyzObject instances?" or "What would be the impact of clearing cache now?" This would turn Mnemosyne into a conversational memory analyst, guided by the user's curiosity.
+**Interactive Analysis Mode**: Mnemosyne now ships a bounded CLI-first leak chat REPL. Future work is broader interactive exploration: richer slash commands, MCP/session-backed conversation, and drill-down flows beyond the current leak-focused shortlist.
 
 **Differential Heap Analysis**: Extend Mnemosyne to compare two heap dumps (e.g., before and after a certain operation, or between versions of an app). This could help identify memory growth by class between releases, etc. The tool could produce a report highlighting what increased or decreased, with the AI summarizing the differences (e.g., "You have 20% more UserSession objects in the later dump, possibly indicating a leak in session management.").
 

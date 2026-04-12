@@ -1,444 +1,255 @@
 # Quick Start Guide
 
-Get up and running with Mnemosyne in 5 minutes!
-
-Current release: v0.2.0. The core crate is organized into grouped module directories under `core/src/`, and the CLI workflow now includes optional Phase 2 investigation reports on `analyze`.
+Get from heap dump to actionable output with the current `mnemosyne-cli` surface.
 
 ## Prerequisites
 
-- Rust 1.70+ installed
-- A JVM heap dump file (`.hprof`)
-- Optional: OpenAI API key for AI features
+- Rust installed if you are building from source
+- a JVM heap dump (`.hprof`)
+- optional AI provider credentials if you want provider-backed AI instead of the default offline `rules` mode
 
----
+## Install
 
-## Installation
-
-### Option 1: Build from Source
+Build from source:
 
 ```bash
 git clone https://github.com/bballer03/mnemosyne
 cd mnemosyne
 cargo build --release
-sudo cp target/release/mnemosyne-cli /usr/local/bin/
 ```
 
-### Option 2: Using Cargo
+Or install the published CLI crate:
 
 ```bash
 cargo install mnemosyne-cli
 ```
 
-### Option 3: Using Homebrew (macOS)
+The packaged binary name is `mnemosyne-cli`.
+
+## Step 1: Capture a Heap Dump
 
 ```bash
-brew install ./HomebrewFormula/mnemosyne.rb
-```
-
-The current packaged binary name is `mnemosyne-cli`. Commands below still use the shorter `mnemosyne` form in examples, but the packaged artifact currently installs as `mnemosyne-cli`.
-
-Mnemosyne is maintained by **bballer03**. For releases, issues, and discussions, use the upstream repository at https://github.com/bballer03/mnemosyne.
-
----
-
-## Your First Analysis
-
-### Step 1: Get a Heap Dump
-
-If you don't have one already:
-
-```bash
-# Find your Java process
 jps
-
-# Take a heap dump
 jmap -dump:format=b,file=heap.hprof <PID>
 ```
 
-### Step 2: Parse It
+## Step 2: Parse the Dump
 
 ```bash
-mnemosyne parse heap.hprof
+mnemosyne-cli parse heap.hprof
 ```
 
-You'll see output like:
+`parse` is the lightweight path. It reports header metadata, total records, and record-category byte totals without building the full object graph.
 
-```
-✓ Parsed heap dump.
-Heap path: heap.hprof
-File size: 2.40 GB
-Format: JAVA PROFILE 1.0.2 | Identifier bytes: 8 | Timestamp(ms): 1709836800000
-Estimated objects: 1234567
-Total HPROF records: 5678901
-Top heap record categories by aggregate bytes:
- #  Record Category           Bytes      Share  Entries
- 1  INSTANCE_DUMP           421.00 MB    50.1%   345678
- 2  PRIMITIVE_ARRAY_DUMP    312.00 MB    37.1%   234567
- 3  OBJECT_ARRAY_DUMP        89.00 MB    10.6%    67890
- 4  CLASS_DUMP               12.00 MB     1.4%     4321
- 5  HEAP_DUMP_SEGMENT         7.50 MB     0.9%       12
-Top record tags:
- Record Tag                    Hex  Entries       Size
- HEAP_DUMP_SEGMENT            0x1C       12  841.50 MB
- STRING_IN_UTF8               0x01    89012   15.00 MB
- LOAD_CLASS                   0x02     4321    0.50 MB
- STACK_TRACE                  0x05     1234    0.20 MB
- STACK_FRAME                  0x04     5678    0.10 MB
-```
-
-These values are calculated from the raw HPROF record tags, so even a lightweight `parse` run tells you which record categories dominate the dump. `mnemosyne leaks` now uses the same graph-backed dominator pipeline as `analyze` when parsing succeeds, but keeps raw field retention disabled by default so leak detection stays on the lean path.
-
-### Step 3: Detect Leaks
+## Step 3: Detect Leaks
 
 ```bash
-mnemosyne leaks heap.hprof
+mnemosyne-cli leaks heap.hprof
 ```
 
-Output:
-
-```
-✓ Leak detection complete.
-Potential leaks:
- Leak ID               Class                               Kind      Severity  Retained    Instances
- leak-usersession-1    com.example.UserSessionCache         Cache     High      512.00 MB      125432
- leak-okhttp-1         okhttp3.Response                     Resource  Medium     89.00 MB        8921
-
-  Leak: leak-usersession-1
-    Description: Cache growing unbounded, cleanup thread blocked
-    Provenance:
-      [SYNTHETIC] generated from histogram heuristics
-
-  Leak: leak-okhttp-1
-    Description: Unclosed HTTP response bodies
-    Provenance:
-      [SYNTHETIC] generated from histogram heuristics
-```
-
-When class names or leak IDs are too long for the table, Mnemosyne truncates them inline and prints a disclosure section beneath with the full values keyed by row number.
-
-If no candidates survive filtering, Mnemosyne now prints `No leak suspects detected.` so a successful zero-result run is explicit.
-
-Limit the output to specific categories whenever you need deterministic CI signals:
+Useful live filters:
 
 ```bash
-mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
+mnemosyne-cli leaks heap.hprof --min-severity high
+mnemosyne-cli leaks heap.hprof --package com.example --package org.demo
+mnemosyne-cli leaks heap.hprof --leak-kind cache --leak-kind thread
 ```
 
-Because the leak engine now consumes the parsed class histogram, package or severity filters operate on real data first and only fall back to synthetic names if the heap lacks useful symbols.
+Notes:
 
-The dedicated `leaks` command is no longer summary-driven by default. It now uses the lean graph-backed path and real dominator-backed retained sizes when parsing succeeds, while still falling back with provenance if the heap lacks enough detail.
+- `leaks` attempts the graph-backed path first
+- if that path is unavailable, Mnemosyne falls back to heuristic output with provenance markers
+- zero-result runs print `No leak suspects detected.` explicitly
+- there is no `--exclude-package` flag
 
-### Step 4: Get AI Insights (Optional)
-
-First, set your API key:
+## Step 4: Run Full Analysis
 
 ```bash
-export OPENAI_API_KEY="sk-..."
+mnemosyne-cli analyze heap.hprof
 ```
 
-Then run AI analysis:
+Useful live options:
 
 ```bash
-mnemosyne analyze heap.hprof --group-by package --threads --strings --collections --top-instances --top-n 10 --min-capacity 32 --ai
+mnemosyne-cli analyze heap.hprof --format json
+mnemosyne-cli analyze heap.hprof --group-by package
+mnemosyne-cli analyze heap.hprof --threads --strings --collections --classloaders --top-instances
+mnemosyne-cli analyze heap.hprof --profile incident-response
+mnemosyne-cli analyze heap.hprof --output-file report.html --format html
 ```
 
-When full HPROF object-graph parsing succeeds, `analyze` now computes retained sizes from the dominator tree and includes graph-backed dominator metrics in the report. It also emits a grouped histogram section and, when present, an unreachable-object breakdown. Use `--group-by class|package|classloader` to change the histogram aggregation. If parsing or filters prevent that path, Mnemosyne falls back to the summary-driven preview and labels the response accordingly.
+`analyze` can attach optional investigation reports to the same run:
 
-The new investigation flags append focused reports to the same analysis run: `--threads` shows per-thread retained memory plus parsed stack frames, `--strings` reports duplicate groups and dedup savings, `--collections` highlights oversized or under-filled collections, and `--top-instances` ranks the largest retained objects. `--top-n` controls report depth, and `--min-capacity` filters out tiny collection backings.
+- `--threads`
+- `--strings`
+- `--collections`
+- `--classloaders`
+- `--top-instances`
+- `--top-n <N>`
+- `--min-capacity <N>`
 
-Those investigation flags intentionally cost more memory than the default path. In the current Step 11 measurements on the 156 MB fixture, default `analyze`/`leaks` runs measured about 4.23x RSS:dump, while `analyze --threads --strings --collections` measured about 4.78x because it opts into retaining raw field data for those analyzers.
+Profile presets currently mean:
 
-Output:
+- `overview`: disables the optional investigation reports
+- `incident-response`: enables all optional investigation reports and raises the default depth
+- `ci-regression`: enables `top-instances` with tighter defaults
 
-```
-🧠 AI Analysis:
+## Step 5: AI Insights
 
-═══════════════════════════════════════════════════════════════
+The CLI flag is still `--ai`:
 
-Root Cause Analysis:
-────────────────────────────────────────────────────────────────
-The UserSessionCache is experiencing unbounded growth because the 
-cleanup thread is deadlocked. The thread is waiting on a monitor 
-lock held by the request handler, which is itself waiting on the 
-cleanup thread to finish.
-
-Impact:
-────────────────────────────────────────────────────────────────
-• 512 MB of unnecessary memory retention
-• Risk of OutOfMemoryError under sustained load
-• Degraded response times due to thread contention
-
-Recommendations:
-────────────────────────────────────────────────────────────────
-1. Break the deadlock cycle:
-   - Add a timeout to cache.cleanup() method
-   - Use tryLock() with timeout instead of synchronized
-   
-2. Architectural improvements:
-   - Replace synchronized HashMap with ConcurrentHashMap
-   - Use weak references for session storage
-   - Implement time-based eviction with ScheduledExecutorService
-
-Code fixes available. Run: mnemosyne fix heap.hprof
+```bash
+mnemosyne-cli analyze heap.hprof --ai
+mnemosyne-cli explain heap.hprof --leak-id leak-usersession-1
 ```
 
-### Step 5: Persist Your Preferences (Optional)
+Current AI modes:
 
-Drop a `.mnemosyne.toml` file in your project (or `~/.config/mnemosyne/config.toml`) to avoid retyping flags:
+- `rules`: default, offline-safe, built into the repo
+- `stub`: deterministic compatibility mode
+- `provider`: calls a configured provider and parses strict TOON back into the stable `AiInsights` contract
+
+Provider-backed AI is configured through `[ai]` or environment variables. OpenAI-compatible, local, and Anthropic provider paths all have targeted verification coverage in this branch.
+
+Start a bounded leak-focused chat session with:
+
+```bash
+mnemosyne-cli chat heap.hprof
+```
+
+`chat` analyzes the heap once, prints the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`. It keeps only the running process' recent history in memory and reuses the same `rules` / `stub` / `provider` AI mode plus provider privacy controls as `explain`. The startup shortlist still respects `[analysis]` filters, so chat can also begin in an explicit healthy-heap context when no leaks survive filtering.
+
+## Step 6: Save Reports
+
+```bash
+mnemosyne-cli analyze heap.hprof --format html --output-file report.html
+mnemosyne-cli analyze heap.hprof --format json --output-file report.json
+mnemosyne-cli analyze heap.hprof --format toon --output-file report.toon
+```
+
+Supported output formats:
+
+- `text`
+- `toon`
+- `markdown`
+- `html`
+- `json`
+
+## Step 7: Inspect the Effective Config
+
+```bash
+mnemosyne-cli config
+mnemosyne-cli config --config .mnemosyne.toml
+```
+
+The current `config` command prints:
+
+- the merged configuration as pretty JSON
+- then a one-line origin message such as `Using built-in defaults...` or `Loaded configuration from ...`
+
+There are currently no `config show` or `config validate` subcommands.
+
+## Minimal Config File
 
 ```toml
-# .mnemosyne.toml
-
 [general]
 output_format = "toon"
 enable_ai = true
 
 [ai]
+mode = "rules"
 model = "gpt-4.1-mini"
 temperature = 0.2
 
+[[ai.tasks]]
+kind = "top-leak"
+enabled = true
+
+[[ai.tasks]]
+kind = "healthy-heap"
+enabled = true
+
+[[ai.tasks]]
+kind = "remediation-checklist"
+enabled = true
+
 [analysis]
-min_severity = "MEDIUM"
-packages = ["com.example", "org.demo"]
+min_severity = "HIGH"
+packages = ["com.example"]
 leak_types = ["CACHE", "THREAD"]
-accumulation_threshold = 10.0
+
+[parser]
+max_objects = 500000
 ```
 
-When Mnemosyne starts it resolves configuration in this order:
+Config lookup order:
 
-1. `mnemosyne --config /path/file.toml`
+1. `--config /path/to/file.toml`
 2. `$MNEMOSYNE_CONFIG`
-3. `.mnemosyne.toml` (current directory)
+3. `.mnemosyne.toml` in the current directory
 4. `~/.config/mnemosyne/config.toml`
 5. `/etc/mnemosyne/config.toml`
-6. Built-in defaults
+6. built-in defaults
 
-Use `mnemosyne config` to view the merged result along with the source file.
-
-Prefer shell variables instead? Export the same knobs:
+## Useful Environment Variables
 
 ```bash
+export MNEMOSYNE_OUTPUT_FORMAT=json
+export MNEMOSYNE_MAX_OBJECTS=500000
 export MNEMOSYNE_MIN_SEVERITY=HIGH
-export MNEMOSYNE_PACKAGES="com.example, org.demo"
+export MNEMOSYNE_PACKAGES="com.example,org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
-```
 
-`packages` now act as an allow-list for real classes first (only matching entries from the histogram become candidates) before Mnemosyne rotates through them while synthesizing fallback IDs. Likewise, `leak_types` either filters the actual leak list or, if none match, forces one synthetic entry per requested kind so your CI remains deterministic.
-
-### Step 6: Save the Report
-
-Need an artifact for CI or teammates?
-
-```bash
-# HTML report
-mnemosyne analyze heap.hprof --format html --output-file report.html
-
-# JSON payload for automated checks
-mnemosyne analyze heap.hprof --format json --output-file report.json
-```
-
-`--output-file` works with every format (text/markdown/html/toon/json). If you omit it, the report streams to stdout so you can still pipe through `tee`.
-
----
-
-## Common Use Cases
-
-### CI/CD Integration
-
-```bash
-# In your build pipeline
-mnemosyne analyze heap.hprof --format toon --min-severity HIGH > report.toon
-
-# Check for critical leaks
-if grep -q "severity=Critical" report.toon; then
-  echo "Critical memory leak detected!"
-  exit 1
-fi
-```
-
-### Comparing Before/After
-
-```bash
-# Take heap dump before optimization
-jmap -dump:format=b,file=before.hprof <PID>
-
-# Run your optimization
-# ...
-
-# Take heap dump after
-jmap -dump:format=b,file=after.hprof <PID>
-
-# Compare
-mnemosyne diff before.hprof after.hprof
-```
-
-Output:
-
-```
-Heap diff: before.hprof -> after.hprof
-  Delta size: -347.00 MB
-  Delta objects: -156789
-  Top changes:
-    - com.example.UserSession: -296.00 MB (before 385.00 MB -> after 89.00 MB)
-    - java.lang.String[]: -23.00 MB (before 421.00 MB -> after 398.00 MB)
-    - byte[]: +22.00 MB (before 312.00 MB -> after 334.00 MB)
-  Class-level retained deltas:
-    Class                           Instances  Shallow                 Retained Delta
-    com.example.UserSession          -156789   385.00 -> 89.00 MB     -296.00 MB
-    java.lang.String[]                 -1200   421.00 -> 398.00 MB     -23.00 MB
-```
-
-When both heaps build object graphs successfully, `diff` now keeps the existing summary view and adds class-level instance, shallow-size, and retained-size deltas below it.
-
-### Filtering by Package
-
-```bash
-# Only analyze your application code
-mnemosyne leaks heap.hprof --package com.myapp
-
-# Exclude framework code
-mnemosyne leaks heap.hprof --exclude-package org.springframework
-```
-
----
-
-## IDE Integration
-
-### VS Code / Cursor
-
-1. Install the MCP extension (if needed)
-
-2. Create `.vscode/mcp-config.json`:
-   ```json
-   {
-     "mcpServers": {
-       "mnemosyne": {
-         "command": "mnemosyne",
-         "args": ["serve"]
-       }
-     }
-   }
-   ```
-
-3. Restart VS Code
-
-4. Now you can chat with Mnemosyne:
-   - "Analyze heap.hprof"
-   - "Show me the leak in UserSessionCache"
-   - "Generate a fix for this leak"
-
----
-
-## Next Steps
-
-- Read the [Architecture](../ARCHITECTURE.md) to understand how it works
-- Check the [API Documentation](api.md) for MCP integration
-- See [Configuration](configuration.md) for advanced options
-- Browse [Examples](examples/) for more use cases
-
----
-
-## Troubleshooting
-
-### "Command not found: mnemosyne"
-
-Make sure `~/.cargo/bin` is in your PATH:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-### "Failed to parse heap dump"
-
-Ensure the file is a valid HPROF format:
-
-```bash
-file heap.hprof
-# Should output: heap.hprof: Java hprof dump
-```
-
-### "AI analysis unavailable"
-
-Set your OpenAI API key:
-
-```bash
+export MNEMOSYNE_AI_ENABLED=true
+export MNEMOSYNE_AI_MODE=provider
+export MNEMOSYNE_AI_PROVIDER=openai
+export MNEMOSYNE_AI_MODEL=gpt-4.1-mini
+export MNEMOSYNE_AI_API_KEY_ENV=OPENAI_API_KEY
 export OPENAI_API_KEY="sk-..."
-# Or add to ~/.bashrc or ~/.zshrc
 ```
 
-### Slow parsing on large heaps
+Notes:
 
-Start with the lightweight streaming overview, then selectively enable deeper investigation reports only when you need them:
+- `MNEMOSYNE_VERBOSE` is not a real config/env knob
+- `MNEMOSYNE_USE_MMAP` and `MNEMOSYNE_THREADS` are loaded, but they are not currently documented as changing the active CLI execution path in this branch
+
+## MCP Setup
+
+Start the stdio server:
 
 ```bash
-mnemosyne parse heap.hprof
-mnemosyne analyze heap.hprof --top-instances --top-n 20
+mnemosyne-cli serve
 ```
 
----
+Current MCP methods:
 
-## Getting Help
+- `list_tools`
+- `parse_heap`
+- `detect_leaks`
+- `analyze_heap`
+- `query_heap`
+- `map_to_code`
+- `find_gc_path`
+- `explain_leak`
+- `propose_fix`
 
-- **Documentation**: Check [docs/](.)
-- **Issues**: [GitHub Issues](https://github.com/bballer03/mnemosyne/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/bballer03/mnemosyne/discussions)
+There is currently no `apply_fix` MCP method.
+There is currently no MCP chat/session method.
 
----
+## Memory Scaling Status
 
-Happy debugging! 🚀
+Step 11 is complete.
 
-- Read the [Architecture](../ARCHITECTURE.md) to understand how it works
-- Check the [API Documentation](api.md) for MCP integration
-- See [Configuration](configuration.md) for advanced options
-- Browse [Examples](examples/) for more use cases
+The current published memory-scaling story is:
 
----
+- default graph-backed `analyze` / `leaks`: about `2.87x-2.90x` RSS:dump on dense synthetic ~500 MB / ~1 GB / ~2 GB tiers
+- investigation-heavy path: about `3.89x-3.92x` on the same tiers
+- `parse`: remains near-constant and very small in RSS because it stays on the streaming summary path
 
-## Troubleshooting
+See `docs/performance/memory-scaling.md` for the measured tables.
 
-### "Command not found: mnemosyne"
+## Next Docs
 
-Make sure `~/.cargo/bin` is in your PATH:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-### "Failed to parse heap dump"
-
-Ensure the file is a valid HPROF format:
-
-```bash
-file heap.hprof
-# Should output: heap.hprof: Java hprof dump
-```
-
-### "AI analysis unavailable"
-
-Set your OpenAI API key:
-
-```bash
-export OPENAI_API_KEY="sk-..."
-# Or add to ~/.bashrc or ~/.zshrc
-```
-
-### Slow parsing on large heaps
-
-Start with the lightweight streaming overview, then selectively enable deeper investigation reports only when you need them:
-
-```bash
-mnemosyne parse heap.hprof
-mnemosyne analyze heap.hprof --top-instances --top-n 20
-```
-
----
-
-## Getting Help
-
-- **Documentation**: Check [docs/](.)
-- **Issues**: [GitHub Issues](https://github.com/bballer03/mnemosyne/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/bballer03/mnemosyne/discussions)
-
----
-
-Happy debugging! 🚀
+- `docs/api.md` for the live MCP wire format
+- `docs/configuration.md` for the full config surface
+- `README.md` for the project overview

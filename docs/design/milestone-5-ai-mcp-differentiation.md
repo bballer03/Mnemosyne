@@ -1,8 +1,8 @@
 # Milestone 5 — AI / MCP / Differentiation
 
-> **Status:** ⚬ Pending  
+> **Status:** ⚠️ Partial — provider/privacy hardening slices plus CLI-first conversation mode landed; MCP/session follow-through remains
 > **Design Owner:** Design Consulting Agent  
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-04-12
 
 ---
 
@@ -12,7 +12,7 @@ Wire real AI capabilities into Mnemosyne and make MCP integration production-rea
 
 ## Context
 
-AI-assisted analysis is Mnemosyne's key differentiator. No other heap analysis tool provides LLM-backed explanations, AI-generated fix suggestions, or natural-language Q&A about heap dumps. The architecture is ready: `AiConfig` with provider/model/temperature fields exists, `AiInsights` and `AiWireExchange` types are defined, the `generate_ai_insights()` function has a clean interface, and the MCP server exposes 7 JSON-RPC handlers. But today, all AI calls terminate in a deterministic stub that returns template text with zero LLM calls and zero HTTP client dependencies.
+AI-assisted analysis is Mnemosyne's key differentiator. The architecture is now partly realized: `AiConfig` supports `rules`, `stub`, and `provider` modes, `AiInsights` and `AiWireExchange` remain the stable contracts, provider-backed execution is verified for OpenAI-compatible, local, and Anthropic endpoints, the stdio MCP server now exposes 9 live methods with `list_tools` discovery plus structured `error_details`, Step `14(d)` now covers provider-mode prompt redaction plus hashed audit logging via `[ai.privacy]` before external calls, and Step `14(e)` now ships a CLI-first `mnemosyne-cli chat <heap.hprof>` slice with bounded in-process history. The remaining M5 work is hardening: MCP/session semantics, streaming only if justified, and AI-driven fix generation.
 
 M1.5 must complete before wiring AI to analysis results — sending empty/heuristic data to an LLM produces misleading output. M3 enriches the analysis context that makes AI insights valuable.
 
@@ -29,7 +29,7 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 6. **Real AI insights** — `generate_ai_insights()` calls a real LLM with heap analysis context
 7. **AI-driven leak explanations** — pass retained-size data + reference chains to LLM
 8. **AI-driven fix suggestions** — LLM-generated context-aware code patches (replacing templates)
-9. **Conversation mode** — interactive Q&A about a heap dump via CLI or MCP
+9. **Conversation mode** — interactive Q&A about a heap dump, starting with a CLI-first slice and deferring MCP/session semantics
 
 ### MCP Hardening
 10. **Tool descriptions** — proper MCP tool metadata for IDE discovery
@@ -58,7 +58,7 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 │                    CLI / MCP                                       │
 │                                                                    │
 │  mnemosyne analyze --ai    MCP: explain_leak / propose_fix        │
-│  mnemosyne explain         MCP: session-based conversation        │
+│  mnemosyne explain         MCP: future session-based conversation │
 │  mnemosyne chat                                                    │
 └──────────────┬─────────────────────────────────────────────────────┘
                │
@@ -127,13 +127,13 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 - `mnemosyne explain --leak-id ID` — LLM-generated explanation with heap context
 
 ### New CLI Commands
-- `mnemosyne chat <heap.hprof>` — interactive conversation mode about a heap dump
+- `mnemosyne chat <heap.hprof>` — CLI-only first slice of conversation mode: analyze once, print the top 3 leak candidates, and support `/focus <leak-id>`, `/list`, `/help`, and `/exit` with bounded in-process history
 
 ### Changed MCP Handlers
 - `explain_leak` — returns LLM-generated explanation (previously: template text)
-- `propose_fix` — returns LLM-generated code patches (previously: template patches)
+- `propose_fix` — still returns template patches today; AI-driven fix generation remains future work
 
-### New MCP Capabilities
+### Remaining MCP Capabilities
 - Streaming responses for long-running AI calls
 - Session context: subsequent MCP calls share analysis state
 - Error codes for AI-specific failures (provider unavailable, token limit, etc.)
@@ -148,13 +148,15 @@ api_key_env = "OPENAI_API_KEY"
 max_tokens = 4096
 
 [ai.privacy]
-redact_patterns = ["\\b\\d{16}\\b", "password=.*"]  # regex patterns to strip
-redact_string_values = true    # replace string object values with <REDACTED>
-audit_log = true               # log hashes of data sent to LLM
+redact_heap_path = true
+redact_patterns = ["\\b\\d{16}\\b", "password=.*"]  # regex patterns to strip from the outbound provider prompt
+audit_log = true
 
 [ai.prompts]
 template_dir = "~/.config/mnemosyne/prompts"  # custom prompt overrides
 ```
+
+Current runtime note: `redact_heap_path`, `redact_patterns`, and provider-mode `audit_log` are implemented, `max_tokens` now acts as a minimal prompt-budget guard for provider-mode leak context, and `mnemosyne-cli chat` reuses that same provider/privacy path. Broader token-accounting and MCP session semantics remain future work.
 
 ## Data Model Changes
 
@@ -201,7 +203,7 @@ template_dir = "~/.config/mnemosyne/prompts"  # custom prompt overrides
 ### Manual Testing Checklist
 - [ ] `analyze --ai` with OpenAI API key produces meaningful insights
 - [ ] `explain` with real leak ID produces context-aware explanation
-- [ ] `chat` mode allows multi-turn conversation
+- [ ] `chat` mode allows bounded multi-turn conversation in the CLI-first slice
 - [ ] Ollama/local model fallback works offline
 - [ ] Privacy redaction strips sensitive strings before LLM call
 - [ ] Token budget prevents oversized prompts
@@ -223,7 +225,7 @@ template_dir = "~/.config/mnemosyne/prompts"  # custom prompt overrides
 ### Phase 3 — AI Features (effort: Large)
 9. AI-driven leak explanations (explain command)
 10. AI-driven fix suggestions (context-aware patches)
-11. Conversation mode (multi-turn context window)
+11. Conversation mode (CLI-first multi-turn context window)
 
 ### Phase 4 — MCP Hardening (effort: Medium)
 12. Streaming responses
@@ -232,7 +234,7 @@ template_dir = "~/.config/mnemosyne/prompts"  # custom prompt overrides
 15. Tool descriptions for IDE discovery
 
 ### Phase 5 — Privacy & Additional Providers (effort: Medium)
-16. Privacy/redaction layer
+16. Privacy/redaction layer (first slice landed: provider-mode prompt redaction)
 17. Audit logging
 18. Anthropic backend
 19. Ollama/local backend

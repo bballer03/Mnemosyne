@@ -1,228 +1,155 @@
 # Examples
 
-This directory contains practical examples of using Mnemosyne.
+This directory is currently a lightweight landing page for real command examples.
 
-## Example Files
+## Current State
 
-- [basic-analysis.md](basic-analysis.md) - Simple heap dump analysis
-- [ci-integration.md](ci-integration.md) - CI/CD pipeline integration
-- [leak-investigation.md](leak-investigation.md) - Step-by-step leak debugging
-- [mcp-usage.md](mcp-usage.md) - Using Mnemosyne via MCP in your IDE
+At the moment this folder does not ship the older example markdown files or sample `.hprof` fixtures that earlier docs referenced.
 
-## Sample Heap Dumps
+The source-of-truth examples live in:
 
-Small example heap dumps for testing:
+- `README.md`
+- `docs/QUICKSTART.md`
+- `docs/api.md`
+- `docs/configuration.md`
 
-- `small-leak.hprof` - Small heap with obvious leak (5 MB)
-- `thread-leak.hprof` - Thread leak example (12 MB)
-- `cache-growth.hprof` - Unbounded cache example (8 MB)
+## Common CLI Examples
 
-Run `mnemosyne parse <dump>` against any of them to see the real class histogram and record-tag percentages that now power leak heuristics, diff output, and dominator summaries.
+Parse a heap dump:
 
-## Configuration Examples
+```bash
+mnemosyne-cli parse heap.hprof
+```
 
-Sample configuration files for different scenarios:
+Detect leaks with filters:
 
-### Production Monitoring
+```bash
+mnemosyne-cli leaks heap.hprof --min-severity high --package com.example --leak-kind cache
+```
+
+Run full analysis with optional investigation reports:
+
+```bash
+mnemosyne-cli analyze heap.hprof \
+  --group-by package \
+  --threads \
+  --strings \
+  --collections \
+  --classloaders \
+  --top-instances \
+  --top-n 10 \
+  --min-capacity 32 \
+  --ai
+```
+
+Persist a report artifact:
+
+```bash
+mnemosyne-cli analyze heap.hprof --format json --output-file report.json
+```
+
+Explain or fix a specific leak:
+
+```bash
+mnemosyne-cli explain heap.hprof --leak-id leak-usersession-1
+mnemosyne-cli fix heap.hprof --leak-id leak-usersession-1 --style defensive --project-root ./service
+```
+
+Map a leak back to code:
+
+```bash
+mnemosyne-cli map com.example.Cache::deadbeef --project-root ./service --class com.example.Cache
+```
+
+Trace a GC root path:
+
+```bash
+mnemosyne-cli gc-path heap.hprof --object-id 0x1000 --max-depth 8
+```
+
+Run a heap query:
+
+```bash
+mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.BigCache\" LIMIT 25"
+```
+
+Inspect the merged config:
+
+```bash
+mnemosyne-cli config
+```
+
+## Minimal Config Examples
+
+### Production-Oriented
 
 ```toml
-# configs/production.toml
 [general]
 output_format = "json"
+enable_ai = true
 
 [analysis]
 min_severity = "HIGH"
-enable_ai = true
+packages = ["com.example"]
+leak_types = ["CACHE", "THREAD"]
 
-[llm]
+[ai]
+mode = "provider"
 provider = "openai"
-model = "gpt-4"
+model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_secs = 30
 ```
 
-### CI/CD Pipeline
+### CI-Oriented
 
 ```toml
-# configs/ci.toml
 [general]
 output_format = "json"
-verbose = false
+enable_ai = false
 
 [analysis]
-enable_ai = false
 min_severity = "CRITICAL"
 
 [parser]
-threads = 8
+max_objects = 500000
 ```
 
-### Local Development
+### Local Provider
 
 ```toml
-# configs/dev.toml
 [general]
-output_format = "text"
-verbose = true
-
-[analysis]
 enable_ai = true
-packages = ["com.myapp"]
 
-[llm]
+[ai]
+mode = "provider"
 provider = "local"
 endpoint = "http://localhost:11434/v1"
-model = "llama2"
+model = "llama3"
+
+[[ai.tasks]]
+kind = "top-leak"
+enabled = true
 ```
 
-## Scripts
+## MCP Example
 
-Useful scripts for automation:
-
-### Memory Regression Test
+Start the server:
 
 ```bash
-#!/bin/bash
-# check-memory-regression.sh
-
-BEFORE=$1
-AFTER=$2
-THRESHOLD=100  # MB
-
-RAW_DELTA=$(mnemosyne diff "$BEFORE" "$AFTER" | awk '/Delta size/ {print $4}')
-DELTA_MB=${RAW_DELTA:+${RAW_DELTA#+}}
-DELTA_MB=${DELTA_MB:-0}
-
-if (( $(echo "$DELTA_MB > $THRESHOLD" | bc -l) )); then
-  echo "❌ Memory regression detected: +${DELTA_MB}MB"
-  exit 1
-else
-  echo "✓ Memory usage within acceptable range: +${DELTA_MB}MB"
-  exit 0
-fi
+mnemosyne-cli serve
 ```
 
-### Automated Leak Detection
+Send one request line:
 
-```bash
-#!/bin/bash
-# nightly-leak-check.sh
-
-PID=$(pgrep -f "MyApplication")
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-HEAP="heap-${TIMESTAMP}.hprof"
-
-# Take heap dump
-jmap -dump:format=b,file=$HEAP $PID
-
-# Analyze
-mnemosyne analyze $HEAP --format toon --min-severity HIGH > report-${TIMESTAMP}.toon
-
-# Check for critical leaks
-if grep -q "severity=Critical" report-${TIMESTAMP}.toon; then
-  # Send alert
-  curl -X POST https://api.pagerduty.com/incidents \
-    -H "Authorization: Token ${PAGERDUTY_TOKEN}" \
-    -d "@alert-payload.json"
-fi
-
-# Cleanup old dumps (keep last 7 days)
-find . -name "heap-*.hprof" -mtime +7 -delete
+```json
+{"id":1,"method":"parse_heap","params":{"path":"heap.hprof"}}
 ```
 
-## Integration Examples
+See `docs/api.md` for the full wire format, the `list_tools` discovery method, and all nine live methods.
 
-### GitHub Actions
-
-```yaml
-# .github/workflows/memory-check.yml
-name: Memory Leak Detection
-
-on:
-  pull_request:
-    branches: [main]
-
-jobs:
-  memory-analysis:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      
-      - name: Install Mnemosyne
-        run: |
-          cargo install mnemosyne-cli
-      
-      - name: Run Tests and Capture Heap Dump
-        run: |
-          ./gradlew test -Dheapdump.on.exit=true
-      
-      - name: Analyze Heap Dump
-        run: |
-          mnemosyne analyze build/heap-dump.hprof \
-            --format toon \
-            --min-severity HIGH \
-            > memory-report.toon
-      
-      - name: Check for Critical Leaks
-        run: |
-          if grep -q "severity=Critical" memory-report.toon; then
-            echo "::error::Critical memory leak detected!"
-            exit 1
-          fi
-      
-      - name: Upload Report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: memory-report
-          path: memory-report.toon
-```
-
-### Kubernetes CronJob
-
-```yaml
-# k8s-memory-monitor.yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: mnemosyne-memory-monitor
-spec:
-  schedule: "0 */6 * * *"  # Every 6 hours
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: mnemosyne
-            image: ghcr.io/bballer03/mnemosyne:0.1.0
-            env:
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mnemosyne-secrets
-                  key: openai-api-key
-            command:
-            - /bin/bash
-            - -c
-            - |
-              # Get pod name of target application
-              POD=$(kubectl get pod -l app=myapp -o jsonpath='{.items[0].metadata.name}')
-              
-              # Exec into pod and take heap dump
-              kubectl exec $POD -- jmap -dump:format=b,file=/tmp/heap.hprof 1
-              
-              # Copy heap dump
-              kubectl cp $POD:/tmp/heap.hprof ./heap.hprof
-              
-              # Analyze
-              mnemosyne analyze heap.hprof --ai --format toon > report.toon
-              
-              # Send to monitoring system
-              curl -X POST https://monitoring.example.com/api/memory-reports \
-                -H "Content-Type: text/plain" \
-                -d @report.toon
-```
-
-## See Also
+## Related Docs
 
 - [Quick Start Guide](../QUICKSTART.md)
-- [API Reference](../api.md)
 - [Configuration Guide](../configuration.md)
+- [API Reference](../api.md)

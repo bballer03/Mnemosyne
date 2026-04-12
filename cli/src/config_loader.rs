@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use dirs::config_dir;
 use mnemosyne_core::{
     analysis::{LeakKind, LeakSeverity},
-    AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat,
+    AiConfig, AiMode, AiProvider, AiTaskDefinition, AnalysisConfig, AppConfig, OutputFormat,
 };
 use serde::Deserialize;
 use std::{
@@ -177,6 +177,9 @@ fn apply_file_config(cfg: &mut AppConfig, file: FileConfig) {
 }
 
 fn apply_ai_section(cfg: &mut AiConfig, section: PartialAiConfig) {
+    let prompts = section.prompts;
+    let privacy = section.privacy;
+
     if let Some(value) = section.enabled {
         cfg.enabled = value;
     }
@@ -188,6 +191,38 @@ fn apply_ai_section(cfg: &mut AiConfig, section: PartialAiConfig) {
     }
     if let Some(value) = section.temperature {
         cfg.temperature = value;
+    }
+    if let Some(value) = section.mode {
+        cfg.mode = value;
+    }
+    if let Some(value) = section.tasks {
+        cfg.tasks = value;
+    }
+    if let Some(privacy) = privacy {
+        if let Some(value) = privacy.redact_heap_path {
+            cfg.privacy.redact_heap_path = value;
+        }
+        if let Some(value) = privacy.redact_patterns {
+            cfg.privacy.redact_patterns = value;
+        }
+        if let Some(value) = privacy.audit_log {
+            cfg.privacy.audit_log = value;
+        }
+    }
+    if let Some(value) = prompts.and_then(|prompts| prompts.template_dir) {
+        cfg.prompts.template_dir = Some(value);
+    }
+    if let Some(value) = section.endpoint {
+        cfg.endpoint = Some(value);
+    }
+    if let Some(value) = section.api_key_env {
+        cfg.api_key_env = Some(value);
+    }
+    if let Some(value) = section.max_tokens {
+        cfg.max_tokens = Some(value);
+    }
+    if let Some(value) = section.timeout_secs {
+        cfg.timeout_secs = value;
     }
 }
 
@@ -248,9 +283,30 @@ fn apply_env_overrides(cfg: &mut AppConfig) {
         }
     }
 
+    if let Ok(value) = env::var("MNEMOSYNE_AI_MODE") {
+        match value.parse::<AiMode>() {
+            Ok(mode) => cfg.ai.mode = mode,
+            Err(err) => warn!("Ignoring MNEMOSYNE_AI_MODE: {}", err),
+        }
+    }
+
     if let Ok(value) = env::var("MNEMOSYNE_AI_MODEL") {
         if !value.trim().is_empty() {
             cfg.ai.model = value;
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_ENDPOINT") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            cfg.ai.endpoint = Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_API_KEY_ENV") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            cfg.ai.api_key_env = Some(trimmed.to_string());
         }
     }
 
@@ -258,6 +314,54 @@ fn apply_env_overrides(cfg: &mut AppConfig) {
         match value.parse::<f32>() {
             Ok(temp) => cfg.ai.temperature = temp,
             Err(_) => warn!("Ignoring MNEMOSYNE_AI_TEMPERATURE: expected float"),
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_PROMPT_TEMPLATE_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            cfg.ai.prompts.template_dir = Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_REDACT_HEAP_PATH") {
+        if let Some(parsed) = parse_bool(&value) {
+            cfg.ai.privacy.redact_heap_path = parsed;
+        } else {
+            warn!("Ignoring MNEMOSYNE_AI_REDACT_HEAP_PATH: expected boolean");
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_REDACT_PATTERNS") {
+        let patterns: Vec<String> = value
+            .split(',')
+            .map(|segment| segment.trim().to_string())
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if !patterns.is_empty() {
+            cfg.ai.privacy.redact_patterns = patterns;
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_AUDIT_LOG") {
+        if let Some(parsed) = parse_bool(&value) {
+            cfg.ai.privacy.audit_log = parsed;
+        } else {
+            warn!("Ignoring MNEMOSYNE_AI_AUDIT_LOG: expected boolean");
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_MAX_TOKENS") {
+        match value.parse::<u32>() {
+            Ok(tokens) => cfg.ai.max_tokens = Some(tokens),
+            Err(_) => warn!("Ignoring MNEMOSYNE_AI_MAX_TOKENS: expected integer"),
+        }
+    }
+
+    if let Ok(value) = env::var("MNEMOSYNE_AI_TIMEOUT_SECS") {
+        match value.parse::<u64>() {
+            Ok(timeout) => cfg.ai.timeout_secs = timeout,
+            Err(_) => warn!("Ignoring MNEMOSYNE_AI_TIMEOUT_SECS: expected integer"),
         }
     }
 
@@ -336,6 +440,26 @@ struct PartialAiConfig {
     provider: Option<AiProvider>,
     model: Option<String>,
     temperature: Option<f32>,
+    mode: Option<AiMode>,
+    tasks: Option<Vec<AiTaskDefinition>>,
+    privacy: Option<PartialAiPrivacyConfig>,
+    prompts: Option<PartialAiPromptConfig>,
+    endpoint: Option<String>,
+    api_key_env: Option<String>,
+    max_tokens: Option<u32>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialAiPrivacyConfig {
+    redact_heap_path: Option<bool>,
+    redact_patterns: Option<Vec<String>>,
+    audit_log: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialAiPromptConfig {
+    template_dir: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -426,5 +550,100 @@ leak_types = ["CACHE", "THREAD"]
         env::remove_var("MNEMOSYNE_MIN_SEVERITY");
         env::remove_var("MNEMOSYNE_PACKAGES");
         env::remove_var("MNEMOSYNE_LEAK_TYPES");
+    }
+
+    #[test]
+    fn parses_ai_task_runner_config() {
+        let toml = r#"
+[ai]
+enabled = true
+mode = "rules"
+
+[[ai.tasks]]
+kind = "top-leak"
+enabled = true
+
+[[ai.tasks]]
+kind = "healthy-heap"
+enabled = false
+"#;
+
+        let file_cfg: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = AppConfig::default();
+        apply_file_config(&mut cfg, file_cfg);
+
+        assert!(cfg.ai.enabled);
+        assert_eq!(cfg.ai.mode.to_string(), "rules");
+        assert_eq!(cfg.ai.tasks.len(), 2);
+        assert_eq!(cfg.ai.tasks[0].kind.to_string(), "top-leak");
+        assert!(cfg.ai.tasks[0].enabled);
+        assert_eq!(cfg.ai.tasks[1].kind.to_string(), "healthy-heap");
+        assert!(!cfg.ai.tasks[1].enabled);
+    }
+
+    #[test]
+    fn parses_ai_provider_mode_config() {
+        let toml = r#"
+[ai]
+enabled = true
+mode = "provider"
+provider = "openai"
+model = "gpt-4.1-mini"
+endpoint = "https://api.openai.com/v1"
+api_key_env = "MNEMOSYNE_TEST_OPENAI_KEY"
+max_tokens = 900
+timeout_secs = 15
+
+[[ai.tasks]]
+kind = "top-leak"
+enabled = true
+"#;
+
+        let file_cfg: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = AppConfig::default();
+        apply_file_config(&mut cfg, file_cfg);
+
+        assert!(cfg.ai.enabled);
+        assert_eq!(cfg.ai.mode.to_string(), "provider");
+        assert_eq!(cfg.ai.provider.to_string(), "openai");
+        assert_eq!(
+            cfg.ai.endpoint.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            cfg.ai.api_key_env.as_deref(),
+            Some("MNEMOSYNE_TEST_OPENAI_KEY")
+        );
+        assert_eq!(cfg.ai.max_tokens, Some(900));
+        assert_eq!(cfg.ai.timeout_secs, 15);
+        assert_eq!(cfg.ai.tasks.len(), 1);
+        assert_eq!(cfg.ai.tasks[0].kind.to_string(), "top-leak");
+    }
+
+    #[test]
+    fn parses_ai_provider_privacy_config() {
+        let toml = r#"
+[ai]
+enabled = true
+mode = "provider"
+
+[ai.privacy]
+redact_heap_path = true
+redact_patterns = ["secret-token-\\d+", "customer-[0-9]+"]
+audit_log = true
+"#;
+
+        let file_cfg: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = AppConfig::default();
+        apply_file_config(&mut cfg, file_cfg);
+
+        assert!(cfg.ai.enabled);
+        assert_eq!(cfg.ai.mode.to_string(), "provider");
+        assert!(cfg.ai.privacy.redact_heap_path);
+        assert_eq!(
+            cfg.ai.privacy.redact_patterns,
+            vec!["secret-token-\\d+", "customer-[0-9]+"]
+        );
+        assert!(cfg.ai.privacy.audit_log);
     }
 }

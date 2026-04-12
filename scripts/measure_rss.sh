@@ -132,14 +132,20 @@ profile_with_proc() {
     local vm_hwm
     local vm_rss
 
+    read_proc_value() {
+        local key=$1
+        local file=$2
+        awk -v key="$key" '$1 == key":" { print $2; exit }' "$file" 2>/dev/null || true
+    }
+
     "$cli_bin" "$command_name" "$heap" >/dev/null 2>&1 &
     pid=$!
     status_path="/proc/$pid/status"
 
     while kill -0 "$pid" >/dev/null 2>&1; do
         if [[ -r "$status_path" ]]; then
-            vm_hwm=$(awk '/^VmHWM:/ {print $2; exit}' "$status_path")
-            vm_rss=$(awk '/^VmRSS:/ {print $2; exit}' "$status_path")
+            vm_hwm=$(read_proc_value VmHWM "$status_path")
+            vm_rss=$(read_proc_value VmRSS "$status_path")
             sample_kib=${vm_hwm:-${vm_rss:-0}}
             if [[ -n "$sample_kib" ]] && (( sample_kib > max_rss_kib )); then
                 max_rss_kib=$sample_kib
@@ -149,8 +155,8 @@ profile_with_proc() {
     done
 
     if [[ -r "$status_path" ]]; then
-        vm_hwm=$(awk '/^VmHWM:/ {print $2; exit}' "$status_path")
-        vm_rss=$(awk '/^VmRSS:/ {print $2; exit}' "$status_path")
+        vm_hwm=$(read_proc_value VmHWM "$status_path")
+        vm_rss=$(read_proc_value VmRSS "$status_path")
         sample_kib=${vm_hwm:-${vm_rss:-0}}
         if [[ -n "$sample_kib" ]] && (( sample_kib > max_rss_kib )); then
             max_rss_kib=$sample_kib
