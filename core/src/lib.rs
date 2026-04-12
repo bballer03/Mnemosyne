@@ -26,7 +26,9 @@ pub use config::{
     AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
 };
 pub use errors::{CoreError, CoreResult};
-pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
+pub use fix::{
+    propose_fix, propose_fix_with_config, FixRequest, FixResponse, FixStyle, FixSuggestion,
+};
 pub use graph::{
     build_dominator_tree, build_histogram, find_gc_path, find_unreachable_objects, DominatorNode,
     DominatorTree, GcPathNode, GcPathRequest, GcPathResult, GraphMetrics, HistogramEntry,

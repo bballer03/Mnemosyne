@@ -401,9 +401,8 @@ Next logical milestone from the current roadmap/status:
 - remaining Step 14 / M5 hardening after the CLI-first conversation slice
 
 The immediate follow-on candidates are now:
-- MCP/session follow-through only if the CLI-first chat slice proves it is worth carrying across transports
-- AI-driven fix generation after the current explanation/chat/provider contracts are stable enough to support it honestly
-- broader provider hardening only where verification shows a concrete gap
+- MCP/session follow-through after the first AI-backed fix-generation slice
+- broader provider or transport hardening only where verification shows a concrete gap
 
 ## Documentation Sync Follow-Through
 

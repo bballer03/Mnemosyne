@@ -1,6 +1,6 @@
 # Milestone 5 — AI / MCP / Differentiation
 
-> **Status:** ⚠️ Partial — provider/privacy hardening slices plus CLI-first conversation mode landed; MCP/session follow-through remains
+> **Status:** ⚠️ Partial — provider/privacy hardening slices, CLI-first conversation mode, and the first AI-backed fix-generation slice landed; MCP/session follow-through remains
 > **Design Owner:** Design Consulting Agent  
 > **Last Updated:** 2026-04-12
 
@@ -12,7 +12,7 @@ Wire real AI capabilities into Mnemosyne and make MCP integration production-rea
 
 ## Context
 
-AI-assisted analysis is Mnemosyne's key differentiator. The architecture is now partly realized: `AiConfig` supports `rules`, `stub`, and `provider` modes, `AiInsights` and `AiWireExchange` remain the stable contracts, provider-backed execution is verified for OpenAI-compatible, local, and Anthropic endpoints, the stdio MCP server now exposes 9 live methods with `list_tools` discovery plus structured `error_details`, Step `14(d)` now covers provider-mode prompt redaction plus hashed audit logging via `[ai.privacy]` before external calls, and Step `14(e)` now ships a CLI-first `mnemosyne-cli chat <heap.hprof>` slice with bounded in-process history. The remaining M5 work is hardening: MCP/session semantics, streaming only if justified, and AI-driven fix generation.
+AI-assisted analysis is Mnemosyne's key differentiator. The architecture is now partly realized: `AiConfig` supports `rules`, `stub`, and `provider` modes, `AiInsights` and `AiWireExchange` remain the stable contracts, provider-backed execution is verified for OpenAI-compatible, local, and Anthropic endpoints, the stdio MCP server now exposes 9 live methods with `list_tools` discovery plus structured `error_details`, Step `14(d)` now covers provider-mode prompt redaction plus hashed audit logging via `[ai.privacy]` before external calls, and Step `14(e)` now ships a CLI-first `mnemosyne-cli chat <heap.hprof>` slice with bounded in-process history plus a first AI-backed one-file / one-snippet fix-generation slice. The remaining M5 work is hardening: MCP/session semantics and streaming only if justified.
 
 M1.5 must complete before wiring AI to analysis results — sending empty/heuristic data to an LLM produces misleading output. M3 enriches the analysis context that makes AI insights valuable.
 
@@ -131,7 +131,7 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 
 ### Changed MCP Handlers
 - `explain_leak` — returns LLM-generated explanation (previously: template text)
-- `propose_fix` — still returns template patches today; AI-driven fix generation remains future work
+- `propose_fix` — now attempts provider-backed one-file / one-snippet fix generation when source context is available, otherwise falls back to heuristic patches with explicit provenance
 
 ### Remaining MCP Capabilities
 - Streaming responses for long-running AI calls

@@ -5,7 +5,7 @@ use crate::{
     },
     config::AppConfig,
     errors::{CoreError, CoreResult},
-    fix::{propose_fix, FixRequest, FixStyle},
+    fix::{propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest},
     hprof::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
@@ -386,7 +386,7 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "propose_fix",
-                "description": "Generate heuristic fix suggestions for a heap or a specific leak candidate.",
+                "description": "Generate AI-backed fix suggestions when provider mode and source context are available, otherwise fall back to heuristic guidance.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
                     { "name": "leak_id", "type": "string", "required": false, "description": "Optional leak identifier to narrow the suggestion set." },
@@ -519,12 +519,15 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "propose_fix" => {
             let params: ProposeFixParams = serde_json::from_value(packet.params)?;
-            let response = propose_fix(FixRequest {
-                heap_path: params.heap_path,
-                leak_id: params.leak_id,
-                style: params.style,
-                project_root: params.project_root,
-            })
+            let response = propose_fix_with_config(
+                FixRequest {
+                    heap_path: params.heap_path,
+                    leak_id: params.leak_id,
+                    style: params.style,
+                    project_root: params.project_root,
+                },
+                config,
+            )
             .await?;
             Ok(serde_json::to_value(response)?)
         }
@@ -664,5 +667,141 @@ mod tests {
                 .and_then(|value| value.get("suggestion")),
             Some(&json!("Set MNEMOSYNE_TEST_API_KEY before retrying."))
         );
+    }
+
+    #[tokio::test]
+    async fn handle_request_propose_fix_falls_back_without_transport_error() {
+        let fixture = build_graph_fixture();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.enabled = true;
+        config.ai.mode = crate::config::AiMode::Provider;
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(8),
+                method: "propose_fix".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "style": "Minimal"
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let suggestions = result
+            .get("suggestions")
+            .and_then(Value::as_array)
+            .expect("suggestions array");
+        assert_eq!(suggestions.len(), 1);
+
+        let provenance = result
+            .get("provenance")
+            .and_then(Value::as_array)
+            .expect("provenance array");
+        assert!(provenance
+            .iter()
+            .any(|m| m.get("kind") == Some(&json!("FALLBACK"))));
+    }
+
+    #[tokio::test]
+    async fn handle_request_propose_fix_returns_provider_backed_patch() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let response_body = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "TOON v1\nsection response\n  confidence_pct=84\n  description=Evict idle entries before they accumulate.\nsection patch\n  diff=--- a/src/main/java/com/example/BigCache.java\\n+++ b/src/main/java/com/example/BigCache.java\\n@@ ...\n"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let read = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+            assert!(request.contains("intent=generate_fix"), "{request}");
+            assert!(
+                request.contains("target_file=src/main/java/com/example/BigCache.java"),
+                "{request}"
+            );
+
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(reply.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let fixture = build_graph_fixture();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let source_dir = project
+            .path()
+            .join("src")
+            .join("main")
+            .join("java")
+            .join("com")
+            .join("example");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("BigCache.java"),
+            "package com.example;\npublic class BigCache {\n  void retain() {}\n}\n",
+        )
+        .unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.enabled = true;
+        config.ai.mode = crate::config::AiMode::Provider;
+        config.ai.provider = crate::config::AiProvider::Local;
+        config.ai.endpoint = Some(format!("http://{addr}/v1"));
+        config.ai.api_key_env = Some("MNEMOSYNE_TEST_MCP_LOCAL_KEY".into());
+        config.ai.timeout_secs = 2;
+        std::env::set_var("MNEMOSYNE_TEST_MCP_LOCAL_KEY", "dummy-key");
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(9),
+                method: "propose_fix".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "project_root": project.path().to_string_lossy().into_owned(),
+                    "style": "Minimal"
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let suggestions = result
+            .get("suggestions")
+            .and_then(Value::as_array)
+            .expect("suggestions array");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(
+            suggestions[0].get("description"),
+            Some(&json!("Evict idle entries before they accumulate."))
+        );
+        assert!(result.get("provenance").is_none());
+
+        std::env::remove_var("MNEMOSYNE_TEST_MCP_LOCAL_KEY");
+        server.join().unwrap();
     }
 }

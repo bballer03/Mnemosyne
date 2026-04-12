@@ -22,7 +22,7 @@ use mnemosyne_core::{
         LeakKind, LeakSeverity, ProvenanceKind,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
-    fix::{propose_fix, FixRequest, FixStyle},
+    fix::{propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
     hprof::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
@@ -364,7 +364,7 @@ async fn run() -> Result<()> {
         Commands::Query(args) => handle_query(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
         Commands::Chat(args) => handle_chat(args, &loaded_config.data).await?,
-        Commands::Fix(args) => handle_fix(args).await?,
+        Commands::Fix(args) => handle_fix(args, &loaded_config.data).await?,
         Commands::Serve(args) => handle_serve(args, &loaded_config.data).await?,
         Commands::Config => handle_config(&loaded_config)?,
     }
@@ -1002,16 +1002,19 @@ async fn handle_chat(args: ChatArgs, base_config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-async fn handle_fix(args: FixArgs) -> Result<()> {
+async fn handle_fix(args: FixArgs, cfg: &AppConfig) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
     let pb = start_spinner("Generating fixes...");
-    let response = propose_fix(FixRequest {
-        heap_path: args.heap.to_string_lossy().into_owned(),
-        leak_id: args.leak_id,
-        style: args.style.into(),
-        project_root: args.project_root,
-    })
+    let response = propose_fix_with_config(
+        FixRequest {
+            heap_path: args.heap.to_string_lossy().into_owned(),
+            leak_id: args.leak_id,
+            style: args.style.into(),
+            project_root: args.project_root,
+        },
+        cfg,
+    )
     .await
     .with_context(|| {
         format!(
