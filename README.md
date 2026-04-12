@@ -1,7 +1,7 @@
 # Mnemosyne
 ### The AI-Powered JVM Memory Debugging Copilot
 
-Ultra-fast heap dump analysis, leak detection, code mapping, and AI-generated fixes — powered by Rust, LLMs, and the Model Context Protocol (MCP).
+Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted diagnostics — powered by Rust, LLMs, and the Model Context Protocol (MCP).
 
 ## 📋 Table of Contents
 
@@ -34,7 +34,7 @@ It brings total clarity to complex Java/Kotlin heap dumps by combining:
 - 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level diffing in the graph-backed analysis path
 - 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
-- 🧬 Code mapping, leak reproduction, forecasting, and more
+- 🧬 Code mapping, graph-backed investigation, and MCP workflows
 
 Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actionable insights** — giving you root cause analysis, memory leak detection, and guided solutions.
 
@@ -46,9 +46,11 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Blazing-fast Rust-based `.hprof` parser
 - Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
-- `mnemosyne analyze` and `mnemosyne leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
-- `mnemosyne analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
-- Optional investigation reports now hang off the same graph-backed path: `mnemosyne analyze --threads --strings --collections --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, and top-instance ranking in one run
+- `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
+- `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
+- Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields
+- `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults without changing the underlying graph-backed analysis pipeline
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
@@ -64,10 +66,11 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
   - HTTP client response leaks
   - ClassLoader leaks
   - Cache & collection leaks
-- `mnemosyne analyze` and `mnemosyne leaks` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with provenance markers when graph parsing is unavailable
+- `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with provenance markers when graph parsing is unavailable
 - Graph-backed suspect ranking now scores leaks using retained/shallow ratio, accumulation-point detection, dominated-object counts, and short reference-chain context while preserving backward compatibility via optional response fields
-- AI-generated code fixes
-- Leak reproduction snippet generator
+- AI explanations across `rules`, `stub`, and provider-backed modes
+- CLI-first leak conversation mode via `mnemosyne-cli chat <heap.hprof>`, with `/focus <leak-id>`, `/list`, `/help`, and `/exit`
+- Heuristic fix suggestions with explicit provenance markers
 
 ### 📍 Code Mapping Engine
 - Maps leaked objects → source code lines
@@ -84,14 +87,18 @@ Fully integrated with:
 - JetBrains (via MCP plugin)
 - ChatGPT Desktop
 
-Available MCP commands:
+Available MCP methods:
+- list_tools
 - parse_heap
+- analyze_heap
+- query_heap
 - detect_leaks
 - map_to_code
 - find_gc_path
 - explain_leak
 - propose_fix
-- apply_fix
+
+Call `list_tools` first if your client wants machine-readable method descriptions and parameter metadata.
 
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
@@ -176,9 +183,9 @@ Mnemosyne automatically looks for additional settings in the following order:
 4. `~/.config/mnemosyne/config.toml`
 5. `/etc/mnemosyne/config.toml`
 
-Run `mnemosyne config` to inspect the effective configuration and where it was loaded from.
+Run `mnemosyne-cli config` to inspect the effective configuration and where it was loaded from.
 
-Need consistent leak filtering defaults for every command? Add an `[analysis]` block to your config so `mnemosyne leaks`, `analyze`, and `explain` all share the same thresholds:
+Need consistent leak filtering defaults for every command? Add an `[analysis]` block to your config so `mnemosyne-cli leaks`, `mnemosyne-cli analyze`, and `mnemosyne-cli explain` all share the same thresholds:
 
 ```toml
 [analysis]
@@ -218,7 +225,7 @@ GitHub repository: https://github.com/bballer03/mnemosyne
 
 #### Parse a heap dump
 ```bash
-mnemosyne parse heap.hprof
+mnemosyne-cli parse heap.hprof
 ```
 
 **Example output:**
@@ -249,7 +256,7 @@ Those numbers come straight from Mnemosyne's lightweight record-stat histogram d
 
 #### Detect memory leaks
 ```bash
-mnemosyne leaks heap.hprof
+mnemosyne-cli leaks heap.hprof
 ```
 
 **Example output:**
@@ -276,26 +283,26 @@ Long leak IDs and class names stay recoverable even when the terminal table boun
 Tune the heuristics per run with `--leak-kind`. Repeat the flag (or provide a comma list) to emit one synthetic entry per requested category:
 
 ```bash
-mnemosyne leaks heap.hprof --leak-kind cache --leak-kind thread
+mnemosyne-cli leaks heap.hprof --leak-kind cache --leak-kind thread
 ```
 
 Need to scope results to multiple namespaces? `--package` accepts comma-delimited or repeated values:
 
 ```bash
-mnemosyne leaks heap.hprof --package com.example --package org.demo
+mnemosyne-cli leaks heap.hprof --package com.example --package org.demo
 ```
 
 Under the hood Mnemosyne now filters real class stats with those package prefixes before it ever synthesizes candidates, which keeps the CLI/MCP output focused on the code you actually own.
 
-Both `mnemosyne leaks` and `mnemosyne analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `mnemosyne analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
+Both `mnemosyne-cli leaks` and `mnemosyne-cli analyze` now attempt graph-backed analysis first, then fall back to heuristics with explicit provenance when the heap dump lacks enough object-graph detail. `analyze` additionally surfaces dominator metrics and richer graph detail in its report output.
 
-When graph-backed analysis succeeds, `mnemosyne analyze` can also print a grouped histogram (`--group-by class|package|classloader`), an unreachable-object summary, optional thread/string/collection/top-instance reports, and `mnemosyne diff` augments the existing record-level comparison with class-level retained-size deltas.
+When graph-backed analysis succeeds, `mnemosyne-cli analyze` can also print a grouped histogram (`--group-by class|package|classloader`), an unreachable-object summary, optional thread/string/collection/classloader/top-instance reports, and `mnemosyne-cli diff` augments the existing record-level comparison with class-level retained-size deltas.
 
-If no candidates survive filtering, `mnemosyne leaks` now prints `No leak suspects detected.` so zero-result runs are explicit instead of silent.
+If no candidates survive filtering, `mnemosyne-cli leaks` prints `No leak suspects detected.` so zero-result runs are explicit instead of silent.
 
 #### Map a leak to source code
 ```bash
-mnemosyne map leak-com.example.MemoryKeeper::d34db33f --project-root ./your-service --class com.example.MemoryKeeper
+mnemosyne-cli map leak-com.example.MemoryKeeper::d34db33f --project-root ./your-service --class com.example.MemoryKeeper
 ```
 
 **Example output:**
@@ -309,7 +316,7 @@ Source candidates for `com.example.MemoryKeeper::d34db33f`:
 
 #### Explain a leak with AI
 ```bash
-mnemosyne explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
+mnemosyne-cli explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
 ```
 
 **Example output:**
@@ -322,11 +329,20 @@ Recommendations:
 - Review threading / coroutine lifecycles anchoring these objects to a GC root.
 ```
 
-> Behind the scenes Mnemosyne packages every AI prompt/response in **TOON** for deterministic machine parsing. The CLI still prints conversational text, but automation can read the structured transcript via `analysis.ai.wire` (or the MCP `explain_leak` response) to forward the TOON payload to a real LLM.
+> Behind the scenes Mnemosyne packages every AI prompt/response in **TOON** for deterministic machine parsing. In `rules` mode, Mnemosyne assembles the response locally. In `provider` mode, it sends a strict TOON prompt to the configured provider transport and parses the returned TOON payload back into the same `AiInsights` / `AiWireExchange` contract. Provider-mode instruction sections come from a YAML template: Mnemosyne ships an embedded default and can load `provider-insights.yaml` overrides from `[ai.prompts].template_dir`. Before external provider calls, `[ai.privacy]` can redact the outbound `heap_path` field and regex-matched content from the fully rendered prompt, `AiWireExchange.prompt` records that redacted prompt, and `audit_log = true` emits hashed metadata for the redacted outbound prompt without logging the raw prompt body.
+
+#### Chat about the current leak shortlist
+```bash
+mnemosyne-cli chat heap.hprof
+```
+
+`chat` is the current CLI-only first slice of conversation mode. It analyzes the heap once, prints the top 3 leak candidates, and keeps only the running process' recent history in memory. The session supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`.
+
+When no focused leak is selected, free-form questions stay bounded to that top-3 shortlist. If the current `[analysis]` filters leave no leak candidates, chat remains available against the healthy-heap summary instead of aborting. Provider-mode chat turns reuse the same TOON/provider pipeline, prompt redaction, hashed audit logging, and minimal `max_tokens` prompt-budget guard as `explain`.
 
 #### Generate a fix patch
 ```bash
-mnemosyne fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive --project-root ./your-service
+mnemosyne-cli fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive --project-root ./your-service
 ```
 
 **Example output:**
@@ -346,7 +362,7 @@ Patch:
 
 #### Find a GC root path
 ```bash
-mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 5
+mnemosyne-cli gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 5
 ```
 
 **Example output:**
@@ -360,7 +376,7 @@ Mnemosyne now resolves GC paths by trying full `ObjectGraph` BFS first via `trac
 
 #### Full AI-powered analysis
 ```bash
-mnemosyne analyze heap.hprof --ai --threads --strings --collections --top-instances --top-n 10 --min-capacity 32
+mnemosyne-cli analyze heap.hprof --ai --threads --strings --collections --top-instances --top-n 10 --min-capacity 32
 ```
 
 **Example output:**
@@ -376,16 +392,16 @@ Recommendation:
 2. Use ConcurrentHashMap instead of synchronized HashMap
 3. Consider using weak references for session storage
 
-Code Fix Available: Run 'mnemosyne fix heap.hprof' to generate patch
+Code Fix Available: Run 'mnemosyne-cli fix heap.hprof' to generate patch
 ```
 
-When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. This currently uses deterministic heuristics so the UX stays consistent offline.
+When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible, local, and Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is now available through `mnemosyne-cli chat`; broader MCP/session work still remains future work.
 
-Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, and the largest retained instances via `--threads`, `--strings`, `--collections`, and `--top-instances`.
+Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
 #### Output TOON (for CI/CD)
 ```bash
-mnemosyne analyze heap.hprof --format toon > report.toon
+mnemosyne-cli analyze heap.hprof --format toon > report.toon
 ```
 
 Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection.
@@ -429,55 +445,58 @@ section ai
 
 ```bash
 # Quick analysis
-mnemosyne analyze heap.hprof
+mnemosyne-cli analyze heap.hprof
 
 # Verbose output with debug info
-mnemosyne analyze heap.hprof -v
+mnemosyne-cli analyze heap.hprof -v
 
 # Filter by package
-mnemosyne leaks heap.hprof --package com.example
+mnemosyne-cli leaks heap.hprof --package com.example
 
 # Specify multiple packages (comma or repeated flag)
-mnemosyne analyze heap.hprof --package com.example,org.demo
+mnemosyne-cli analyze heap.hprof --package com.example,org.demo
 
 # Focus on selected leak kinds
-mnemosyne analyze heap.hprof --leak-kind cache,thread
+mnemosyne-cli analyze heap.hprof --leak-kind cache,thread
 
 # Group the analysis histogram by package
-mnemosyne analyze heap.hprof --group-by package
+mnemosyne-cli analyze heap.hprof --group-by package
 
 # Add investigation reports to the same analysis run
-mnemosyne analyze heap.hprof --threads --strings --collections --top-instances --top-n 15 --min-capacity 32
+mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instances --top-n 15 --min-capacity 32
 
 # Export HTML report
-mnemosyne analyze heap.hprof --format html --output-file report.html
+mnemosyne-cli analyze heap.hprof --format html --output-file report.html
 
 # Emit JSON for CI
-mnemosyne analyze heap.hprof --format json --output-file report.json
+mnemosyne-cli analyze heap.hprof --format json --output-file report.json
 
 # Compare two heap dumps
-mnemosyne diff before.hprof after.hprof
+mnemosyne-cli diff before.hprof after.hprof
 
 # Map leak to code
-mnemosyne map leak-foo --project-root ./service --class com.example.MemoryKeeper
+mnemosyne-cli map leak-foo --project-root ./service --class com.example.MemoryKeeper
 
 # Explain a specific leak
-mnemosyne explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
+mnemosyne-cli explain heap.hprof --leak-id com.example.UserSessionCache::deadbeef
+
+# Start a leak-focused chat session
+mnemosyne-cli chat heap.hprof
 
 # Generate a defensive fix patch
-mnemosyne fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive
+mnemosyne-cli fix heap.hprof --leak-id com.example.UserSessionCache::deadbeef --style defensive
 
 # Trace GC path
-mnemosyne gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
+mnemosyne-cli gc-path heap.hprof --object-id 0x7f8a9c123456 --max-depth 4
 
 # Inspect effective config (and source)
-mnemosyne config --config ./ops/prod.toml
+mnemosyne-cli config --config ./ops/prod.toml
 ```
 
 ### Comparing Heap Dumps
 
 ```bash
-$ mnemosyne diff before.hprof after.hprof
+$ mnemosyne-cli diff before.hprof after.hprof
 Heap diff: before.hprof -> after.hprof
   Delta size: +128.00 MB
   Delta objects: +12500
@@ -506,7 +525,7 @@ Edit or create `.vscode/mcp-config.json`:
 {
   "mcpServers": {
     "mnemosyne": {
-      "command": "/path/to/mnemosyne",
+      "command": "/path/to/mnemosyne-cli",
       "args": ["serve"],
       "env": {
         "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
@@ -523,7 +542,7 @@ Edit `~/.config/zed/settings.json`:
   "mcp": {
     "servers": {
       "mnemosyne": {
-        "command": "mnemosyne",
+        "command": "mnemosyne-cli",
         "args": ["serve"],
         "env": {
           "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
@@ -539,7 +558,7 @@ Edit `~/Library/Application Support/ChatGPT/mcp_config.json` (macOS):
 ```json
 {
   "mnemosyne": {
-    "command": "mnemosyne",
+    "command": "mnemosyne-cli",
     "args": ["serve"],
     "env": {
       "OPENAI_API_KEY": "${env:OPENAI_API_KEY}"
@@ -552,7 +571,7 @@ Edit `~/Library/Application Support/ChatGPT/mcp_config.json` (macOS):
 
 Once configured, you can ask your AI assistant:
 
-> **Tip:** `mnemosyne serve` reads the same configuration chain as the CLI. Supply `--config`, set `$MNEMOSYNE_CONFIG`, or drop a `.mnemosyne.toml` next to your heap dumps so MCP sessions inherit your `[analysis]`, AI, and output defaults automatically.
+> **Tip:** `mnemosyne-cli serve` reads the same configuration chain as the CLI. Supply `--config`, set `$MNEMOSYNE_CONFIG`, or drop a `.mnemosyne.toml` next to your heap dumps so MCP sessions inherit your `[analysis]`, AI, and output defaults automatically.
 
 - **"Analyze heap.hprof and show me the root cause."**
 - **"Open the file responsible for the retained objects."**
@@ -563,14 +582,16 @@ Once configured, you can ask your AI assistant:
 ### Available MCP Commands
 
 | Command | Description |
-|---------|-------------|
+|---|---|
+| `list_tools` | Return machine-readable MCP method descriptions and parameter metadata |
 | `parse_heap` | Parse a heap dump and return summary |
+| `analyze_heap` | Run the full heap analysis pipeline and return `AnalyzeResponse` |
+| `query_heap` | Execute a minimal OQL-style query and return tabular results |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
 | `explain_leak` | Get AI explanation for detected leak |
 | `propose_fix` | Generate code fix suggestions |
-| `apply_fix` | Apply fix to source code |
 
 ---
 
@@ -614,7 +635,7 @@ Mnemosyne is built for speed and efficiency:
 
 ### Benchmarks
 
-> **Captured:** 2026-03-09 on a 156 MB Kotlin + Spring Boot heap dump (`resources/test-fixtures/heap.hprof`)
+> **Captured:** 2026-04-12 after Step 11 completion. Includes the 156 MB real fixture plus dense synthetic validation at roughly 500 MB, 1 GB, and 2 GB tiers.
 
 **Measured results (Criterion, release profile):**
 
@@ -635,7 +656,15 @@ Mnemosyne is built for speed and efficiency:
 | `leaks` (default) | 656.46 MiB | 4.23x | Same lean graph-backed path with real dominator-backed retained sizes |
 | `analyze --strings --threads --collections` | ~741 MiB | 4.78x | Opt-in field-data retention for investigation analyzers |
 
-Full benchmark details: [`docs/performance/memory-scaling.md`](docs/performance/memory-scaling.md)
+**Step 11 dense synthetic validation:**
+
+| Tier | Default path | Investigation path | Notes |
+|---|---|---|---|
+| ~500 MB | 2.90x | 3.92x | Step 11 dense synthetic T1 |
+| ~1 GB | 2.87x | 3.89x | Step 11 dense synthetic T2 |
+| ~2 GB | 2.89x | 3.92x | Step 11 dense synthetic T3 |
+
+Step 11 is complete. Full benchmark and RSS details: [`docs/performance/memory-scaling.md`](docs/performance/memory-scaling.md)
 
 Default graph-backed runs now keep raw field retention disabled unless thread, string, or collection investigation is requested. That split is implemented through `ParseOptions`, which keeps the higher-memory path opt-in instead of making every `analyze` or `leaks` run pay the full Phase 2 cost.
 
@@ -663,13 +692,11 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - Full IDE integration
 
 ### Phase 3 — V2
-- AI auto-fixes
-- Leak reproduction generator
-- PR leak detection & CI integration
+- Richer fix generation beyond heuristic placeholder patches
+- Broader CI and workflow integration
 
 ### Phase 4 — V3
 - JVM Agent
-- Memory growth forecasting
 - GC log + thread dump correlation
 
 ### Phase 5 — V4

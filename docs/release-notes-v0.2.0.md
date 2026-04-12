@@ -24,7 +24,7 @@ First published benchmark data on a 156 MB real-world heap dump:
 - Graph queries: **sub-microsecond** (27 ns references, 15 ns referrers)
 - Release-time full graph analysis RSS: **~555 MB** (3.56x dump size, within the original 4x safety threshold)
 
-> Post-release note (2026-03-09): Step 11 large-dump re-baselining later found a 4.78x regression after Phase 2 field retention landed. A follow-up remediation introduced `ParseOptions` and restored default `analyze`/`leaks` runs to ~656 MiB / 4.23x on the same 156 MB fixture, while opt-in investigation runs remain ~741 MiB / 4.78x. See `docs/performance/memory-scaling.md` for the current measurements.
+> Post-release note (updated 2026-04-12): Step 11 large-dump re-baselining later found a 4.78x regression after Phase 2 field retention landed. A follow-up remediation introduced `ParseOptions` and restored default `analyze`/`leaks` runs to ~656 MiB / 4.23x on the same 156 MB fixture, while opt-in investigation runs remain ~741 MiB / 4.78x there. Step 11 is now complete and the dense synthetic follow-through cleared roughly 500 MB / 1 GB / 2 GB tiers at about 2.87x-2.90x on the default path and 3.89x-3.92x on the investigation path. See `docs/performance/memory-scaling.md` for the current measurements.
 
 ### Bug Fixes
 - **Critical HPROF tag-constant fix**: `TAG_HEAP_DUMP_SEGMENT` corrected from `0x0D` to `0x1C` — real-world JVM dumps now parse correctly
@@ -40,10 +40,10 @@ First published benchmark data on a 156 MB real-world heap dump:
 - M1.5 (Real-World Hardening): ✅ Complete
 - M2 (Packaging & DX): ✅ Complete
 - M3 Phase 1 (Core Analysis Features): ✅ Complete
-- M3 Phase 2 (Advanced Analysis): Design phase
+- M3 Phase 2 (Advanced Analysis): later completed after this release
 
 ## Upgrade Notes
 - No breaking API changes from v0.1.1
 - `LeakInsight` has new optional fields (`shallow_size_bytes`, `suspect_score`) with `skip_serializing_if` for backward compatibility
-- `AnalyzeResponse` has new optional fields (`histogram`, `unreachable_objects`)
+- `AnalyzeResponse` has new optional fields including `histogram` and `unreachable`
 - `HeapDiff` has a new optional `class_diff` field

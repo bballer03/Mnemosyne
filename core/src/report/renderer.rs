@@ -169,6 +169,42 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(classloaders) = &analysis.classloader_report {
+        doc.push_str("section classloaders\n");
+        push_kv(&mut doc, 2, "total_loaders", classloaders.loaders.len());
+        for (idx, loader) in classloaders.loaders.iter().enumerate() {
+            doc.push_str(&format!("  loader#{idx}\n"));
+            push_kv(&mut doc, 4, "object_id", loader.object_id);
+            push_kv(&mut doc, 4, "class_name", &loader.class_name);
+            push_kv(&mut doc, 4, "loaded_class_count", loader.loaded_class_count);
+            push_kv(&mut doc, 4, "instance_count", loader.instance_count);
+            push_kv(
+                &mut doc,
+                4,
+                "total_shallow_bytes",
+                loader.total_shallow_bytes,
+            );
+            if let Some(retained_bytes) = loader.retained_bytes {
+                push_kv(&mut doc, 4, "retained_bytes", retained_bytes);
+            }
+            if let Some(parent_loader) = loader.parent_loader {
+                push_kv(&mut doc, 4, "parent_loader", parent_loader);
+            }
+        }
+
+        if !classloaders.potential_leaks.is_empty() {
+            doc.push_str("section classloader_leaks\n");
+            for (idx, leak) in classloaders.potential_leaks.iter().enumerate() {
+                doc.push_str(&format!("  leak#{idx}\n"));
+                push_kv(&mut doc, 4, "object_id", leak.object_id);
+                push_kv(&mut doc, 4, "class_name", &leak.class_name);
+                push_kv(&mut doc, 4, "retained_bytes", leak.retained_bytes);
+                push_kv(&mut doc, 4, "loaded_class_count", leak.loaded_class_count);
+                push_kv(&mut doc, 4, "reason", &leak.reason);
+            }
+        }
+    }
+
     doc.push_str("section dominators\n");
     if analysis.graph.dominators.is_empty() {
         push_kv(&mut doc, 2, "status", "empty");
@@ -296,6 +332,36 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(classloaders) = &analysis.classloader_report {
+        body.push_str("\nClassLoader Report\n------------------\n");
+        for loader in &classloaders.loaders {
+            body.push_str(&format!(
+                "{} [{} classes, {} instances, {} shallow bytes",
+                loader.class_name,
+                loader.loaded_class_count,
+                loader.instance_count,
+                loader.total_shallow_bytes
+            ));
+            if let Some(retained_bytes) = loader.retained_bytes {
+                body.push_str(&format!(", {retained_bytes} retained bytes"));
+            }
+            body.push_str("]\n");
+            if let Some(parent_loader) = loader.parent_loader {
+                body.push_str(&format!("  Parent loader: {parent_loader}\n"));
+            }
+        }
+
+        if !classloaders.potential_leaks.is_empty() {
+            body.push_str("\nPotential ClassLoader Leaks\n---------------------------\n");
+            for leak in &classloaders.potential_leaks {
+                body.push_str(&format!(
+                    "{} [{}]: {}\n",
+                    leak.class_name, leak.object_id, leak.reason
+                ));
+            }
+        }
+    }
+
     if let Some(ai) = &analysis.ai {
         body.push_str("\nAI Insights\n-----------\n");
         body.push_str(&format!(
@@ -305,7 +371,7 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
             ai.summary
         ));
         for rec in &ai.recommendations {
-            body.push_str(&format!("- {}\n", rec));
+            body.push_str(&format!("- {rec}\n"));
         }
     }
 
@@ -398,6 +464,36 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(classloaders) = &analysis.classloader_report {
+        doc.push_str("\n## ClassLoader Report\n");
+        for loader in &classloaders.loaders {
+            doc.push_str(&format!(
+                "- `{}`: {} classes, {} instances, {} shallow bytes",
+                loader.class_name,
+                loader.loaded_class_count,
+                loader.instance_count,
+                loader.total_shallow_bytes
+            ));
+            if let Some(retained_bytes) = loader.retained_bytes {
+                doc.push_str(&format!(", {retained_bytes} retained bytes"));
+            }
+            doc.push('\n');
+            if let Some(parent_loader) = loader.parent_loader {
+                doc.push_str(&format!("  - parent loader: `{parent_loader}`\n"));
+            }
+        }
+
+        if !classloaders.potential_leaks.is_empty() {
+            doc.push_str("\n### Potential ClassLoader Leaks\n");
+            for leak in &classloaders.potential_leaks {
+                doc.push_str(&format!(
+                    "- `{}` [`{}`]: {}\n",
+                    leak.class_name, leak.object_id, leak.reason
+                ));
+            }
+        }
+    }
+
     if let Some(ai) = &analysis.ai {
         doc.push_str("\n## AI Insights\n");
         doc.push_str(&format!(
@@ -409,7 +505,7 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
         if !ai.recommendations.is_empty() {
             doc.push_str("  ### Recommendations\n");
             for rec in &ai.recommendations {
-                doc.push_str(&format!("  - {}\n", rec));
+                doc.push_str(&format!("  - {rec}\n"));
             }
         }
     }
@@ -471,7 +567,7 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
                     .iter()
                     .map(|rec| format!("<li>{}</li>", escape_html(rec)))
                     .collect();
-                format!("<ul>{}</ul>", items)
+                format!("<ul>{items}</ul>")
             };
             format!(
                 "<section><h2>AI Insights</h2><p><strong>Model:</strong> {model} (confidence {confidence:.0}%)</p><p>{summary}</p>{recs}</section>",
@@ -545,6 +641,54 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         )
     }).unwrap_or_default();
 
+    let classloader_block = analysis
+        .classloader_report
+        .as_ref()
+        .map(|classloaders| {
+            let loaders: String = classloaders
+                .loaders
+                .iter()
+                .map(|loader| {
+                    let retained = loader
+                        .retained_bytes
+                        .map(|bytes| format!(", {bytes} retained bytes"))
+                        .unwrap_or_default();
+                    let parent = loader
+                        .parent_loader
+                        .map(|id| format!(" <span class=\"parent-loader\">parent {id}</span>"))
+                        .unwrap_or_default();
+                    format!(
+                    "<li><strong>{}</strong>: {} classes, {} instances, {} shallow bytes{}{}</li>",
+                    escape_html(&loader.class_name),
+                    loader.loaded_class_count,
+                    loader.instance_count,
+                    loader.total_shallow_bytes,
+                    retained,
+                    parent
+                )
+                })
+                .collect();
+            let leak_block = if classloaders.potential_leaks.is_empty() {
+                String::new()
+            } else {
+                let leaks: String = classloaders
+                    .potential_leaks
+                    .iter()
+                    .map(|leak| {
+                        format!(
+                            "<li><strong>{}</strong> [{}]: {}</li>",
+                            escape_html(&leak.class_name),
+                            leak.object_id,
+                            escape_html(&leak.reason)
+                        )
+                    })
+                    .collect();
+                format!("<section><h3>Potential ClassLoader Leaks</h3><ul>{leaks}</ul></section>")
+            };
+            format!("<section><h2>ClassLoader Report</h2><ul>{loaders}</ul>{leak_block}</section>")
+        })
+        .unwrap_or_default();
+
     format!(
         r#"<section>
   <h1>Mnemosyne Analysis</h1>
@@ -556,6 +700,7 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
     <div><strong>Leaks:</strong> {leak_list}</div>
             {histogram_block}
             {unreachable_block}
+            {classloader_block}
       {ai_block}
             {provenance_block}
 </section>"#,
@@ -567,6 +712,7 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         leak_list = leak_list,
         histogram_block = histogram_block,
         unreachable_block = unreachable_block,
+        classloader_block = classloader_block,
         provenance_block = provenance_block
     )
 }
@@ -574,6 +720,58 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_classloader_response() -> AnalyzeResponse {
+        use crate::analysis::{
+            ClassLoaderInfo, ClassLoaderLeakCandidate, ClassLoaderReport, ProvenanceMarker,
+        };
+        use crate::graph::GraphMetrics;
+        use crate::hprof::HeapSummary;
+        use std::time::{Duration, SystemTime};
+
+        AnalyzeResponse {
+            summary: HeapSummary {
+                heap_path: "test.hprof".into(),
+                total_objects: 100,
+                total_size_bytes: 1024,
+                classes: Vec::new(),
+                generated_at: SystemTime::now(),
+                header: None,
+                total_records: 0,
+                record_stats: Vec::new(),
+            },
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(42),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: Some(ClassLoaderReport {
+                loaders: vec![ClassLoaderInfo {
+                    object_id: 5000,
+                    class_name: "com.example.PluginClassLoader".into(),
+                    loaded_class_count: 2,
+                    instance_count: 3,
+                    total_shallow_bytes: 448,
+                    retained_bytes: Some(512),
+                    parent_loader: Some(42),
+                }],
+                potential_leaks: vec![ClassLoaderLeakCandidate {
+                    object_id: 7000,
+                    class_name: "com.example.LeakyPluginClassLoader".into(),
+                    retained_bytes: 10 * 1024 * 1024,
+                    loaded_class_count: 1,
+                    reason: "Retains 10.00 MB but loads only 1 classes".into(),
+                }],
+            }),
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
+            provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
+        }
+    }
 
     #[test]
     fn html_escaping_prevents_xss() {
@@ -640,6 +838,7 @@ mod tests {
             histogram: None,
             unreachable: None,
             thread_report: None,
+            classloader_report: None,
             collection_report: None,
             string_report: None,
             top_instances: None,
@@ -704,6 +903,7 @@ mod tests {
             histogram: None,
             unreachable: None,
             thread_report: None,
+            classloader_report: None,
             collection_report: None,
             string_report: None,
             top_instances: None,
@@ -770,6 +970,7 @@ mod tests {
             histogram: None,
             unreachable: None,
             thread_report: None,
+            classloader_report: None,
             collection_report: None,
             string_report: None,
             top_instances: None,
@@ -792,5 +993,30 @@ mod tests {
             html.contains("provenance-partial"),
             "response provenance class missing in HTML"
         );
+    }
+
+    #[test]
+    fn reports_render_classloader_sections() {
+        let response = sample_classloader_response();
+
+        let text = render_text(&response);
+        assert!(text.contains("ClassLoader Report"));
+        assert!(text.contains("com.example.PluginClassLoader"));
+        assert!(text.contains("Potential ClassLoader Leaks"));
+
+        let markdown = render_markdown(&response);
+        assert!(markdown.contains("## ClassLoader Report"));
+        assert!(markdown.contains("com.example.PluginClassLoader"));
+        assert!(markdown.contains("### Potential ClassLoader Leaks"));
+
+        let html = render_html(&response);
+        assert!(html.contains("<h2>ClassLoader Report</h2>"));
+        assert!(html.contains("com.example.PluginClassLoader"));
+        assert!(html.contains("Potential ClassLoader Leaks"));
+
+        let toon = render_toon(&response);
+        assert!(toon.contains("section classloaders"));
+        assert!(toon.contains("class_name=com.example.PluginClassLoader"));
+        assert!(toon.contains("section classloader_leaks"));
     }
 }

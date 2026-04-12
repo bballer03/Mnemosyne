@@ -602,7 +602,7 @@ pub struct AnalyzeResponse {
 }
 ```
 
-This follows the same pattern used for `histogram` and `unreachable_objects` — backward-compatible optional extensions.
+This follows the same pattern used for `histogram` and `unreachable` — backward-compatible optional extensions.
 
 ---
 
@@ -718,8 +718,8 @@ This is the **gating prerequisite** for Phase 2b/2c work.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Field extraction complexity | High — many analyzers blocked | Implement as Phase 2a prerequisite |
-| **`field_data` retention increases RSS** | **Resolved in Step 11 (partial)** — unconditional retention did raise the 156 MB fixture from 3.56x to 4.78x RSS:dump. The current implementation now uses `ParseOptions { retain_field_data: false }` by default and only opts into field retention for thread, string, and collection analyzers, bringing default `analyze`/`leaks` runs down to 4.23x. | **Keep validating at larger tiers.** Multi-tier Step 11 runs at 500 MB / 1 GB / 2 GB are still pending; if larger dumps regress further, evaluate streaming overview mode or disk-backed storage. |
-| **Primitive array data retention** | **Reduced by Step 11 remediation** — `byte[]` and `char[]` payloads are now only retained when field-data retention is explicitly enabled, so default `leaks` and default `analyze` runs no longer pay that overhead. | Keep the existing array-size cap, keep retention opt-in, and re-measure investigation-heavy runs during multi-tier validation. |
+| **`field_data` retention increases RSS** | **Resolved in Step 11** — unconditional retention did raise the 156 MB fixture from 3.56x to 4.78x RSS:dump. The current implementation now uses `ParseOptions { retain_field_data: false }` by default and only opts into field retention for thread, string, and collection analyzers, bringing default `analyze`/`leaks` runs down to 4.23x on the 156 MB fixture while dense synthetic validation cleared ~500 MB / ~1 GB / ~2 GB tiers at 2.87x-2.90x on the lean path. | Keep the split in place, use the 156 MB real fixture as a regression sentinel, and add more real-world large-heap validation when available. |
+| **Primitive array data retention** | **Reduced by Step 11 remediation** — `byte[]` and `char[]` payloads are now only retained when field-data retention is explicitly enabled, so default `leaks` and default `analyze` runs no longer pay that overhead. | Keep the existing array-size cap, keep retention opt-in, and re-measure investigation-heavy runs when new analyzers are added. |
 | Memory overhead from string materialization | Medium — string analysis reads all string values | Stream and hash without full retention |
 | OQL injection/abuse | Low — local tool, not a web service | Validate query structure, enforce LIMIT |
 | HPROF version differences (Java 8 vs 17) | Medium — field layouts differ | Test with both Java 8 and 17+ dumps |

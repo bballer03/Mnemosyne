@@ -17,16 +17,18 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_insights,
-        validate_leak_id, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
-        ProvenanceKind,
+        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_chat_turn_async,
+        generate_ai_insights_async, validate_leak_id, AnalyzeRequest, LeakDetectionOptions,
+        LeakKind, LeakSeverity, ProvenanceKind,
     },
-    config::{AppConfig, OutputFormat},
+    config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
     hprof::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
+    parse_hprof_file,
+    query::{execute_query, parse_query, CellValue},
     report::{render_report, ReportRequest},
     CoreError,
 };
@@ -63,8 +65,12 @@ enum Commands {
     Map(MapArgs),
     /// Find a path from an object to its GC root.
     GcPath(GcPathArgs),
+    /// Execute an OQL-style query against the heap graph.
+    Query(QueryArgs),
     /// Generate AI explanations for a leak candidate.
     Explain(ExplainArgs),
+    /// Start a bounded leak-focused chat session.
+    Chat(ChatArgs),
     /// Generate patch suggestions for a leak candidate.
     Fix(FixArgs),
     /// Start the Model Context Protocol (MCP) server.
@@ -94,6 +100,8 @@ struct AnalyzeArgs {
     heap: PathBuf,
     #[arg(long, value_enum, default_value_t = OutputFormatArg::Text)]
     format: OutputFormatArg,
+    #[arg(long)]
+    profile: Option<ProfileArg>,
     #[arg(long = "group-by", value_enum, default_value_t = GroupByArg::Class)]
     group_by: GroupByArg,
     #[arg(short = 'o', long = "output-file", value_name = "FILE")]
@@ -109,6 +117,9 @@ struct AnalyzeArgs {
     /// Enable collection inspection (fill ratio, waste detection)
     #[arg(long)]
     collections: bool,
+    /// Enable classloader analysis
+    #[arg(long = "classloaders")]
+    classloaders: bool,
     /// Show top-N largest instances
     #[arg(long = "top-instances")]
     top_instances: bool,
@@ -151,6 +162,12 @@ struct GcPathArgs {
 }
 
 #[derive(Debug, Parser)]
+struct QueryArgs {
+    heap: PathBuf,
+    query: String,
+}
+
+#[derive(Debug, Parser)]
 struct ExplainArgs {
     heap: PathBuf,
     #[arg(long = "leak-id")]
@@ -161,6 +178,11 @@ struct ExplainArgs {
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
     leak_kind: Vec<LeakKindArg>,
+}
+
+#[derive(Debug, Parser)]
+struct ChatArgs {
+    heap: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -226,6 +248,16 @@ enum GroupByArg {
     Classloader,
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum ProfileArg {
+    #[value(name = "overview")]
+    Overview,
+    #[value(name = "incident-response")]
+    IncidentResponse,
+    #[value(name = "ci-regression")]
+    CiRegression,
+}
+
 impl From<SeverityArg> for LeakSeverity {
     fn from(value: SeverityArg) -> Self {
         match value {
@@ -284,6 +316,16 @@ impl From<GroupByArg> for HistogramGroupBy {
     }
 }
 
+impl From<ProfileArg> for AnalysisProfile {
+    fn from(value: ProfileArg) -> Self {
+        match value {
+            ProfileArg::Overview => AnalysisProfile::Overview,
+            ProfileArg::IncidentResponse => AnalysisProfile::IncidentResponse,
+            ProfileArg::CiRegression => AnalysisProfile::CiRegression,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
@@ -319,7 +361,9 @@ async fn run() -> Result<()> {
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
+        Commands::Query(args) => handle_query(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
+        Commands::Chat(args) => handle_chat(args, &loaded_config.data).await?,
         Commands::Fix(args) => handle_fix(args).await?,
         Commands::Serve(args) => handle_serve(args, &loaded_config.data).await?,
         Commands::Config => handle_config(&loaded_config)?,
@@ -371,7 +415,7 @@ async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
     if !leaks.is_empty() {
         println!("{}", bold_label("Potential leaks:"));
         let (table, truncated_leak_ids, truncated_class_names) = build_leaks_table(&leaks);
-        println!("{}", table);
+        println!("{table}");
         print_full_value_section("Full leak IDs for truncated rows:", &truncated_leak_ids);
         print_full_value_section(
             "Full class names for truncated leak rows:",
@@ -404,6 +448,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
 
     let mut config = base_config.clone();
     config.output = args.format.into();
+    let profile = args.profile.map(AnalysisProfile::from);
     let use_ai = args.ai || config.ai.enabled;
     config.ai.enabled = use_ai;
     if !args.packages.is_empty() {
@@ -413,6 +458,46 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         config.analysis.leak_types = args.leak_kind.iter().copied().map(LeakKind::from).collect();
     }
     let leak_options = LeakDetectionOptions::from(&config.analysis);
+
+    let mut enable_threads = args.threads;
+    let mut enable_strings = args.strings;
+    let mut enable_collections = args.collections;
+    let mut enable_classloaders = args.classloaders;
+    let mut enable_top_instances = args.top_instances;
+    let mut top_n = args.top_n;
+    let mut min_capacity = args.min_capacity;
+
+    if let Some(profile) = profile {
+        match profile {
+            AnalysisProfile::Overview => {
+                enable_threads = false;
+                enable_strings = false;
+                enable_collections = false;
+                enable_classloaders = false;
+                enable_top_instances = false;
+                top_n = 10;
+                min_capacity = 16;
+            }
+            AnalysisProfile::IncidentResponse => {
+                enable_threads = true;
+                enable_strings = true;
+                enable_collections = true;
+                enable_classloaders = true;
+                enable_top_instances = true;
+                top_n = top_n.max(15);
+                min_capacity = min_capacity.max(32);
+            }
+            AnalysisProfile::CiRegression => {
+                enable_threads = false;
+                enable_strings = false;
+                enable_collections = false;
+                enable_classloaders = false;
+                enable_top_instances = true;
+                top_n = 5;
+                min_capacity = 64;
+            }
+        }
+    }
 
     let pb = start_spinner("Analyzing heap dump...");
     if use_ai {
@@ -425,12 +510,13 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         leak_options,
         enable_ai: use_ai,
         histogram_group_by: args.group_by.into(),
-        enable_threads: args.threads,
-        enable_strings: args.strings,
-        enable_collections: args.collections,
-        enable_top_instances: args.top_instances,
-        top_n: args.top_n,
-        min_collection_capacity: args.min_capacity,
+        enable_classloaders,
+        enable_threads,
+        enable_strings,
+        enable_collections,
+        enable_top_instances,
+        top_n,
+        min_collection_capacity: min_capacity,
         min_duplicate_count: 2,
     })
     .await
@@ -485,6 +571,12 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 );
                 println!("{}", build_thread_table(threads));
                 print_thread_stacks(threads);
+            }
+
+            if let Some(classloaders) = &response.classloader_report {
+                println!();
+                println!("{}", bold_label("ClassLoader Report:"));
+                println!("{}", build_classloader_table(classloaders));
             }
 
             if let Some(strings) = &response.string_report {
@@ -666,6 +758,29 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     Ok(())
 }
 
+async fn handle_query(args: QueryArgs) -> Result<()> {
+    validate_heap_file(&args.heap)?;
+
+    let pb = start_spinner("Executing query...");
+    let graph = parse_hprof_file(args.heap.to_string_lossy().as_ref())
+        .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
+    let dominator = mnemosyne_core::build_dominator_tree(&graph);
+    let query = parse_query(&args.query).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let result = execute_query(&query, &graph, Some(&dominator))?;
+    finish_spinner(&pb, "Query complete.");
+
+    println!("{} {}", bold_label("Columns:"), result.columns.join(", "));
+    println!("{} {}", bold_label("Matched:"), result.total_matched);
+    for row in &result.rows {
+        println!("{}", format_query_row(row));
+    }
+    if result.truncated {
+        println!("{} result set truncated by LIMIT", bold_label("Note:"));
+    }
+
+    Ok(())
+}
+
 async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
@@ -704,7 +819,7 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
     }
 
     let targeted = focus_leaks(&response.leaks, args.leak_id.as_deref());
-    let ai = generate_ai_insights(&response.summary, &targeted, &config.ai);
+    let ai = generate_ai_insights_async(&response.summary, &targeted, &config.ai).await?;
     finish_spinner(&pb, "Explanation complete.");
 
     println!(
@@ -717,7 +832,170 @@ async fn handle_explain(args: ExplainArgs, base_config: &AppConfig) -> Result<()
     if !ai.recommendations.is_empty() {
         println!("{}", bold_label("Recommendations:"));
         for rec in ai.recommendations {
-            println!("- {}", rec);
+            println!("- {rec}");
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ChatSession {
+    summary: HeapSummary,
+    leaks: Vec<mnemosyne_core::analysis::LeakInsight>,
+    focus_leak_id: Option<String>,
+    history: Vec<mnemosyne_core::analysis::AiChatTurn>,
+}
+
+fn print_chat_help() {
+    println!("Type a question about the current leak context.");
+    println!("Commands: /focus <leak-id>, /list, /help, /exit");
+}
+
+fn print_chat_shortlist(leaks: &[mnemosyne_core::analysis::LeakInsight]) {
+    let shortlist: Vec<_> = leaks.iter().take(3).cloned().collect();
+    println!("{}", bold_label("Top leak candidates:"));
+    if shortlist.is_empty() {
+        println!(
+            "No leak suspects detected. Ask questions about the healthy-heap summary or type /exit."
+        );
+        return;
+    }
+
+    let (table, truncated_ids, truncated_classes) = build_leaks_table(&shortlist);
+    println!("{table}");
+    print_full_value_section("Full leak IDs for truncated rows:", &truncated_ids);
+    print_full_value_section(
+        "Full class names for truncated leak rows:",
+        &truncated_classes,
+    );
+}
+
+fn chat_shortlist(
+    leaks: &[mnemosyne_core::analysis::LeakInsight],
+) -> Vec<mnemosyne_core::analysis::LeakInsight> {
+    leaks.iter().take(3).cloned().collect()
+}
+
+async fn handle_chat(args: ChatArgs, base_config: &AppConfig) -> Result<()> {
+    use std::io::{self, Write};
+
+    validate_heap_file(&args.heap)?;
+
+    let mut config = base_config.clone();
+    let mut startup_config = config.clone();
+    startup_config.ai.enabled = false;
+
+    let pb = start_spinner("Analyzing heap for chat...");
+    let response = analyze_heap(AnalyzeRequest {
+        heap_path: args.heap.to_string_lossy().into(),
+        config: startup_config,
+        leak_options: LeakDetectionOptions::from(&config.analysis),
+        enable_ai: false,
+        histogram_group_by: HistogramGroupBy::Class,
+        ..AnalyzeRequest::default()
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to start chat from heap dump: {}",
+            args.heap.display()
+        )
+    })?;
+    finish_spinner(&pb, "Chat context ready.");
+
+    config.ai.enabled = true;
+
+    let mut session = ChatSession {
+        summary: response.summary,
+        leaks: response.leaks,
+        focus_leak_id: None,
+        history: Vec::new(),
+    };
+
+    println!("{} {}", bold_label("Analyzed heap:"), args.heap.display());
+    print_chat_shortlist(&session.leaks);
+    print_chat_help();
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    loop {
+        write!(stdout, "chat> ")?;
+        stdout.flush()?;
+
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if input == "/exit" {
+            break;
+        }
+        if input == "/help" {
+            print_chat_help();
+            continue;
+        }
+        if input == "/list" {
+            print_chat_shortlist(&session.leaks);
+            continue;
+        }
+        if input == "/focus" {
+            println!("{} /focus <leak-id>", bold_label("Usage:"));
+            continue;
+        }
+        if let Some(target) = input.strip_prefix("/focus ") {
+            let target = target.trim();
+            match validate_leak_id(&session.leaks, target) {
+                Ok(()) => {
+                    session.focus_leak_id = Some(target.to_string());
+                    println!("{} {}", bold_label("Focused leak:"), target);
+                }
+                Err(err) => {
+                    let detail = match &err {
+                        CoreError::InvalidInput(detail) => detail.clone(),
+                        _ => err.to_string(),
+                    };
+                    println!("{} {detail}", bold_label("Focus error:"));
+                }
+            }
+            continue;
+        }
+
+        let targeted = match session.focus_leak_id.as_deref() {
+            Some(leak_id) => focus_leaks(&session.leaks, Some(leak_id)),
+            None => chat_shortlist(&session.leaks),
+        };
+        println!("{} {}", bold_label("Question:"), input);
+        let ai = generate_ai_chat_turn_async(
+            &session.summary,
+            &targeted,
+            input,
+            &session.history,
+            session.focus_leak_id.as_deref(),
+            &config.ai,
+        )
+        .await?;
+        println!("{}", bold_label("Answer:"));
+        println!("{}", ai.summary);
+        if !ai.recommendations.is_empty() {
+            println!("{}", bold_label("Recommendations:"));
+            for rec in &ai.recommendations {
+                println!("- {rec}");
+            }
+        }
+
+        session.history.push(mnemosyne_core::analysis::AiChatTurn {
+            question: input.to_string(),
+            answer_summary: ai.summary.clone(),
+        });
+        if session.history.len() > 3 {
+            let excess = session.history.len() - 3;
+            session.history.drain(0..excess);
         }
     }
 
@@ -808,6 +1086,7 @@ fn handle_config(loaded: &LoadedConfig) -> Result<()> {
 fn install_tracing() {
     let _ = tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .finish()
         .try_init();
     info!("Tracing initialized");
@@ -846,7 +1125,7 @@ fn print_summary(summary: &HeapSummary) {
             bold_label("Top heap record categories by aggregate bytes:")
         );
         let (table, truncated_categories) = build_parse_summary_table(summary);
-        println!("{}", table);
+        println!("{table}");
         print_full_value_section(
             "Full record category names for truncated rows:",
             &truncated_categories,
@@ -1004,6 +1283,7 @@ const TOP_INSTANCE_CLASS_WIDTH: usize = 40;
 const THREAD_NAME_WIDTH: usize = 32;
 const STRING_VALUE_WIDTH: usize = 36;
 const COLLECTION_TYPE_WIDTH: usize = 38;
+const CLASSLOADER_CLASS_WIDTH: usize = 36;
 
 fn build_parse_summary_table(summary: &HeapSummary) -> (Table, Vec<(String, String)>) {
     let mut table = base_table();
@@ -1242,6 +1522,30 @@ fn build_collection_table(report: &mnemosyne_core::analysis::CollectionReport) -
     table
 }
 
+fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Loader", CellAlignment::Left),
+        header_cell("Classes", CellAlignment::Right),
+        header_cell("Instances", CellAlignment::Right),
+        header_cell("Shallow", CellAlignment::Right),
+        header_cell("Retained", CellAlignment::Right),
+    ]);
+
+    for loader in report.loaders.iter().take(10) {
+        let class_cell = truncate_for_table(&loader.class_name, CLASSLOADER_CLASS_WIDTH);
+        table.add_row(vec![
+            Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(loader.loaded_class_count),
+            right_cell(loader.instance_count),
+            right_cell(format_megabytes(loader.total_shallow_bytes)),
+            right_cell(format_megabytes(loader.retained_bytes.unwrap_or(0))),
+        ]);
+    }
+
+    table
+}
+
 fn build_class_diff_table(class_diff: &[mnemosyne_core::ClassLevelDelta]) -> Table {
     let mut table = base_table();
     table.set_header(vec![
@@ -1287,12 +1591,24 @@ fn right_cell(value: impl ToString) -> Cell {
 }
 
 fn severity_cell(severity: LeakSeverity) -> Cell {
-    let label = format!("{:?}", severity);
+    let label = format!("{severity:?}");
     Cell::new(label).set_alignment(CellAlignment::Left)
 }
 
 fn format_megabytes(bytes: u64) -> String {
     format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn format_query_row(row: &[CellValue]) -> String {
+    row.iter()
+        .map(|cell| match cell {
+            CellValue::Id(id) => format!("0x{id:08X}"),
+            CellValue::Str(value) => value.clone(),
+            CellValue::Int(value) => value.to_string(),
+            CellValue::Null => "null".into(),
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn print_full_value_section(title: &str, values: &[(String, String)]) {
@@ -1302,7 +1618,7 @@ fn print_full_value_section(title: &str, values: &[(String, String)]) {
 
     println!("{}", bold_label(title));
     for (label, full_value) in values {
-        println!("  {} -> {}", label, full_value);
+        println!("  {label} -> {full_value}");
     }
 }
 

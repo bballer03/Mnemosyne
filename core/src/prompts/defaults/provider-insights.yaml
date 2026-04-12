@@ -1,0 +1,8 @@
+version: 1
+instructions:
+  - key: response_format
+    value: Return only TOON v1 with section response and section recommendations
+  - key: required_model
+    value: "{{model}}"
+  - key: required_keys
+    value: model, confidence_pct, summary, item#N

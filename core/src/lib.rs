@@ -9,15 +9,22 @@ pub mod errors;
 pub mod fix;
 pub mod graph;
 pub mod hprof;
+pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod prompts;
+pub mod query;
 pub mod report;
 
 pub use analysis::{
-    focus_leaks, generate_ai_insights, AiInsights, AiWireExchange, AiWireFormat, AnalyzeRequest,
-    AnalyzeResponse, LeakDetectionOptions, LeakSuspect, ProvenanceKind, ProvenanceMarker,
+    focus_leaks, generate_ai_insights, generate_ai_insights_async, AiInsights, AiWireExchange,
+    AiWireFormat, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakSuspect,
+    ProvenanceKind, ProvenanceMarker,
 };
-pub use config::{AiConfig, AiProvider, AnalysisConfig, AppConfig, OutputFormat, ParserConfig};
+pub use config::{
+    AiConfig, AiMode, AiPromptConfig, AiProvider, AiTaskDefinition, AiTaskKind, AnalysisConfig,
+    AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
+};
 pub use errors::{CoreError, CoreResult};
 pub use fix::{propose_fix, FixRequest, FixResponse, FixStyle, FixSuggestion};
 pub use graph::{

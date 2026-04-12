@@ -137,8 +137,7 @@ fn minimal_fix(leak: &LeakInsight, file: &str) -> (String, String) {
         leak.class_name
     );
     let diff = format!(
-        "--- a/{file}\n+++ b/{file}\n@@\n-// TODO: release retained objects\n+if (cache.size() > SAFE_CAPACITY) {{\n+    cache.clear();\n+}}\n",
-        file = file
+        "--- a/{file}\n+++ b/{file}\n@@\n-// TODO: release retained objects\n+if (cache.size() > SAFE_CAPACITY) {{\n+    cache.clear();\n+}}\n"
     );
     (description, diff)
 }
@@ -149,8 +148,7 @@ fn defensive_fix(leak: &LeakInsight, file: &str) -> (String, String) {
         leak.class_name
     );
     let diff = format!(
-        "--- a/{file}\n+++ b/{file}\n@@ public void retain(...)\n-Resource r = allocator.acquire();\n+try (Resource r = allocator.acquire()) {{\n+    // existing logic\n+}}\n",
-        file = file
+        "--- a/{file}\n+++ b/{file}\n@@ public void retain(...)\n-Resource r = allocator.acquire();\n+try (Resource r = allocator.acquire()) {{\n+    // existing logic\n+}}\n"
     );
     (description, diff)
 }
@@ -161,8 +159,7 @@ fn comprehensive_fix(leak: &LeakInsight, file: &str) -> (String, String) {
         leak.class_name
     );
     let diff = format!(
-        "--- a/{file}\n+++ b/{file}\n@@\n-Map<String, Object> cache = new HashMap<>();\n+Map<String, Object> cache = new WeakHashMap<>();\n+ScheduledExecutorService reap = Executors.newSingleThreadScheduledExecutor();\n+reap.scheduleAtFixedRate(this::cleanup, 1, 1, TimeUnit.MINUTES);\n",
-        file = file
+        "--- a/{file}\n+++ b/{file}\n@@\n-Map<String, Object> cache = new HashMap<>();\n+Map<String, Object> cache = new WeakHashMap<>();\n+ScheduledExecutorService reap = Executors.newSingleThreadScheduledExecutor();\n+reap.scheduleAtFixedRate(this::cleanup, 1, 1, TimeUnit.MINUTES);\n"
     );
     (description, diff)
 }

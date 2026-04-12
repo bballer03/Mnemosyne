@@ -1,463 +1,661 @@
-# MCP API Reference
+# API Reference
 
-This document describes all available Model Context Protocol (MCP) commands for Mnemosyne.
+Mnemosyne exposes a line-delimited JSON protocol over stdio through `mnemosyne-cli serve`.
 
-## Table of Contents
+This file documents the live wire contract implemented in `core/src/mcp/server.rs`. It is intentionally narrower than JSON-RPC 2.0:
 
-- [Connection](#connection)
-- [Commands](#commands)
-  - [parse_heap](#parse_heap)
-  - [detect_leaks](#detect_leaks)
-  - [map_to_code](#map_to_code)
-  - [find_gc_path](#find_gc_path)
-  - [explain_leak](#explain_leak)
-  - [propose_fix](#propose_fix)
-  - [apply_fix](#apply_fix)
-- [Data Types](#data-types)
-- [Error Handling](#error-handling)
+- requests are single-line JSON objects written to stdin
+- responses are single-line JSON objects written to stdout
+- there is no `jsonrpc` field
+- there is no `data` envelope inside `result`
+- failures preserve the plain-string `error` field and now also attach machine-readable `error_details`
 
----
+## Transport
 
-## Connection
-
-Mnemosyne runs as an MCP server that communicates via stdio.
-
-### Starting the Server
+Start the server:
 
 ```bash
-mnemosyne serve
+mnemosyne-cli serve
 ```
 
-### Configuration
+Send one JSON object per line:
 
-MCP clients connect using configuration files. See [README.md](../README.md#-mcp-integration) for IDE-specific setup.
+```json
+{"id":1,"method":"parse_heap","params":{"path":"heap.hprof"}}
+```
 
----
-
-## Commands
-
-### parse_heap
-
-Parse a heap dump file and return a summary.
-
-#### Request
+Successful responses:
 
 ```json
 {
+  "id": 1,
+  "success": true,
+  "result": {},
+  "error": null
+}
+```
+
+Failed responses:
+
+```json
+{
+  "id": 1,
+  "success": false,
+  "result": null,
+  "error": "Invalid input: unsupported MCP method: nope",
+  "error_details": {
+    "code": "invalid_input",
+    "message": "Invalid input: unsupported MCP method: nope",
+    "details": {
+      "detail": "unsupported MCP method: nope"
+    }
+  }
+}
+```
+
+## Method List
+
+The current server supports these methods:
+
+- `list_tools`
+- `parse_heap`
+- `detect_leaks`
+- `analyze_heap`
+- `query_heap`
+- `map_to_code`
+- `find_gc_path`
+- `explain_leak`
+- `propose_fix`
+
+There is currently no `apply_fix` handler.
+
+`list_tools` is the discovery surface for machine-readable tool descriptions and parameter metadata.
+
+## Common Types
+
+These serialized values show up in multiple responses.
+
+### Error Details
+
+Failures include:
+
+- `error`: a backward-compatible string summary
+- `error_details.code`: a stable machine-readable code such as `invalid_input` or `config_error`
+- `error_details.message`: the same human-readable message carried in `error`
+- `error_details.details`: optional structured context such as `path`, `detail`, `phase`, or `suggestion`
+
+### Provenance Marker
+
+Fallback, synthetic, partial, and placeholder output is labeled explicitly:
+
+```json
+{
+  "kind": "SYNTHETIC",
+  "detail": "Fix suggestions are generated heuristically from leak summaries."
+}
+```
+
+`kind` is one of:
+
+- `SYNTHETIC`
+- `PARTIAL`
+- `FALLBACK`
+- `PLACEHOLDER`
+
+### Leak Severity
+
+Serialized as uppercase enum names:
+
+- `LOW`
+- `MEDIUM`
+- `HIGH`
+- `CRITICAL`
+
+### Leak Kind
+
+Serialized as uppercase enum names:
+
+- `UNKNOWN`
+- `CACHE`
+- `COROUTINE`
+- `THREAD`
+- `HTTP_RESPONSE`
+- `CLASS_LOADER`
+- `COLLECTION`
+- `LISTENER`
+
+### Histogram Grouping
+
+`analyze_heap` accepts `histogram_group_by` as:
+
+- `class`
+- `package`
+- `class_loader`
+
+## `list_tools`
+
+Return the live MCP tool catalog with descriptions and parameter metadata.
+
+### Request
+
+```json
+{
+  "id": 0,
+  "method": "list_tools",
+  "params": {}
+}
+```
+
+### Result Shape
+
+`result` contains a `tools` array:
+
+```json
+{
+  "tools": [
+    {
+      "name": "analyze_heap",
+      "description": "Run the full analysis pipeline and return the serialized analysis response.",
+      "params": [
+        {
+          "name": "heap_path",
+          "type": "string",
+          "required": true,
+          "description": "Path to the heap dump."
+        }
+      ]
+    }
+  ]
+}
+```
+
+## `parse_heap`
+
+Parse an HPROF file and return a lightweight heap summary.
+
+### Request
+
+```json
+{
+  "id": 1,
   "method": "parse_heap",
   "params": {
-    "path": "/path/to/heap.hprof",
-    "options": {
-      "include_strings": false,
-      "max_objects": null
+    "path": "heap.hprof",
+    "include_strings": false,
+    "max_objects": 500000
+  }
+}
+```
+
+### Params
+
+- `path` string, required
+- `include_strings` boolean, optional, currently accepted but not surfaced in the summary
+- `max_objects` number, optional, defaults to config `parser.max_objects`
+
+### Result Shape
+
+`result` is a serialized `HeapSummary`:
+
+```json
+{
+  "heap_path": "heap.hprof",
+  "total_objects": 1234567,
+  "total_size_bytes": 2576980377,
+  "classes": [
+    {
+      "name": "INSTANCE_DUMP",
+      "instances": 345678,
+      "total_size_bytes": 441450000,
+      "percentage": 50.1
     }
-  }
+  ],
+  "generated_at": "2026-04-12T10:00:00Z",
+  "header": {
+    "format": "JAVA PROFILE 1.0.2",
+    "identifier_size": 8,
+    "timestamp_millis": 1709836800000
+  },
+  "total_records": 5678901,
+  "record_stats": [
+    {
+      "tag": 28,
+      "name": "HEAP_DUMP_SEGMENT",
+      "count": 12,
+      "bytes": 882376704
+    }
+  ]
 }
 ```
 
-#### Parameters
+## `detect_leaks`
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `path` | string | Yes | Path to the `.hprof` file |
-| `options.include_strings` | boolean | No | Include string table in output (default: false) |
-| `options.max_objects` | number | No | Limit number of objects to parse (for testing) |
+Run leak detection against a heap path using the configured analysis defaults plus request overrides.
 
-#### Response
+### Request
 
 ```json
 {
-  "success": true,
-  "data": {
-    "total_size_bytes": 2453291008,
-    "total_objects": 1234567,
-    "total_classes": 4321,
-    "gc_roots": 156,
-    "top_classes": [
-      {
-        "name": "java.lang.String",
-        "instances": 421032,
-        "total_size_bytes": 441651200,
-        "percentage": 18.0
-      }
-    ],
-    "parse_time_ms": 3245
-  }
-}
-```
-
-`detect_leaks` now follows the same lean graph-backed path used by the CLI `leaks` command: it attempts `ObjectGraph` -> dominator -> retained-size analysis with `retain_field_data` disabled by default, then falls back to heuristics with provenance markers when parsing fails. The `retained_size_bytes` field is real dominator-backed data when full parsing succeeds.
-
----
-
-### detect_leaks
-
-Detect potential memory leaks in a parsed heap dump.
-
-#### Request
-
-```json
-{
+  "id": 2,
   "method": "detect_leaks",
   "params": {
-    "heap_path": "/path/to/heap.hprof",
-    "filters": {
-      "package": "com.example",
-      "min_severity": "MEDIUM",
-      "leak_types": ["COROUTINE", "THREAD", "CACHE"]
-    }
+    "heap_path": "heap.hprof",
+    "package": "com.example",
+    "min_severity": "HIGH",
+    "leak_types": ["CACHE", "THREAD"]
   }
 }
 ```
 
-#### Parameters
+### Params
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `heap_path` | string | Yes | Path to the heap dump |
-| `filters.package` | string | No | Only analyze classes in this package |
-| `filters.min_severity` | string | No | Minimum severity: LOW, MEDIUM, HIGH, CRITICAL |
-| `filters.leak_types` | array | No | Types of leaks to detect |
+- `heap_path` string, required
+- `package` string, optional, single package filter for this MCP method
+- `min_severity` string, optional
+- `leak_types` string array, optional
 
-#### Response
+### Result Shape
+
+`result` is a JSON array of `LeakInsight` objects:
+
+```json
+[
+  {
+    "id": "leak-usersession-1",
+    "class_name": "com.example.UserSessionCache",
+    "leak_kind": "CACHE",
+    "severity": "HIGH",
+    "retained_size_bytes": 536870912,
+    "shallow_size_bytes": 4096,
+    "suspect_score": 0.87,
+    "instances": 125432,
+    "description": "Cache growing unbounded, cleanup thread blocked",
+    "provenance": []
+  }
+]
+```
+
+## `analyze_heap`
+
+Run the full analysis pipeline and return the serialized `AnalyzeResponse`.
+
+### Request
 
 ```json
 {
-  "success": true,
-  "data": {
-    "leaks": [
-      {
-        "id": "leak-001",
-        "class": "com.example.UserSessionCache",
-        "severity": "HIGH",
-        "leak_type": "CACHE",
-        "instances": 125432,
-        "retained_size_bytes": 536870912,
-        "gc_root": {
-          "type": "THREAD",
-          "name": "session-cleanup",
-          "state": "BLOCKED"
-        },
-        "description": "UserSessionCache retaining stale sessions"
-      }
+  "id": 3,
+  "method": "analyze_heap",
+  "params": {
+    "heap_path": "heap.hprof",
+    "min_severity": "MEDIUM",
+    "packages": ["com.example"],
+    "leak_types": ["CACHE"],
+    "histogram_group_by": "package",
+    "enable_ai": true,
+    "enable_classloaders": true,
+    "enable_threads": true,
+    "enable_strings": true,
+    "enable_collections": true,
+    "enable_top_instances": true,
+    "top_n": 10,
+    "min_collection_capacity": 32,
+    "min_duplicate_count": 3
+  }
+}
+```
+
+### Params
+
+- `heap_path` string, required
+- `min_severity` string, optional
+- `packages` string array, optional
+- `leak_types` string array, optional
+- `histogram_group_by` string, optional, defaults to `class`
+- `enable_ai` boolean, optional
+- `enable_classloaders` boolean, optional
+- `enable_threads` boolean, optional
+- `enable_strings` boolean, optional
+- `enable_collections` boolean, optional
+- `enable_top_instances` boolean, optional
+- `top_n` number, optional
+- `min_collection_capacity` number, optional
+- `min_duplicate_count` number, optional
+
+### Result Shape
+
+`result` is a serialized `AnalyzeResponse` object with optional sections omitted when not requested or not available:
+
+```json
+{
+  "summary": {
+    "heap_path": "heap.hprof",
+    "total_objects": 1234567,
+    "total_size_bytes": 2576980377,
+    "classes": [],
+    "generated_at": "2026-04-12T10:00:00Z",
+    "header": {
+      "format": "JAVA PROFILE 1.0.2",
+      "identifier_size": 8,
+      "timestamp_millis": 1709836800000
+    },
+    "total_records": 5678901,
+    "record_stats": []
+  },
+  "leaks": [],
+  "recommendations": [],
+  "elapsed": {
+    "secs": 1,
+    "nanos": 500000000
+  },
+  "graph": {
+    "node_count": 1200000,
+    "edge_count": 4300000,
+    "dominators": []
+  },
+  "ai": {
+    "model": "gpt-4.1-mini",
+    "summary": "Top leak is retaining a large share of the heap.",
+    "recommendations": [
+      "Review cleanup and ownership boundaries."
     ],
-    "total_leaks": 1,
-    "analysis_time_ms": 1842
+    "confidence": 0.74,
+    "wire": {
+      "format": "Toon",
+      "prompt": "...",
+      "response": "..."
+    }
+  },
+  "histogram": {
+    "group_by": "package",
+    "entries": [],
+    "total_instances": 1200000,
+    "total_shallow_size": 900000000
+  },
+  "unreachable": {
+    "total_count": 42,
+    "total_shallow_size": 8192,
+    "by_class": []
+  },
+  "provenance": []
+}
+```
+
+Notes:
+
+- the field name is `unreachable`, not `unreachable_objects`
+- `ai` is omitted when AI is disabled or unavailable
+- optional report sections are omitted when `None`
+- the server serializes the raw Rust structs directly under `result`
+
+## `query_heap`
+
+Execute the OQL-style heap query engine over the parsed object graph.
+
+### Request
+
+```json
+{
+  "id": 4,
+  "method": "query_heap",
+  "params": {
+    "heap_path": "heap.hprof",
+    "query": "SELECT @objectId, @className FROM \"com.example.BigCache\" LIMIT 25"
   }
 }
 ```
 
----
+### Result Shape
 
-### map_to_code
-
-Map leaked objects to source code locations.
-
-#### Request
+`result` is a `QueryResult`:
 
 ```json
 {
+  "columns": ["@objectId", "@className"],
+  "rows": [
+    [
+      { "Id": 4096 },
+      { "Str": "com.example.BigCache" }
+    ]
+  ],
+  "total_matched": 1,
+  "truncated": false
+}
+```
+
+`CellValue` uses serde's externally tagged enum encoding. Common cells look like:
+
+- `{ "Id": 4096 }`
+- `{ "Str": "com.example.BigCache" }`
+- `{ "Int": 8192 }`
+- `"Null"`
+
+## `map_to_code`
+
+Map a leak identifier to likely source files using lightweight path and symbol heuristics.
+
+### Request
+
+```json
+{
+  "id": 5,
   "method": "map_to_code",
   "params": {
-    "leak_id": "com.example.UserSessionCache::ff12ab90",
-    "class": "com.example.UserSessionCache",
-    "project_root": "/path/to/project",
+    "leak_id": "com.example.Cache::deadbeef",
+    "class": "com.example.Cache",
+    "project_root": "D:/repo",
     "include_git_info": true
   }
 }
 ```
 
-#### Parameters
+### Params
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `leak_id` | string | Yes | ID from `detect_leaks` response |
-| `class` | string | No | Fully-qualified class name (improves accuracy) |
-| `project_root` | string | Yes | Root directory of source code |
-| `include_git_info` | boolean | No | Include git blame/history (default: true) |
+- `leak_id` string, required
+- `class` string, optional
+- `project_root` string, required
+- `include_git_info` boolean, optional, defaults to `true`
 
-#### Response
+### Result Shape
+
+`result` is a `SourceMapResult`:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "locations": [
-      {
-        "file": "src/main/java/com/example/UserSessionCache.java",
-        "line": 45,
-        "symbol": "public void addSession(...)",
-        "code_snippet": "cache.put(sessionId, session);",
-        "git": {
-          "author": "John Doe",
-          "commit": "abc123def456",
-          "date": "2025-11-15T10:30:00Z",
-          "message": "Add session caching"
-        }
+  "leak_id": "com.example.Cache::deadbeef",
+  "locations": [
+    {
+      "file": "D:/repo/src/main/java/com/example/Cache.java",
+      "line": 42,
+      "symbol": "public final class Cache {",
+      "code_snippet": "class Cache {\n  ...\n}",
+      "git": {
+        "author": "Example Author",
+        "commit": "abc123",
+        "date": "2026-04-12 10:00:00 +0000",
+        "message": "Add cache cleanup"
       }
-    ]
-  }
+    }
+  ]
 }
 ```
 
-> **Note:** When no matching file is found, Mnemosyne will return a placeholder entry that explains how to provide better hints (e.g., `class`) for the next attempt.
+If no matching source file is found, Mnemosyne returns a synthetic fallback location under `.mnemosyne/unmapped/...` with `git: null`.
 
----
+## `find_gc_path`
 
-### find_gc_path
+Find a path from an object to a GC root.
 
-Find the path from an object to its GC root.
-
-#### Request
+### Request
 
 ```json
 {
+  "id": 6,
   "method": "find_gc_path",
   "params": {
-    "heap_path": "/path/to/heap.hprof",
-    "object_id": "0x7f8a9c123456",
-    "max_depth": 5
+    "heap_path": "heap.hprof",
+    "object_id": "0x1000",
+    "max_depth": 8
   }
 }
 ```
 
-#### Parameters
+### Result Shape
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `heap_path` | string | Yes | Path to the heap dump |
-| `object_id` | string | Yes | Hex ID of the object |
-| `max_depth` | number | No | Maximum path depth to search |
-
-#### Response
+`result` is a `GcPathResult`:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "object_id": "0x0000000033333333",
-    "path": [
-      {
-        "object_id": "0x0000000044444444",
-        "class_name": "com.example.Leaky",
-        "field": "ROOT Unknown",
-        "is_root": true
-      },
-      {
-        "object_id": "0x0000000033333333",
-        "class_name": "java.lang.Object",
-        "field": "leakyField",
-        "is_root": false
-      }
-    ],
-    "path_length": 2
-  }
+  "object_id": "0x0000000000001000",
+  "path": [
+    {
+      "object_id": "0x0000000000000001",
+      "class_name": "java.lang.Thread",
+      "field": "ROOT",
+      "is_root": true
+    },
+    {
+      "object_id": "0x0000000000001000",
+      "class_name": "com.example.Cache",
+      "field": "entries",
+      "is_root": false
+    }
+  ],
+  "path_length": 2,
+  "provenance": []
 }
 ```
 
-The server now streams real GC roots, class dumps, instance dumps, and object arrays to build these paths. If a heap omits the required records—or exceeds the configured sampling budget—the API falls back to the legacy synthetic chain so clients never receive an empty response.
+The implementation tries, in order:
 
----
+1. full `ObjectGraph` BFS
+2. budget-limited fallback graph parsing
+3. synthetic path construction from summary data
 
-### explain_leak
+Synthetic or fallback paths are labeled in `provenance`.
 
-Get an AI-generated explanation for a detected leak.
+## `explain_leak`
 
-#### Request
+Generate AI insights for the whole heap or a single leak candidate.
+
+### Request
 
 ```json
 {
+  "id": 7,
   "method": "explain_leak",
   "params": {
-    "heap_path": "/path/to/heap.hprof",
-    "leak_id": "com.example.UserSessionCache::ff12ab90",
-    "min_severity": "LOW"
+    "heap_path": "heap.hprof",
+    "leak_id": "leak-usersession-1",
+    "min_severity": "HIGH"
   }
 }
 ```
 
-#### Parameters
+### Result Shape
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `heap_path` | string | Yes | Heap dump to inspect |
-| `leak_id` | string | No | Target leak ID or class; when omitted, Mnemosyne explains the top leak |
-| `min_severity` | string | No | Minimum severity to consider (default: LOW) |
-
-#### Response
+`result` is the raw `AiInsights` object:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "model": "gpt-4.1-mini",
-    "summary": "UserSessionCache is retaining ~512.00 MB via 125432 instances; prioritize freeing it to reclaim 21.0% of the heap.",
-    "recommendations": [
-      "Guard UserSessionCache lifetimes: ensure cleanup hooks dispose unused entries.",
-      "Add targeted instrumentation (counters, timers) around the suspected allocation sites.",
-      "Review threading / coroutine lifecycles anchoring these objects to a GC root."
-    ],
-    "confidence": 0.78,
-    "wire": {
-      "format": "Toon",
-      "prompt": "TOON v1\nsection request\n  intent=explain_leak\n  heap_path=/path/to/heap.hprof\n  total_bytes=2453291008\n  total_objects=1234567\n  leak_sampled=1\nsection leaks\n  leak#0\n    id=com.example.UserSessionCache::ff12ab90\n    class=com.example.UserSessionCache\n    kind=Cache\n    severity=High\n    retained_mb=512.00\n    instances=125432\n    description=UserSessionCache dominates 21% of the heap\n",
-      "response": "TOON v1\nsection response\n  model=gpt-4.1-mini\n  confidence_pct=78\n  summary=com.example.UserSessionCache retains ~512.00 MB via 125432 instances (severity High).\nsection remediation\n  priority=high\n  retained_percent=21.0\n"
-    }
+  "model": "gpt-4.1-mini",
+  "summary": "Top leak is retaining a large share of the heap.",
+  "recommendations": [
+    "Review cleanup and ownership boundaries."
+  ],
+  "confidence": 0.74,
+  "wire": {
+    "format": "Toon",
+    "prompt": "...",
+    "response": "..."
   }
 }
 ```
 
-The `wire` block always contains the exact TOON payload Mnemosyne would send to (and expect from) a real LLM. Clients that want to broker their own AI requests can forward this payload without parsing human-readable prose.
+Notes:
 
-If `leak_id` is provided but does not match any detected leak ID or class name, the server returns `INVALID_PARAMS` instead of silently widening to the top leak.
+- the `wire.format` enum currently serializes as `Toon`
+- `AiInsights`, `AiWireExchange`, and `AiWireFormat::Toon` are stable shared contracts in this branch
+- provider-backed AI exists, but consumers should still treat the generated text as advisory
 
----
+## `propose_fix`
 
-### propose_fix
+Generate heuristic fix suggestions for a leak candidate.
 
-Generate code fix suggestions for a leak.
-
-#### Request
+### Request
 
 ```json
 {
+  "id": 8,
   "method": "propose_fix",
   "params": {
-    "heap_path": "/path/to/heap.hprof",
-    "leak_id": "com.example.UserSessionCache::ff12ab90",
-    "project_root": "/path/to/project",
-    "style": "DEFENSIVE"
+    "heap_path": "heap.hprof",
+    "leak_id": "leak-usersession-1",
+    "project_root": "D:/repo",
+    "style": "Minimal"
   }
 }
 ```
 
-#### Parameters
+### Params
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `heap_path` | string | Yes | Heap dump used for leak context |
-| `leak_id` | string | No | Target leak ID/class; when omitted, Mnemosyne uses the top leak |
-| `project_root` | string | No | Source root for path hints |
-| `style` | string | No | MINIMAL, DEFENSIVE, or COMPREHENSIVE (default: MINIMAL) |
+- `heap_path` string, required
+- `leak_id` string, optional
+- `project_root` string, optional
+- `style` string, optional, defaults to `Minimal`
 
-#### Response
+`style` currently serializes in Rust enum casing:
 
-```json
-{
-  "success": true,
-  "data": {
-    "suggestions": [
-      {
-        "leak_id": "com.example.UserSessionCache::ff12ab90",
-        "class_name": "com.example.UserSessionCache",
-        "target_file": "src/main/java/com/example/UserSessionCache.java",
-        "description": "Wrap com.example.UserSessionCache allocations in try-with-resources / finally blocks to avoid lingering references.",
-        "diff": "--- a/...\n+++ b/...\n@@ public void retain(...)\n-Resource r = allocator.acquire();\n+try (Resource r = allocator.acquire()) {\n+    // existing logic\n+}\n",
-        "confidence": 0.72,
-        "style": "DEFENSIVE"
-      }
-    ]
-  }
-}
-```
+- `Minimal`
+- `Defensive`
+- `Comprehensive`
 
----
+### Result Shape
 
-### apply_fix
-
-Apply a proposed fix to the source code.
-
-#### Request
+`result` is a `FixResponse`:
 
 ```json
 {
-  "method": "apply_fix",
-  "params": {
-    "fix_index": 0,
-    "create_backup": true,
-    "dry_run": false
-  }
-}
-```
-
-#### Response
-
-```json
-{
-  "success": true,
-  "data": {
-    "files_modified": 1,
-    "backup_path": "/path/to/project/.mnemosyne/backup-2025-11-30-123456"
-  }
-}
-```
-
----
-
-## Data Types
-
-### Severity Levels
-
-- `LOW`: Minor issues, informational
-- `MEDIUM`: Noticeable memory usage, should investigate
-- `HIGH`: Significant leak, fix soon
-- `CRITICAL`: Severe leak, fix immediately
-
-### Leak Types
-
-- `COROUTINE`: Suspended coroutines never resumed
-- `THREAD`: Threads that should have terminated
-- `HTTP_RESPONSE`: Unclosed HTTP responses
-- `CLASSLOADER`: ClassLoader preventing unloading
-- `CACHE`: Unbounded cache growth
-- `COLLECTION`: Collection growing without bounds
-- `LISTENER`: Event listeners not unregistered
-
----
-
-## Error Handling
-
-All errors follow this format:
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "PARSE_ERROR",
-    "message": "Failed to parse heap dump: Invalid HPROF magic number",
-    "details": {
-      "file": "/path/to/heap.hprof",
-      "offset": 0
+  "suggestions": [
+    {
+      "leak_id": "leak-usersession-1",
+      "class_name": "com.example.UserSessionCache",
+      "target_file": "D:/repo/src/main/java/com/example/UserSessionCache.java",
+      "description": "Add guard clauses so com.example.UserSessionCache releases references when exceeding safe capacity.",
+      "diff": "--- a/...\n+++ b/...\n@@\n-// TODO...\n+if (cache.size() > SAFE_CAPACITY) {\n+    cache.clear();\n+}\n",
+      "confidence": 0.75,
+      "style": "Minimal"
     }
-  }
+  ],
+  "project_root": "D:/repo",
+  "provenance": [
+    {
+      "kind": "SYNTHETIC",
+      "detail": "Fix suggestions are generated heuristically from leak summaries."
+    },
+    {
+      "kind": "PLACEHOLDER",
+      "detail": "Static-analysis-backed remediation is not wired yet; this is placeholder guidance."
+    }
+  ]
 }
 ```
 
-### Error Codes
+These suggestions are currently heuristic placeholders, not source-to-source verified edits.
 
-| Code | Description |
-|------|-------------|
-| `FILE_NOT_FOUND` | Heap dump file doesn't exist |
-| `PARSE_ERROR` | Invalid or corrupted heap dump |
-| `ANALYSIS_ERROR` | Error during leak detection |
-| `MAPPING_ERROR` | Failed to map to source code |
-| `GIT_ERROR` | Git operation failed |
-| `AI_ERROR` | LLM service error |
-| `INVALID_PARAMS` | Invalid request parameters |
+## CLI Relationship
 
----
+The MCP server shares core logic with the CLI, but the command names are not one-to-one API wrappers. The live CLI command surface is:
 
-## Rate Limits
+- `parse`
+- `leaks`
+- `analyze`
+- `diff`
+- `map`
+- `gc-path`
+- `query`
+- `explain`
+- `fix`
+- `serve`
+- `config`
 
-AI-powered commands (`explain_leak`, `propose_fix`) are subject to LLM API rate limits.
-
-**Recommendations:**
-- Cache results when possible
-- Use `dry_run` mode for testing
-- Batch multiple analyses
-
----
-
-## Examples
-
-See [examples/](examples/) directory for complete usage examples.
+For quick operator examples, see `docs/QUICKSTART.md`. For command-line usage, prefer `mnemosyne-cli --help` and the subcommand help text as the runtime source of truth.
