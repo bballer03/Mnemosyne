@@ -94,15 +94,23 @@ pub async fn propose_fix_with_config(
     })
     .await?;
 
+    propose_fix_for_leaks_with_config(&analysis.leaks, &request, &config).await
+}
+
+pub(crate) async fn propose_fix_for_leaks_with_config(
+    leaks: &[LeakInsight],
+    request: &FixRequest,
+    config: &AppConfig,
+) -> CoreResult<FixResponse> {
     if let Some(ref target) = request.leak_id {
-        validate_leak_id(&analysis.leaks, target)?;
+        validate_leak_id(leaks, target)?;
     }
 
-    let leaks = focus_leaks(&analysis.leaks, request.leak_id.as_deref());
+    let leaks = focus_leaks(leaks, request.leak_id.as_deref());
     let Some(leak) = leaks.into_iter().next() else {
         return Ok(FixResponse {
             suggestions: Vec::new(),
-            project_root: request.project_root,
+            project_root: request.project_root.clone(),
             provenance: Vec::new(),
         });
     };
@@ -175,7 +183,7 @@ pub async fn propose_fix_with_config(
 
     Ok(FixResponse {
         suggestions: vec![suggestion],
-        project_root: request.project_root,
+        project_root: request.project_root.clone(),
         provenance,
     })
 }

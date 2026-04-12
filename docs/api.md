@@ -64,6 +64,11 @@ The current server supports these methods:
 - `query_heap`
 - `map_to_code`
 - `find_gc_path`
+- `create_ai_session`
+- `resume_ai_session`
+- `get_ai_session`
+- `close_ai_session`
+- `chat_session`
 - `explain_leak`
 - `propose_fix`
 
@@ -533,6 +538,113 @@ The implementation tries, in order:
 
 Synthetic or fallback paths are labeled in `provenance`.
 
+## `create_ai_session`
+
+Analyze a heap once and persist an MCP AI follow-up session.
+
+### Request
+
+```json
+{
+  "id": 7,
+  "method": "create_ai_session",
+  "params": {
+    "heap_path": "heap.hprof",
+    "min_severity": "LOW",
+    "packages": ["com.example"],
+    "leak_types": ["CACHE"]
+  }
+}
+```
+
+### Result Shape
+
+```json
+{
+  "session_id": "mcp-1712920000000000000",
+  "created_at": "1712920000",
+  "updated_at": "1712920000",
+  "heap_path": "heap.hprof",
+  "summary": {},
+  "leak_count": 3,
+  "top_leaks": ["leak-usersession-1", "leak-cache-2", "leak-thread-3"],
+  "focus_leak_id": null
+}
+```
+
+## `resume_ai_session`
+
+Reload a persisted AI session and return the current bounded history.
+
+### Request
+
+```json
+{
+  "id": 8,
+  "method": "resume_ai_session",
+  "params": {
+    "session_id": "mcp-1712920000000000000"
+  }
+}
+```
+
+### Result Shape
+
+Same as `create_ai_session`, plus a `history` array of `AiChatTurn` entries.
+
+## `get_ai_session`
+
+Inspect compact metadata for a persisted session without performing AI work.
+
+### Result Shape
+
+```json
+{
+  "session_id": "mcp-1712920000000000000",
+  "created_at": "1712920000",
+  "updated_at": "1712920060",
+  "heap_path": "heap.hprof",
+  "leak_count": 3,
+  "focus_leak_id": "leak-usersession-1",
+  "history_length": 2
+}
+```
+
+## `close_ai_session`
+
+Delete a persisted AI session.
+
+### Result Shape
+
+```json
+{
+  "session_id": "mcp-1712920000000000000",
+  "closed": true
+}
+```
+
+## `chat_session`
+
+Ask a follow-up AI question against a persisted session.
+
+### Request
+
+```json
+{
+  "id": 9,
+  "method": "chat_session",
+  "params": {
+    "session_id": "mcp-1712920000000000000",
+    "question": "What should I fix first?",
+    "focus_leak_id": "leak-usersession-1"
+  }
+}
+```
+
+### Result Shape
+
+`result` is the normal `AiInsights` object.
+
 ## `explain_leak`
 
 Generate AI insights for the whole heap or a single leak candidate.
@@ -541,7 +653,7 @@ Generate AI insights for the whole heap or a single leak candidate.
 
 ```json
 {
-  "id": 7,
+  "id": 10,
   "method": "explain_leak",
   "params": {
     "heap_path": "heap.hprof",
@@ -550,6 +662,23 @@ Generate AI insights for the whole heap or a single leak candidate.
   }
 }
 ```
+
+Session-backed requests use `session_id` instead of `heap_path`:
+
+```json
+{
+  "id": 11,
+  "method": "explain_leak",
+  "params": {
+    "session_id": "mcp-1712920000000000000",
+    "leak_id": "leak-usersession-1"
+  }
+}
+```
+
+Exactly one of `heap_path` or `session_id` is required. `min_severity` is only valid on the `heap_path` path.
+
+When `session_id` is used and `leak_id` is omitted, Mnemosyne reuses the persisted session's current `conversation.focus_leak_id` when one exists. If no focus has been established yet, the request falls back to whole-session leak context.
 
 ### Result Shape
 
@@ -585,7 +714,7 @@ Generate AI-backed fix suggestions for a leak candidate when provider mode and s
 
 ```json
 {
-  "id": 8,
+  "id": 12,
   "method": "propose_fix",
   "params": {
     "heap_path": "heap.hprof",
@@ -596,12 +725,30 @@ Generate AI-backed fix suggestions for a leak candidate when provider mode and s
 }
 ```
 
+Session-backed requests use `session_id` instead of `heap_path`:
+
+```json
+{
+  "id": 13,
+  "method": "propose_fix",
+  "params": {
+    "session_id": "mcp-1712920000000000000",
+    "style": "Minimal"
+  }
+}
+```
+
 ### Params
 
-- `heap_path` string, required
+- `heap_path` string, required on the direct heap-analysis path
+- `session_id` string, required on the session-backed path
 - `leak_id` string, optional
 - `project_root` string, optional
 - `style` string, optional, defaults to `Minimal`
+
+Exactly one of `heap_path` or `session_id` is required.
+
+When `session_id` is used and `leak_id` is omitted, Mnemosyne reuses the persisted session's current `conversation.focus_leak_id` when one exists. If no focus has been established yet, fix generation evaluates the persisted leak set in its existing priority order and returns the first suggestion in the normal `FixResponse` shape.
 
 `style` currently serializes in Rust enum casing:
 
@@ -646,6 +793,21 @@ Generate AI-backed fix suggestions for a leak candidate when provider mode and s
 
 When `project_root` yields a mapped source file plus a small local snippet and provider mode is active, Mnemosyne can return an AI-backed patch suggestion in the same `FixResponse` shape. When that path is unavailable or fails validation, it falls back to heuristic placeholder guidance with explicit provenance markers.
 
+## Transport Notes
+
+Mnemosyne's MCP stdio server currently uses a one-request/one-response JSON-line transport for all live methods, including AI-backed calls such as `explain_leak`, `chat_session`, and `propose_fix`.
+
+Streaming or progress-event messages are not part of the live API contract in this branch. The current transport has dedicated black-box coverage for delayed AI-backed responses and larger single-response payloads, and those tests keep the existing request/response contract acceptable.
+
+Provider-backed failures expose machine-readable MCP error codes through `error_details.code`:
+
+- `provider_error` for upstream provider HTTP failures and response-decode failures
+- `provider_timeout` for provider timeout failures
+- `session_not_found` when a requested persisted session file does not exist
+- `session_load_failed` when a persisted session file cannot be decoded or does not match the requested `session_id`
+- `session_version_unsupported` when a persisted session was written with an unsupported `session_version`
+- `session_persist_failed` when session create/update/delete cannot be safely written to disk
+
 ## CLI Relationship
 
 The MCP server shares core logic with the CLI, but the command names are not one-to-one API wrappers. The live CLI command surface is:
@@ -658,6 +820,7 @@ The MCP server shares core logic with the CLI, but the command names are not one
 - `gc-path`
 - `query`
 - `explain`
+- `chat`
 - `fix`
 - `serve`
 - `config`

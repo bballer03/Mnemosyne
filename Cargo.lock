@@ -1018,6 +1018,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "criterion",
+ "dirs",
  "petgraph",
  "regex",
  "reqwest",

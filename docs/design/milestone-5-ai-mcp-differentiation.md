@@ -1,6 +1,6 @@
 # Milestone 5 — AI / MCP / Differentiation
 
-> **Status:** ⚠️ Partial — provider/privacy hardening slices, CLI-first conversation mode, and the first AI-backed fix-generation slice landed; MCP/session follow-through remains
+> **Status:** ✅ Complete — provider/privacy hardening slices, CLI-first conversation mode, the first AI-backed fix-generation slice, persisted MCP AI sessions, and evidence-first MCP transport hardening landed; streaming remains conditional follow-on work rather than part of the shipped contract
 > **Design Owner:** Design Consulting Agent  
 > **Last Updated:** 2026-04-12
 
@@ -12,7 +12,7 @@ Wire real AI capabilities into Mnemosyne and make MCP integration production-rea
 
 ## Context
 
-AI-assisted analysis is Mnemosyne's key differentiator. The architecture is now partly realized: `AiConfig` supports `rules`, `stub`, and `provider` modes, `AiInsights` and `AiWireExchange` remain the stable contracts, provider-backed execution is verified for OpenAI-compatible, local, and Anthropic endpoints, the stdio MCP server now exposes 9 live methods with `list_tools` discovery plus structured `error_details`, Step `14(d)` now covers provider-mode prompt redaction plus hashed audit logging via `[ai.privacy]` before external calls, and Step `14(e)` now ships a CLI-first `mnemosyne-cli chat <heap.hprof>` slice with bounded in-process history plus a first AI-backed one-file / one-snippet fix-generation slice. The remaining M5 work is hardening: MCP/session semantics and streaming only if justified.
+AI-assisted analysis is Mnemosyne's key differentiator. The architecture is now realized for the current milestone scope: `AiConfig` supports `rules`, `stub`, and `provider` modes, `AiInsights` and `AiWireExchange` remain the stable contracts, provider-backed execution is verified for OpenAI-compatible, local, and Anthropic endpoints, the stdio MCP server now exposes explicit AI session lifecycle methods on top of the original analysis surface with `list_tools` discovery plus structured `error_details`, Step `14(d)` covers provider-mode prompt redaction plus hashed audit logging via `[ai.privacy]` before external calls, and Step `14(e)` ships both a CLI-first `mnemosyne-cli chat <heap.hprof>` slice with bounded in-process history and persisted MCP AI sessions for resumed `chat_session` / `explain_leak` / `propose_fix` follow-up. Evidence-first transport hardening verifies delayed AI-backed responses and larger single-response payloads against the existing stdio request/response model while exposing dedicated provider timeout and provider failure error codes. The remaining post-M5 hardening is conditional: streaming only if future evidence justifies it.
 
 M1.5 must complete before wiring AI to analysis results — sending empty/heuristic data to an LLM produces misleading output. M3 enriches the analysis context that makes AI insights valuable.
 
@@ -22,18 +22,18 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 1. **HTTP client + LLM abstraction layer** — trait-based interface supporting multiple providers
 2. **OpenAI backend** — GPT-4/GPT-4o implementation
 3. **Anthropic backend** — Claude implementation
-4. **Local model support** — llama.cpp or Ollama integration for offline use
+4. **Local model support** — OpenAI-compatible local endpoint support for self-hosted or offline-friendly deployments
 5. **Configurable prompt templates** — YAML-defined prompts with context injection
 
 ### AI-Powered Features
 6. **Real AI insights** — `generate_ai_insights()` calls a real LLM with heap analysis context
 7. **AI-driven leak explanations** — pass retained-size data + reference chains to LLM
 8. **AI-driven fix suggestions** — LLM-generated context-aware code patches (replacing templates)
-9. **Conversation mode** — interactive Q&A about a heap dump, starting with a CLI-first slice and deferring MCP/session semantics
+9. **Conversation mode** — interactive Q&A about a heap dump, delivered as a CLI-first slice plus persisted MCP AI session follow-up
 
 ### MCP Hardening
 10. **Tool descriptions** — proper MCP tool metadata for IDE discovery
-11. **Streaming responses** — progressive result delivery for long-running analysis
+11. **Streaming responses** — progressive result delivery only if tests show the current request/response transport is insufficient
 12. **Error contracts** — structured MCP error responses with error codes
 13. **Session management** — maintain analysis context across multiple MCP calls
 
@@ -58,7 +58,7 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 │                    CLI / MCP                                       │
 │                                                                    │
 │  mnemosyne analyze --ai    MCP: explain_leak / propose_fix        │
-│  mnemosyne explain         MCP: future session-based conversation │
+│  mnemosyne explain         MCP: session-based conversation / fix   │
 │  mnemosyne chat                                                    │
 └──────────────┬─────────────────────────────────────────────────────┘
                │
@@ -135,8 +135,7 @@ M1.5 must complete before wiring AI to analysis results — sending empty/heuris
 
 ### Remaining MCP Capabilities
 - Streaming responses for long-running AI calls
-- Session context: subsequent MCP calls share analysis state
-- Error codes for AI-specific failures (provider unavailable, token limit, etc.)
+- Broader AI-specific error-code coverage when additional provider failure classes prove necessary
 
 ### Config Changes
 ```toml
@@ -156,7 +155,7 @@ audit_log = true
 template_dir = "~/.config/mnemosyne/prompts"  # custom prompt overrides
 ```
 
-Current runtime note: `redact_heap_path`, `redact_patterns`, and provider-mode `audit_log` are implemented, `max_tokens` now acts as a minimal prompt-budget guard for provider-mode leak context, and `mnemosyne-cli chat` reuses that same provider/privacy path. Broader token-accounting and MCP session semantics remain future work.
+Current runtime note: `redact_heap_path`, `redact_patterns`, and provider-mode `audit_log` are implemented, `max_tokens` now acts as a minimal prompt-budget guard for provider-mode leak context, `mnemosyne-cli chat` reuses that same provider/privacy path, and MCP now persists explicit heap-bound AI sessions with `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Broader token-accounting and streaming remain future work.
 
 ## Data Model Changes
 

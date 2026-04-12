@@ -95,6 +95,11 @@ Available MCP methods:
 - detect_leaks
 - map_to_code
 - find_gc_path
+- create_ai_session
+- resume_ai_session
+- get_ai_session
+- close_ai_session
+- chat_session
 - explain_leak
 - propose_fix
 
@@ -395,7 +400,7 @@ Recommendation:
 Code Fix Available: Run 'mnemosyne-cli fix heap.hprof' to generate patch
 ```
 
-When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible, local, and Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is now available through `mnemosyne-cli chat`; broader MCP/session work still remains future work.
+When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible, local, and Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is available through `mnemosyne-cli chat`, and MCP now ships persisted heap-bound AI sessions via `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Session files default to a per-user local Mnemosyne data directory, and `[ai.sessions].directory` lets operators pin that storage to a specific path.
 
 Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 

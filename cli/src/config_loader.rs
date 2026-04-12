@@ -179,6 +179,7 @@ fn apply_file_config(cfg: &mut AppConfig, file: FileConfig) {
 fn apply_ai_section(cfg: &mut AiConfig, section: PartialAiConfig) {
     let prompts = section.prompts;
     let privacy = section.privacy;
+    let sessions = section.sessions;
 
     if let Some(value) = section.enabled {
         cfg.enabled = value;
@@ -211,6 +212,9 @@ fn apply_ai_section(cfg: &mut AiConfig, section: PartialAiConfig) {
     }
     if let Some(value) = prompts.and_then(|prompts| prompts.template_dir) {
         cfg.prompts.template_dir = Some(value);
+    }
+    if let Some(value) = sessions.and_then(|sessions| sessions.directory) {
+        cfg.sessions.directory = Some(value);
     }
     if let Some(value) = section.endpoint {
         cfg.endpoint = Some(value);
@@ -444,6 +448,7 @@ struct PartialAiConfig {
     tasks: Option<Vec<AiTaskDefinition>>,
     privacy: Option<PartialAiPrivacyConfig>,
     prompts: Option<PartialAiPromptConfig>,
+    sessions: Option<PartialAiSessionConfig>,
     endpoint: Option<String>,
     api_key_env: Option<String>,
     max_tokens: Option<u32>,
@@ -460,6 +465,11 @@ struct PartialAiPrivacyConfig {
 #[derive(Debug, Default, Deserialize)]
 struct PartialAiPromptConfig {
     template_dir: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialAiSessionConfig {
+    directory: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -645,5 +655,22 @@ audit_log = true
             vec!["secret-token-\\d+", "customer-[0-9]+"]
         );
         assert!(cfg.ai.privacy.audit_log);
+    }
+
+    #[test]
+    fn parses_ai_session_directory_config() {
+        let toml = r#"
+[ai.sessions]
+directory = "C:/tmp/mnemosyne-sessions"
+"#;
+
+        let file_cfg: FileConfig = toml::from_str(toml).unwrap();
+        let mut cfg = AppConfig::default();
+        apply_file_config(&mut cfg, file_cfg);
+
+        assert_eq!(
+            cfg.ai.sessions.directory.as_deref(),
+            Some("C:/tmp/mnemosyne-sessions")
+        );
     }
 }

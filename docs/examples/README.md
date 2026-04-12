@@ -146,7 +146,7 @@ Send one request line:
 {"id":1,"method":"parse_heap","params":{"path":"heap.hprof"}}
 ```
 
-See `docs/api.md` for the full wire format, the `list_tools` discovery method, and all nine live methods.
+See `docs/api.md` for the full wire format, the `list_tools` discovery method, and all fourteen live methods.
 
 ## Related Docs
 

@@ -2,10 +2,20 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use assert_cmd::Command;
 use mnemosyne_core::hprof::test_fixtures::{build_graph_fixture, build_simple_fixture};
+use mnemosyne_core::{
+    analysis::{AiChatTurn, LeakInsight, LeakKind, LeakSeverity},
+    fix::FixStyle,
+    hprof::HeapSummary,
+    mcp::session::{
+        PersistedAiSession, SessionAnalysisSnapshot, SessionConversationSnapshot,
+        MCP_SESSION_VERSION,
+    },
+};
 use predicates::prelude::*;
 use serde_json::{Deserializer, Value};
 use tempfile::{tempdir, NamedTempFile, TempDir};
@@ -51,6 +61,65 @@ fn parse_first_json_value(input: &str) -> Value {
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn seed_persisted_ai_session(root: &Path, session: &PersistedAiSession) {
+    fs::create_dir_all(root).unwrap();
+    let path = root.join(format!("{}.json", session.session_id));
+    let payload = serde_json::to_vec_pretty(session).unwrap();
+    fs::write(path, payload).unwrap();
+}
+
+fn seed_persisted_ai_session_as(root: &Path, file_session_id: &str, session: &PersistedAiSession) {
+    fs::create_dir_all(root).unwrap();
+    let path = root.join(format!("{file_session_id}.json"));
+    let payload = serde_json::to_vec_pretty(session).unwrap();
+    fs::write(path, payload).unwrap();
+}
+
+fn persisted_session_fixture(session_id: &str) -> PersistedAiSession {
+    PersistedAiSession {
+        session_version: MCP_SESSION_VERSION,
+        session_id: session_id.to_string(),
+        created_at: "1710000000".into(),
+        updated_at: "1710000000".into(),
+        heap_path: "seeded-session.hprof".into(),
+        analysis: SessionAnalysisSnapshot {
+            min_severity: LeakSeverity::Low,
+            packages: vec!["com.example".into()],
+            leak_types: vec![LeakKind::Cache],
+            summary: HeapSummary {
+                heap_path: "seeded-session.hprof".into(),
+                total_objects: 7,
+                total_size_bytes: 4096,
+                classes: Vec::new(),
+                generated_at: SystemTime::UNIX_EPOCH,
+                header: None,
+                total_records: 3,
+                record_stats: Vec::new(),
+            },
+            leaks: vec![LeakInsight {
+                id: "leak-cache-1".into(),
+                class_name: "com.example.CacheHolder".into(),
+                leak_kind: LeakKind::Cache,
+                severity: LeakSeverity::High,
+                retained_size_bytes: 2048,
+                shallow_size_bytes: Some(128),
+                suspect_score: Some(0.91),
+                instances: 2,
+                description: "CacheHolder retains request state after completion.".into(),
+                provenance: Vec::new(),
+            }],
+            top_leaks: vec!["leak-cache-1".into()],
+        },
+        conversation: SessionConversationSnapshot {
+            focus_leak_id: Some("leak-cache-1".into()),
+            history: vec![AiChatTurn {
+                question: "What is the leak?".into(),
+                answer_summary: "CacheHolder retains request state.".into(),
+            }],
+        },
+    }
 }
 
 fn toml_path_arg(path: &Path) -> String {
@@ -1786,6 +1855,648 @@ fn test_serve_invalid_json_includes_error_details() {
         .get("error")
         .and_then(Value::as_str)
         .is_some_and(|value| value.contains("invalid JSON")));
+}
+
+#[test]
+fn test_serve_explain_leak_delayed_provider_response_returns_single_json_line() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=transport-test\n  confidence_pct=72\n  summary=Delayed provider response\nsection recommendations\n  item#0=First delayed recommendation\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let _ = stream.read(&mut buf).unwrap();
+        thread::sleep(Duration::from_millis(250));
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("serve-provider-delay.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"transport-test\"\nendpoint = \"http://{addr}/v1\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "id": 21,
+        "method": "explain_leak",
+        "params": { "heap_path": fixture_path }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1
+    );
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(21)));
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("summary"))
+            .and_then(Value::as_str),
+        Some("Delayed provider response")
+    );
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_serve_chat_session_reads_persisted_session_from_stdio() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let session = persisted_session_fixture("session-chat-1");
+    seed_persisted_ai_session(&sessions_dir, &session);
+
+    let config_path = sandbox.path().join("serve-session-chat.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"rules\"\n[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 31,
+        "method": "chat_session",
+        "params": {
+            "session_id": session.session_id,
+            "question": "What should I fix first?"
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1
+    );
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(31)));
+    assert!(json
+        .get("result")
+        .and_then(|value| value.get("summary"))
+        .and_then(Value::as_str)
+        .is_some_and(|summary| !summary.is_empty()));
+    assert!(json
+        .get("result")
+        .and_then(|value| value.get("recommendations"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty()));
+}
+
+#[test]
+fn test_serve_get_ai_session_reads_persisted_session_from_stdio() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let session = persisted_session_fixture("session-get-1");
+    seed_persisted_ai_session(&sessions_dir, &session);
+
+    let config_path = sandbox.path().join("serve-session-get.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 33,
+        "method": "get_ai_session",
+        "params": {
+            "session_id": session.session_id,
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(33)));
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("session_id"))
+            .and_then(Value::as_str),
+        Some("session-get-1")
+    );
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("history_length"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+}
+
+#[test]
+fn test_serve_get_ai_session_missing_session_reports_session_not_found() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let config_path = sandbox.path().join("serve-session-not-found.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 34,
+        "method": "get_ai_session",
+        "params": {
+            "session_id": "missing-session",
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("session_not_found")
+    );
+}
+
+#[test]
+fn test_serve_get_ai_session_rejects_embedded_session_id_mismatch() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let session = persisted_session_fixture("session-actual");
+    seed_persisted_ai_session_as(&sessions_dir, "session-expected", &session);
+
+    let config_path = sandbox.path().join("serve-session-mismatch.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 35,
+        "method": "get_ai_session",
+        "params": {
+            "session_id": "session-expected",
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("session_load_failed")
+    );
+    assert!(json
+        .get("error")
+        .and_then(Value::as_str)
+        .is_some_and(|detail| detail.contains("session-expected")));
+}
+
+#[test]
+fn test_serve_get_ai_session_rejects_unsupported_session_version() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let mut session = persisted_session_fixture("session-version-1");
+    session.session_version = MCP_SESSION_VERSION + 1;
+    seed_persisted_ai_session(&sessions_dir, &session);
+
+    let config_path = sandbox.path().join("serve-session-version.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 36,
+        "method": "get_ai_session",
+        "params": {
+            "session_id": "session-version-1",
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("session_version_unsupported")
+    );
+}
+
+#[test]
+fn test_serve_create_ai_session_reports_session_persist_failure() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_path = sandbox.path().join("sessions-file");
+    fs::write(&sessions_path, b"not a directory").unwrap();
+
+    let config_path = sandbox.path().join("serve-session-persist-failure.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_path)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 37,
+        "method": "create_ai_session",
+        "params": { "heap_path": fixture_path }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("session_persist_failed")
+    );
+}
+
+#[test]
+fn test_serve_propose_fix_reads_persisted_session_from_stdio() {
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let session = persisted_session_fixture("session-fix-1");
+    seed_persisted_ai_session(&sessions_dir, &session);
+
+    let config_path = sandbox.path().join("serve-session-fix.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = false\n[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+
+    let request = serde_json::json!({
+        "id": 32,
+        "method": "propose_fix",
+        "params": {
+            "session_id": session.session_id,
+            "style": FixStyle::Minimal
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1
+    );
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(32)));
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("suggestions"))
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("leak_id"))
+            .and_then(Value::as_str),
+        Some("leak-cache-1")
+    );
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("suggestions"))
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("style"))
+            .and_then(Value::as_str),
+        Some("Minimal")
+    );
+}
+
+#[test]
+fn test_serve_explain_leak_large_provider_payload_remains_single_json_line() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let large_summary = "transport-payload".repeat(256);
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": format!(
+                        "TOON v1\nsection response\n  model=transport-test\n  confidence_pct=74\n  summary={}\nsection recommendations\n  item#0={}\n",
+                        large_summary,
+                        large_summary,
+                    )
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let _ = stream.read(&mut buf).unwrap();
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("serve-provider-large.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"transport-test\"\nendpoint = \"http://{addr}/v1\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "id": 22,
+        "method": "explain_leak",
+        "params": { "heap_path": fixture_path }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1
+    );
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(22)));
+    assert!(json
+        .get("result")
+        .and_then(|value| value.get("summary"))
+        .and_then(Value::as_str)
+        .is_some_and(|summary| summary.contains("transport-payload")));
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_serve_explain_leak_provider_http_error_has_provider_error_code() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("serve-provider-http-error.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"transport-test\"\nendpoint = \"http://{addr}/v1\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "id": 23,
+        "method": "explain_leak",
+        "params": { "heap_path": fixture_path }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("provider_error")
+    );
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("details"))
+            .and_then(|details| details.get("status"))
+            .and_then(Value::as_u64),
+        Some(500)
+    );
+
+    server.join().unwrap();
+}
+
+#[test]
+fn test_serve_explain_leak_provider_timeout_has_provider_timeout_code() {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let _ = stream.read(&mut buf).unwrap();
+        thread::sleep(Duration::from_secs(3));
+    });
+
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let config_path = sandbox.path().join("serve-provider-timeout.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"transport-test\"\nendpoint = \"http://{addr}/v1\"\ntimeout_secs = 1\n"
+        ),
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "id": 24,
+        "method": "explain_leak",
+        "params": { "heap_path": fixture_path }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(false)));
+    assert_eq!(
+        json.get("error_details")
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str),
+        Some("provider_timeout")
+    );
+
+    server.join().unwrap();
 }
 
 #[test]

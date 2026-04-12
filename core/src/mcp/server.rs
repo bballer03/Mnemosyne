@@ -1,17 +1,23 @@
 use crate::{
     analysis::{
-        analyze_heap, detect_leaks, focus_leaks, generate_ai_insights_async, validate_leak_id,
-        AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, detect_leaks, focus_leaks, generate_ai_chat_turn_async,
+        generate_ai_insights_async, validate_leak_id, AiChatTurn, AnalyzeRequest,
+        LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
     errors::{CoreError, CoreResult},
-    fix::{propose_fix_with_config, FixRequest, FixStyle},
+    fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest},
     hprof::{parse_heap, HeapParseJob},
     mapper::{map_to_code, MapToCodeRequest},
+    mcp::session::{
+        new_session_id, timestamp_now, top_leak_ids, McpSessionStore, PersistedAiSession,
+        SessionAnalysisSnapshot, SessionConversationSnapshot, MCP_SESSION_VERSION,
+    },
     query::{execute_query, parse_query},
     HistogramGroupBy,
 };
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -135,6 +141,16 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": source.to_string() })),
             },
+            CoreError::InvalidInput(detail) if detail.starts_with("session not found:") => Self {
+                code: "session_not_found",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::InvalidInput(detail) if detail.starts_with("session load failed:") => Self {
+                code: "session_load_failed",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
             CoreError::FileNotFound { path, suggestion } => Self {
                 code: "file_not_found",
                 message,
@@ -172,8 +188,26 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": detail })),
             },
+            CoreError::AiProviderError { detail, status } => Self {
+                code: "provider_error",
+                message,
+                details: Some(json!({
+                    "detail": detail,
+                    "status": status,
+                })),
+            },
+            CoreError::AiProviderTimeout { detail } => Self {
+                code: "provider_timeout",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
             CoreError::NotImplemented(detail) => Self {
                 code: "not_implemented",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
+                code: "session_version_unsupported",
                 message,
                 details: Some(json!({ "detail": detail })),
             },
@@ -187,6 +221,15 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": source.to_string() })),
             },
+            CoreError::Other(source)
+                if source.to_string().starts_with("session persist failed:") =>
+            {
+                Self {
+                    code: "session_persist_failed",
+                    message,
+                    details: Some(json!({ "detail": source.to_string() })),
+                }
+            }
             CoreError::Other(source) => Self {
                 code: "internal_error",
                 message,
@@ -236,11 +279,22 @@ struct FindGcPathParams {
 
 #[derive(Debug, Deserialize)]
 struct ExplainLeakParams {
-    heap_path: String,
+    #[serde(default)]
+    heap_path: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     leak_id: Option<String>,
     #[serde(default)]
     min_severity: Option<LeakSeverity>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatSessionParams {
+    session_id: String,
+    question: String,
+    #[serde(default)]
+    focus_leak_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -274,6 +328,22 @@ struct AnalyzeHeapParams {
     min_duplicate_count: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct CreateAiSessionParams {
+    heap_path: String,
+    #[serde(default)]
+    min_severity: Option<LeakSeverity>,
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    leak_types: Vec<LeakKind>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionIdParams {
+    session_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryHeapParams {
     heap_path: String,
@@ -282,7 +352,10 @@ struct QueryHeapParams {
 
 #[derive(Debug, Deserialize)]
 struct ProposeFixParams {
-    heap_path: String,
+    #[serde(default)]
+    heap_path: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     leak_id: Option<String>,
     #[serde(default)]
@@ -293,6 +366,93 @@ struct ProposeFixParams {
 
 fn default_fix_style() -> FixStyle {
     FixStyle::Minimal
+}
+
+fn session_store(config: &AppConfig) -> McpSessionStore {
+    let root = config
+        .ai
+        .sessions
+        .directory
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_directory);
+    McpSessionStore::new(root)
+}
+
+fn default_session_directory() -> PathBuf {
+    if let Some(mut dir) = dirs::data_local_dir() {
+        dir.push("mnemosyne");
+        dir.push("ai-sessions");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("ai-sessions");
+    fallback
+}
+
+fn persist_session(store: &McpSessionStore, session: &PersistedAiSession) -> CoreResult<()> {
+    store
+        .save(session)
+        .map_err(|err| CoreError::Other(anyhow!("session persist failed: {err}")))
+}
+
+fn delete_session(store: &McpSessionStore, session_id: &str) -> CoreResult<()> {
+    store.delete(session_id).map_err(|err| match err {
+        CoreError::InvalidInput(_) | CoreError::Unsupported(_) => err,
+        other => CoreError::Other(anyhow!("session persist failed: {other}")),
+    })
+}
+
+fn session_payload(session: &PersistedAiSession) -> Value {
+    json!({
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "heap_path": session.heap_path,
+        "summary": session.analysis.summary,
+        "leak_count": session.analysis.leaks.len(),
+        "top_leaks": session.analysis.top_leaks,
+        "focus_leak_id": session.conversation.focus_leak_id,
+    })
+}
+
+fn resumed_session_payload(session: &PersistedAiSession) -> Value {
+    json!({
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "heap_path": session.heap_path,
+        "summary": session.analysis.summary,
+        "leak_count": session.analysis.leaks.len(),
+        "top_leaks": session.analysis.top_leaks,
+        "focus_leak_id": session.conversation.focus_leak_id,
+        "history": session.conversation.history,
+    })
+}
+
+fn compact_session_payload(session: &PersistedAiSession) -> Value {
+    json!({
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "heap_path": session.heap_path,
+        "leak_count": session.analysis.leaks.len(),
+        "focus_leak_id": session.conversation.focus_leak_id,
+        "history_length": session.conversation.history.len(),
+    })
+}
+
+fn session_resolved_leaks<'a>(
+    session: &'a PersistedAiSession,
+    explicit_leak_id: Option<&'a str>,
+) -> CoreResult<Vec<crate::analysis::LeakInsight>> {
+    let resolved = explicit_leak_id.or(session.conversation.focus_leak_id.as_deref());
+    if let Some(target) = resolved {
+        validate_leak_id(&session.analysis.leaks, target)?;
+    }
+    Ok(focus_leaks(&session.analysis.leaks, resolved))
 }
 
 impl MapToCodeParams {
@@ -376,19 +536,61 @@ fn tool_catalog() -> Value {
                 ]
             },
             {
-                "name": "explain_leak",
-                "description": "Generate AI-backed leak explanations for a heap or a specific leak candidate.",
+                "name": "create_ai_session",
+                "description": "Analyze a heap once and persist an AI follow-up session.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." },
+                    { "name": "packages", "type": "array<string>", "required": false, "description": "Optional package prefix filters." },
+                    { "name": "leak_types", "type": "array<string>", "required": false, "description": "Optional leak-kind filter list." }
+                ]
+            },
+            {
+                "name": "resume_ai_session",
+                "description": "Resume a persisted AI follow-up session by session_id.",
+                "params": [
+                    { "name": "session_id", "type": "string", "required": true, "description": "Persisted AI session identifier." }
+                ]
+            },
+            {
+                "name": "get_ai_session",
+                "description": "Inspect compact metadata for a persisted AI session.",
+                "params": [
+                    { "name": "session_id", "type": "string", "required": true, "description": "Persisted AI session identifier." }
+                ]
+            },
+            {
+                "name": "close_ai_session",
+                "description": "Delete a persisted AI follow-up session.",
+                "params": [
+                    { "name": "session_id", "type": "string", "required": true, "description": "Persisted AI session identifier." }
+                ]
+            },
+            {
+                "name": "chat_session",
+                "description": "Ask a follow-up AI question against a persisted session.",
+                "params": [
+                    { "name": "session_id", "type": "string", "required": true, "description": "Persisted AI session identifier." },
+                    { "name": "question", "type": "string", "required": true, "description": "Follow-up question to ask." },
+                    { "name": "focus_leak_id", "type": "string", "required": false, "description": "Optional leak identifier to focus the turn." }
+                ]
+            },
+            {
+                "name": "explain_leak",
+                "description": "Generate AI-backed leak explanations from a heap path or a persisted AI session.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": false, "description": "Path to the heap dump. Exactly one of heap_path or session_id is required." },
+                    { "name": "session_id", "type": "string", "required": false, "description": "Persisted AI session identifier. Exactly one of heap_path or session_id is required." },
                     { "name": "leak_id", "type": "string", "required": false, "description": "Optional leak identifier to focus the explanation." },
-                    { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." }
+                    { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override for the heap_path flow only." }
                 ]
             },
             {
                 "name": "propose_fix",
-                "description": "Generate AI-backed fix suggestions when provider mode and source context are available, otherwise fall back to heuristic guidance.",
+                "description": "Generate AI-backed fix suggestions from a heap path or a persisted AI session when provider mode and source context are available, otherwise fall back to heuristic guidance.",
                 "params": [
-                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "heap_path", "type": "string", "required": false, "description": "Path to the heap dump. Exactly one of heap_path or session_id is required." },
+                    { "name": "session_id", "type": "string", "required": false, "description": "Persisted AI session identifier. Exactly one of heap_path or session_id is required." },
                     { "name": "leak_id", "type": "string", "required": false, "description": "Optional leak identifier to narrow the suggestion set." },
                     { "name": "project_root", "type": "string", "required": false, "description": "Optional project directory used for file targeting." },
                     { "name": "style", "type": "string", "required": false, "description": "Patch style: Minimal, Defensive, or Comprehensive." }
@@ -425,6 +627,129 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             }
             let leaks = detect_leaks(&params.heap_path, options).await?;
             Ok(serde_json::to_value(leaks)?)
+        }
+        "create_ai_session" => {
+            let params: CreateAiSessionParams = serde_json::from_value(packet.params)?;
+            let mut request_config = config.clone();
+            if !params.packages.is_empty() {
+                request_config.analysis.packages = params.packages.clone();
+            }
+            if !params.leak_types.is_empty() {
+                request_config.analysis.leak_types = params.leak_types.clone();
+            }
+            request_config.ai.enabled = false;
+
+            let mut leak_options = LeakDetectionOptions::from(&request_config.analysis);
+            if let Some(sev) = params.min_severity {
+                leak_options.min_severity = sev;
+            }
+
+            let analysis = analyze_heap(AnalyzeRequest {
+                heap_path: params.heap_path.clone(),
+                config: request_config,
+                leak_options: leak_options.clone(),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                ..AnalyzeRequest::default()
+            })
+            .await?;
+
+            let now = timestamp_now();
+            let session = PersistedAiSession {
+                session_version: MCP_SESSION_VERSION,
+                session_id: new_session_id(),
+                created_at: now.clone(),
+                updated_at: now,
+                heap_path: params.heap_path,
+                analysis: SessionAnalysisSnapshot {
+                    min_severity: leak_options.min_severity,
+                    packages: leak_options.package_filters,
+                    leak_types: leak_options.leak_types,
+                    top_leaks: top_leak_ids(&analysis.leaks),
+                    summary: analysis.summary,
+                    leaks: analysis.leaks,
+                },
+                conversation: SessionConversationSnapshot {
+                    focus_leak_id: None,
+                    history: Vec::new(),
+                },
+            };
+
+            let store = session_store(config);
+            persist_session(&store, &session)?;
+            Ok(session_payload(&session))
+        }
+        "resume_ai_session" => {
+            let params: SessionIdParams = serde_json::from_value(packet.params)?;
+            let store = session_store(config);
+            let mut session = store.load(&params.session_id)?;
+            session.updated_at = timestamp_now();
+            persist_session(&store, &session)?;
+            Ok(resumed_session_payload(&session))
+        }
+        "get_ai_session" => {
+            let params: SessionIdParams = serde_json::from_value(packet.params)?;
+            let store = session_store(config);
+            let session = store.load(&params.session_id)?;
+            Ok(compact_session_payload(&session))
+        }
+        "close_ai_session" => {
+            let params: SessionIdParams = serde_json::from_value(packet.params)?;
+            let store = session_store(config);
+            delete_session(&store, &params.session_id)?;
+            Ok(json!({ "session_id": params.session_id, "closed": true }))
+        }
+        "chat_session" => {
+            let params: ChatSessionParams = serde_json::from_value(packet.params)?;
+            let store = session_store(config);
+            let mut session = store.load(&params.session_id)?;
+
+            if let Some(ref target) = params.focus_leak_id {
+                validate_leak_id(&session.analysis.leaks, target)?;
+            }
+
+            let active_focus = params
+                .focus_leak_id
+                .as_deref()
+                .or(session.conversation.focus_leak_id.as_deref());
+            let focused = if let Some(target) = active_focus {
+                focus_leaks(&session.analysis.leaks, Some(target))
+            } else {
+                let shortlist = session.analysis.top_leaks.clone();
+                session
+                    .analysis
+                    .leaks
+                    .iter()
+                    .filter(|leak| shortlist.iter().any(|id| id == &leak.id))
+                    .cloned()
+                    .collect()
+            };
+
+            let mut ai_config = config.ai.clone();
+            ai_config.enabled = true;
+            let ai = generate_ai_chat_turn_async(
+                &session.analysis.summary,
+                &focused,
+                &params.question,
+                &session.conversation.history,
+                active_focus,
+                &ai_config,
+            )
+            .await?;
+
+            if let Some(target) = params.focus_leak_id {
+                session.conversation.focus_leak_id = Some(target);
+            }
+            crate::mcp::session::trim_history(
+                &mut session.conversation.history,
+                AiChatTurn {
+                    question: params.question,
+                    answer_summary: ai.summary.clone(),
+                },
+            );
+            session.updated_at = timestamp_now();
+            persist_session(&store, &session)?;
+            Ok(serde_json::to_value(ai)?)
         }
         "analyze_heap" => {
             let params: AnalyzeHeapParams = serde_json::from_value(packet.params)?;
@@ -495,41 +820,94 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
-            let mut config = config.clone();
-            config.ai.enabled = true;
-            let mut leak_options = LeakDetectionOptions::from(&config.analysis);
-            if let Some(sev) = params.min_severity {
-                leak_options.min_severity = sev;
+            match (&params.heap_path, &params.session_id) {
+                (Some(_), Some(_)) | (None, None) => Err(CoreError::InvalidInput(
+                    "exactly one of heap_path or session_id is required".into(),
+                )),
+                (Some(heap_path), None) => {
+                    let mut analyze_config = config.clone();
+                    analyze_config.ai.enabled = false;
+                    let mut leak_options = LeakDetectionOptions::from(&analyze_config.analysis);
+                    if let Some(sev) = params.min_severity {
+                        leak_options.min_severity = sev;
+                    }
+                    let analysis = analyze_heap(AnalyzeRequest {
+                        heap_path: heap_path.clone(),
+                        config: analyze_config.clone(),
+                        leak_options,
+                        enable_ai: false,
+                        histogram_group_by: HistogramGroupBy::Class,
+                        ..AnalyzeRequest::default()
+                    })
+                    .await?;
+                    if let Some(ref target) = params.leak_id {
+                        validate_leak_id(&analysis.leaks, target)?;
+                    }
+                    let focused = focus_leaks(&analysis.leaks, params.leak_id.as_deref());
+                    let mut ai_config = analyze_config.ai.clone();
+                    ai_config.enabled = true;
+                    let ai =
+                        generate_ai_insights_async(&analysis.summary, &focused, &ai_config).await?;
+                    Ok(serde_json::to_value(ai)?)
+                }
+                (None, Some(session_id)) => {
+                    if params.min_severity.is_some() {
+                        return Err(CoreError::InvalidInput(
+                            "min_severity is not supported for session-backed explain_leak".into(),
+                        ));
+                    }
+                    let store = session_store(config);
+                    let session = store.load(session_id)?;
+                    let focused = session_resolved_leaks(&session, params.leak_id.as_deref())?;
+                    let mut ai_config = config.ai.clone();
+                    ai_config.enabled = true;
+                    let ai =
+                        generate_ai_insights_async(&session.analysis.summary, &focused, &ai_config)
+                            .await?;
+                    Ok(serde_json::to_value(ai)?)
+                }
             }
-            let analysis = analyze_heap(AnalyzeRequest {
-                heap_path: params.heap_path,
-                config: config.clone(),
-                leak_options,
-                enable_ai: true,
-                histogram_group_by: HistogramGroupBy::Class,
-                ..AnalyzeRequest::default()
-            })
-            .await?;
-            if let Some(ref target) = params.leak_id {
-                validate_leak_id(&analysis.leaks, target)?;
-            }
-            let focused = focus_leaks(&analysis.leaks, params.leak_id.as_deref());
-            let ai = generate_ai_insights_async(&analysis.summary, &focused, &config.ai).await?;
-            Ok(serde_json::to_value(ai)?)
         }
         "propose_fix" => {
             let params: ProposeFixParams = serde_json::from_value(packet.params)?;
-            let response = propose_fix_with_config(
-                FixRequest {
-                    heap_path: params.heap_path,
-                    leak_id: params.leak_id,
-                    style: params.style,
-                    project_root: params.project_root,
-                },
-                config,
-            )
-            .await?;
-            Ok(serde_json::to_value(response)?)
+            match (&params.heap_path, &params.session_id) {
+                (Some(_), Some(_)) | (None, None) => Err(CoreError::InvalidInput(
+                    "exactly one of heap_path or session_id is required".into(),
+                )),
+                (Some(heap_path), None) => {
+                    let response = propose_fix_with_config(
+                        FixRequest {
+                            heap_path: heap_path.clone(),
+                            leak_id: params.leak_id,
+                            style: params.style,
+                            project_root: params.project_root,
+                        },
+                        config,
+                    )
+                    .await?;
+                    Ok(serde_json::to_value(response)?)
+                }
+                (None, Some(session_id)) => {
+                    let store = session_store(config);
+                    let session = store.load(session_id)?;
+                    let leak_id = params
+                        .leak_id
+                        .clone()
+                        .or(session.conversation.focus_leak_id.clone());
+                    let response = propose_fix_for_leaks_with_config(
+                        &session.analysis.leaks,
+                        &FixRequest {
+                            heap_path: session.heap_path,
+                            leak_id,
+                            style: params.style,
+                            project_root: params.project_root,
+                        },
+                        config,
+                    )
+                    .await?;
+                    Ok(serde_json::to_value(response)?)
+                }
+            }
         }
         other => Err(CoreError::InvalidInput(format!(
             "unsupported MCP method: {other}"
@@ -669,6 +1047,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rpc_response_maps_session_error_codes() {
+        for (error, expected_code) in [
+            (
+                CoreError::InvalidInput("session not found: session-404".into()),
+                "session_not_found",
+            ),
+            (
+                CoreError::InvalidInput(
+                    "session load failed: session-123: embedded session_id session-actual does not match requested session_id session-123"
+                        .into(),
+                ),
+                "session_load_failed",
+            ),
+            (
+                CoreError::Unsupported("session_version 99 is unsupported".into()),
+                "session_version_unsupported",
+            ),
+            (
+                CoreError::Other(anyhow::anyhow!("session persist failed: disk full")),
+                "session_persist_failed",
+            ),
+        ] {
+            let response = RpcResponse::from_core_error(json!(17), &error);
+            let serialized = serde_json::to_value(&response).unwrap();
+            let details = serialized
+                .get("error_details")
+                .and_then(Value::as_object)
+                .expect("error_details object");
+
+            assert_eq!(details.get("code"), Some(&json!(expected_code)));
+        }
+    }
+
     #[tokio::test]
     async fn handle_request_propose_fix_falls_back_without_transport_error() {
         let fixture = build_graph_fixture();
@@ -803,5 +1215,396 @@ mod tests {
 
         std::env::remove_var("MNEMOSYNE_TEST_MCP_LOCAL_KEY");
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_request_create_ai_session_returns_session_metadata() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(11),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.get("session_id").and_then(Value::as_str).is_some());
+        assert_eq!(result.get("focus_leak_id"), Some(&Value::Null));
+        assert!(result.get("top_leaks").and_then(Value::as_array).is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_request_resume_ai_session_reads_persisted_state() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(12),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+
+        let resumed = handle_request(
+            RpcRequest {
+                id: json!(13),
+                method: "resume_ai_session".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resumed.get("session_id"), Some(&json!(session_id)));
+        assert!(resumed.get("history").and_then(Value::as_array).is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_request_get_ai_session_returns_compact_metadata() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(33),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+
+        let compact = handle_request(
+            RpcRequest {
+                id: json!(34),
+                method: "get_ai_session".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(compact.get("session_id"), Some(&json!(session_id)));
+        assert_eq!(compact.get("history_length"), Some(&json!(0)));
+        assert_eq!(compact.get("focus_leak_id"), Some(&Value::Null));
+        assert!(compact.get("summary").is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_request_resume_ai_session_rejects_invalid_session_id() {
+        let sessions = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(101),
+                method: "resume_ai_session".into(),
+                params: json!({ "session_id": "../escaped" }),
+            },
+            &config,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("invalid session_id"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_close_ai_session_removes_persisted_state() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(14),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+
+        handle_request(
+            RpcRequest {
+                id: json!(15),
+                method: "close_ai_session".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(16),
+                method: "resume_ai_session".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("session"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_chat_session_updates_history_and_focus() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.enabled = true;
+        config.ai.mode = crate::config::AiMode::Rules;
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(21),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned(),
+                    "min_severity": "LOW"
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+        let leak_id = created
+            .get("top_leaks")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_str)
+            .unwrap();
+
+        let ai = handle_request(
+            RpcRequest {
+                id: json!(22),
+                method: "chat_session".into(),
+                params: json!({
+                    "session_id": session_id,
+                    "question": "What should I fix first?",
+                    "focus_leak_id": leak_id
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert!(ai.get("summary").and_then(Value::as_str).is_some());
+
+        let resumed = handle_request(
+            RpcRequest {
+                id: json!(23),
+                method: "resume_ai_session".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resumed.get("focus_leak_id"), Some(&json!(leak_id)));
+        assert_eq!(
+            resumed
+                .get("history")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_request_explain_leak_supports_session_id() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.enabled = true;
+        config.ai.mode = crate::config::AiMode::Rules;
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(24),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+
+        let explained = handle_request(
+            RpcRequest {
+                id: json!(25),
+                method: "explain_leak".into(),
+                params: json!({ "session_id": session_id }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert!(explained.get("summary").and_then(Value::as_str).is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_request_propose_fix_supports_session_id() {
+        let fixture = build_graph_fixture();
+        let mut heap = NamedTempFile::new().unwrap();
+        heap.write_all(&fixture).unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+
+        let mut config = AppConfig::default();
+        config.ai.enabled = false;
+        config.ai.sessions.directory = Some(sessions.path().display().to_string());
+
+        let created = handle_request(
+            RpcRequest {
+                id: json!(26),
+                method: "create_ai_session".into(),
+                params: json!({
+                    "heap_path": heap.path().to_string_lossy().into_owned()
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let session_id = created.get("session_id").and_then(Value::as_str).unwrap();
+
+        let fix = handle_request(
+            RpcRequest {
+                id: json!(27),
+                method: "propose_fix".into(),
+                params: json!({
+                    "session_id": session_id,
+                    "style": "Minimal"
+                }),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert!(fix.get("suggestions").and_then(Value::as_array).is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_request_explain_leak_rejects_conflicting_context_sources() {
+        let err = handle_request(
+            RpcRequest {
+                id: json!(31),
+                method: "explain_leak".into(),
+                params: json!({
+                    "heap_path": "heap.hprof",
+                    "session_id": "session-123"
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("exactly one of heap_path or session_id"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_list_tools_includes_ai_session_methods() {
+        let result = handle_request(
+            RpcRequest {
+                id: json!(32),
+                method: "list_tools".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+
+        for name in [
+            "create_ai_session",
+            "resume_ai_session",
+            "get_ai_session",
+            "close_ai_session",
+            "chat_session",
+        ] {
+            assert!(
+                tools
+                    .iter()
+                    .any(|tool| tool.get("name") == Some(&json!(name))),
+                "missing {name}"
+            );
+        }
     }
 }

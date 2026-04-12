@@ -218,6 +218,67 @@ Docs updated:
 - `README.md`
 - `ARCHITECTURE.md`
 - `STATUS.md`
+
+### 7. MCP AI sessions (Step 14(e) follow-through)
+
+Completed the MCP session-backed conversation/context slice after the CLI-first chat and AI-backed fix-generation work.
+
+What changed:
+- extended `AiConfig` with:
+  - `[ai.sessions].directory`
+- added a new MCP-local persisted session store:
+  - `core/src/mcp/session.rs`
+- added explicit MCP lifecycle methods:
+  - `create_ai_session`
+  - `resume_ai_session`
+  - `get_ai_session`
+  - `close_ai_session`
+  - `chat_session`
+- sessions now persist:
+  - `heap_path`
+  - analysis summary
+  - leak list
+  - top-3 shortlist leak IDs
+  - current focus leak ID
+  - bounded recent `AiChatTurn` history
+- resumed MCP AI follow-up now works across server restarts for:
+  - `chat_session`
+  - `explain_leak` via `session_id`
+  - `propose_fix` via `session_id`
+- preserved existing contracts:
+  - `AiInsights`
+  - `AiWireExchange`
+  - `AiWireFormat::Toon`
+  - `FixRequest`
+  - `FixSuggestion`
+  - `FixResponse`
+  - existing `heap_path`-based `explain_leak` / `propose_fix`
+
+Tests added/updated:
+- `config_loader::tests::parses_ai_session_directory_config`
+- `mcp::session::tests::session_store_round_trips_persisted_session`
+- `mcp::session::tests::append_turn_trims_history_to_three_entries`
+- `mcp::server::tests::handle_request_create_ai_session_returns_session_metadata`
+- `mcp::server::tests::handle_request_resume_ai_session_reads_persisted_state`
+- `mcp::server::tests::handle_request_close_ai_session_removes_persisted_state`
+- `mcp::server::tests::handle_request_chat_session_updates_history_and_focus`
+- `mcp::server::tests::handle_request_explain_leak_supports_session_id`
+- `mcp::server::tests::handle_request_propose_fix_supports_session_id`
+- `mcp::server::tests::handle_request_explain_leak_rejects_conflicting_context_sources`
+- `mcp::server::tests::handle_request_list_tools_includes_ai_session_methods`
+
+Verification:
+- `cargo test -p mnemosyne-cli config_loader::tests::parses_ai_session_directory_config -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::session::tests::session_store_round_trips_persisted_session --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::session::tests::append_turn_trims_history_to_three_entries --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_create_ai_session_returns_session_metadata --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_resume_ai_session_reads_persisted_state --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_close_ai_session_removes_persisted_state --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_chat_session_updates_history_and_focus --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_explain_leak_supports_session_id --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_propose_fix_supports_session_id --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_explain_leak_rejects_conflicting_context_sources --lib -- --exact --nocapture`
+- `cargo test -p mnemosyne-core mcp::server::tests::handle_request_list_tools_includes_ai_session_methods --lib -- --exact --nocapture`
 - `docs/roadmap.md`
 - `OVERNIGHT_SUMMARY.md`
 - `docs/design/milestone-5-ai-mcp-differentiation.md`

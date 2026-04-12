@@ -22,8 +22,8 @@ pub use analysis::{
     ProvenanceKind, ProvenanceMarker,
 };
 pub use config::{
-    AiConfig, AiMode, AiPromptConfig, AiProvider, AiTaskDefinition, AiTaskKind, AnalysisConfig,
-    AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
+    AiConfig, AiMode, AiPromptConfig, AiProvider, AiSessionConfig, AiTaskDefinition, AiTaskKind,
+    AnalysisConfig, AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
 };
 pub use errors::{CoreError, CoreResult};
 pub use fix::{
