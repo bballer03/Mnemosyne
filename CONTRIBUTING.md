@@ -416,9 +416,9 @@ Fixes #(issue)
 ### Review Process
 
 1. **Automated checks** must pass (CI/CD)
-2. **At least one approval** from a maintainer
-3. **All comments addressed** or discussed
-4. **Conflicts resolved** with main branch
+2. **All pull request conversations** must be addressed or resolved
+3. **Conflicts resolved** with main branch
+4. **Protected main workflow:** changes land through pull requests; approval requirements may be tightened when multiple maintainers are active
 
 ---
 
