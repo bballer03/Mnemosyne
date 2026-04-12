@@ -591,7 +591,7 @@ Once configured, you can ask your AI assistant:
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
 | `explain_leak` | Get AI explanation for detected leak |
-| `propose_fix` | Generate code fix suggestions |
+| `propose_fix` | Generate AI-backed fix suggestions with heuristic fallback |
 
 ---
 

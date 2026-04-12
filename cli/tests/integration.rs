@@ -1423,6 +1423,89 @@ fn test_fix_succeeds() {
 }
 
 #[test]
+fn test_fix_with_provider_mode_returns_ai_backed_patch() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  confidence_pct=84\n  description=Evict idle entries before they accumulate.\nsection patch\n  diff=--- a/src/main/java/com/example/CacheLeak.java\\n+++ b/src/main/java/com/example/CacheLeak.java\\n@@ ...\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+        assert!(request.contains("intent=generate_fix"), "{request}");
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let project_root = sandbox.path().join("repo");
+    let source_dir = project_root
+        .join("src")
+        .join("main")
+        .join("java")
+        .join("com")
+        .join("example");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(
+        source_dir.join("CacheLeak.java"),
+        "package com.example;\npublic class CacheLeak {\n  void retain() {}\n}\n",
+    )
+    .unwrap();
+
+    let config_path = sandbox.path().join("provider-fix.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"provider-fix-model\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n"
+        ),
+    )
+    .unwrap();
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args([
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "fix",
+            fixture_path.as_str(),
+            "--project-root",
+            project_root.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Evict idle entries before they accumulate."));
+    assert!(stdout.contains("CacheLeak.java"));
+    assert!(!stdout.contains("[PLACEHOLDER]"));
+
+    server.join().unwrap();
+}
+
+#[test]
 fn test_explain_invalid_leak_id_errors() {
     let real_fixture_path = real_heap_fixture_path();
     let synthetic_fixture;

@@ -579,7 +579,7 @@ Notes:
 
 ## `propose_fix`
 
-Generate heuristic fix suggestions for a leak candidate.
+Generate AI-backed fix suggestions for a leak candidate when provider mode and source context are available; otherwise return heuristic fallback guidance.
 
 ### Request
 
@@ -633,6 +633,10 @@ Generate heuristic fix suggestions for a leak candidate.
       "detail": "Fix suggestions are generated heuristically from leak summaries."
     },
     {
+      "kind": "FALLBACK",
+      "detail": "Provider-backed fix generation was unavailable; returned heuristic guidance instead."
+    },
+    {
       "kind": "PLACEHOLDER",
       "detail": "Static-analysis-backed remediation is not wired yet; this is placeholder guidance."
     }
@@ -640,7 +644,7 @@ Generate heuristic fix suggestions for a leak candidate.
 }
 ```
 
-These suggestions are currently heuristic placeholders, not source-to-source verified edits.
+When `project_root` yields a mapped source file plus a small local snippet and provider mode is active, Mnemosyne can return an AI-backed patch suggestion in the same `FixResponse` shape. When that path is unavailable or fails validation, it falls back to heuristic placeholder guidance with explicit provenance markers.
 
 ## CLI Relationship
 

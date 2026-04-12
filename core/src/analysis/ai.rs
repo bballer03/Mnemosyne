@@ -189,14 +189,10 @@ fn generate_provider_ai_insights(
     leaks: &[LeakInsight],
     config: &AiConfig,
 ) -> CoreResult<AiInsights> {
-    let prompt =
-        redact_provider_prompt(build_provider_toon_prompt(summary, leaks, config)?, config)?;
-    emit_provider_audit_log(&prompt, config);
-    let response = complete_llm(&LlmCompletionRequest {
-        prompt: prompt.clone(),
-        config: config.clone(),
-    })?;
-    parse_provider_toon_response(config, prompt, response.text)
+    let prompt = build_provider_toon_prompt(summary, leaks, config)?;
+    let redacted_prompt = redact_provider_prompt(prompt, config)?;
+    let response = complete_provider_prompt(redacted_prompt.clone(), config)?;
+    parse_provider_toon_response(config, redacted_prompt, response)
 }
 
 fn generate_provider_chat_insights(
@@ -207,16 +203,20 @@ fn generate_provider_chat_insights(
     focus_leak_id: Option<&str>,
     config: &AiConfig,
 ) -> CoreResult<AiInsights> {
-    let prompt = redact_provider_prompt(
-        build_provider_chat_toon_prompt(summary, leaks, question, history, focus_leak_id, config)?,
-        config,
-    )?;
+    let prompt =
+        build_provider_chat_toon_prompt(summary, leaks, question, history, focus_leak_id, config)?;
+    let redacted_prompt = redact_provider_prompt(prompt, config)?;
+    let response = complete_provider_prompt(redacted_prompt.clone(), config)?;
+    parse_provider_toon_response(config, redacted_prompt, response)
+}
+
+pub(crate) fn complete_provider_prompt(prompt: String, config: &AiConfig) -> CoreResult<String> {
     emit_provider_audit_log(&prompt, config);
     let response = complete_llm(&LlmCompletionRequest {
-        prompt: prompt.clone(),
+        prompt,
         config: config.clone(),
     })?;
-    parse_provider_toon_response(config, prompt, response.text)
+    Ok(response.text)
 }
 
 fn emit_provider_audit_log(prompt: &str, config: &AiConfig) {
@@ -244,7 +244,7 @@ fn sha256_hex(input: &str) -> String {
     hex
 }
 
-fn redact_provider_prompt(prompt: String, config: &AiConfig) -> CoreResult<String> {
+pub(crate) fn redact_provider_prompt(prompt: String, config: &AiConfig) -> CoreResult<String> {
     let mut redacted = prompt;
 
     if config.privacy.redact_heap_path {
@@ -1200,9 +1200,9 @@ mod tests {
         config.mode = AiMode::Provider;
         config.provider = crate::config::AiProvider::Local;
         config.endpoint = Some(format!("http://{addr}/v1"));
-        config.api_key_env = Some("MNEMOSYNE_TEST_LOCAL_KEY".into());
+        config.api_key_env = Some("MNEMOSYNE_TEST_AI_LOCAL_KEY".into());
         config.timeout_secs = 2;
-        std::env::set_var("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key");
+        std::env::set_var("MNEMOSYNE_TEST_AI_LOCAL_KEY", "dummy-key");
 
         let insights = generate_ai_insights(&summary, &[], &config).unwrap();
         assert_eq!(insights.model, "test-provider");
@@ -1214,7 +1214,7 @@ mod tests {
         assert!((insights.confidence - 0.81).abs() < f32::EPSILON);
         assert_eq!(insights.wire.response, "TOON v1\nsection response\n  model=test-provider\n  confidence_pct=81\n  summary=Provider-backed summary\nsection recommendations\n  item#0=Do the cleanup\n  item#1=Add instrumentation\n");
 
-        std::env::remove_var("MNEMOSYNE_TEST_LOCAL_KEY");
+        std::env::remove_var("MNEMOSYNE_TEST_AI_LOCAL_KEY");
         server.join().unwrap();
     }
 
