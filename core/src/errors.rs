@@ -28,6 +28,12 @@ pub enum CoreError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("AI provider request failed: {detail}")]
+    AiProviderError { detail: String, status: Option<u16> },
+
+    #[error("AI provider request timed out: {detail}")]
+    AiProviderTimeout { detail: String },
+
     #[error("Operation not yet implemented: {0}")]
     NotImplemented(String),
 

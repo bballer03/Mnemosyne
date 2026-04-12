@@ -81,6 +81,19 @@ pub fn complete(request: &LlmCompletionRequest) -> CoreResult<LlmCompletionRespo
     }
 }
 
+fn map_provider_error(err: reqwest::Error) -> CoreError {
+    if err.is_timeout() {
+        return CoreError::AiProviderTimeout {
+            detail: err.to_string(),
+        };
+    }
+
+    CoreError::AiProviderError {
+        detail: err.to_string(),
+        status: err.status().map(|status| status.as_u16()),
+    }
+}
+
 fn complete_openai_compatible(request: &LlmCompletionRequest) -> CoreResult<LlmCompletionResponse> {
     let endpoint = resolved_endpoint(&request.config)?;
     let api_key = resolved_api_key(&request.config)?;
@@ -88,7 +101,10 @@ fn complete_openai_compatible(request: &LlmCompletionRequest) -> CoreResult<LlmC
     let client = Client::builder()
         .timeout(Duration::from_secs(request.config.timeout_secs))
         .build()
-        .map_err(|err| CoreError::Other(err.into()))?;
+        .map_err(|err| CoreError::AiProviderError {
+            detail: err.to_string(),
+            status: None,
+        })?;
 
     let body = OpenAiChatRequest {
         model: request.config.model.clone(),
@@ -105,13 +121,9 @@ fn complete_openai_compatible(request: &LlmCompletionRequest) -> CoreResult<LlmC
         builder = builder.bearer_auth(key);
     }
 
-    let response = builder.send().map_err(|err| CoreError::Other(err.into()))?;
-    let response = response
-        .error_for_status()
-        .map_err(|err| CoreError::Other(err.into()))?;
-    let payload: OpenAiChatResponse = response
-        .json()
-        .map_err(|err| CoreError::Other(err.into()))?;
+    let response = builder.send().map_err(map_provider_error)?;
+    let response = response.error_for_status().map_err(map_provider_error)?;
+    let payload: OpenAiChatResponse = response.json().map_err(map_provider_error)?;
     let text = payload
         .choices
         .into_iter()
@@ -131,7 +143,10 @@ fn complete_anthropic(request: &LlmCompletionRequest) -> CoreResult<LlmCompletio
     let client = Client::builder()
         .timeout(Duration::from_secs(request.config.timeout_secs))
         .build()
-        .map_err(|err| CoreError::Other(err.into()))?;
+        .map_err(|err| CoreError::AiProviderError {
+            detail: err.to_string(),
+            status: None,
+        })?;
 
     let body = AnthropicMessageRequest {
         model: request.config.model.clone(),
@@ -149,13 +164,9 @@ fn complete_anthropic(request: &LlmCompletionRequest) -> CoreResult<LlmCompletio
         .header("anthropic-version", "2023-06-01")
         .json(&body)
         .send()
-        .map_err(|err| CoreError::Other(err.into()))?;
-    let response = response
-        .error_for_status()
-        .map_err(|err| CoreError::Other(err.into()))?;
-    let payload: AnthropicMessageResponse = response
-        .json()
-        .map_err(|err| CoreError::Other(err.into()))?;
+        .map_err(map_provider_error)?;
+    let response = response.error_for_status().map_err(map_provider_error)?;
+    let payload: AnthropicMessageResponse = response.json().map_err(map_provider_error)?;
     let text = payload
         .content
         .into_iter()

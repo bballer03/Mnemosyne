@@ -63,7 +63,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 
 ### Still in progress
 - **Remaining MAT-parity work**, especially deeper query/explorer coverage beyond the current minimal OQL-style surface.
-- **Prompt/provider hardening for AI** (e.g., broader audit/token-budget controls and richer MCP/session semantics after the CLI-first conversation slice).
+- **Prompt/provider hardening for AI** (e.g., broader audit/token-budget controls, persisted MCP AI sessions, and any remaining streaming follow-through that proves necessary).
 - **Large-dump follow-through**: Step 11 is complete. The current benchmark baseline now includes dense synthetic validation at roughly 500 MB / 1 GB / 2 GB, with default-path RSS around 2.87x-2.90x and investigation-path RSS around 3.89x-3.92x. Additional real-world large-dump validation is still useful, but the Step 11 gate is no longer open.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
@@ -291,7 +291,7 @@ If multiple tasks are needed, they can be defined in a data-driven way (e.g. a Y
 
 Overall, the AI Analysis Engine transforms raw data into expert insights. It's like having a knowledgeable assistant review the heap dump and point out "interesting" things. By scripting these inquiries, Mnemosyne can provide a rich analysis that goes beyond what traditional tools offer, which often require the developer to manually deduce issues from raw statistics.
 
-> **Status (Apr 2026):** The current alpha build supports deterministic `rules`, compatibility `stub`, and provider-backed AI execution while preserving the stable `AiInsights` / `AiWireExchange` contract. A CLI-first `chat` flow now reuses the same AI pipeline for bounded leak-focused follow-up, and `fix` / `propose_fix` now add a first AI-backed one-file / one-snippet patch-generation slice with heuristic fallback. MCP session semantics remain future work.
+> **Status (Apr 2026):** The current alpha build supports deterministic `rules`, compatibility `stub`, and provider-backed AI execution while preserving the stable `AiInsights` / `AiWireExchange` contract. A CLI-first `chat` flow reuses the same AI pipeline for bounded leak-focused follow-up, `fix` / `propose_fix` add an AI-backed one-file / one-snippet patch-generation slice with heuristic fallback, and the MCP server now persists heap-bound AI sessions for resumed chat/explain/fix follow-up.
 
 ### 5. LLM Integration Module (AI Service Connector)
 
@@ -311,7 +311,7 @@ This component abstracts the connection to external AI models or services. We an
 
 In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By isolating this, we make it easy to update the tool as AI technology evolves (e.g., switching to a new API or adding support for an on-prem LLM) without affecting the rest of the system. This design choice follows a flexible approach seen in similar tools like KCPilot, which abstracts LLM communication and anticipates future model integrations.
 
-> **Status (Apr 2026):** `core::llm` now backs real OpenAI-compatible, local, and Anthropic provider execution. Prompt-template overrides, provider-mode redaction, hashed audit logging, and a minimal prompt-budget guard are in place. Local-model follow-through beyond OpenAI-compatible endpoints, plus broader streaming/session semantics, remain open work.
+> **Status (Apr 2026):** `core::llm` now backs real OpenAI-compatible, local, and Anthropic provider execution. Prompt-template overrides, provider-mode redaction, hashed audit logging, a minimal prompt-budget guard, and persisted MCP AI sessions are in place. Local-model follow-through beyond OpenAI-compatible endpoints, plus streaming if the transport proves it necessary, remain open work.
 
 ### 6. Report Generator (Output Formatter)
 
@@ -444,7 +444,7 @@ In summary, Mnemosyne is not an isolated tool – it's built to play well with e
 
 While the current design of Mnemosyne provides a robust foundation for JVM heap analysis, we envision many enhancements and extensions that can be built on top of it. The modular architecture makes it easier to implement these in the future:
 
-**Interactive Analysis Mode**: Mnemosyne now ships a bounded CLI-first leak chat REPL. Future work is broader interactive exploration: richer slash commands, MCP/session-backed conversation, and drill-down flows beyond the current leak-focused shortlist.
+**Interactive Analysis Mode**: Mnemosyne now ships a bounded CLI-first leak chat REPL plus persisted MCP AI sessions for resumed leak-focused conversation, explanation, and fix follow-up. Future work is broader interactive exploration: richer slash commands, wider heap-workspace sessions, and drill-down flows beyond the current leak-focused shortlist.
 
 **Differential Heap Analysis**: Extend Mnemosyne to compare two heap dumps (e.g., before and after a certain operation, or between versions of an app). This could help identify memory growth by class between releases, etc. The tool could produce a report highlighting what increased or decreased, with the AI summarizing the differences (e.g., "You have 20% more UserSession objects in the later dump, possibly indicating a leak in session management.").
 

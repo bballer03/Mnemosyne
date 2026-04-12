@@ -41,6 +41,7 @@ pub struct AiConfig {
     pub tasks: Vec<AiTaskDefinition>,
     pub privacy: AiPrivacyConfig,
     pub prompts: AiPromptConfig,
+    pub sessions: AiSessionConfig,
     pub endpoint: Option<String>,
     pub api_key_env: Option<String>,
     pub max_tokens: Option<u32>,
@@ -60,6 +61,12 @@ pub struct AiPrivacyConfig {
 #[serde(default)]
 pub struct AiPromptConfig {
     pub template_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AiSessionConfig {
+    pub directory: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -150,6 +157,7 @@ impl Default for AiConfig {
             ],
             privacy: AiPrivacyConfig::default(),
             prompts: AiPromptConfig::default(),
+            sessions: AiSessionConfig::default(),
             endpoint: None,
             api_key_env: None,
             max_tokens: None,
