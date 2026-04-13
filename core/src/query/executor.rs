@@ -5,7 +5,7 @@ use super::types::{
 use crate::{
     errors::CoreResult,
     graph::DominatorTree,
-    hprof::{ObjectGraph, ObjectId},
+    hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
 };
 
 pub fn execute_query(
@@ -17,7 +17,12 @@ pub fn execute_query(
     let mut matched_ids = Vec::new();
 
     for (&object_id, object) in &graph.objects {
-        if !matches_class_pattern(graph, object.class_id, &query.from.class_pattern) {
+        if !matches_class_pattern(
+            graph,
+            object.class_id,
+            &query.from.class_pattern,
+            query.from.instanceof,
+        ) {
             continue;
         }
         if !matches_filter(query, graph, dominator, object_id) {
@@ -64,7 +69,31 @@ fn field_label(field: &FieldRef) -> String {
     }
 }
 
-fn matches_class_pattern(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern) -> bool {
+fn matches_class_pattern(
+    graph: &ObjectGraph,
+    class_id: u64,
+    pattern: &ClassPattern,
+    include_superclasses: bool,
+) -> bool {
+    let mut current = Some(class_id);
+    while let Some(candidate) = current {
+        if class_name_matches(graph, candidate, pattern) {
+            return true;
+        }
+
+        if !include_superclasses {
+            break;
+        }
+
+        current = graph.classes.get(&candidate).and_then(|class_info| {
+            (class_info.super_class_id != 0).then_some(class_info.super_class_id)
+        });
+    }
+
+    false
+}
+
+fn class_name_matches(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern) -> bool {
     let Some(class_name) = graph
         .class_name(class_id)
         .map(|name| name.replace('/', "."))
@@ -113,6 +142,10 @@ fn evaluate_condition(
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
 ) -> bool {
+    if condition.op == ComparisonOp::InstanceOf {
+        return matches_instanceof_condition(&condition.field, &condition.value, graph, object_id);
+    }
+
     let left = resolve_field_value(&condition.field, graph, dominator, object_id);
     compare_values(left, condition.op, &condition.value)
 }
@@ -153,7 +186,76 @@ fn resolve_field_value(
                 .unwrap_or("<unknown>")
                 .replace('/', "."),
         ),
-        FieldRef::InstanceField(_) => CellValue::Null,
+        FieldRef::InstanceField(name) => resolve_instance_field_value(object, name, graph),
+    }
+}
+
+fn resolve_instance_field_value(
+    object: &crate::hprof::HeapObject,
+    field_name: &str,
+    graph: &ObjectGraph,
+) -> CellValue {
+    let Some(value) = read_field(object, &graph.classes, field_name, graph.identifier_size) else {
+        return CellValue::Null;
+    };
+
+    match value {
+        FieldValue::Boolean(value) => CellValue::Bool(value),
+        FieldValue::Byte(value) => CellValue::Int(i64::from(value)),
+        FieldValue::Short(value) => CellValue::Int(i64::from(value)),
+        FieldValue::Int(value) => CellValue::Int(i64::from(value)),
+        FieldValue::Long(value) => CellValue::Int(value),
+        FieldValue::Char(value) => std::char::from_u32(u32::from(value))
+            .map(|ch| CellValue::Str(ch.to_string()))
+            .unwrap_or(CellValue::Null),
+        FieldValue::Float(value) => CellValue::Str(value.to_string()),
+        FieldValue::Double(value) => CellValue::Str(value.to_string()),
+        FieldValue::ObjectRef(Some(reference)) => CellValue::Id(reference),
+        FieldValue::ObjectRef(None) => CellValue::Null,
+    }
+}
+
+fn matches_instanceof_condition(
+    field: &FieldRef,
+    value: &Value,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> bool {
+    let Value::Str(expected_class) = value else {
+        return false;
+    };
+
+    let Some(target_id) = resolve_reference_target(field, graph, object_id) else {
+        return false;
+    };
+
+    let Some(target_object) = graph.get_object(target_id) else {
+        return false;
+    };
+
+    let pattern = if expected_class.contains('*') {
+        ClassPattern::Glob(expected_class.clone())
+    } else {
+        ClassPattern::Exact(expected_class.clone())
+    };
+
+    matches_class_pattern(graph, target_object.class_id, &pattern, true)
+}
+
+fn resolve_reference_target(
+    field: &FieldRef,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> Option<ObjectId> {
+    let object = graph.get_object(object_id)?;
+    match field {
+        FieldRef::BuiltIn(_) => None,
+        FieldRef::InstanceField(name) => {
+            match read_field(object, &graph.classes, name, graph.identifier_size)? {
+                FieldValue::ObjectRef(Some(reference)) => Some(reference),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -172,6 +274,11 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
             ComparisonOp::Eq => left == *right,
             ComparisonOp::Ne => left != *right,
             ComparisonOp::Like => glob_match(&right.replace('%', "*"), &left),
+            _ => false,
+        },
+        (CellValue::Bool(left), Value::Bool(right)) => match op {
+            ComparisonOp::Eq => left == *right,
+            ComparisonOp::Ne => left != *right,
             _ => false,
         },
         (CellValue::Null, Value::Null) => matches!(op, ComparisonOp::Eq),

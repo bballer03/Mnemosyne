@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** April 12, 2026
+> **Last Updated:** April 13, 2026
 > **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -63,7 +63,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 
 ### Still in progress
 - **Remaining MAT-parity work**, especially deeper query/explorer coverage beyond the current minimal OQL-style surface.
-- **Prompt/provider hardening for AI** (e.g., broader audit/token-budget controls, persisted MCP AI sessions, and any remaining streaming follow-through that proves necessary).
+- **Post-M5 AI follow-through** (e.g., broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and any streaming follow-through only if later validation proves it necessary).
 - **Large-dump follow-through**: Step 11 is complete. The current benchmark baseline now includes dense synthetic validation at roughly 500 MB / 1 GB / 2 GB, with default-path RSS around 2.87x-2.90x and investigation-path RSS around 3.89x-3.92x. Additional real-world large-dump validation is still useful, but the Step 11 gate is no longer open.
 - **Formal MCP/task automation around the future analysis pipeline.**
 
@@ -127,9 +127,13 @@ Mnemosyne's architecture is organized into clear layers, separating the concerns
 │  │    CLI  (clap-based)   │       │ MCP Server (stdio JSON lines)  │  │
 │  │ parse · leaks · analyze│       │ list_tools · parse_heap        │  │
 │  │ diff · map · fix       │       │ detect_leaks · analyze_heap    │  │
-│  │ gc-path · serve        │       │ query_heap · map_to_code       │  │
-│  │ --format text|md|html  │       │ find_gc_path · explain_leak    │  │
-│  │   |toon|json           │       │ propose_fix                    │  │
+│  │ query · gc-path · serve│       │ query_heap · map_to_code       │  │
+│  │ chat · explain · config│       │ find_gc_path · explain_leak    │  │
+│  │ --format text|md|html  │       │ create_ai_session ·            │  │
+│  │   |toon|json           │       │ resume_ai_session ·            │  │
+│  │                        │       │ get_ai_session ·               │  │
+│  │                        │       │ close_ai_session ·             │  │
+│  │                        │       │ chat_session · propose_fix     │  │
 │  └───────────┬────────────┘       └──────────────┬──────────────────┘  │
 │              │                                   │                      │
 └──────────────┼───────────────────────────────────┼──────────────────────┘
@@ -159,10 +163,11 @@ Mnemosyne's architecture is organized into clear layers, separating the concerns
 │  │   summary)   │ │   Tarjan     │ │   heap anal.)│ │              │  │
 │  │              │ │   retained)  │ │              │ ├──────────────┤  │
 │  │ binary_      │ │              │ │ ai.rs        │ │  fix/        │  │
-│  │  parser.rs   │ │ gc_path.rs   │ │  (LLM stub)  │ │  generator   │  │
-│  │  (object     │ │  (BFS +      │ │              │ │  .rs         │  │
-│  │   graph)     │ │   fallback)  │ │              │ │  (template   │  │
-│  │              │ │              │ │              │ │   patches)   │  │
+│  │  parser.rs   │ │ gc_path.rs   │ │  (rules/stub │ │  generator   │  │
+│  │  (object     │ │  (BFS +      │ │   /provider  │ │  .rs         │  │
+│  │   graph)     │ │   fallback)  │ │   AI)        │ │  (template + │  │
+│  │              │ │              │ │              │ │   provider-  │  │
+│  │              │ │              │ │              │ │   backed fix)│  │
 │  │ object_      │ │ metrics.rs   │ └──────────────┘ │              │  │
 │  │  graph.rs    │ │  (graph      │                   ├──────────────┤  │
 │  │  (model)     │ │   summaries) │                   │  report/     │  │
@@ -213,11 +218,11 @@ Mnemosyne is divided into modular components, each with a focused responsibility
 
 ### 1. Command-Line Interface (CLI)
 
-The CLI is the user-facing component: it parses command-line arguments and provides commands such as `mnemosyne analyze <heapdump>` or `mnemosyne report <options>`. Responsibilities include:
+The CLI is the user-facing component: it parses command-line arguments and provides commands such as `mnemosyne analyze <heapdump>`, `mnemosyne diff <before> <after>`, or `mnemosyne config`. Responsibilities include:
 
 **Argument Parsing & Config**: Reading options (e.g. output format selection, AI model settings, filters) – likely using a crate like clap for ergonomic CLI design.
 
-**User Commands**: Handling subcommands for different actions. For example, `analyze` to perform a full analysis on a heap dump, or `summary` to quickly list top memory consumers.
+**User Commands**: Handling shipped subcommands for different actions: `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config`.
 
 **Triggering Workflow**: After parsing inputs, the CLI invokes the MCP to perform the requested operation. It essentially hands off control along with user-provided parameters (file path, config flags).
 
@@ -249,7 +254,7 @@ In essence, MCP is the central controller ensuring that Mnemosyne's components w
 
 The Heap Dump Parser is the component responsible for reading the JVM heap dump file (typically in `.hprof` format) and extracting meaningful data. Implemented in Rust, it emphasizes performance and low memory usage:
 
-**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). Using a combination of low-level IO and parsing libraries (e.g. the jvm-hprof crate or a custom parser built with nom for binary parsing), it sequentially reads records from the dump. This approach allows analyzing dumps larger than the available RAM by only retaining needed information at any time.
+**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). `core::hprof::parser` uses sequential buffered reads for summary-level record stats, while `core::hprof::binary_parser` performs the deeper binary HPROF pass that builds the in-memory `ObjectGraph` used by graph-backed analysis.
 
 **Data Extraction**: As it parses, it gathers key metrics and structures:
 - **Class Histogram**: A list of classes with their instance counts and total memory usage (so we know top memory consumers).
@@ -293,25 +298,27 @@ Overall, the AI Analysis Engine transforms raw data into expert insights. It's l
 
 > **Status (Apr 2026):** The current alpha build supports deterministic `rules`, compatibility `stub`, and provider-backed AI execution while preserving the stable `AiInsights` / `AiWireExchange` contract. A CLI-first `chat` flow reuses the same AI pipeline for bounded leak-focused follow-up, `fix` / `propose_fix` add an AI-backed one-file / one-snippet patch-generation slice with heuristic fallback, and the MCP server now persists heap-bound AI sessions for resumed chat/explain/fix follow-up.
 
+> **Closeout note (Apr 2026):** This completes the approved M5 milestone scope. Remaining AI follow-on work is narrower: broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible local endpoints, and streaming only if later validation shows the current request/response transport is insufficient.
+
 ### 5. LLM Integration Module (AI Service Connector)
 
-This component abstracts the connection to external AI models or services. We anticipate most users will use OpenAI's GPT-4 or similar models initially, but the design allows flexibility:
+This component handles the shipped connection to external AI models or services through a small request/response completion layer:
 
-**API Abstraction**: The LLM module provides a clean API (within Mnemosyne's code) for the Analysis Engine to call. The engine doesn't need to know the details of HTTP calls or authentication – it simply provides a prompt and receives a response. The LLM module handles constructing API requests (e.g. to OpenAI's REST API) with the right parameters (model name, API key, etc.).
+**Completion API**: `core::llm` exposes `LlmCompletionRequest`, `LlmCompletionResponse`, and `complete()`. The AI analysis layer builds a prompt, calls `complete()`, and receives one full response body back.
 
-**Configurable Models**: Through configuration, users can specify which model or provider to use. For example, settings could allow choosing between GPT-4, GPT-3.5, or even a self-hosted local model. The module could support multiple backends: OpenAI, an open-source model via an API (like a local server running LLaMA 2), or others. Currently, OpenAI's API is the default backend, but the module is built to be extensible.
+**Configurable Providers**: Through configuration, users can specify provider mode and model settings. Runtime support today is `openai`, `anthropic`, and `local`, where `local` means an OpenAI-compatible endpoint supplied via `ai.endpoint`. The default path is still offline-safe: AI is disabled by default and `AiMode::Rules` is the default mode when AI is enabled.
 
-**Rate Limiting & API Usage**: The module may include logic for handling rate limits or batching requests if multiple prompts are sent. It ensures the tool remains within usage policies of the AI API (like not sending too many tokens or requests too fast).
+**Provider Dispatch**: `complete()` dispatches to an OpenAI-compatible chat-completions request for both `openai` and `local`, and to Anthropic's messages API for `anthropic`.
 
-**Offline Mode**: In sensitive environments where sending data to an external API is not allowed, the LLM module can be configured to use a local model or disabled entirely. This toggling is centralized here. In a future iteration, hooking up to a small local model (with obviously more limited capabilities) could allow offline analysis, albeit with less sophisticated results.
+**Transport Model**: The current implementation is a blocking request/response transport. It does not expose a trait-based streaming abstraction in `core::llm`; streaming remains future follow-on only if later validation shows the shipped transport is insufficient.
 
 **Security & Privacy**: Because heap dumps can contain sensitive information (like user data in memory), the integration module will document what data it might send to the AI. By default, Mnemosyne might redact or truncate extremely sensitive content before calling the API. The design also encourages the AI prompts to focus on statistical summaries and not raw data dumps, minimizing exposure of any one piece of sensitive data.
 
-**Fallbacks**: If the AI service is unreachable or errors out, the LLM module communicates that back to the Analysis Engine gracefully (perhaps with error types). This ensures that network issues or API outages won't crash the entire tool – it will simply skip the AI portion if needed, and the rest of the pipeline can still run (the user will be warned that AI analysis was skipped).
+**Fallbacks**: Provider failures surface through the shared `CoreError` path so higher layers can report timeouts and provider errors without changing the stable `AiInsights` / `AiWireExchange` contracts.
 
 In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By isolating this, we make it easy to update the tool as AI technology evolves (e.g., switching to a new API or adding support for an on-prem LLM) without affecting the rest of the system. This design choice follows a flexible approach seen in similar tools like KCPilot, which abstracts LLM communication and anticipates future model integrations.
 
-> **Status (Apr 2026):** `core::llm` now backs real OpenAI-compatible, local, and Anthropic provider execution. Prompt-template overrides, provider-mode redaction, hashed audit logging, a minimal prompt-budget guard, and persisted MCP AI sessions are in place. Local-model follow-through beyond OpenAI-compatible endpoints, plus streaming if the transport proves it necessary, remain open work.
+> **Status (Apr 2026):** `core::llm` now backs real OpenAI-compatible cloud execution, OpenAI-compatible local endpoints, and Anthropic provider execution through the shipped blocking completion path. Prompt-template overrides, provider-mode redaction, hashed audit logging, a minimal prompt-budget guard, and persisted MCP AI sessions are in place. Native non-OpenAI-compatible local transports, plus streaming if the transport proves it necessary, remain open work.
 
 ### 6. Report Generator (Output Formatter)
 
@@ -422,7 +429,7 @@ Throughout this flow, each component logs progress and important events. For ins
 
 Mnemosyne is designed to fit into various development and analysis workflows. Here are key integration points and usage scenarios:
 
-**Development CI/CD**: As part of continuous integration, Mnemosyne can be run after automated tests (especially long-running or stress tests) to check for memory regressions. By using the JSON output, a CI pipeline can flag a build if, for example, the number of certain objects grows abnormally compared to a baseline. The tool can be scripted to compare current run's results with a known good state (future extension: a `mnemosyne diff` command could assist in comparing two heap dumps, e.g., before vs after a test).
+**Development CI/CD**: As part of continuous integration, Mnemosyne can be run after automated tests (especially long-running or stress tests) to check for memory regressions. By using the JSON output, a CI pipeline can flag a build if, for example, the number of certain objects grows abnormally compared to a baseline. The shipped `mnemosyne diff` command already compares two heap dumps and can report both the fast record/class summary and class-level graph-backed deltas when both snapshots build object graphs.
 
 **Automated Leak Detection**: In staging or production environments, Mnemosyne could be scheduled (via a cron or Kubernetes CronJob) to periodically take a heap dump of a running service (using jmap or other JVM tooling) and analyze it. If any leak suspects or critical issues are found, it can automatically send an alert or email with the Markdown report. This essentially provides an automated "memory health check" for live systems.
 
@@ -430,7 +437,7 @@ Mnemosyne is designed to fit into various development and analysis workflows. He
 
 **Standalone Library Usage**: The core parsing and analysis logic can be exposed as a Rust library (crate). This means other programs or tools can use Mnemosyne's functionality programmatically. For instance, a larger monitoring agent written in Rust might incorporate Mnemosyne's library to do on-the-fly heap analysis without going through CLI. Similarly, a Python script could call Mnemosyne via FFI or by invoking the CLI and parsing JSON.
 
-**OpenAI/LLM Configurability**: Integration with the AI is flexible. Users provide an API key (via environment variable or config file) for the default OpenAI integration. The model and parameters can be tuned in a config (e.g., choosing a faster, cheaper model vs. a more powerful one). There is also potential to integrate with alternative AI endpoints – for example, an enterprise may route requests to an internal AI service. The LLM Integration module is built to allow these configurations without changing the analysis code.
+**AI Configurability**: Integration with AI is flexible, but conservative by default. `rules` mode is the default offline-safe path, `provider` mode is opt-in, and provider mode supports OpenAI-compatible cloud endpoints, OpenAI-compatible local endpoints via `ai.endpoint`, and Anthropic. Model, temperature, timeout, privacy, and prompt-template overrides can all be tuned through config.
 
 **Logging/Telemetry**: If using Mnemosyne in larger systems, its logging can integrate with system logging (e.g., outputting JSON logs or using a standard logging facade). This means an ops team could aggregate Mnemosyne's run logs to see trends over time (like how memory usage is changing across multiple analyses).
 
@@ -446,7 +453,7 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Interactive Analysis Mode**: Mnemosyne now ships a bounded CLI-first leak chat REPL plus persisted MCP AI sessions for resumed leak-focused conversation, explanation, and fix follow-up. Future work is broader interactive exploration: richer slash commands, wider heap-workspace sessions, and drill-down flows beyond the current leak-focused shortlist.
 
-**Differential Heap Analysis**: Extend Mnemosyne to compare two heap dumps (e.g., before and after a certain operation, or between versions of an app). This could help identify memory growth by class between releases, etc. The tool could produce a report highlighting what increased or decreased, with the AI summarizing the differences (e.g., "You have 20% more UserSession objects in the later dump, possibly indicating a leak in session management.").
+**Differential Heap Analysis**: Mnemosyne already ships `diff` for fast record/class comparison and, when both snapshots build object graphs, class-level instance/shallow/retained deltas. The future extension here is deeper diffing: object-identity tracking, reference-chain change summaries, richer AI commentary over the shipped diff surface, and more interactive report/UI drill-down.
 
 **Support for Additional Formats**: Currently focused on the standard JVM HPROF format, Mnemosyne could be extended to support other heap or memory snapshot formats. For example, Android .hprof files (which are similar but not identical), or IBM/OpenJ9 heap dumps, etc. The parser component can be augmented or new parser modules added for these formats.
 

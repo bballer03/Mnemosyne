@@ -1,45 +1,44 @@
 # Milestone 3 — Core Heap Analysis Parity
 
-> **Status:** ⚬ READY FOR IMPLEMENTATION — M1.5 prerequisite complete  
+> **Status:** ✅ Complete for the approved scope — future evidence-driven follow-on remains  
 > **Design Owner:** Design Consulting Agent  
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-04-13
 
 ---
 
 ## Objective
 
-Close the feature gap with Eclipse MAT on core analysis capabilities, making Mnemosyne a credible alternative for developers who currently rely on MAT for heap investigation. Additionally, adopt performance and scalability patterns from hprof-slurp to handle multi-GB production dumps efficiently.
+Document the M3 milestone that made Mnemosyne a credible CLI-first alternative to Eclipse MAT for core heap investigation, and identify the narrower future follow-on work beyond the shipped approved scope.
 
 ## Context
 
-Eclipse MAT is the de-facto standard for JVM heap analysis. Users choose heap analysis tools based on what questions they can answer. Mnemosyne's M1 pipeline (object graph, dominator tree, retained sizes) provides the foundation, but significant feature gaps remain: no MAT-style suspect ranking, no histogram grouping, no OQL, no thread inspection, no ClassLoader analysis, no collection inspection, no unreachable object reporting, and only record-level diffing.
+Eclipse MAT remains the de-facto standard for JVM heap analysis. M3 was the milestone that closed Mnemosyne's approved core parity gap: graph-backed suspect ranking, grouped histograms, unreachable-object reporting, class-level diffing, thread inspection, string analysis, collection inspection, top-instance reporting, classloader reporting, the shipped OQL/query slice, and analyze profiles are now shipped in the live codebase.
 
-hprof-slurp demonstrates that a Rust HPROF parser can achieve ~2GB/s throughput with ~500MB memory — by trading analysis depth for speed. M3 should deliver both: a streaming "overview" mode for fast triage and deep graph-backed analysis for MAT-class investigation.
+hprof-slurp still provides useful scale and throughput reference points, but M3 is no longer waiting on a broad "overview mode vs deep mode" decision. Step 11 is complete, the current in-memory architecture cleared the active roadmap gate, and streaming/threaded-I/O/`nom` work is now an evidence-driven future scale path rather than a prerequisite for claiming M3 delivery.
 
-**Critical dependency:** M1.5 (tag-constant fix + real-world validation) is ✅ COMPLETE. The graph-backed pipeline is validated on real-world HPROF files. M3 implementation may begin.
+**Current milestone truth:** the approved M3 scope is complete. The final closeout batch landed the optional `hyperfine` / `heaptrack` wrappers with graceful skip behavior plus a deeper query slice with retained instance-field projection/filtering on the CLI/MCP query paths and hierarchy-aware `INSTANCEOF`. Remaining work is future follow-on only: richer OQL/query depth beyond the shipped slice, larger-tier validation only where still useful, and evidence-driven scale levers.
 
 ## Scope
 
-### Analysis Features
-1. **MAT-style leak suspects** — objects where retained_size >> shallow_size; accumulation-point detection; reference chain context
-2. **Histogram improvements** — group by fully-qualified class, package prefix, ClassLoader
-3. **OQL-like query engine** — simple query language for ad-hoc object inspection
-4. **Thread inspection** — parse STACK_TRACE + STACK_FRAME + ROOT_THREAD_OBJECT; link threads to retained objects
-5. **ClassLoader analysis** — parse classloader hierarchy from CLASS_DUMP; per-loader stats; classloader leak detection
-6. **Collection inspection** — detect known collection types (HashMap, ArrayList, etc.); fill ratio; size anomalies
-7. **Unreachable objects** — report objects not reachable from any GC root; sizes and classes
-8. **Enhanced heap diff** — object/class-level comparison (not just record-level)
+### Shipped in the approved M3 scope
+1. **MAT-style leak suspects** — retained/shallow ratio, accumulation-point detection, dominated-count context, and short reference-chain context
+2. **Histogram improvements** — grouping by class, package, and classloader
+3. **Thread inspection** — stack-trace parsing plus retained-memory context
+4. **ClassLoader analysis** — report-oriented classloader summaries in `analyze_heap()` and shared renderers
+5. **Collection inspection** — waste/fill-ratio inspection for the highest-value collection types
+6. **Unreachable objects** — GC-root reachability summaries
+7. **Enhanced heap diff** — class-level graph-backed comparison layered onto the existing diff surface
+8. **Top-N largest instances** — graph-backed retained-size ranking
+9. **String analysis** — duplicate detection, dedup-waste estimation, and top strings by size
+10. **Configurable analysis profiles** — `overview`, `incident-response`, and `ci-regression`
+11. **Initial OQL/query surface** — the shipped built-in-field query/parser/executor slice
+12. **Benchmark baseline and scaling validation** — Criterion plus completed Step 11 dense synthetic validation through roughly the 2 GB tier
+13. **Final closeout batch** — optional `hyperfine` / `heaptrack` wrappers with graceful skip behavior plus deeper retained-field query/filter support and hierarchy-aware `INSTANCEOF`
 
-### Performance & Scalability
-9. **Streaming "overview" mode** — bounded-memory class/instance stats without full graph (inspired by hprof-slurp)
-10. **Benchmark infrastructure** — `criterion` micro-benchmarks, `hyperfine` CLI timing, `heaptrack` memory profiling
-11. **Thread stack trace extraction** — parse STACK_TRACE + STACK_FRAME records (inspired by hprof-slurp)
-12. **Memory-bounded object store evaluation** — measure RSS at various dump sizes; evaluate alternatives if >4× ratio
-
-### Supporting Features
-13. **Top-N largest instances** — per-class largest single instance size
-14. **String analysis** — list strings, detect duplicates, quantify dedup savings
-15. **Configurable analysis profiles** — `--mode overview|deep`, `--profile ci-regression|incident-response`
+### Future evidence-driven follow-on
+1. **Richer OQL/query depth** — broader predicates, deeper field access, and explorer ergonomics beyond the shipped slice
+2. **Additional larger-tier validation only where justified** — especially if future real-world large dumps reveal new scaling pressure
+3. **Streaming overview mode / threaded I/O / `nom` evaluation only if evidence supports them** — these are scale levers, not milestone gates
 
 ## Non-scope
 
@@ -49,6 +48,10 @@ hprof-slurp demonstrates that a Rust HPROF parser can achieve ~2GB/s throughput 
 - Real-world HPROF tag fix (M1.5 — prerequisite)
 - Cross-platform distribution changes
 - MCP server protocol changes (beyond new tool handlers for new features)
+
+## Historical Note
+
+The sections below preserve the original implementation design and phased breakdown that drove M3 delivery. Read them as historical planning context for shipped work, not as a current pending implementation checklist. Where the doc discusses overview mode, parser prerequisites, or future-tense module additions, the live codebase is the runtime truth: most deep graph-backed parity work is already shipped, and the true remaining work is the narrower follow-through listed above.
 
 ## Architecture Overview
 
@@ -77,7 +80,9 @@ hprof-slurp demonstrates that a Rust HPROF parser can achieve ~2GB/s throughput 
                               └────────────────────┘
 ```
 
-### New Module Structure
+### Historical Module Structure (Shipped Foundation + Superseded Proposals)
+
+The outline below captures the intended M3 shape at design time. Parts of it shipped, but some command/module proposals were superseded by the current implementation. Treat this section as historical context, not the current runtime contract.
 
 ```
 core/src/
@@ -129,21 +134,29 @@ core/src/
 
 ## API/CLI/Reporting Impact
 
-### New CLI Commands
-- `mnemosyne query "SELECT class, retained_size FROM objects WHERE ..."` — OQL queries
-- `mnemosyne threads` — thread inspection with stack traces
-- `mnemosyne dominators` — standalone dominator tree view
-- `mnemosyne histogram --group-by package|classloader` — grouped histograms
+### CLI / MCP / Reporting Impact (Historical Design vs Shipped Surface)
+
+Shipped M3 surface:
+- `mnemosyne query <heap.hprof> "..."` provides the initial built-in-field query surface
+- `mnemosyne analyze --threads --strings --collections --classloaders --top-instances` exposes the shipped investigation features
+- `mnemosyne analyze --group-by class|package|classloader` exposes grouped histograms
+- MCP ships `query_heap` and the existing `analyze_heap` flags rather than dedicated `inspect_thread` / `get_histogram` handlers
+
+Historical proposals below did not all ship as-is and should not be treated as current commands:
+- `mnemosyne threads`
+- `mnemosyne dominators`
+- `mnemosyne histogram ...`
+- `--mode overview|deep|auto`
+- dedicated `inspect_thread` and `get_histogram` MCP handlers
 
 ### New CLI Flags
-- `--mode overview|deep|auto` — analysis depth selection
-- `--profile ci-regression|incident-response` — preconfigured analysis profiles
-- `--top-n <N>` — control top-N display count
+- Shipped: `--profile ci-regression|incident-response|overview`
+- Shipped: `--top-n <N>`
+- Remaining evidence-driven follow-on only: `--mode overview|deep|auto`
 
 ### New MCP Handlers
-- `query_heap` — OQL queries via MCP
-- `inspect_thread` — thread inspection via MCP
-- `get_histogram` — grouped histogram via MCP
+- Shipped: `query_heap`
+- Not part of the shipped surface: dedicated `inspect_thread` / `get_histogram` handlers
 
 ### Report Changes
 - Leak suspects section with MAT-style ranking (retained/shallow ratio, accumulation points)
@@ -165,7 +178,7 @@ core/src/
 ### Updated Types
 - `AnalyzeResponse` — add thread_info, collection_stats, unreachable_set, suspect_ranking fields
 - `HeapSummary` — add histogram_groups, string_stats fields
-- `HeapDiff` — add object-level diff fields (new_objects, freed_objects, retained_delta_by_class)
+- `HeapDiff` — historical proposal included deeper diff expansion; shipped M3 work added class-level retained/shallow/instance deltas rather than object-level lifecycle fields
 
 ## Validation/Testing Strategy
 
@@ -194,11 +207,11 @@ core/src/
 
 ## Rollout/Implementation Phases
 
-### Phase 1 — Foundation (post-M1.5)
-0. **HPROF tag centralization** — extract duplicated tag constants from `binary_parser.rs`, `test_fixtures.rs`, `gc_path.rs`, and inline hex in `parser.rs` into a single `core/src/hprof/tags.rs` module. This is a pre-requisite cleanup that eliminates a class of future drift bugs before Phase 2+ feature work adds more tag consumers.
-1. Histogram improvements — group by class, package, classloader
-2. Benchmark infrastructure setup (criterion + hyperfine)
-3. Memory measurement at different dump sizes
+### Historical delivered phases
+1. **Phase 1 — Foundation:** tag centralization, Criterion benchmark setup, and memory measurement groundwork shipped
+2. **Phase 1 Batch 2:** histogram grouping, MAT-style suspects, unreachable objects, and class-level diff shipped
+3. **Phase 2 / 3 / 5 outcome:** thread inspection, classloader analysis, collection inspection, string analysis, top instances, and analysis profiles shipped
+4. **Phase 4 first slice outcome:** the initial OQL/query engine shipped as a built-in-field surface rather than full MAT-equivalent OQL
 
 #### Phase 1 Batch 1 (M3-P1-B1): Benchmark Infrastructure + RSS Measurement + Tag Centralization
 
@@ -259,26 +272,9 @@ core/src/
 - All existing 101 tests continue to pass
 - New unit tests for each feature
 
-### Phase 2 — Core Analysis
-4. MAT-style leak suspects algorithm (✅ moved to M3-P1-B2)
-5. Unreachable objects analysis (✅ moved to M3-P1-B2)
-6. Enhanced heap diff (object/class level) (✅ moved to M3-P1-B2)
-
-### Phase 3 — New Capabilities
-7. Thread inspection (STACK_TRACE + STACK_FRAME parsing)
-8. ClassLoader analysis
-9. Collection inspection
-10. String analysis (duplicates, dedup savings)
-
-### Phase 4 — Advanced Features
-11. OQL query engine (parser + evaluator)
-12. Streaming "overview" mode (bounded memory)
-13. Top-N largest instances
-
-### Phase 5 — Polish
-14. Analysis profiles (--profile flag)
-15. Dual-mode auto-selection (auto: overview if >1GB)
-16. Performance optimization based on benchmark data
+### Future follow-on after shipped M3 work
+1. **OQL/query follow-through** — deepen the shipped query slice beyond retained instance-field projection/filtering and hierarchy-aware `INSTANCEOF`
+2. **Scale levers only if needed** — revisit overview mode, dual-mode auto-selection, performance tuning, threaded I/O, or parser strategy only if future evidence shows the current architecture is insufficient
 
 ## Risks and Open Questions
 
@@ -298,5 +294,5 @@ core/src/
 4. Should collection inspection require Java stdlib version metadata? (Risk: version-specific field names)
 
 ### Dependencies
-- **Blocked by:** Nothing — M1.5 (real-world hardening) is complete
-- **Blocks:** M4 (UI needs analysis features to display), M5 (AI needs real analysis data), M6 (benchmarks needed for comparisons)
+- **Blocked by:** Nothing — this is now a shipped-plus-follow-through milestone record
+- **Supports:** M4 UI work, remaining benchmark publication, and later M6 examples/benchmark comparisons

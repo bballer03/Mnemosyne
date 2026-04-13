@@ -394,7 +394,7 @@ Notes:
 
 ## `query_heap`
 
-Execute the OQL-style heap query engine over the parsed object graph.
+Execute the OQL-style heap query engine over the parsed object graph, including built-in fields plus retained instance-field projection and filtering on the query path.
 
 ### Request
 

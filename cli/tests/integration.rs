@@ -6,7 +6,9 @@ use std::{
 };
 
 use assert_cmd::Command;
-use mnemosyne_core::hprof::test_fixtures::{build_graph_fixture, build_simple_fixture};
+use mnemosyne_core::hprof::test_fixtures::{
+    build_graph_fixture, build_simple_fixture, build_thread_stack_fixture,
+};
 use mnemosyne_core::{
     analysis::{AiChatTurn, LeakInsight, LeakKind, LeakSeverity},
     fix::FixStyle,
@@ -1183,6 +1185,46 @@ fn test_analyze_with_threads_flag() {
 }
 
 #[test]
+fn test_analyze_with_threads_flag_emits_java_style_stack_frames() {
+    let fixture = write_fixture(&build_thread_stack_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--threads"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = strip_ansi(&stdout_string(&output.stdout));
+
+    assert!(
+        stdout.contains("at com.example.WorkerThread.run(WorkerThread.java:123)"),
+        "stdout missing positive-line source frame: {stdout}"
+    );
+    assert!(
+        stdout.contains("at com.example.WorkerThread.compiledWithSource(Compiled Method)"),
+        "stdout missing compiled-method frame with source metadata: {stdout}"
+    );
+    assert!(
+        stdout.contains("at com.example.WorkerThread.knownSourceNoLine(WorkerThread.java)"),
+        "stdout missing known-source frame without usable line number: {stdout}"
+    );
+    assert!(
+        stdout.contains("at com.example.WorkerThread.compiledWithoutSource(Compiled Method)"),
+        "stdout missing compiled-method frame without source metadata: {stdout}"
+    );
+    assert!(
+        stdout.contains("at com.example.WorkerThread.mainLoop(Unknown Source)"),
+        "stdout missing unknown-source frame without source metadata: {stdout}"
+    );
+    assert!(
+        stdout.contains("at com.example.WorkerThread.nativeBridge(Native Method)"),
+        "stdout missing native-method frame: {stdout}"
+    );
+}
+
+#[test]
 fn test_analyze_with_classloaders_flag() {
     let fixture = write_fixture(&build_graph_fixture());
     let fixture_path = path_arg(fixture.path());
@@ -1218,6 +1260,28 @@ fn test_query_command_prints_matching_rows() {
     assert!(stdout.contains("Columns:"));
     assert!(stdout.contains("@objectId"));
     assert!(stdout.contains("com.example.BigCache"));
+}
+
+#[test]
+fn test_query_command_projects_instance_fields_through_live_path() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "query",
+            fixture_path.as_str(),
+            r#"SELECT @objectId, entries FROM "com.example.BigCache" WHERE entries = 8192"#,
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = normalized_stdout(&output.stdout);
+    assert!(stdout.contains("Columns: @objectId, entries"), "{stdout}");
+    assert!(stdout.contains("Matched: 1"), "{stdout}");
+    assert!(stdout.contains("0x00002000"), "{stdout}");
 }
 
 #[test]

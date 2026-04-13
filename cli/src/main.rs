@@ -27,10 +27,10 @@ use mnemosyne_core::{
     hprof::{parse_heap, HeapParseJob, HeapSummary},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
-    parse_hprof_file,
+    parse_hprof_file_with_options,
     query::{execute_query, parse_query, CellValue},
     report::{render_report, ReportRequest},
-    CoreError,
+    CoreError, ParseOptions,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -65,7 +65,7 @@ enum Commands {
     Map(MapArgs),
     /// Find a path from an object to its GC root.
     GcPath(GcPathArgs),
-    /// Execute an OQL-style query against the heap graph.
+    /// Execute an OQL-style query against the heap graph, including retained instance fields on query paths.
     Query(QueryArgs),
     /// Generate AI explanations for a leak candidate.
     Explain(ExplainArgs),
@@ -762,8 +762,13 @@ async fn handle_query(args: QueryArgs) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
     let pb = start_spinner("Executing query...");
-    let graph = parse_hprof_file(args.heap.to_string_lossy().as_ref())
-        .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
+    let graph = parse_hprof_file_with_options(
+        args.heap.to_string_lossy().as_ref(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
     let dominator = mnemosyne_core::build_dominator_tree(&graph);
     let query = parse_query(&args.query).map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let result = execute_query(&query, &graph, Some(&dominator))?;
@@ -1457,21 +1462,25 @@ fn print_thread_stacks(report: &mnemosyne_core::analysis::ThreadReport) {
         println!();
         println!("{} {}", bold_label("Stack:"), thread.name);
         for frame in stack_trace {
+            let class_name = frame.class_name.replace('/', ".");
             match (&frame.source_file, frame.line_number) {
                 (Some(source_file), line) if line > 0 => {
                     println!(
                         "  at {}.{}({}:{})",
-                        frame.class_name, frame.method_name, source_file, line
+                        class_name, frame.method_name, source_file, line
                     );
+                }
+                (_, -3) => {
+                    println!("  at {}.{}(Native Method)", class_name, frame.method_name);
+                }
+                (_, -2) => {
+                    println!("  at {}.{}(Compiled Method)", class_name, frame.method_name);
                 }
                 (Some(source_file), _) => {
-                    println!(
-                        "  at {}.{}({})",
-                        frame.class_name, frame.method_name, source_file
-                    );
+                    println!("  at {}.{}({})", class_name, frame.method_name, source_file);
                 }
                 (None, _) => {
-                    println!("  at {}.{}", frame.class_name, frame.method_name);
+                    println!("  at {}.{}(Unknown Source)", class_name, frame.method_name);
                 }
             }
         }
@@ -1608,6 +1617,7 @@ fn format_query_row(row: &[CellValue]) -> String {
             CellValue::Id(id) => format!("0x{id:08X}"),
             CellValue::Str(value) => value.clone(),
             CellValue::Int(value) => value.to_string(),
+            CellValue::Bool(value) => value.to_string(),
             CellValue::Null => "null".into(),
         })
         .collect::<Vec<_>>()

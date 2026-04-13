@@ -8,7 +8,6 @@ const HPROF_HEADER: &[u8] = b"JAVA PROFILE 1.0.2\0";
 const TYPE_CHAR: u8 = 5;
 const TYPE_OBJECT: u8 = 2;
 const TYPE_INT: u8 = 10;
-#[cfg(test)]
 const TYPE_BYTE: u8 = 8;
 
 /// Builder for small synthetic HPROF binaries used by unit tests.
@@ -82,7 +81,6 @@ impl HprofBuilder {
         self.push_record(TAG_HEAP_DUMP_SEGMENT, sub_records)
     }
 
-    #[cfg(test)]
     pub(crate) fn add_stack_frame(
         &mut self,
         frame_id: u64,
@@ -102,7 +100,6 @@ impl HprofBuilder {
         self.push_record(TAG_STACK_FRAME, body)
     }
 
-    #[cfg(test)]
     pub(crate) fn add_stack_trace(
         &mut self,
         serial: u32,
@@ -246,7 +243,6 @@ impl HeapDumpBuilder {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn add_prim_array_dump_bytes(&mut self, obj_id: u64, values: &[u8]) -> &mut Self {
         self.buf.write_u8(SUB_PRIM_ARRAY_DUMP).unwrap();
         HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
@@ -328,6 +324,52 @@ pub fn build_graph_fixture() -> Vec<u8> {
         .add_gc_root_java_frame(0x1000, 1, 0)
         .add_instance_dump(0x1000, 0x200, &0x2000u32.to_be_bytes())
         .add_instance_dump(0x2000, 0x100, &[]);
+
+    builder.add_heap_dump(heap.build());
+    builder.build()
+}
+
+pub fn build_thread_stack_fixture() -> Vec<u8> {
+    let mut builder = HprofBuilder::new(4);
+    builder
+        .add_string(1, "java/lang/Object")
+        .add_string(2, "java/lang/String")
+        .add_string(3, "java/lang/Thread")
+        .add_string(4, "com/example/WorkerThread")
+        .add_string(5, "value")
+        .add_string(6, "coder")
+        .add_string(7, "name")
+        .add_string(8, "daemon")
+        .add_string(9, "run")
+        .add_string(10, "()V")
+        .add_string(11, "WorkerThread.java")
+        .add_string(12, "mainLoop")
+        .add_string(13, "worker-main")
+        .add_string(14, "compiledWithSource")
+        .add_string(15, "knownSourceNoLine")
+        .add_string(16, "compiledWithoutSource")
+        .add_string(17, "nativeBridge")
+        .add_load_class(1, 0x100, 0, 1)
+        .add_load_class(2, 0x200, 0, 2)
+        .add_load_class(3, 0x300, 0, 3)
+        .add_load_class(4, 0x400, 0, 4)
+        .add_stack_frame(0x1000, 9, 10, 11, 4, 123)
+        .add_stack_frame(0x1001, 14, 10, 11, 4, -2)
+        .add_stack_frame(0x1002, 15, 10, 11, 4, -1)
+        .add_stack_frame(0x1003, 16, 10, 0, 4, -2)
+        .add_stack_frame(0x1004, 12, 10, 0, 4, -1)
+        .add_stack_frame(0x1005, 17, 10, 0, 4, -3)
+        .add_stack_trace(42, 7, &[0x1000, 0x1001, 0x1002, 0x1003, 0x1004, 0x1005]);
+
+    let mut heap = HeapDumpBuilder::new(4);
+    heap.add_gc_root_thread_obj(0x5000, 7, 42)
+        .add_class_dump(0x100, 0, 0, &[])
+        .add_class_dump(0x200, 0x100, 8, &[(5, TYPE_OBJECT), (6, TYPE_BYTE)])
+        .add_class_dump(0x300, 0x100, 5, &[(7, TYPE_OBJECT), (8, 4)])
+        .add_class_dump(0x400, 0x300, 0, &[])
+        .add_instance_dump(0x5000, 0x400, &[0, 0, 0, 0x60, 1])
+        .add_instance_dump(0x6000, 0x200, &[0, 0, 0, 0x70, 0])
+        .add_prim_array_dump_bytes(0x7000, b"worker-main");
 
     builder.add_heap_dump(heap.build());
     builder.build()

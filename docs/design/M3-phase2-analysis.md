@@ -1,18 +1,20 @@
 # M3 Phase 2+ Analysis Architecture Design
 
-> **Status:** Design Complete, Implementation Pending
+> **Status:** ✅ Implemented for the shipped Phase 2 scope; use this doc as historical architecture plus remaining-query follow-through context
 > **Owner:** Design Consulting Agent
 > **Created:** 2026-03-08
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-04-13
 > **Milestone:** M3 Phase 2 — Advanced Heap Analysis
 
 ---
 
 ## 1. Overview
 
-This document defines the architecture for Mnemosyne's M3 Phase 2+ analysis capabilities: Thread Inspection, ClassLoader Analysis, Collection Inspection, String Analysis, Top-N Largest Instances, and an OQL Query Engine. These features close the remaining MAT-parity gaps and position Mnemosyne as a credible alternative to Eclipse MAT for production heap analysis.
+This document defines the architecture for Mnemosyne's M3 Phase 2+ analysis capabilities: Thread Inspection, ClassLoader Analysis, Collection Inspection, String Analysis, Top-N Largest Instances, and an OQL Query Engine. These capabilities are now largely shipped and are part of the live graph-backed analysis surface.
 
-New analyzers consume the `ObjectGraph` model from `core::hprof::object_graph` and the `DominatorTree` from `core::graph::dominator`. **However, a foundational prerequisite (Phase 2a) must extend the binary parser and `HeapObject` struct before most analyzers can operate** — instance field data and primitive array content are currently discarded after reference extraction. See Section 12 and Section 13 for details.
+New analyzers consume the `ObjectGraph` model from `core::hprof::object_graph` and the `DominatorTree` from `core::graph::dominator`. The foundational prerequisites described in the original design were implemented during M3 delivery: opt-in field-data retention, selective primitive-array retention, stack-trace parsing, and the shipped analyzer modules are all present in the live codebase. The main remaining M3 follow-through from this doc is deeper query semantics and explorer ergonomics beyond the initial built-in-field OQL/query surface.
+
+Historical note: the detailed sections below preserve the original implementation design language. Where they describe parser/data-model prerequisites in future tense, read them as historical architecture for already shipped work unless a section explicitly calls out remaining query follow-through.
 
 ---
 
@@ -78,9 +80,9 @@ HPROF records already parsed by `binary_parser`:
 - Thread objects in the heap (instances of `java.lang.Thread`)
 - `ROOT_THREAD_OBJECT` GC roots — link thread object IDs to stack trace serials
 
-### 4.2 Required ObjectGraph Extensions
+### 4.2 Historical ObjectGraph Extensions (implemented)
 
-The binary parser currently **skips** `STACK_TRACE` (tag 0x05) and `STACK_FRAME` (tag 0x04) records — they fall through to the `_ => skip_bytes(reader, length)` branch in the top-level record loop. Phase 2a must add parsing handlers for these tags. New `ObjectGraph` fields needed:
+The original design assumed the binary parser would need to stop skipping `STACK_TRACE` (tag 0x05) and `STACK_FRAME` (tag 0x04) records and add new `ObjectGraph` fields for them. That work is now shipped; the structure below is preserved as the design record of what Phase 2a introduced:
 
 ```rust
 // In ObjectGraph:
@@ -290,9 +292,9 @@ pub fn inspect_collections(
 ```
 
 ### 6.3 Implementation Notes
-- **`HeapObject` does NOT currently have a `field_data` field.** The binary parser reads instance field bytes into a temporary buffer (see `parse_instance_dump()` in `binary_parser.rs`), extracts only reference-type field values into `references: Vec<ObjectId>`, and discards the raw bytes. Phase 2a must add a `field_data: Vec<u8>` field to `HeapObject` and retain the raw instance bytes so that collection, string, and thread analyzers can extract typed field values.
+- **Historical prerequisite now implemented:** `HeapObject` now retains opt-in `field_data`, so the collection, string, and thread analyzers can extract typed field values without forcing that retention onto the lean default path.
 - Array lengths come from primitive/object array HPROF records (already parsed)
-- **Primitive array data is also discarded** — `parse_prim_array_dump()` calls `skip_bytes()` over element data. String analysis requires reading `char[]`/`byte[]` content. Phase 2a must selectively retain primitive array data (at minimum for byte/char arrays).
+- **Historical prerequisite now implemented:** selective primitive-array retention is available for the byte[]/char[] content needed by string and related analyzers, with retention kept opt-in for memory control.
 - Waste calculation: `(capacity - size) * element_size` for array-backed collections
 - Fill ratio thresholds: empty (0.0), sparse (<0.25), normal (0.25-0.75), dense (>0.75)
 
@@ -350,7 +352,7 @@ pub fn analyze_strings(
 
 ### 7.3 Implementation Notes
 - String value extraction requires reading the `value` field reference → char[]/byte[] content
-- **Prerequisite:** Phase 2a must retain both (a) instance `field_data` on `HeapObject` (to read the `value` field reference and `coder` field) and (b) primitive array element data (to read the actual char[]/byte[] backing content). Both are currently discarded by the parser.
+- **Historical prerequisite now implemented:** Phase 2a added the field/array retention needed to read the `value` and `coder` fields plus the backing char[]/byte[] content. The remaining follow-through is richer query semantics, not missing string-analysis prerequisites.
 - Java 9+ uses compact strings: Latin-1 (1 byte/char) by default, UTF-16 when needed
 - Java 8 always uses char[] (2 bytes/char)
 - The `coder` field (Java 9+) indicates encoding: 0 = Latin-1, 1 = UTF-16
@@ -365,7 +367,18 @@ pub fn analyze_strings(
 
 Mnemosyne OQL is a simplified subset of Eclipse MAT's OQL, designed for ad-hoc heap exploration.
 
-#### Grammar (EBNF-style)
+Shipped today:
+- built-in field projection/filtering
+- exact and glob class matching
+- numeric/string comparisons on built-in fields
+- CLI `query` and MCP `query_heap`
+
+Not yet shipped:
+- real `INSTANCEOF` semantics
+- instance-field filtering and projection
+- meaningful `@toString` rendering beyond the current class-name-oriented fallback behavior
+
+#### Historical design grammar (broader than the shipped first slice)
 ```
 query       := select_clause from_clause [where_clause] [limit_clause]
 select_clause := "SELECT" (field_list | "*")
@@ -384,29 +397,22 @@ operator    := "=" | "!=" | ">" | "<" | ">=" | "<=" | "LIKE" | "INSTANCEOF"
 value       := integer | float | quoted_string | "null" | "true" | "false"
 ```
 
-#### Example Queries
+#### Shipped example queries
 ```sql
 -- Find all large HashMaps
 SELECT @objectId, @shallowSize, @retainedSize
 FROM "java.util.HashMap"
 WHERE @retainedSize > 1048576
 
--- Find strings containing "password"
-SELECT @objectId, @className
-FROM "java.lang.String"
-WHERE @toString LIKE "%password%"
-
--- Find all instances of a class hierarchy
-SELECT *
-FROM INSTANCEOF "java.util.AbstractMap"
-WHERE @shallowSize > 1024
-LIMIT 100
-
 -- Find objects retained by a specific class
 SELECT @objectId, @className, @retainedSize
 FROM "com.example.*"
 WHERE @retainedSize > 0
 ```
+
+#### Follow-on examples (not shipped today)
+- String-content filtering that depends on meaningful object-string rendering remains future work.
+- Hierarchy-aware class-family queries that depend on real subclass traversal remain future work.
 
 ### 8.2 Module Design
 
@@ -493,11 +499,11 @@ pub enum CellValue {
 
 ### 8.4 Execution Strategy
 
-1. **FROM resolution**: Scan `ObjectGraph::classes` for matching class patterns → collect matching `ObjectId` sets
-2. **INSTANCEOF resolution**: Walk class hierarchy (super_class chain) to find all subclass instances
-3. **WHERE filtering**: Evaluate conditions against each object. Built-in fields are resolved directly from `ObjectGraph`/`DominatorTree`; instance fields require field extraction
-4. **SELECT projection**: Extract requested fields for matching objects
-5. **LIMIT**: Truncate result set
+1. **Shipped today — FROM resolution**: scan `ObjectGraph::classes` for exact/glob class-pattern matches and collect matching object sets
+2. **Shipped today — WHERE filtering**: evaluate numeric/string comparisons on built-in fields resolved directly from `ObjectGraph` and optional `DominatorTree`
+3. **Shipped today — SELECT projection**: return requested built-in fields for matching objects
+4. **Shipped today — LIMIT**: truncate the result set
+5. **Not yet shipped — follow-on semantics**: real `INSTANCEOF` traversal, instance-field filtering/projection, and richer object-string rendering remain future M3 follow-through
 
 Performance: Full table scan over `ObjectGraph::objects`. For a 156 MB dump with ~300k objects, expect sub-second query times. Larger dumps may need index support in the future.
 
@@ -516,7 +522,7 @@ pub fn execute_query(
 ```
 
 - CLI integration: `mnemosyne query heap.hprof "SELECT * FROM ..."` subcommand
-- MCP integration: `execute_query` JSON-RPC handler
+- MCP integration: `query_heap` handler over the same built-in-field query surface
 - REPL mode (future): interactive query session over a loaded heap
 
 ---
@@ -635,10 +641,10 @@ mnemosyne analyze heap.hprof --threads --collections --strings --top-instances
 
 ---
 
-## 12. Implementation Sequence
+## 12. Historical Implementation Sequence and Remaining Follow-Through
 
-### Phase 2a — Foundation (prerequisite)
-The binary parser currently discards all non-reference data during instance parsing and skips primitive array content entirely. Before any new analyzer can read field values, the following foundational work is required:
+### Phase 2a — Foundation (implemented)
+The binary parser originally discarded non-reference data during instance parsing and skipped primitive array content entirely. The following foundational work was implemented during M3 delivery:
 
 1. **Add `field_data: Vec<u8>` to `HeapObject`** — Retain raw instance field bytes during `parse_instance_dump()`. Currently the local `data` buffer is discarded after reference extraction. Default to empty `Vec` for arrays and objects where field data is not applicable.
 2. **Retain primitive array element data** — Add a `data: Option<Vec<u8>>` or similar field to `HeapObject` for `PrimitiveArray` variants. At minimum, retain `byte[]` (type 8) and `char[]` (type 5) arrays, which are needed for string analysis. Consider opt-in retention via a parser config flag to manage memory impact.
@@ -646,7 +652,7 @@ The binary parser currently discards all non-reference data during instance pars
 4. **Implement the typed field extraction API** — `FieldValue` enum + `read_field()` / `read_all_fields()` functions that interpret `HeapObject::field_data` bytes using `ClassInfo::instance_fields` layout. This is the shared prerequisite for collection, string, and thread analyzers.
 5. **Memory impact assessment** — Measure RSS delta on the 156 MB test fixture with field_data retention enabled vs. disabled. If the RSS:dump ratio exceeds 5x, implement opt-in retention or selective storage for target classes only.
 
-### Phase 2b — Individual Analyzers (parallelizable after 2a)
+### Phase 2b — Individual Analyzers (shipped)
 2. **String Analysis** — Highest value-to-effort ratio. String waste is common and easy to detect.
 3. **Collection Inspection** — Second highest impact. Collection waste is the #1 finding in most MAT sessions.
 4. **Thread Inspection** — Requires stack trace storage extension in ObjectGraph.
@@ -654,18 +660,22 @@ The binary parser currently discards all non-reference data during instance pars
 6. **ClassLoader Analysis** — Niche but critical for app-server environments. (May be deferred to Phase 3 per roadmap Step 12.)
 
 ### Phase 2c — Query Engine
-6. **OQL Parser** — Recursive descent, well-defined grammar.
-7. **OQL Executor** — Object scan with filter evaluation.
-8. **CLI + MCP integration** — `mnemosyne query` subcommand + `execute_query` RPC handler.
+6. **OQL Parser** — shipped first slice
+7. **OQL Executor** — shipped first slice
+8. **CLI + MCP integration** — shipped first slice; remaining work is deeper query semantics
 
 ### Phase 2d — Polish
 9. **Report rendering** — All new analyzer results rendered in 5 output formats.
 10. **CLI table formatting** — Consistent with existing comfy-table patterns.
 11. **Documentation** — User-facing docs for each new subcommand/flag.
 
+### Remaining follow-through
+1. **Richer query semantics** — broader predicates, field access, hierarchy-aware traversal, and explorer-oriented ergonomics beyond the shipped built-in-field surface
+2. **Any future scale-sensitive query work** — only if evidence from real workloads justifies more indexing or traversal machinery
+
 ---
 
-## 13. Dependencies
+## 13. Historical Dependencies and Remaining Query Focus
 
 | Analyzer | Requires ObjectGraph | Requires DominatorTree | Requires Field Extraction | Requires ObjectGraph Extension |
 |---|---|---|---|---|
@@ -676,9 +686,9 @@ The binary parser currently discards all non-reference data during instance pars
 | String Analysis | ✅ | ✅ | ✅ (value field) | ❌ |
 | OQL Engine | ✅ | Optional | ✅ (instance fields) | ❌ |
 
-### Critical Prerequisite: Field Extraction API
+### Critical Prerequisite: Field Extraction API (implemented)
 
-The biggest shared dependency is a **typed field extraction API** for `HeapObject`. Currently `HeapObject` does **not** store field data at all — the binary parser reads instance bytes into a temporary buffer, extracts reference-type fields, and discards the raw data. Phase 2a must first add `field_data: Vec<u8>` storage, then build the typed accessor API on top of it:
+The biggest shared dependency in the original design was a **typed field extraction API** for `HeapObject`. That prerequisite is now implemented, and the snippet below remains as the architectural record of the API shape that unlocked the shipped analyzers:
 
 ```rust
 // In core::hprof::object_graph or a new field_reader module
@@ -709,7 +719,7 @@ pub fn read_all_fields(
 ) -> Vec<(String, FieldValue)>;
 ```
 
-This is the **gating prerequisite** for Phase 2b/2c work.
+This was the **gating prerequisite** for the shipped Phase 2b/2c work. The main remaining dependency area is deeper query semantics rather than missing field extraction.
 
 ---
 
