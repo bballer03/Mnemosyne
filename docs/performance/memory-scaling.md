@@ -122,6 +122,8 @@ Based on the current measured data:
 - All benchmarks run on release profile with optimizations.
 - Criterion collected 100 samples per benchmark.
 - `scripts/measure_rss.sh` now profiles `parse`, `analyze`, and `leaks` in one pass and computes RSS:dump ratios automatically.
+- `scripts/run_hyperfine_bench.sh <heap.hprof>` wraps an optional `hyperfine` install for a small `parse` / `analyze` / `leaks` command matrix; when `hyperfine` is absent it prints a skip message and exits successfully.
+- `scripts/run_heaptrack_profile.sh [--command "analyze --threads --strings --collections"] <heap.hprof>` wraps an optional `heaptrack` install for one `mnemosyne-cli` subcommand plus flags, always appends the heap path as the final CLI argument, prints the expanded CLI command and chosen output path, and skips cleanly when `heaptrack` is absent.
 - The script falls back to `/proc/PID/status` VmHWM sampling when `/usr/bin/time` is unavailable.
 - The script now emits pass/warn/fail markers for the current 4.0x / 6.0x thresholds.
 - Gnuplot was not installed; Criterion used the plotters backend for HTML reports saved to `target/criterion/`.

@@ -95,6 +95,7 @@ pub enum CellValue {
     Id(u64),
     Str(String),
     Int(i64),
+    Bool(bool),
     Null,
 }
 

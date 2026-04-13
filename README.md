@@ -21,7 +21,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted dia
 
 ![language](https://img.shields.io/badge/language-rust-orange?style=flat-square)
 ![license](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-![status](https://img.shields.io/badge/status-alpha-yellow?style=flat-square)
+![status](https://img.shields.io/badge/status-v0.2.0--alpha-yellow?style=flat-square)
 
 ---
 
@@ -36,7 +36,7 @@ It brings total clarity to complex Java/Kotlin heap dumps by combining:
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, graph-backed investigation, and MCP workflows
 
-Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actionable insights** — giving you root cause analysis, memory leak detection, and guided solutions.
+Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving you root cause analysis, memory leak detection, and guided solutions.
 
 ---
 
@@ -49,7 +49,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
-- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields plus retained instance-field projection/filtering on query paths
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults without changing the underlying graph-backed analysis pipeline
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
@@ -80,7 +80,7 @@ Mnemosyne transforms `.hprof` heap dumps, GC logs, and thread dumps into **actio
 - Works with Java & Kotlin projects
 
 ### 💻 IDE Integration via MCP
-Fully integrated with:
+Compatible with MCP-capable clients such as:
 - VS Code
 - Cursor
 - Zed
@@ -197,14 +197,11 @@ Need consistent leak filtering defaults for every command? Add an `[analysis]` b
 min_severity = "MEDIUM"
 packages = ["com.example", "org.demo"]
 leak_types = ["CACHE", "THREAD", "HTTP_RESPONSE"]
-accumulation_threshold = 10.0
 ```
 
 CLI flags such as `--min-severity` or `--package` still win, but the config keeps the day-one experience aligned across local runs, CI, and MCP.
 
 Leaks below `min_severity` are filtered out, so noisy low-priority signals stay out of your reports.
-
-`accumulation_threshold` controls when a graph-backed suspect is flagged as an accumulation point. Lower values make Mnemosyne more aggressive about highlighting small objects that retain disproportionately large subgraphs.
 
 When you specify multiple `packages`, Mnemosyne first treats them as an allow-list for real classes (only matching histograms become leak candidates) and then rotates through them as it synthesizes fallback identifiers so each category stays easy to trace back to its service/module.
 
@@ -400,7 +397,7 @@ Recommendation:
 Code Fix Available: Run 'mnemosyne-cli fix heap.hprof' to generate patch
 ```
 
-When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible, local, and Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is available through `mnemosyne-cli chat`, and MCP now ships persisted heap-bound AI sessions via `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Session files default to a per-user local Mnemosyne data directory, and `[ai.sessions].directory` lets operators pin that storage to a specific path.
+When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible cloud and local endpoints plus Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is available through `mnemosyne-cli chat`, and MCP now ships persisted heap-bound AI sessions via `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Session files default to a per-user local Mnemosyne data directory, and `[ai.sessions].directory` lets operators pin that storage to a specific path. Broader conversation semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming remain future follow-on work rather than part of the shipped milestone contract.
 
 Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
@@ -452,8 +449,8 @@ section ai
 # Quick analysis
 mnemosyne-cli analyze heap.hprof
 
-# Verbose output with debug info
-mnemosyne-cli analyze heap.hprof -v
+# Use an explicit config file
+mnemosyne-cli analyze heap.hprof --config ./ops/prod.toml
 
 # Filter by package
 mnemosyne-cli leaks heap.hprof --package com.example
@@ -576,7 +573,7 @@ Edit `~/Library/Application Support/ChatGPT/mcp_config.json` (macOS):
 
 Once configured, you can ask your AI assistant:
 
-> **Tip:** `mnemosyne-cli serve` reads the same configuration chain as the CLI. Supply `--config`, set `$MNEMOSYNE_CONFIG`, or drop a `.mnemosyne.toml` next to your heap dumps so MCP sessions inherit your `[analysis]`, AI, and output defaults automatically.
+> **Tip:** `mnemosyne-cli serve` reads the same configuration chain as the CLI. Supply `--config`, set `$MNEMOSYNE_CONFIG`, or place a `.mnemosyne.toml` in the current working directory so MCP sessions inherit your `[analysis]`, AI, and output defaults automatically.
 
 - **"Analyze heap.hprof and show me the root cause."**
 - **"Open the file responsible for the retained objects."**
@@ -591,10 +588,15 @@ Once configured, you can ask your AI assistant:
 | `list_tools` | Return machine-readable MCP method descriptions and parameter metadata |
 | `parse_heap` | Parse a heap dump and return summary |
 | `analyze_heap` | Run the full heap analysis pipeline and return `AnalyzeResponse` |
-| `query_heap` | Execute a minimal OQL-style query and return tabular results |
+| `query_heap` | Execute an OQL-style query and return tabular results, including retained instance-field access on query paths |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
+| `create_ai_session` | Create and persist a heap-bound AI session for later follow-up |
+| `resume_ai_session` | Resume a persisted AI session by ID |
+| `get_ai_session` | Inspect compact metadata for a persisted AI session |
+| `close_ai_session` | Close and remove persisted AI session state |
+| `chat_session` | Continue a persisted AI session with chat-style follow-up |
 | `explain_leak` | Get AI explanation for detected leak |
 | `propose_fix` | Generate AI-backed fix suggestions with heuristic fallback |
 
@@ -685,29 +687,11 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 
 ## 🗺 Roadmap
 
-### Phase 1 — MVP
-- Rust heap dump parser
-- Dominator tree
-- Basic leak detection
-- CLI + MCP server
-
-### Phase 2 — V1
-- AI explanations
-- Source code mapping
-- Full IDE integration
-
-### Phase 3 — V2
-- Richer fix generation beyond heuristic placeholder patches
-- Broader CI and workflow integration
-
-### Phase 4 — V3
-- JVM Agent
-- GC log + thread dump correlation
-
-### Phase 5 — V4
-- Web dashboard
-- WASM-based in-browser analyzer
-- GPU-accelerated graph computation
+### Current Snapshot
+- M3 is mostly complete: core parity shipped, with small closeout items first and deeper query/scale follow-through only where evidence justifies it
+- M4 is the next full open milestone: UI and usability work
+- M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
+- M6 follows M4 and any justified M5 follow-on: ecosystem and community expansion
 
 ---
 

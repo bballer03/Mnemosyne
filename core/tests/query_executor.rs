@@ -1,7 +1,8 @@
 use byteorder::{BigEndian, WriteBytesExt};
 use mnemosyne_core::{
-    build_dominator_tree, parse_hprof,
+    build_dominator_tree, parse_hprof_with_options,
     query::{execute_query, parse_query, CellValue},
+    ParseOptions,
 };
 
 const TAG_STRING_IN_UTF8: u8 = 0x01;
@@ -105,7 +106,13 @@ fn build_graph_fixture() -> Vec<u8> {
 
 #[test]
 fn execute_query_returns_builtin_fields_for_matching_objects() {
-    let graph = parse_hprof(&build_graph_fixture()).expect("fixture should parse");
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
     let dominator = build_dominator_tree(&graph);
     let query = parse_query(
         r#"SELECT @objectId, @className, @shallowSize, @retainedSize FROM "com.example.BigCache" WHERE @retainedSize > 1"#,
@@ -134,7 +141,13 @@ fn execute_query_returns_builtin_fields_for_matching_objects() {
 
 #[test]
 fn execute_query_applies_limit_after_matching() {
-    let graph = parse_hprof(&build_graph_fixture()).expect("fixture should parse");
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
     let dominator = build_dominator_tree(&graph);
     let query = parse_query(r#"SELECT @objectId FROM "java.lang.Object" LIMIT 1"#)
         .expect("query should parse");
@@ -143,4 +156,73 @@ fn execute_query_applies_limit_after_matching() {
 
     assert_eq!(result.total_matched, 1);
     assert_eq!(result.rows.len(), 1);
+}
+
+#[test]
+fn execute_query_matches_from_instanceof_across_superclasses() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM INSTANCEOF "java.lang.Object""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId"]);
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x1000)], vec![CellValue::Id(0x2000)]]
+    );
+}
+
+#[test]
+fn execute_query_projects_and_filters_instance_fields() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId, entries FROM "com.example.BigCache" WHERE entries = 8192"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "entries"]);
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x1000), CellValue::Id(0x2000)]]
+    );
+}
+
+#[test]
+fn execute_query_supports_instanceof_filters_on_instance_fields() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.BigCache" WHERE entries INSTANCEOF "java.lang.Object""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
 }

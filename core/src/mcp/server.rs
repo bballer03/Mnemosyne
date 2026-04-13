@@ -15,7 +15,7 @@ use crate::{
         SessionAnalysisSnapshot, SessionConversationSnapshot, MCP_SESSION_VERSION,
     },
     query::{execute_query, parse_query},
-    HistogramGroupBy,
+    HistogramGroupBy, ParseOptions,
 };
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -510,7 +510,7 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "query_heap",
-                "description": "Execute a built-in-field OQL-style query against the heap graph.",
+                "description": "Execute an OQL-style query against the heap graph, including built-in fields plus retained instance fields when available.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
                     { "name": "query", "type": "string", "required": true, "description": "Query text." }
@@ -792,7 +792,12 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "query_heap" => {
             let params: QueryHeapParams = serde_json::from_value(packet.params)?;
-            let graph = crate::hprof::parse_hprof_file(&params.heap_path)?;
+            let graph = crate::hprof::parse_hprof_file_with_options(
+                &params.heap_path,
+                ParseOptions {
+                    retain_field_data: true,
+                },
+            )?;
             let dominator = crate::graph::build_dominator_tree(&graph);
             let query = parse_query(&params.query)
                 .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
@@ -979,6 +984,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_request_query_heap_projects_instance_fields() {
+        let fixture = build_graph_fixture();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "query_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "query": r#"SELECT @objectId, entries FROM "com.example.BigCache" WHERE entries = 8192"#,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result.get("columns"),
+            Some(&json!(["@objectId", "entries"]))
+        );
+        assert_eq!(result.get("total_matched"), Some(&json!(1)));
+        assert_eq!(
+            result.get("rows"),
+            Some(&json!([[{ "Id": 4096 }, { "Id": 8192 }]]))
+        );
+    }
+
+    #[tokio::test]
     async fn handle_request_list_tools_returns_descriptions() {
         let result = handle_request(
             RpcRequest {
@@ -1008,6 +1044,13 @@ mod tests {
                     .get("params")
                     .and_then(Value::as_array)
                     .is_some_and(|params| params.is_empty())
+        }));
+        assert!(tools.iter().any(|tool| {
+            tool.get("name") == Some(&json!("query_heap"))
+                && tool
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|desc| desc.contains("instance fields"))
         }));
     }
 

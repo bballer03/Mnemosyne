@@ -91,7 +91,7 @@ mnemosyne-cli analyze heap.hprof --output-file report.html --format html
 Profile presets currently mean:
 
 - `overview`: disables the optional investigation reports
-- `incident-response`: enables all optional investigation reports and raises the default depth
+- `incident-response`: enables all optional investigation reports and bumps `top_n` to at least `15` plus `min_capacity` to at least `32`
 - `ci-regression`: enables `top-instances` with tighter defaults
 
 ## Step 5: AI Insights
@@ -230,11 +230,15 @@ Current MCP methods:
 - `query_heap`
 - `map_to_code`
 - `find_gc_path`
+- `create_ai_session`
+- `resume_ai_session`
+- `get_ai_session`
+- `close_ai_session`
+- `chat_session`
 - `explain_leak`
 - `propose_fix`
 
 There is currently no `apply_fix` MCP method.
-There is currently no MCP chat/session method.
 
 ## Memory Scaling Status
 

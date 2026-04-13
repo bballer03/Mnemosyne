@@ -131,7 +131,7 @@ All phases delivered:
 | Cross-compilation complexity | ✅ Resolved | Used cargo cross-compile targets successfully |
 | crates.io name availability | ✅ Resolved | `mnemosyne-core` and `mnemosyne-cli` published |
 | Homebrew SHA256 management | ✅ Resolved | Checksums populated for v0.1.1 release |
-| Dockerfile base image CVEs | ⚠️ Open | `debian:bookworm-slim` has known vulnerabilities; tracked for Security Agent triage |
+| Dockerfile base image CVEs | ⚠️ Triaged | M3-B attempted Docker Scout first and then used fallback Grype scans of saved runtime and builder-stage images when Scout auth was unavailable; the shipped runtime image had no critical findings and only `wont-fix` high findings, while the builder-stage scan was noisier but non-shipping, so no safe minimal same-family remediation was justified yet |
 
 ### Retrospective Notes
 M2 was a clean success. All batches delivered without regressions. The workspace grew from 67 to 87 tests. The CLI now provides a polished experience for first-time users. Distribution channels are established and functional.
