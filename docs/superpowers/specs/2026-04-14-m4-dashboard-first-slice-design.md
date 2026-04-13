@@ -4,178 +4,259 @@
 > Date: 2026-04-14
 > Parent: `docs/design/milestone-4-ui-and-usability.md`
 > Visual reference: Stitch project `projects/11463443557609217785`, screen `projects/11463443557609217785/screens/e6f417ad65cc4a4e97f4bf467b02d2b4` (`Mnemosyne Triage Dashboard`)
+> Note: this design supersedes the earlier HTML-embedded first-slice direction after the stack decision changed to a shared React frontend with later Tauri packaging.
 
 ## Goal
 
-Ship the first real M4 UI surface by turning `mnemosyne analyze --format html` into an interactive, self-contained leak-triage dashboard that feels like a dense engineering console and reuses the current analysis output without requiring a web server.
+Ship the first real M4 UI surface as a browser-first React application that loads Mnemosyne analysis JSON artifacts, presents a leak-triage dashboard based on the approved Stitch design, and establishes the shared frontend foundation that can later be reused in a Tauri desktop shell with minimal UI rewrites.
 
 ## Why This Slice
 
-M4 is the next full open milestone, but the full milestone is too large to build safely in one batch. The fastest evidence-backed path is to start with the already-shipped HTML report surface and make it interactive before introducing `serve --web`, routing, browser state, or upload flows.
+The original first-slice idea was to enhance `analyze --format html` into an interactive HTML dashboard. That would have been the narrowest path, but it conflicts with the new architectural goal: a maintainable shared UI that can support both browser and desktop app delivery.
 
-Current runtime truth already gives this slice a strong base:
+Current runtime truth supports the revised direction:
 
-- `AnalyzeResponse` already carries the data needed for a first dashboard: summary, leaks, graph metrics, histogram, provenance, and optional secondary analysis sections
-- `core::report::renderer::render_html()` already exists and is XSS-hardened through `escape_html()`
-- the CLI already emits HTML through `mnemosyne analyze --format html`
-- M3 delivered the analysis depth that makes a triage dashboard useful: leak suspects, grouped histogram data, graph metrics, and provenance markers
+- `AnalyzeResponse` already contains the dashboard data we need: summary, leaks, graph metrics, histogram, provenance, and optional secondary analyzers
+- the JSON output path already exists via `OutputFormat::Json` and serializes `AnalyzeResponse` directly
+- CLI integration tests already exercise `analyze --format json`, so the data artifact path is real rather than speculative
+- the repo does not yet have a frontend workspace, so the first slice must define that boundary clearly instead of layering React awkwardly into the Rust crates
 
-That means the first M4 step does not need new analysis algorithms or a new transport. It needs a better presentation layer.
+That means the best first M4 step is not "enhance embedded report JS." It is "create the shared frontend foundation and render the first real dashboard from existing JSON output."
 
 ## Approaches Considered
 
-### 1. Pure HTML-first dashboard
+### 1. Keep the HTML-first implementation
 
-Treat the first slice only as a richer report artifact and optimize purely for static-file consumption.
-
-Pros:
-
-- smallest implementation surface
-- no new runtime or dependency model
-- easiest path to a shippable first M4 outcome
-
-Cons:
-
-- may need later redesign when `serve --web` arrives
-- risks baking report-only layout assumptions into the first screen
-
-### 2. HTML-first implementation with a reusable app-shaped layout (recommended)
-
-Implement the first slice as interactive HTML, but shape the layout so it can later become the dashboard view inside the local web UI with minimal redesign.
+Continue with the embedded HTML/CSS/JS dashboard and treat React/Tauri as a later rewrite.
 
 Pros:
 
-- preserves the shortest path to value
-- gives M4 a real shipped surface quickly
-- reduces later redesign churn when `serve --web` lands
+- smallest short-term implementation surface
+- no new frontend toolchain yet
 
 Cons:
 
-- requires a little more upfront discipline around layout boundaries
-- cannot express every future app interaction in the first slice
+- duplicates UI effort later
+- poor maintainability for the desired long-term product
+- conflicts with the explicit preference to avoid hand-maintained plain HTML/CSS/JS UI logic
 
-### 3. Web-app-first dashboard
+### 2. Browser-first shared frontend with later Tauri shell (recommended)
 
-Design and implement the first screen as if `serve --web` already exists, even if the initial implementation still renders from HTML.
+Build a React/TypeScript frontend now, use existing JSON artifacts as the first data source, and keep Tauri as a later packaging/runtime layer around the same frontend.
 
 Pros:
 
-- most aligned with the eventual local web UI
+- one maintainable UI codebase for web and desktop
+- no premature Rust API/server work required in the first slice
+- aligns with the approved stack and future desktop direction
+- gives M4 a real product foundation instead of a throwaway report UI
 
 Cons:
 
-- pulls in route, state, and browser-app assumptions too early
-- increases design and implementation complexity before the first UI artifact ships
+- introduces a frontend workspace and build toolchain now
+- first slice needs explicit file and packaging boundaries because the repo is currently Rust-only
+
+### 3. Build browser and Tauri targets from day one
+
+Set up both the browser app and the Tauri shell in the first slice.
+
+Pros:
+
+- proves web/desktop parity immediately
+
+Cons:
+
+- increases scope too early
+- mixes frontend-foundation work with desktop packaging concerns
+- slows delivery of the first usable dashboard
 
 ## Chosen Approach
 
-Use the HTML-first implementation with a reusable app-shaped layout.
+Use the browser-first shared frontend with later Tauri shell.
 
 In practice, that means:
 
-- the first delivered artifact remains `mnemosyne analyze --format html`
-- the dashboard is structured like the top-level screen of a future local web UI
-- the slice focuses on leak triage first, with compact secondary context panels
-- drill-down affordances are visible now even if deeper M4 screens land later
+- the first shipped M4 slice is a browser app, not a desktop app yet
+- the frontend package manager and script runner are locked to Bun
+- the frontend stack is locked to:
+  - React
+  - TypeScript
+  - Vite
+  - React Router
+  - TanStack Table
+  - TanStack Query
+  - Zustand
+  - Tailwind + shadcn/ui
+  - Bun
+- the first data source is a Mnemosyne analysis JSON artifact generated from existing CLI/report output
+- the frontend is structured so Tauri can later wrap it without rewriting the dashboard UI
 
 ## Scope
 
 ### In scope
 
-- enhanced interactive HTML output for `mnemosyne analyze --format html`
-- dark, dense engineering-console presentation
-- header bar with heap identity, analyzed timestamp, profile/status badges, and provenance visibility
-- summary metric strip with total objects, heap size, leak count, graph nodes, and elapsed time
-- leak-triage-first primary workspace
-- client-side search, filter, and sorting for the leak list
-- inline expandable leak details inside the dashboard
-- compact graph metrics panel
-- compact histogram snapshot panel
-- visible drill-down actions for future M4 screens:
-  - inspect leak
-  - inspect object
-  - trace GC path
-  - open dominators
-- graceful rendering for empty or partially populated data
-- regression coverage for the new HTML dashboard structure
+- new browser-first frontend workspace for M4
+- app shell and route foundation
+- artifact loader for local Mnemosyne analysis JSON files
+- dashboard screen matching the approved Stitch design direction
+- leak-triage-first workflow
+- summary strip using existing `AnalyzeResponse.summary`
+- leak table using existing `AnalyzeResponse.leaks`
+- compact graph metrics panel using existing `AnalyzeResponse.graph`
+- compact histogram snapshot using existing `AnalyzeResponse.histogram`
+- provenance visibility using existing response and leak provenance markers
+- frontend state for selected artifact, filters, sorting, and expanded leak details
+- validation and graceful failure for malformed or incompatible JSON artifacts
+- docs and repo structure updates needed to introduce the frontend app honestly
+- Bun-based frontend scripts and developer workflow docs
 
 ### Out of scope
 
-- `mnemosyne serve --web`
-- local web server routes or browser-open behavior
-- upload/select heap flows
-- live parsing progress via WebSocket or SSE
-- dominator tree browser implementation
-- object inspector implementation
-- GC path visualizer implementation
-- query console implementation
-- new core analysis algorithms or response-shape changes for M4-specific data
-- mobile-responsive design
-- hosted or remote web access
+- Tauri packaging in this first slice
+- local Rust API server
+- `serve --web`
+- object inspector route
+- dominator tree route
+- GC path viewer route
+- query console route
+- live parsing progress
+- upload-to-backend workflow
+- new analysis algorithms or dashboard-only backend data models
+- hosted multi-user web deployment
 
 ## UX Contract
 
 ### Primary user goal
 
-The first dashboard exists for incident-response triage: open the report, identify the most severe or highest-retained leak suspects, narrow the list quickly, expand one item for more context, and move into deeper investigation.
+The first dashboard exists for incident-response triage: open a real Mnemosyne analysis artifact in the browser, identify the most severe or highest-retained leak suspects, narrow the set quickly, expand one row for more context, and prepare to drill into deeper M4 screens later.
 
 ### Visual tone
 
-- dark theme
-- dense engineering-console styling
+- dark engineering-console aesthetic
 - high information density
-- restrained color used as a signal, not decoration
-- monospace accents for IDs and numeric data where useful
-- sharp table-driven layout rather than card-heavy consumer SaaS styling
+- restrained color used as signal rather than decoration
+- table-forward layout rather than soft card-heavy admin UI
+- technical typography and clear data hierarchy
 
-The intended feel is "hardened analysis console," not "friendly analytics app."
+The intent remains "serious heap analysis tool," not generic SaaS dashboard.
 
 ### Information architecture
 
-1. Header bar
-   - heap file name
+1. App shell
+   - top-level title and current artifact identity
+   - left navigation or compact shell navigation for future M4 routes
+   - current route focused on dashboard only in the first slice
+2. Dashboard header
+   - heap file identity
    - analyzed timestamp
-   - profile or mode badge when present
-   - provenance/status badge area
-   - space for future dashboard-level actions
-2. Summary strip
+   - profile/status badges
+   - provenance summary indicator
+3. Summary strip
    - total objects
    - total heap size
    - leak count
    - graph nodes
    - elapsed time
-3. Primary workspace
-   - top leak suspects table or stacked table-like list
-   - sticky filter and search controls directly above the list
-   - inline expandable detail area per leak
-4. Secondary context panels
+4. Primary workspace
+   - top leak suspects table
+   - search and filter controls
+   - inline expandable leak details
+5. Secondary context panels
    - graph metrics
    - histogram snapshot
 
 ### Interaction model
 
-- default sort is severity first, then retained size
-- search matches at least class name, leak ID, and description
-- first-slice filters should cover:
+- browser-first, stateful dashboard experience
+- default sort: severity, then retained size
+- search covers class name, leak ID, and description
+- initial filters cover:
   - severity
   - provenance present vs none
   - minimum retained size
-- leak details expand inline rather than navigating away
-- if client-side behavior fails, the page must remain readable as static HTML
+- leak detail expands inline in the dashboard rather than navigating away
+- artifact load errors render a clear, user-readable invalid-artifact state
 
-## Data Model Use
+## Data Flow
 
-This slice should consume existing `AnalyzeResponse` data rather than inventing a new dashboard-only backend shape.
+The first slice uses a file/artifact flow rather than a live API:
 
-Primary data surfaces:
+1. Mnemosyne CLI produces analysis JSON from existing `AnalyzeResponse`
+2. User opens the browser app
+3. User selects a local JSON artifact
+4. Frontend validates and parses the artifact
+5. Frontend normalizes the parsed JSON into dashboard view state
+6. Dashboard renders the approved first-slice panels
 
-- `AnalyzeResponse.summary`
-- `AnalyzeResponse.leaks`
-- `AnalyzeResponse.graph`
-- `AnalyzeResponse.histogram`
-- `AnalyzeResponse.provenance`
+This keeps the first slice grounded in real data while avoiding premature server work.
 
-Secondary optional surfaces may remain unused in this first slice unless they naturally fit without bloating the dashboard:
+## Frontend Boundaries
+
+### App shell
+
+Responsible for:
+
+- route container
+- page framing
+- top-level empty/loading/error states
+- future route slots for later M4 screens
+
+### Artifact loader
+
+Responsible for:
+
+- selecting a local JSON artifact
+- parsing file contents in browser
+- validating the JSON shape against the first-slice contract
+- returning typed frontend data or a clear error state
+
+### Dashboard route
+
+Responsible for:
+
+- assembling the triage screen from typed data
+- owning dashboard-level filters and sort state
+- coordinating summary strip, leak table, and secondary panels
+
+### Presentation components
+
+Responsible for:
+
+- summary strip
+- leak table
+- leak detail expansion
+- graph metrics panel
+- histogram panel
+- provenance badges
+
+### State layer
+
+Responsible for:
+
+- selected artifact metadata
+- parsed analysis payload
+- filter state
+- sort state
+- expanded leak row state
+
+## Data Model Strategy
+
+The frontend should not define a brand-new product-specific backend contract in the first slice. It should consume the existing JSON shape and create a narrow typed adapter layer around it.
+
+### Canonical source
+
+- existing serialized `AnalyzeResponse`
+
+### First-slice required fields
+
+- `summary`
+- `leaks`
+- `graph`
+- `histogram`
+- `provenance`
+- `elapsed`
+
+### Optional fields
 
 - `thread_report`
 - `string_report`
@@ -185,91 +266,88 @@ Secondary optional surfaces may remain unused in this first slice unless they na
 - `ai`
 - `unreachable`
 
-For the approved first slice, the dashboard should stay focused on core analysis only. Optional analyzers should not be made first-class dashboard panels yet.
+These optional fields should be tolerated by the loader but do not need first-class dashboard panels in this slice.
 
 ## File-Level Design
 
-### Rendering surface
+### Workspace shape
+
+Because the repo currently has no frontend workspace, the first slice should add one explicitly rather than mixing frontend build assets into the Rust crates.
+
+Recommended structure:
+
+- `ui/`
+  - browser-first React app
+- `ui/package.json`
+  - frontend package manifest executed through Bun
+- `ui/bun.lock`
+  - committed frontend lockfile
+- `ui/src/main.tsx`
+  - React entrypoint
+- `ui/src/app/router.tsx`
+  - route setup
+- `ui/src/app/providers.tsx`
+  - TanStack Query and other global providers
+- `ui/src/features/artifact-loader/`
+  - local JSON selection, parsing, and validation
+- `ui/src/features/dashboard/`
+  - dashboard route and presentation components
+- `ui/src/lib/analysis-types.ts`
+  - typed adapter for the JSON artifact shape
+- `ui/src/lib/formatting.ts`
+  - dashboard display helpers
+- `ui/src/state/`
+  - Zustand stores for artifact and dashboard UI state
+
+### Frontend tooling policy
+
+- Bun is the only supported frontend package manager and script runner for this slice
+- frontend setup, install, dev, test, and build commands use `bun` / `bunx`
+- docs should not dual-document npm, pnpm, or yarn commands for this workspace
+- frontend runtime code should remain standard browser/React code rather than using Bun-specific runtime APIs, so the app stays portable to browser and later Tauri builds
+
+### Rust-side contract surface
 
 - `core/src/report/renderer.rs`
-  - remains the public report-dispatch surface
-  - continues to own `render_report()` and the format switch
-  - the current static `render_html()` implementation becomes the entrypoint for the dashboard HTML slice
-
-### Internal organization
-
-- keep the public report surface unchanged
-- allow a small extraction if needed to keep the implementation reviewable, because `renderer.rs` is already large
-- preferred extraction target if the HTML dashboard code becomes unwieldy:
-  - `core/src/report/html_dashboard.rs`
-  - purpose: build the interactive HTML dashboard while keeping `renderer.rs` as dispatch + shared helpers
-
-This is a maintainability choice, not a contract change. The public output path remains `OutputFormat::Html`.
-
-### CLI surface
-
+  - JSON output remains the current artifact path
 - `cli/src/main.rs`
-  - no new command required for this slice
-  - `analyze --format html` remains the delivery path
-- help text or examples may be updated later if the implementation meaningfully changes how the HTML artifact is described
+  - may need small doc/help/example updates later to make the frontend artifact workflow discoverable
 
-### Tests
-
-- renderer unit tests in the report module should validate the new dashboard structure
-- CLI integration should confirm the enhanced HTML path is wired through the existing `analyze` command
-
-## Implementation Boundaries
-
-### Required behavior
-
-- the HTML artifact is self-contained and viewable locally in a browser
-- leak triage is visually dominant over all other sections
-- provenance remains visible and honest
-- empty-leak runs render a clear "No leak suspects detected" state instead of an empty shell
-- histogram and graph context appear as supporting panels, not equal peers to the leak table
-
-### Deferred behavior
-
-- no browser routing
-- no server-backed pagination
-- no route-based object detail screens
-- no live progress updates
-- no graph-heavy visualization dependency introduced just for the first slice
+No live API/server layer is required in this slice.
 
 ## Verification Strategy
 
-### Renderer-level verification
+### Frontend verification
 
-- unit tests for summary strip rendering
-- unit tests for leak-table rendering
-- unit tests for empty leak state
-- unit tests for provenance badge rendering
-- unit tests confirming collapsible detail markup exists
-- unit tests confirming search/filter/sort markup hooks exist
-- regression tests that preserve HTML escaping and XSS hardening
+- unit tests for artifact validation/parsing
+- component tests for summary strip and leak table rendering
+- component tests for empty, invalid, and malformed artifact states
+- component tests for search/filter/sort behavior
+- route-level test for opening the dashboard after loading a valid artifact
 
-### CLI verification
+### Rust-side verification
 
-- integration test confirming `mnemosyne analyze --format html` emits the dashboard structure
-- integration test covering the zero-leak dashboard state if a suitable fixture path already exists
+- keep existing JSON analysis CLI coverage green
+- add or update one integration test if needed to ensure the frontend-facing artifact path remains truthful and documented
 
 ### Non-goals for this slice
 
-- browser automation is not required unless the implementation introduces behavior that cannot be safely regression-tested through rendered HTML structure alone
+- no end-to-end Tauri testing yet
+- no browser-to-Rust live API tests yet
+- no requirement for the full later M4 route set
 
 ## Risks
 
-- `renderer.rs` is already large, so the HTML dashboard can become hard to review if everything stays inline
-- the first slice can accidentally drift toward a full app shell if too many future-screen affordances are made active immediately
-- client-side interaction can obscure graceful fallback behavior if the static HTML path is not kept readable
-- the UI can become generic and product-like instead of tool-like if density and signal hierarchy are not enforced during implementation
-- optional analysis sections can bloat the first dashboard and dilute leak triage if they are pulled in too early
+- the first slice can become too large if it tries to add live APIs or Tauri in the same batch
+- the frontend can drift from the real Rust data model if the typed adapter layer becomes a second contract instead of a thin normalization layer
+- using a heavy generic component library aesthetic would undermine the desired engineering-console tone
+- file-import UX can become clumsy if artifact loading and invalid-state handling are not designed clearly
 
 ## Decision
 
-Proceed with the first M4 slice as an interactive HTML triage dashboard in this order:
+Proceed with the first M4 slice in this order:
 
-1. upgrade the HTML report into a dense dashboard shell
-2. make leak triage the dominant interactive region
-3. add compact summary and supporting graph/histogram context
-4. keep the result self-contained and reusable as the future dashboard shape for `serve --web`
+1. create the browser-first shared frontend workspace
+2. add local JSON artifact loading and typed adaptation of `AnalyzeResponse`
+3. ship the dashboard route and app shell from the approved Stitch direction
+4. defer Tauri packaging and live Rust APIs until after the browser-first slice is stable
