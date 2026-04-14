@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap & Milestones
 
-> **Last updated:** 2026-04-13 (roadmap/design alignment for shipped M3 and approved-scope M5 state)
+> **Last updated:** 2026-04-14 (roadmap/design alignment for shipped M3, approved-scope M5, and current M4 browser-first slice)
 > **Owner:** Tech PM Agent
 > **Status:** Living document — updated after each major implementation batch
 
@@ -205,7 +205,7 @@ The gap remains significant but the architectural path is clear. The object grap
 | ClassLoader analysis | ✅ Delivered | Optional classloader reports now ship in `analyze_heap()`, CLI `analyze --classloaders`, shared report renderers, and MCP `analyze_heap` | Expand duplicate-class / hierarchy-depth analysis if needed | High | Medium | M3 |
 | Collection inspection | ✅ Delivered | M3 Phase 2 inspects `HashMap`, `HashSet`, `ArrayList`, and `ConcurrentHashMap` fill ratio and waste | Expand type coverage and reuse the summary in explorer surfaces | Medium | Medium | M3 |
 | Export / reporting | ✅ Implemented | Good for current scope | Already strong: 5 formats, provenance, XSS hardening. Add CSV, protobuf, flamegraph later | Low | Medium | M2 |
-| UI-based exploration | ❌ Missing | CLI only | Phase from TUI → static HTML → web UI → full explorer | Very High | High | M4 |
+| UI-based exploration | ⚠️ First slice shipped | Browser-first React dashboard under `ui/` now loads serialized `AnalyzeResponse` JSON artifacts for local triage; deeper explorer routes/views remain open | Extend the browser-first slice into richer views and only add a live local API if later evidence justifies it | Very High | High | M4 |
 | Large dump performance | ⚠️ Partial | Streaming parser handles any size; the current in-memory object graph cleared the approved M3 gate with dense synthetic validation through roughly the 2 GB tier, while broader large-tier follow-on remains evidence-driven | Extend validation and consider alternative storage only if future profiling or real-world heaps justify it | High | High | Post-M3 evidence-driven follow-on |
 | Heap snapshot comparison | ⚠️ Partial | Record-level diff plus class-level instance/shallow/retained deltas landed in M3-P1-B2; object-identity and reference-chain diffing are still missing | Extend to object-level diff if stable identity/indexing is added later | Medium | Medium | M3 |
 | Unreachable objects | ✅ Delivered | M3-P1-B2 reports unreachable-object count, shallow size, and per-class breakdown from GC-root reachability traversal | Add richer drill-down and explorer/report views | Medium | Medium | M3 |
@@ -456,8 +456,8 @@ This ensures automation, testing, and integration are never second-class citizen
 |---|---|---|---|
 | TUI (ratatui) | Native Rust, SSH-friendly, fast, no browser required | Complex graph/tree navigation, limited visual fidelity, steep learning curve for rich views | Good for Phase UI-1: explorer mode |
 | Static HTML | Zero server, shareable, portable, already partially implemented | No interactivity for large datasets, hard to do search/filter without JS | Phase UI-2: enhanced reports |
-| Web UI (local) | Rich interactivity, modern UX, familiar tooling | Requires web framework dependency, more complex build, frontend skill needed | Phase UI-3: primary interactive explorer |
-| Desktop (Tauri) | Native feel, full Rust backend, cross-platform | Complex build pipeline, platform-specific issues, distribution challenges | Phase UI-4 alternative |
+| Browser-first React frontend | Rich interactivity, shared UI code, no required local server in the first slice | Requires frontend toolchain and careful artifact-contract discipline | Current M4 first slice |
+| Desktop (Tauri) | Native feel, can wrap the existing browser UI later | Complex build pipeline, platform-specific issues, distribution challenges | Later wrapper path after the browser-first slice |
 | Web app (hosted) | Collaboration, no install, team sharing | Heap data contains sensitive application internals — security and privacy concerns | Future/optional, enterprise only |
 
 ### 5.5 Phased UI Plan
@@ -479,14 +479,11 @@ This ensures automation, testing, and integration are never second-class citizen
 - Object graph mini-visualization using D3.js or similar (embedded)
 - Stack: HTML template generation in Rust, embedded minified JS/CSS
 
-**Phase UI-3: Lightweight Web UI** (Milestone 4)
-- Local web server using `axum` (already familiar Tokio ecosystem)
-- Upload or select heap dump file
-- Real-time parsing progress via WebSocket or SSE
-- Interactive dominator tree browser with drill-down
-- Object graph explorer: click through reference chains
-- Histogram explorer with group-by controls (class, package, classloader)
-- Query interface when OQL lands
+**Phase UI-3: Browser-First Shared Frontend** (Milestone 4)
+- Shared React frontend under `ui/`, with Bun as the supported package manager and script runner
+- Local artifact loader for serialized `AnalyzeResponse` JSON
+- Current shipped first slice: triage dashboard for summary metrics, provenance, graph counts, histogram context, and leak review
+- Future routes: dominator browser, object inspector, GC path viewer, leak drill-down, query views
 - Key screens:
   - **Dashboard**: heap size, object count, top consumers, leak suspect count
   - **Dominator Tree**: expandable tree with retained sizes, search, filter
@@ -494,7 +491,7 @@ This ensures automation, testing, and integration are never second-class citizen
   - **Leak Report**: ranked suspects with evidence chains
   - **GC Path Viewer**: visual path from object to GC root
   - **Query Console**: OQL input with results table
-- Stack: `axum` + `htmx` (progressive enhancement) or React SPA, served from the Rust binary
+- Stack: React + Vite in `ui/`, artifact-driven in the browser first; Tauri remains a later wrapper option
 
 **Phase UI-4: Full Interactive Heap Investigation** (Milestone 6+)
 - Full object reference graph visualization (graph layout engine)
@@ -734,7 +731,7 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 **Key Deliverables:**
 1. Static interactive HTML reports — self-contained, JS-enabled, collapsible, searchable
-2. Local web UI — axum-based server for interactive exploration
+2. Browser-first local UI — shared React frontend with local JSON artifact loading for interactive triage
 3. Dominator tree browser — expandable tree view with retained size bars
 4. Object inspector — click any object to see fields, references, size
 5. Leak report dashboard — visual summary with drill-down
@@ -743,7 +740,7 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 **Dependencies:** M1 (object graph), M3 (analysis features)
 
-**Modules/files affected:** `core/src/report/renderer.rs`, new `core/src/web.rs` or `web/` crate, HTML templates, static assets
+**Modules/files affected:** `core/src/report/renderer.rs`, shared output contracts, `ui/`, HTML templates, static assets
 
 **Complexity:** High
 
@@ -1068,7 +1065,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 | 19 | OQL query engine | P2 | High | XL | M3 Phase 2 data model | M3 | ✅ Done for approved scope — shipped query slice includes retained instance-field projection/filtering and hierarchy-aware `INSTANCEOF`; richer OQL remains future follow-on |
 | 20 | Thread inspection | P1 | High | L | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
 | 21 | ClassLoader analysis | P2 | Medium | L | M1.5 ✅ | M3 | ✅ Done |
-| 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ⚬ Pending |
+| 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ◑ In progress — browser-first `ui/` dashboard slice ships local JSON artifact loading and triage; deeper routes remain pending |
 | 23 | Collection inspection | P1 | High | M | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
 | 24 | Unreachable objects | P2 | Medium | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 25 | Configurable prompt/task runner | P2 | Medium | L | LLM integration | M5 | ✅ Done — rule-based task runner plus YAML prompt-template loading landed |
@@ -1206,7 +1203,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 ### Remaining Roadmap Order
 The remaining roadmap should now execute in this order:
 1. **Small remaining M3 closeout work** — README badge qualifier, real usage examples, IntelliJ stacktrace compatibility, and benchmark/query follow-through only where still justified
-2. **M4 (UI & Usability)** — the next full open milestone: interactive HTML reports and the local web UI on top of shipped M3/M5 capabilities
+2. **M4 (UI & Usability)** — the next full open milestone: interactive HTML reports plus a browser-first local UI on top of shipped M3/M5 capabilities; the loader + triage dashboard first slice now exists, but the milestone remains open for deeper views
 3. **M5 follow-on only where evidence supports it** — broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and transport streaming only if the current request/response contract proves insufficient
 4. **M6 (Ecosystem & Community)** — docs, examples, benchmarks, integrations, and community infrastructure after M4 and any justified M5 follow-on
 
