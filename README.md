@@ -122,6 +122,16 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
+### Browser-first dashboard (current M4 slice)
+The current UI slice lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and currently loads serialized `AnalyzeResponse` JSON artifacts for local triage instead of calling a live local server API. Tauri remains a later wrapper path, not part of this slice.
+
+```bash
+cd ui
+npx --yes bun test
+npx --yes bun run build
+npx --yes bun run lint
+```
+
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
 
@@ -629,7 +639,7 @@ mnemosyne/
 ├── .github/
 │ └── workflows/ci.yml   # GitHub Actions workspace validation
 │
-├── web/# (Future) WASM/Web dashboard
+├── ui/                    # Browser-first React dashboard (current M4 first slice)
 │
 └── Cargo.toml
 ```
@@ -689,7 +699,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 
 ### Current Snapshot
 - M3 is mostly complete: core parity shipped, with small closeout items first and deeper query/scale follow-through only where evidence justifies it
-- M4 is the next full open milestone: UI and usability work
+- M4 remains open: the browser-first `ui/` dashboard first slice exists, and deeper routes/views are still pending
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 follows M4 and any justified M5 follow-on: ecosystem and community expansion
 

@@ -1,20 +1,20 @@
-# Milestone 4 — UI & Usability
+# Milestone 4 - UI & Usability
 
-> **Status:** ⚬ Pending  
+> **Status:** In Progress  
 > **Design Owner:** Design Consulting Agent  
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-04-14
 
 ---
 
 ## Objective
 
-Make Mnemosyne visually accessible to developers who prefer graphical exploration of heap data. Deliver interactive HTML reports and a local web UI that leverage the analysis features built in M1–M3, dramatically widening the user base beyond CLI-only users.
+Make Mnemosyne visually accessible to developers who prefer graphical exploration of heap data. Deliver interactive HTML reports and a browser-first local UI that leverage the analysis features built in M1-M3, widening the user base beyond CLI-only users.
 
 ## Context
 
-Heap analysis is fundamentally a visual and exploratory task. Developers investigating memory leaks navigate dominator trees, inspect reference chains, compare object counts, and drill into specific classes — activities that map poorly to sequential text output. Eclipse MAT's success is inseparable from its GUI-based tree explorers and table views. For Mnemosyne to compete for adoption, it must offer interactive exploration while preserving the CLI-first, automation-friendly foundation.
+Heap analysis is fundamentally a visual and exploratory task. Developers investigating memory leaks navigate dominator trees, inspect reference chains, compare object counts, and drill into specific classes - activities that map poorly to sequential text output. Eclipse MAT's success is inseparable from its GUI-based tree explorers and table views. For Mnemosyne to compete for adoption, it must offer interactive exploration while preserving the CLI-first, automation-friendly foundation.
 
-The current reporting layer (Text, Markdown, HTML, TOON, JSON) provides a solid base. HTML output already includes XSS hardening via `escape_html()`. M4 extends this foundation into interactive experiences.
+The current reporting layer (Text, Markdown, HTML, TOON, JSON) provides a solid base. HTML output already includes XSS hardening via `escape_html()`. M4 now extends this foundation through a shared React frontend under `ui/`, starting with a local JSON artifact loader plus triage dashboard that runs directly in the browser.
 
 ## Scope
 
@@ -26,72 +26,52 @@ The current reporting layer (Text, Markdown, HTML, TOON, JSON) provides a solid 
 5. Provenance badges with color-coded severity
 6. Object graph mini-visualization (embedded D3.js or equivalent)
 
-### Phase UI-3: Lightweight Web UI
-7. Local web server using `axum` (Tokio ecosystem)
-8. Upload or select heap dump file
-9. Real-time parsing progress via WebSocket or SSE
-10. Interactive dominator tree browser with drill-down
-11. Object graph explorer: click through reference chains
-12. Histogram explorer with group-by controls
-13. Query interface (OQL from M3)
-14. Key screens: Dashboard, Dominator Tree, Object Inspector, Leak Report, GC Path Viewer, Query Console
+### Phase UI-3: Browser-First Shared Frontend
+7. Shared React frontend under `ui/`, built with Vite and run with Bun
+8. Local artifact loader for serialized `AnalyzeResponse` JSON output
+9. Current first slice: triage dashboard for summary metrics, provenance, histogram context, graph counts, and leak review
+10. Route and state structure that can grow into deeper explorer views without introducing a live local API yet
+11. Future browser views: Dominator Tree, Object Inspector, Leak Report drill-down, GC Path Viewer, Query Console
 
 ## Non-scope
 
-- Desktop application (Tauri/Electron) — evaluated but deferred to M6+
-- Hosted web application — security and privacy concerns for heap data
+- Desktop application wrapper in this slice - Tauri remains a later packaging path after the browser-first UI proves out
+- Hosted web application - security and privacy concerns for heap data
 - Core analysis logic changes (M3)
 - AI/LLM features (M5)
 - New analysis algorithms
-- Mobile-responsive design (not a use case for heap analysis)
+- Replacing the current artifact-driven flow with a live local server API in the first slice
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    USER INTERFACE                         │
-│                                                         │
-│  Browser ──── http://localhost:PORT ─────→ axum server  │
-│     │                                          │        │
-│     │    ┌──────────────┐                      │        │
-│     ├───→│ Dashboard    │←── Core API ─────────┤        │
-│     │    ├──────────────┤                      │        │
-│     ├───→│ Dominator    │←── DominatorTree ────┤        │
-│     │    │  Tree Browser│                      │        │
-│     │    ├──────────────┤                      │        │
-│     ├───→│ Object       │←── ObjectGraph ──────┤        │
-│     │    │  Inspector   │    Navigation API    │        │
-│     │    ├──────────────┤                      │        │
-│     ├───→│ Leak Report  │←── detect_leaks() ──┤        │
-│     │    ├──────────────┤                      │        │
-│     ├───→│ GC Path      │←── find_gc_path() ──┤        │
-│     │    │  Viewer      │                      │        │
-│     │    ├──────────────┤                      │        │
-│     └───→│ Query        │←── query_heap() ────┘        │
-│          │  Console     │    (M3 OQL)                   │
-│          └──────────────┘                               │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    BROWSER-FIRST UI                         │
+│                                                              │
+│  Browser                                                     │
+│     │                                                        │
+│     ├──> Artifact Loader -> reads serialized AnalyzeResponse │
+│     │                       JSON from local disk             │
+│     │                                                        │
+│     └──> Triage Dashboard -> summary / provenance /          │
+│                              histogram / graph counts /      │
+│                              leak review                     │
+└──────────────────────────────────────────────────────────────┘
            │
-┌──────────┼──────────────────────────────────────────────┐
-│          ▼     WEB SERVER LAYER (new)                   │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  axum routes                                     │   │
-│  │  /api/summary     → HeapSummary JSON             │   │
-│  │  /api/dominators  → DominatorTree (paginated)    │   │
-│  │  /api/objects/:id → ObjectGraph navigation        │   │
-│  │  /api/leaks       → detect_leaks() JSON          │   │
-│  │  /api/gc-path     → find_gc_path() JSON          │   │
-│  │  /api/query       → OQL execution                │   │
-│  │  /ws/progress     → parsing progress stream      │   │
-│  └──────────────────────────────────────────────────┘   │
-│                                                         │
-│  Static assets: HTML templates, embedded JS/CSS         │
-└─────────────────────────────────────────────────────────┘
+┌──────────┼───────────────────────────────────────────────────┐
+│          ▼     FRONTEND WORKSPACE                            │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  ui/                                                  │  │
+│  │  React + Vite                                         │  │
+│  │  Bun-supported scripts: test / build / lint / dev     │  │
+│  │  Shared routes + state for later deeper explorer work │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
            │
-┌──────────┼──────────────────────────────────────────────┐
-│          ▼     CORE LAYER (unchanged)                   │
-│  hprof/ │ graph/ │ analysis/ │ report/ │ ...            │
-└─────────────────────────────────────────────────────────┘
+┌──────────┼───────────────────────────────────────────────────┐
+│          ▼     CORE LAYER (unchanged for this slice)         │
+│  cli/ emits JSON artifacts | core/ defines AnalyzeResponse   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Module/File Impact
@@ -99,43 +79,32 @@ The current reporting layer (Text, Markdown, HTML, TOON, JSON) provides a solid 
 | File | Change Type | Description |
 |---|---|---|
 | `core/src/report/renderer.rs` | Enhanced | Interactive HTML report generation with embedded JS |
-| `core/src/web/mod.rs` | New | Web server module (or separate `web/` crate) |
-| `core/src/web/routes.rs` | New | axum route handlers |
-| `core/src/web/templates/` | New | HTML templates for web UI screens |
-| `core/src/web/static/` | New | Embedded JS/CSS assets |
-| `cli/src/main.rs` | Updated | `mnemosyne serve --web` command |
-| `cli/Cargo.toml` | Updated | axum dependency |
-| `core/Cargo.toml` | Updated | axum, tower, serde_json dependencies |
+| `ui/` | New | Shared browser-first React frontend for the M4 first slice |
+| `ui/src/features/artifact-loader/` | New | Local `AnalyzeResponse` JSON artifact intake |
+| `ui/src/features/dashboard/` | New | Triage dashboard screens and components |
+| `cli/src/main.rs` | Reused | Existing CLI/report output remains the way artifacts are produced |
+| `core/src/lib.rs` and shared types | Reused | Existing `AnalyzeResponse` contract feeds the frontend artifact loader |
 
-**Crate structure decision:** The web UI may warrant a separate `web/` crate in the workspace to isolate the axum/frontend dependency from the core analysis library. This prevents users who only need the core library from pulling in web framework dependencies.
+**Workspace decision:** The first slice keeps the UI in a separate `ui/` workspace directory so browser concerns do not add frontend dependencies to the Rust crates. A later Tauri wrapper can package this same frontend without changing the current browser-first runtime model.
 
 ## API/CLI/Reporting Impact
 
-### New CLI Command
-- `mnemosyne serve --web [--port PORT]` — start local web server and open browser
-
 ### Enhanced Existing Command
-- `mnemosyne analyze --format html` — now produces interactive HTML (collapsible, searchable, sortable) instead of static HTML
+- `mnemosyne analyze --format html` - continues to be the HTML reporting path
 
-### New REST API (web server only)
-- `GET /api/summary` — heap summary JSON
-- `GET /api/dominators?page=N&size=M` — paginated dominator tree
-- `GET /api/objects/:id` — single object with fields, references, referrers
-- `GET /api/leaks` — leak suspects JSON
-- `GET /api/gc-path?object_id=ID&max_depth=N` — GC path JSON
-- `POST /api/query` — OQL query execution (if M3 OQL exists)
-- `WS /ws/progress` — parsing progress WebSocket stream
+### Frontend Artifact Contract
+- Current M4 first slice consumes serialized `AnalyzeResponse` JSON artifacts produced by the existing CLI/reporting surfaces
+- No live local browser API is part of the shipped first slice
+- Future deeper views can either keep extending the artifact model or add a local API later if evidence shows the browser-only artifact path is insufficient
 
 ## Data Model Changes
 
-### New Types
-- `WebConfig` — port, bind address, auto-open browser, progress streaming
-- `DominatorPage` — paginated dominator tree response for large heaps
-- `ObjectDetail` — expanded view of a single object (fields, references, referrers, class info, size)
-- `ProgressEvent` — parsing progress for WebSocket streaming (phase, progress_pct, message)
+### Current first-slice contract
+- Existing `AnalyzeResponse` JSON is the browser data source
+- Frontend-local view models derive summary cards, dashboard tables, provenance badges, and leak triage state from that artifact
 
 ### Existing types remain unchanged
-All core types (`ObjectGraph`, `DominatorTree`, `LeakInsight`, etc.) are consumed as-is through JSON serialization.
+All core analysis types remain owned by the Rust crates. The current UI slice consumes the serialized output contract rather than introducing a parallel API-specific schema.
 
 ## Validation/Testing Strategy
 
@@ -146,65 +115,61 @@ All core types (`ObjectGraph`, `DominatorTree`, `LeakInsight`, etc.) are consume
 - Sortable tables sort by all columns
 - Provenance badges display with correct colors
 
-### Web Server Tests
-- Each API endpoint returns correct JSON
-- Paginated endpoints handle edge cases (empty, single page, many pages)
-- WebSocket progress events fire during parsing
-- Server handles concurrent requests
-- Server gracefully handles invalid object IDs
+### Frontend Tests
+- Artifact loader accepts valid `AnalyzeResponse` JSON and rejects malformed input with readable feedback
+- Dashboard renders summary metrics, provenance, graph counts, histogram context, and leak triage tables from the loaded artifact
+- Layout remains usable on narrow screens for loader and dashboard views
+- Route/state resets correctly when a new artifact is loaded
 
 ### Performance Tests
-- Browser remains responsive with 100K+ objects (virtual scrolling)
-- Dominator tree lazy-loading works for deep trees
-- Web server response time <100ms for API calls with pre-parsed data
+- Browser remains responsive for the current triage dashboard artifact size targets
+- Artifact parsing and client-side state updates remain acceptable on representative `AnalyzeResponse` payloads
 
 ### Security Tests
-- XSS hardening preserved in interactive HTML
-- Web server binds only to localhost by default
-- No sensitive heap data leaked in error responses
-- CSP headers on HTML responses
+- XSS hardening preserved in interactive HTML and dashboard rendering
+- No artifact content is uploaded off-box in the browser-first slice
+- Error messages avoid dumping raw sensitive artifact content back into the UI
 
 ## Rollout/Implementation Phases
 
-### Phase 1 — Enhanced HTML Reports (effort: Large)
+### Phase 1 - Enhanced HTML Reports (effort: Large)
 1. Upgrade HTML report template with embedded minified JS
 2. Collapsible section toggle for leak details
 3. Sortable table headers for histograms and leak lists
 4. Client-side search/filter box
 5. Provenance badge styling (color + icon)
 
-### Phase 2 — Web Server Foundation (effort: Large)
-6. Create web server module (axum, tower)
-7. `mnemosyne serve --web` command
-8. API routes for summary, dominators, leaks
-9. Static asset serving (HTML templates, JS, CSS)
+### Phase 2 - Browser-First Dashboard Foundation (effort: Large)
+6. Stand up shared React frontend under `ui/`
+7. Support Bun-based test/build/lint workflow
+8. Implement local JSON artifact loader for serialized `AnalyzeResponse`
+9. Ship the triage dashboard first slice
 
-### Phase 3 — Interactive Views (effort: XL)
-10. Dashboard screen (summary metrics, top consumers, leak count)
-11. Dominator tree browser (expand/collapse, retained size bars)
-12. Object inspector (click object → fields, references, referrers)
+### Phase 3 - Interactive Views (effort: XL)
+10. Extend beyond the shipped dashboard into dominator and object-inspection views
+11. Add deeper cross-view navigation and drill-down
+12. Decide whether artifact-only data flow remains sufficient or whether a local API is justified
 
-### Phase 4 — Advanced Views (effort: XL)
+### Phase 4 - Advanced Views (effort: XL)
 13. Leak report view with drill-down
 14. GC path visualizer (interactive path diagram)
 15. Query console (if M3 OQL exists)
-16. Parsing progress via WebSocket
+16. Optional Tauri wrapper if packaging evidence supports it
 
 ## Risks and Open Questions
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Frontend complexity may exceed Rust-ecosystem tooling | Medium | High | Consider htmx for progressive enhancement instead of full SPA |
-| axum dependency adds significant compile time | Medium | Medium | Isolate in separate crate; feature-gate |
-| Browser performance with 1M+ objects | High | High | Virtual scrolling, server-side pagination, lazy tree loading |
-| Embedding JS in Rust binary bloats binary size | Medium | Low | Minify and compress; consider lazy download |
-| Security: web server opens local port | Low | Medium | Bind localhost only; document security model |
+| Browser-only artifact flow may not cover deeper explorer needs | Medium | Medium | Reassess after dashboard slices land; add a local API only if justified |
+| Browser performance with large serialized artifacts | Medium | High | Keep first slice triage-focused; add pagination/virtualization as views deepen |
+| Contract drift between Rust `AnalyzeResponse` and frontend assumptions | Medium | High | Keep shared types/tests/docs synchronized and verify with frontend build/tests |
+| Bun workflow mismatch for contributors | Low | Medium | Document Bun as the supported package manager/script runner for `ui/` |
 
 ### Open Questions
-1. htmx vs React SPA? (Recommendation: start with htmx for simplicity, upgrade if needed)
-2. Separate `web/` crate or module in core? (Recommendation: separate crate to isolate deps)
-3. Should the web UI support remote access? (Recommendation: no, localhost-only for security)
-4. D3.js for graph visualization or simpler alternatives? (Recommendation: evaluate vis.js or cytoscape.js)
+1. How far can the artifact-driven browser model go before a live local API is necessary?
+2. Which deeper routes should land next after the shipped loader + triage dashboard?
+3. When packaging is justified, should the first wrapper be Tauri or should the browser build remain standalone longer?
+4. Which visualization libraries are actually needed once graph-heavy views land?
 
 ### Dependencies
 - **Blocked by:** M1.5 (real-world data), M3 (analysis features to display)
