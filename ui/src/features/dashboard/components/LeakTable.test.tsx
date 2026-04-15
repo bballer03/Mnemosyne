@@ -2,11 +2,43 @@ import "../../../test/setup";
 
 import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
+import type { AnalysisArtifact } from "../../../lib/analysis-types";
 import { useDashboardStore } from "../dashboard-store";
 
 import { LeakTable } from "./LeakTable";
+
+const baseArtifact: AnalysisArtifact = {
+  summary: {
+    heapPath: "fixture.hprof",
+    totalObjects: 1,
+    totalSizeBytes: 1,
+    totalRecords: 1,
+  },
+  leaks: [
+    {
+      id: "leak-1",
+      className: "com.example.Cache",
+      leakKind: "CACHE",
+      severity: "HIGH",
+      retainedSizeBytes: 100,
+      shallowSizeBytes: 16,
+      suspectScore: 0.91,
+      instances: 1,
+      description: "Cache leak",
+      provenance: [],
+    },
+  ],
+  recommendations: [],
+  elapsedSeconds: 1,
+  graph: {
+    nodeCount: 1,
+    edgeCount: 1,
+    dominatorCount: 1,
+  },
+  provenance: [],
+};
 
 describe("LeakTable", () => {
   beforeEach(() => {
@@ -177,6 +209,25 @@ describe("LeakTable", () => {
 
     expect(view.queryByText(/inline drilldown is intentionally restrained in this slice/i)).not.toBeInTheDocument();
     expect(view.getByRole("button", { name: /inspect/i })).toBeInTheDocument();
+  });
+
+  it("calls the provided trace callback when Trace is clicked", async () => {
+    const user = userEvent.setup();
+    const onTraceLeak = mock(() => {});
+    const view = render(<LeakTable artifact={baseArtifact} onTraceLeak={onTraceLeak} />);
+
+    await act(async () => {
+      await user.click(view.getByRole("button", { name: /trace/i }));
+    });
+
+    expect(onTraceLeak).toHaveBeenCalledTimes(1);
+    expect(onTraceLeak).toHaveBeenCalledWith("leak-1");
+  });
+
+  it("disables Trace when no trace callback is provided", () => {
+    const view = render(<LeakTable artifact={baseArtifact} />);
+
+    expect(view.getByRole("button", { name: /trace/i })).toBeDisabled();
   });
 
   it("filters leak rows by search, severity, provenance state, and retained bytes", async () => {

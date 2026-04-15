@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Navigate, useInRouterContext } from "react-router-dom";
+import { Link, Navigate, useInRouterContext, useNavigate } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { GraphMetricsPanel } from "./components/GraphMetricsPanel";
 import { HistogramPanel } from "./components/HistogramPanel";
 import { LeakTable } from "./components/LeakTable";
@@ -99,6 +100,11 @@ export function DashboardPage() {
             <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
               Browser-first triage surface powered entirely by the loaded analysis artifact.
             </p>
+            {isInRouterContext ? (
+              <div>
+                <Link to="/artifacts/explorer">Artifact Explorer</Link>
+              </div>
+            ) : null}
           </div>
           <div
             style={{
@@ -135,7 +141,7 @@ export function DashboardPage() {
           alignItems: "start",
         }}
       >
-        <LeakTable artifact={artifact} />
+        {isInRouterContext ? <RoutedLeakTable artifact={artifact} /> : <LeakTable artifact={artifact} />}
         <aside style={{ display: "grid", gap: "1rem" }}>
           <GraphMetricsPanel artifact={artifact} />
           <HistogramPanel artifact={artifact} />
@@ -143,4 +149,10 @@ export function DashboardPage() {
       </section>
     </main>
   );
+}
+
+function RoutedLeakTable({ artifact }: { artifact: AnalysisArtifact }) {
+  const navigate = useNavigate();
+
+  return <LeakTable artifact={artifact} onTraceLeak={(leakId) => navigate(`/leaks/${encodeURIComponent(leakId)}/overview`)} />;
 }
