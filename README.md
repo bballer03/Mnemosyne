@@ -127,7 +127,7 @@ The current UI slice lives under `ui/` as a shared React frontend. It is browser
 
 ```bash
 cd ui
-npx --yes bun test
+npx --yes bun run test
 npx --yes bun run build
 npx --yes bun run lint
 ```
