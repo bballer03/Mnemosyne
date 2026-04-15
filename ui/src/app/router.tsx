@@ -3,6 +3,10 @@ import { Navigate, createBrowserRouter, createMemoryRouter, RouterProvider, type
 import { ArtifactLoaderPage } from "../features/artifact-loader/ArtifactLoaderPage";
 import { ArtifactExplorerPage } from "../features/artifact-explorer/ArtifactExplorerPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
+import { HeapDominatorPage } from "../features/heap-explorer/HeapDominatorPage";
+import { HeapExplorerLayout } from "../features/heap-explorer/HeapExplorerLayout";
+import { HeapObjectInspectorPage } from "../features/heap-explorer/HeapObjectInspectorPage";
+import { HeapQueryConsolePage } from "../features/heap-explorer/HeapQueryConsolePage";
 import { LeakExplainPage } from "../features/leak-workspace/LeakExplainPage";
 import { LeakFixPage } from "../features/leak-workspace/LeakFixPage";
 import { LeakGcPathPage } from "../features/leak-workspace/LeakGcPathPage";
@@ -22,6 +26,28 @@ export const routes: RouteObject[] = [
   {
     path: "/artifacts/explorer",
     element: <ArtifactExplorerPage />,
+  },
+  {
+    path: "/heap-explorer",
+    element: <HeapExplorerLayout />,
+    children: [
+      {
+        index: true,
+        element: <Navigate to="dominators" replace />,
+      },
+      {
+        path: "dominators",
+        element: <HeapDominatorPage />,
+      },
+      {
+        path: "object-inspector",
+        element: <HeapObjectInspectorPage />,
+      },
+      {
+        path: "query-console",
+        element: <HeapQueryConsolePage />,
+      },
+    ],
   },
   {
     path: "/leaks/:leakId",

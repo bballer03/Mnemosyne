@@ -256,6 +256,59 @@ describe("loadAnalysisArtifactFromText", () => {
       },
     });
   });
+
+  it("round-trips serialized dominator rows into the frontend graph shape", () => {
+    const parsed = loadAnalysisArtifactFromText(
+      JSON.stringify({
+        summary: {
+          heap_path: "heap.hprof",
+          total_objects: 42,
+          total_size_bytes: 2048,
+          classes: [],
+          generated_at: "2026-04-14T00:00:00Z",
+          header: null,
+          total_records: 2,
+          record_stats: [],
+        },
+        leaks: [],
+        recommendations: [],
+        elapsed: { secs: 1, nanos: 0 },
+        graph: {
+          node_count: 200,
+          edge_count: 400,
+          dominators: [
+            {
+              name: "com.example.Cache",
+              class_name: "com.example.Cache",
+              object_id: "0x0000000000001234",
+              dominates: 7,
+              immediate_dominator: "com.example.Root",
+              retained_size: 1024,
+              shallow_size: 64,
+            },
+          ],
+        },
+        provenance: [],
+      }),
+    );
+
+    expect(parsed.graph).toEqual({
+      nodeCount: 200,
+      edgeCount: 400,
+      dominatorCount: 1,
+      dominators: [
+        {
+          name: "com.example.Cache",
+          className: "com.example.Cache",
+          objectId: "0x0000000000001234",
+          dominates: 7,
+          immediateDominator: "com.example.Root",
+          retainedSize: 1024,
+          shallowSize: 64,
+        },
+      ],
+    });
+  });
 });
 
 describe("useArtifactStore", () => {
@@ -278,6 +331,7 @@ describe("useArtifactStore", () => {
         nodeCount: 1,
         edgeCount: 2,
         dominatorCount: 0,
+        dominators: [],
       },
       provenance: [],
     });

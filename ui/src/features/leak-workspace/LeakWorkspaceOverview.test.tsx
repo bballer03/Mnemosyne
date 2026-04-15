@@ -31,6 +31,7 @@ function seedArtifact(overrides?: Partial<ReturnType<typeof buildLeak>>) {
           nodeCount: 200,
           edgeCount: 400,
           dominatorCount: 10,
+          dominators: [],
         },
         provenance: [],
       },

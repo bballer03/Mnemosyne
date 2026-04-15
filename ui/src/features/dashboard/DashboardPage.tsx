@@ -101,8 +101,9 @@ export function DashboardPage() {
               Browser-first triage surface powered entirely by the loaded analysis artifact.
             </p>
             {isInRouterContext ? (
-              <div>
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                 <Link to="/artifacts/explorer">Artifact Explorer</Link>
+                <Link to="/heap-explorer/dominators">Heap Explorer</Link>
               </div>
             ) : null}
           </div>

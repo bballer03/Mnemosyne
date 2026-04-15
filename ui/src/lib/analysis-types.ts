@@ -29,6 +29,15 @@ export type AnalysisArtifact = {
     nodeCount: number;
     edgeCount: number;
     dominatorCount: number;
+    dominators: Array<{
+      name: string;
+      className: string;
+      objectId: string;
+      dominates: number;
+      immediateDominator?: string;
+      retainedSize: number;
+      shallowSize: number;
+    }>;
   };
   histogram?: {
     groupBy: string;
@@ -145,6 +154,52 @@ function readOptionalString(value: unknown, field: string): string | undefined {
   }
 
   return readString(value, field);
+}
+
+function readOptionalNonEmptyString(value: unknown, field: string): string | undefined {
+  const parsed = readOptionalString(value, field);
+  return parsed === "" ? undefined : parsed;
+}
+
+function parseGraphDominatorRows(
+  value: unknown,
+): NonNullable<AnalysisArtifact["graph"]>["dominators"] {
+  const dominators = readArray(value, "graph.dominators");
+
+  return dominators.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(
+        `Invalid Mnemosyne analysis artifact: expected graph.dominators[${index}] to be an object`,
+      );
+    }
+
+    const name = readString(entry.name, `graph.dominators[${index}].name`);
+
+    return {
+      name,
+      className: readOptionalNonEmptyString(
+        entry.class_name,
+        `graph.dominators[${index}].class_name`,
+      ) ?? name,
+      objectId: readOptionalString(entry.object_id, `graph.dominators[${index}].object_id`) ?? "",
+      dominates: readOptionalNumber(entry.dominates, `graph.dominators[${index}].dominates`) ?? 0,
+      immediateDominator:
+        entry.immediate_dominator === null
+          ? undefined
+          : readOptionalString(
+              entry.immediate_dominator,
+              `graph.dominators[${index}].immediate_dominator`,
+            ),
+      retainedSize: readOptionalNumber(
+        entry.retained_size,
+        `graph.dominators[${index}].retained_size`,
+      ) ?? 0,
+      shallowSize: readOptionalNumber(
+        entry.shallow_size,
+        `graph.dominators[${index}].shallow_size`,
+      ) ?? 0,
+    };
+  });
 }
 
 function readOptionalGeneratedAt(value: unknown, field: string): string | undefined {
@@ -532,7 +587,7 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     throw new Error("Invalid Mnemosyne analysis artifact: missing graph");
   }
 
-  const dominators = readArray(input.graph.dominators, "graph.dominators");
+  const dominators = parseGraphDominatorRows(input.graph.dominators);
 
   const histogram = input.histogram === undefined
     ? undefined
@@ -640,6 +695,7 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
       nodeCount: readNumber(input.graph.node_count, "graph.node_count"),
       edgeCount: readNumber(input.graph.edge_count, "graph.edge_count"),
       dominatorCount: dominators.length,
+      dominators,
     },
     histogram,
     unreachable,

@@ -16,10 +16,16 @@ pub struct GraphMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DominatorNode {
     pub name: String,
+    #[serde(default)]
+    pub class_name: String,
+    #[serde(default)]
+    pub object_id: String,
     pub dominates: usize,
     pub immediate_dominator: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub retained_size: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub shallow_size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,6 +68,11 @@ pub struct UnreachableClassEntry {
 
 fn is_zero(v: &u64) -> bool {
     *v == 0
+}
+
+fn format_graph_object_id(object_id: ObjectId, id_size: u8) -> String {
+    let width = usize::from(id_size) * 2;
+    format!("0x{object_id:0width$X}")
 }
 
 pub fn build_histogram(
@@ -226,12 +237,12 @@ pub fn build_graph_metrics_from_dominator(
     let mut dominators = Vec::with_capacity(top.len());
 
     for &(obj_id, retained) in &top {
-        let name = graph
-            .objects
-            .get(&obj_id)
+        let object = graph.objects.get(&obj_id);
+        let class_name = object
             .and_then(|obj| graph.class_name(obj.class_id))
             .unwrap_or("<unknown>")
             .to_string();
+        let shallow_size = object.map(|obj| u64::from(obj.shallow_size)).unwrap_or(0);
 
         let dominates = dom.dominated_by(obj_id).len();
 
@@ -243,10 +254,13 @@ pub fn build_graph_metrics_from_dominator(
             .map(String::from);
 
         dominators.push(DominatorNode {
-            name,
+            name: class_name.clone(),
+            class_name,
+            object_id: format_graph_object_id(obj_id, graph.identifier_size),
             dominates,
             immediate_dominator: immediate,
             retained_size: retained,
+            shallow_size,
         });
     }
 
@@ -327,9 +341,12 @@ pub fn summarize_graph(summary: &HeapSummary) -> GraphMetrics {
         });
         dominators.push(DominatorNode {
             name: logical_name,
+            class_name: String::new(),
+            object_id: String::new(),
             dominates,
             immediate_dominator: immediate,
             retained_size: 0,
+            shallow_size: 0,
         });
     }
 
@@ -408,6 +425,48 @@ mod tests {
         assert_eq!(metrics.dominators[0].retained_size, 60);
         assert_eq!(metrics.dominators[1].retained_size, 50);
         assert_eq!(metrics.dominators[2].retained_size, 30);
+    }
+
+    #[test]
+    fn build_graph_metrics_from_dominator_exposes_browser_navigation_fields() {
+        let mut obj_graph = make_test_graph(
+            &[
+                (0x1000, 0x100, 10, &[0x2000]),
+                (0x2000, 0x200, 20, &[0x3000]),
+                (0x3000, 0x300, 30, &[]),
+            ],
+            &[0x1000],
+        );
+        add_class(&mut obj_graph, 0x100, "com.example.Root", 0);
+        add_class(&mut obj_graph, 0x200, "com.example.Parent", 0);
+        add_class(&mut obj_graph, 0x300, "com.example.Child", 0);
+
+        let dom = build_dominator_tree(&obj_graph);
+        let metrics = build_graph_metrics_from_dominator(&dom, &obj_graph);
+
+        assert_eq!(metrics.dominators.len(), 3);
+        assert_eq!(metrics.dominators[0].name, "com.example.Root");
+        assert_eq!(metrics.dominators[0].class_name, "com.example.Root");
+        assert_eq!(metrics.dominators[0].object_id, "0x0000000000001000");
+        assert_eq!(metrics.dominators[0].shallow_size, 10);
+
+        assert_eq!(metrics.dominators[1].name, "com.example.Parent");
+        assert_eq!(metrics.dominators[1].class_name, "com.example.Parent");
+        assert_eq!(metrics.dominators[1].object_id, "0x0000000000002000");
+        assert_eq!(
+            metrics.dominators[1].immediate_dominator.as_deref(),
+            Some("com.example.Root")
+        );
+        assert_eq!(metrics.dominators[1].shallow_size, 20);
+
+        assert_eq!(metrics.dominators[2].name, "com.example.Child");
+        assert_eq!(metrics.dominators[2].class_name, "com.example.Child");
+        assert_eq!(metrics.dominators[2].object_id, "0x0000000000003000");
+        assert_eq!(
+            metrics.dominators[2].immediate_dominator.as_deref(),
+            Some("com.example.Parent")
+        );
+        assert_eq!(metrics.dominators[2].shallow_size, 30);
     }
 
     #[test]

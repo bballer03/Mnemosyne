@@ -303,4 +303,173 @@ describe("parseAnalysisArtifact", () => {
       },
     });
   });
+
+  it("preserves serialized dominator rows for browser navigation", () => {
+    const parsed = parseAnalysisArtifact({
+      summary: {
+        heap_path: "heap.hprof",
+        total_objects: 42,
+        total_size_bytes: 2048,
+        classes: [],
+        generated_at: "2026-04-14T00:00:00Z",
+        header: null,
+        total_records: 2,
+        record_stats: [],
+      },
+      leaks: [],
+      recommendations: [],
+      elapsed: { secs: 1, nanos: 0 },
+      graph: {
+        node_count: 200,
+        edge_count: 400,
+        dominators: [
+          {
+            name: "com.example.Cache",
+            class_name: "com.example.Cache",
+            object_id: "0x0000000000001234",
+            dominates: 7,
+            immediate_dominator: "com.example.Root",
+            retained_size: 1024,
+            shallow_size: 64,
+          },
+        ],
+      },
+      provenance: [],
+    });
+
+    expect(parsed.graph).toEqual({
+      nodeCount: 200,
+      edgeCount: 400,
+      dominatorCount: 1,
+      dominators: [
+        {
+          name: "com.example.Cache",
+          className: "com.example.Cache",
+          objectId: "0x0000000000001234",
+          dominates: 7,
+          immediateDominator: "com.example.Root",
+          retainedSize: 1024,
+          shallowSize: 64,
+        },
+      ],
+    });
+  });
+
+  it("falls back to name when fallback dominator rows serialize an empty class_name", () => {
+    const parsed = parseAnalysisArtifact({
+      summary: {
+        heap_path: "heap.hprof",
+        total_objects: 42,
+        total_size_bytes: 2048,
+        classes: [],
+        generated_at: "2026-04-14T00:00:00Z",
+        header: null,
+        total_records: 2,
+        record_stats: [],
+      },
+      leaks: [],
+      recommendations: [],
+      elapsed: { secs: 1, nanos: 0 },
+      graph: {
+        node_count: 2,
+        edge_count: 1,
+        dominators: [
+          {
+            name: "com.example.FallbackNode",
+            class_name: "",
+            object_id: "",
+            dominates: 1,
+            retained_size: 0,
+            shallow_size: 0,
+          },
+        ],
+      },
+      provenance: [],
+    });
+
+    expect(parsed.graph.dominators[0]?.className).toBe("com.example.FallbackNode");
+  });
+
+  it("maps null immediate_dominator to undefined for root dominator rows", () => {
+    const parsed = parseAnalysisArtifact({
+      summary: {
+        heap_path: "heap.hprof",
+        total_objects: 42,
+        total_size_bytes: 2048,
+        classes: [],
+        generated_at: "2026-04-14T00:00:00Z",
+        header: null,
+        total_records: 2,
+        record_stats: [],
+      },
+      leaks: [],
+      recommendations: [],
+      elapsed: { secs: 1, nanos: 0 },
+      graph: {
+        node_count: 1,
+        edge_count: 0,
+        dominators: [
+          {
+            name: "com.example.Root",
+            class_name: "com.example.Root",
+            object_id: "0x0000000000001000",
+            dominates: 0,
+            immediate_dominator: null,
+            retained_size: 1024,
+            shallow_size: 64,
+          },
+        ],
+      },
+      provenance: [],
+    });
+
+    expect(parsed.graph.dominators[0]?.immediateDominator).toBeUndefined();
+  });
+
+  it("rejects null for optional strings outside dominator immediate_dominator", () => {
+    expect(() =>
+      parseAnalysisArtifact({
+        summary: {
+          heap_path: "heap.hprof",
+          total_objects: 42,
+          total_size_bytes: 2048,
+          classes: [],
+          generated_at: "2026-04-14T00:00:00Z",
+          header: null,
+          total_records: 2,
+          record_stats: [],
+        },
+        leaks: [
+          {
+            id: "leak-1",
+            class_name: "com.example.Cache",
+            leak_kind: "CACHE",
+            severity: "HIGH",
+            retained_size_bytes: 1024,
+            instances: 4,
+            description: "Cache retains request objects",
+            provenance: [{ kind: "FALLBACK", detail: null }],
+          },
+        ],
+        recommendations: [],
+        elapsed: { secs: 1, nanos: 0 },
+        graph: {
+          node_count: 1,
+          edge_count: 0,
+          dominators: [
+            {
+              name: "com.example.Root",
+              class_name: "com.example.Root",
+              object_id: "0x0000000000001000",
+              dominates: 0,
+              immediate_dominator: null,
+              retained_size: 1024,
+              shallow_size: 64,
+            },
+          ],
+        },
+        provenance: [],
+      }),
+    ).toThrow(/expected leaks\[0\]\.provenance\[0\]\.detail to be a string/i);
+  });
 });

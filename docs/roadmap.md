@@ -205,7 +205,7 @@ The gap remains significant but the architectural path is clear. The object grap
 | ClassLoader analysis | ✅ Delivered | Optional classloader reports now ship in `analyze_heap()`, CLI `analyze --classloaders`, shared report renderers, and MCP `analyze_heap` | Expand duplicate-class / hierarchy-depth analysis if needed | High | Medium | M3 |
 | Collection inspection | ✅ Delivered | M3 Phase 2 inspects `HashMap`, `HashSet`, `ArrayList`, and `ConcurrentHashMap` fill ratio and waste | Expand type coverage and reuse the summary in explorer surfaces | Medium | Medium | M3 |
 | Export / reporting | ✅ Implemented | Good for current scope | Already strong: 5 formats, provenance, XSS hardening. Add CSV, protobuf, flamegraph later | Low | Medium | M2 |
-| UI-based exploration | ⚠️ First slice shipped | Browser-first React dashboard under `ui/` now loads serialized `AnalyzeResponse` JSON artifacts for local triage; deeper explorer routes/views remain open | Extend the browser-first slice into richer views and only add a live local API if later evidence justifies it | Very High | High | M4 |
+| UI-based exploration | ⚠️ Leak workspace slice landed locally | Browser-first React frontend under `ui/` now ships the local artifact loader, triage dashboard, and a leak workspace route family under `/leaks/:leakId`. `overview` is artifact-backed; `explain`, `gc-path`, `source-map`, and `fix` rely on a narrow local live-detail adapter boundary, and `source-map`, `fix`, or `gc-path` may still be unavailable when `projectRoot` or `objectId` are not yet seeded. | Extend the browser-first slice, keep the live-detail boundary narrow, and only introduce broader browser RPC if later evidence justifies it | Very High | High | M4 |
 | Large dump performance | ⚠️ Partial | Streaming parser handles any size; the current in-memory object graph cleared the approved M3 gate with dense synthetic validation through roughly the 2 GB tier, while broader large-tier follow-on remains evidence-driven | Extend validation and consider alternative storage only if future profiling or real-world heaps justify it | High | High | Post-M3 evidence-driven follow-on |
 | Heap snapshot comparison | ⚠️ Partial | Record-level diff plus class-level instance/shallow/retained deltas landed in M3-P1-B2; object-identity and reference-chain diffing are still missing | Extend to object-level diff if stable identity/indexing is added later | Medium | Medium | M3 |
 | Unreachable objects | ✅ Delivered | M3-P1-B2 reports unreachable-object count, shallow size, and per-class breakdown from GC-root reachability traversal | Add richer drill-down and explorer/report views | Medium | Medium | M3 |
@@ -482,8 +482,11 @@ This ensures automation, testing, and integration are never second-class citizen
 **Phase UI-3: Browser-First Shared Frontend** (Milestone 4)
 - Shared React frontend under `ui/`, with Bun as the supported package manager and script runner
 - Local artifact loader for serialized `AnalyzeResponse` JSON
-- Current shipped first slice: triage dashboard for summary metrics, provenance, graph counts, histogram context, and leak review
-- Future routes: dominator browser, object inspector, GC path viewer, leak drill-down, query views
+- Shipped local slices: triage dashboard plus a leak workspace route family under `/leaks/:leakId` with `overview`, `explain`, `gc-path`, `source-map`, and `fix` subroutes
+- `overview` is artifact-backed and immediate
+- `explain`, `gc-path`, `source-map`, and `fix` cross a narrow local live-detail adapter boundary instead of a generalized app-wide browser RPC layer
+- Current limitation: `source-map`, `fix`, and `gc-path` may remain unavailable when `projectRoot` or `objectId` are not yet seeded
+- Future routes: dominator browser, object inspector, broader query views, and any other explorer follow-through justified by usage
 - Key screens:
   - **Dashboard**: heap size, object count, top consumers, leak suspect count
   - **Dominator Tree**: expandable tree with retained sizes, search, filter
@@ -1065,7 +1068,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 | 19 | OQL query engine | P2 | High | XL | M3 Phase 2 data model | M3 | ✅ Done for approved scope — shipped query slice includes retained instance-field projection/filtering and hierarchy-aware `INSTANCEOF`; richer OQL remains future follow-on |
 | 20 | Thread inspection | P1 | High | L | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
 | 21 | ClassLoader analysis | P2 | Medium | L | M1.5 ✅ | M3 | ✅ Done |
-| 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ◑ In progress — browser-first `ui/` dashboard slice ships local JSON artifact loading and triage; deeper routes remain pending |
+| 22 | Local web UI | P2 | High | XL | HTML reports | M4 | ◑ In progress — browser-first `ui/` ships local JSON artifact loading, triage, and a leak workspace route family under `/leaks/:leakId`; broader explorer routes and stronger context seeding remain pending |
 | 23 | Collection inspection | P1 | High | M | M1.5 ✅ | M3 | ✅ Done (M3 Phase 2) |
 | 24 | Unreachable objects | P2 | Medium | M | M1.5 ✅ | M3 | ✅ Done (M3-P1-B2) |
 | 25 | Configurable prompt/task runner | P2 | Medium | L | LLM integration | M5 | ✅ Done — rule-based task runner plus YAML prompt-template loading landed |
@@ -1203,7 +1206,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 ### Remaining Roadmap Order
 The remaining roadmap should now execute in this order:
 1. **Small remaining M3 closeout work** — README badge qualifier, real usage examples, IntelliJ stacktrace compatibility, and benchmark/query follow-through only where still justified
-2. **M4 (UI & Usability)** — the next full open milestone: interactive HTML reports plus a browser-first local UI on top of shipped M3/M5 capabilities; the loader + triage dashboard first slice now exists, but the milestone remains open for deeper views
+2. **M4 (UI & Usability)** — the next full open milestone: interactive HTML reports plus a browser-first local UI on top of shipped M3/M5 capabilities; the loader, triage dashboard, and leak workspace route family now exist, but the milestone remains open for broader explorer coverage and stronger live-detail context seeding
 3. **M5 follow-on only where evidence supports it** — broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and transport streaming only if the current request/response contract proves insufficient
 4. **M6 (Ecosystem & Community)** — docs, examples, benchmarks, integrations, and community infrastructure after M4 and any justified M5 follow-on
 
@@ -1262,5 +1265,5 @@ The remaining roadmap should now execute in this order:
 ---
 
 *This roadmap is a living document. Update it after each major batch completion.*
-*Last review: roadmap/design alignment for shipped M3 and approved-scope M5 state (2026-04-13).*
-*Next review: after the small remaining M3 closeout batch or the first M4 slice lands.*
+*Last review: roadmap/design alignment for shipped M3, approved-scope M5, and the current M4 browser-first leak-workspace slice (2026-04-14).*
+*Next review: after the next M4 explorer follow-on batch or the small remaining M3 closeout batch.*

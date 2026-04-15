@@ -42,6 +42,7 @@ function seedArtifact(heapPath = "fixture.hprof") {
           nodeCount: 200,
           edgeCount: 400,
           dominatorCount: 10,
+          dominators: [],
         },
         provenance: [],
       },

@@ -36,18 +36,23 @@ const baseArtifact: AnalysisArtifact = {
     nodeCount: 1,
     edgeCount: 1,
     dominatorCount: 1,
+    dominators: [],
   },
   provenance: [],
 };
 
 describe("LeakTable", () => {
   beforeEach(() => {
-    useDashboardStore.getState().reset();
+    act(() => {
+      useDashboardStore.getState().reset();
+    });
   });
 
   afterEach(() => {
-    useDashboardStore.getState().reset();
     cleanup();
+    act(() => {
+      useDashboardStore.getState().reset();
+    });
   });
 
   it("renders leak rows from the artifact", () => {
@@ -78,14 +83,16 @@ describe("LeakTable", () => {
             nodeCount: 1,
             edgeCount: 1,
             dominatorCount: 1,
+            dominators: [],
           },
           provenance: [],
         }}
       />,
     );
+    const panel = within(view.container);
 
-    expect(view.getByText(/com\.example\.Cache/i)).toBeInTheDocument();
-    expect(view.getByText(/fallback/i)).toBeInTheDocument();
+    expect(panel.getByText(/com\.example\.Cache/i)).toBeInTheDocument();
+    expect(panel.getByText(/fallback/i)).toBeInTheDocument();
   });
 
   it("renders the explicit empty-state copy when there are no leaks", () => {
@@ -105,6 +112,7 @@ describe("LeakTable", () => {
             nodeCount: 1,
             edgeCount: 1,
             dominatorCount: 1,
+            dominators: [],
           },
           provenance: [],
         }}
@@ -144,6 +152,7 @@ describe("LeakTable", () => {
             nodeCount: 1,
             edgeCount: 1,
             dominatorCount: 1,
+            dominators: [],
           },
           provenance: [],
         }}
@@ -188,6 +197,7 @@ describe("LeakTable", () => {
             nodeCount: 1,
             edgeCount: 1,
             dominatorCount: 1,
+            dominators: [],
           },
           provenance: [],
         }}
@@ -297,6 +307,7 @@ describe("LeakTable", () => {
             nodeCount: 1,
             edgeCount: 1,
             dominatorCount: 1,
+            dominators: [],
           },
           provenance: [],
         }}

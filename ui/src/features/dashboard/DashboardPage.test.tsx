@@ -13,6 +13,56 @@ import { LeakWorkspaceOverview } from "../leak-workspace/LeakWorkspaceOverview";
 
 import { DashboardPage } from "./DashboardPage";
 
+function createArtifactFixture() {
+  return {
+    summary: {
+      heapPath: "fixture.hprof",
+      totalObjects: 42,
+      totalSizeBytes: 2048,
+      generatedAt: "2026-04-14T00:00:00Z",
+      totalRecords: 2,
+    },
+    leaks: [
+      {
+        id: "leak-1",
+        className: "com.example.Cache",
+        leakKind: "CACHE",
+        severity: "HIGH",
+        retainedSizeBytes: 1024,
+        shallowSizeBytes: 64,
+        suspectScore: 0.98,
+        instances: 4,
+        description: "Cache retains request objects",
+        provenance: [],
+      },
+    ],
+    recommendations: [],
+    elapsedSeconds: 1,
+    graph: {
+      nodeCount: 200,
+      edgeCount: 400,
+      dominatorCount: 1,
+      dominators: [
+        {
+          name: "com.example.Cache",
+          className: "com.example.Cache",
+          objectId: "0xdeadbeef",
+          dominates: 12,
+          retainedSize: 1024,
+          shallowSize: 64,
+        },
+      ],
+    },
+    histogram: {
+      groupBy: "class",
+      totalInstances: 42,
+      totalShallowSize: 2048,
+      entries: [],
+    },
+    provenance: [],
+  };
+}
+
 describe("DashboardPage", () => {
   beforeEach(() => {
     act(() => {
@@ -21,10 +71,11 @@ describe("DashboardPage", () => {
   });
 
   afterEach(() => {
+    cleanup();
+
     act(() => {
       useArtifactStore.getState().reset();
     });
-    cleanup();
   });
 
   it("renders summary metrics and top leak section from loaded artifact", () => {
@@ -60,6 +111,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           histogram: {
             groupBy: "class",
@@ -103,6 +155,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           provenance: [{ kind: "FALLBACK" }, { kind: "HEURISTIC" }],
         },
@@ -134,6 +187,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           provenance: [],
         },
@@ -171,6 +225,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           provenance: [],
         },
@@ -241,6 +296,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           provenance: [],
         },
@@ -292,6 +348,7 @@ describe("DashboardPage", () => {
             nodeCount: 200,
             edgeCount: 400,
             dominatorCount: 10,
+            dominators: [],
           },
           histogram: {
             groupBy: "class",
@@ -318,5 +375,25 @@ describe("DashboardPage", () => {
 
     expect(router.state.location.pathname).toBe("/artifacts/explorer");
     expect(view.getByRole("heading", { name: /artifact explorer/i })).toBeInTheDocument();
+  });
+
+  it("navigates from the dashboard to heap explorer dominators", async () => {
+    const user = userEvent.setup();
+
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: createArtifactFixture(),
+      });
+    });
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/dashboard"] });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    await user.click(view.getByRole("link", { name: /heap explorer/i }));
+
+    expect(router.state.location.pathname).toBe("/heap-explorer/dominators");
+    expect(view.getByRole("heading", { name: /heap explorer/i })).toBeInTheDocument();
   });
 });

@@ -38,6 +38,7 @@ function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }):
       nodeCount: 200,
       edgeCount: 400,
       dominatorCount: 10,
+      dominators: [],
     },
     histogram: options?.histogram,
     stringReport: {
@@ -164,10 +165,11 @@ describe("ArtifactExplorerPage", () => {
   });
 
   afterEach(() => {
+    cleanup();
+
     act(() => {
       useArtifactStore.getState().reset();
     });
-    cleanup();
   });
 
   it("redirects back to the loader when no artifact is loaded", () => {
