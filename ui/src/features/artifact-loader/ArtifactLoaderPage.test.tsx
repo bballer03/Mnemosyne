@@ -48,8 +48,10 @@ function createDeferred<T>() {
 
 describe("ArtifactLoaderPage", () => {
   beforeEach(() => {
-    useArtifactStore.getState().reset();
-    useDashboardStore.getState().reset();
+    act(() => {
+      useArtifactStore.getState().reset();
+      useDashboardStore.getState().reset();
+    });
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -58,9 +60,11 @@ describe("ArtifactLoaderPage", () => {
   });
 
   afterEach(() => {
-    useArtifactStore.getState().reset();
-    useDashboardStore.getState().reset();
     cleanup();
+    act(() => {
+      useArtifactStore.getState().reset();
+      useDashboardStore.getState().reset();
+    });
   });
 
   it("shows the selected artifact name after a valid JSON load", async () => {

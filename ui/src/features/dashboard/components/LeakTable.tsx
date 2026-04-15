@@ -29,7 +29,13 @@ function severityTone(severity: string) {
   return { text: "#cbd5e1", border: "#334155", background: "rgba(30, 41, 59, 0.7)" };
 }
 
-export function LeakTable({ artifact }: { artifact: AnalysisArtifact }) {
+export function LeakTable({
+  artifact,
+  onTraceLeak,
+}: {
+  artifact: AnalysisArtifact;
+  onTraceLeak?: (leakId: string) => void;
+}) {
   const {
     search,
     severity,
@@ -302,14 +308,15 @@ export function LeakTable({ artifact }: { artifact: AnalysisArtifact }) {
                         </button>
                         <button
                           type="button"
-                          disabled
-                          title="Deep trace routes land in the next slice"
+                          disabled={typeof onTraceLeak !== "function"}
+                          onClick={() => onTraceLeak?.(leak.id)}
                           style={{
                             borderRadius: 999,
-                            border: "1px solid #1e293b",
+                            border: "1px solid #334155",
                             background: "rgba(15, 23, 42, 0.8)",
-                            color: "#64748b",
+                            color: "#cbd5e1",
                             padding: "0.35rem 0.7rem",
+                            cursor: "pointer",
                           }}
                         >
                           Trace

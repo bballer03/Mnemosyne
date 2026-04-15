@@ -123,11 +123,11 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
 ### Browser-first dashboard (current M4 slice)
-The current UI slice lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and currently loads serialized `AnalyzeResponse` JSON artifacts for local triage instead of calling a live local server API. Tauri remains a later wrapper path, not part of this slice.
+The current UI slice lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships a local artifact loader plus a leak triage flow that now includes a dedicated leak workspace route family under `/leaks/:leakId` with `overview`, `explain`, `gc-path`, `source-map`, and `fix` subroutes. `overview` stays artifact-backed and immediate, while the other subroutes cross a narrow local live-detail adapter boundary instead of a generalized app-wide browser RPC layer. `source-map`, `fix`, and `gc-path` may still remain unavailable when `projectRoot` or `objectId` are not yet seeded. Tauri remains a later wrapper path, not part of this slice.
 
 ```bash
 cd ui
-npx --yes bun test
+npx --yes bun run test
 npx --yes bun run build
 npx --yes bun run lint
 ```
@@ -699,7 +699,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 
 ### Current Snapshot
 - M3 is mostly complete: core parity shipped, with small closeout items first and deeper query/scale follow-through only where evidence justifies it
-- M4 remains open: the browser-first `ui/` dashboard first slice exists, and deeper routes/views are still pending
+- M4 remains open: the browser-first `ui/` frontend now ships the local artifact loader, triage dashboard, and leak workspace route family under `/leaks/:leakId`; broader explorer coverage and stronger context seeding are still pending
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 follows M4 and any justified M5 follow-on: ecosystem and community expansion
 
