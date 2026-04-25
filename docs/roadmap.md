@@ -679,7 +679,7 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 > **Design Reference:** [docs/design/milestone-3-core-heap-analysis-parity.md](design/milestone-3-core-heap-analysis-parity.md)
 
-**Design addenda:** [docs/superpowers/specs/2026-04-13-m3-a-small-closeout-design.md](superpowers/specs/2026-04-13-m3-a-small-closeout-design.md), [docs/superpowers/specs/2026-04-13-m3-b-docker-cve-triage-design.md](superpowers/specs/2026-04-13-m3-b-docker-cve-triage-design.md)
+**Design addenda:** M3 small closeout and Docker CVE triage design specs (completed — see commit history for specs)
 
 **Objective:** Close the feature gap with Eclipse MAT on core analysis capabilities.
 
