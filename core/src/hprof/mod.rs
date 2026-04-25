@@ -10,8 +10,9 @@ pub mod test_fixtures;
 pub use binary_parser::*;
 pub use object_graph::*;
 pub use overview::{
-    GcRootKind, OverviewClassStat, OverviewClassStats, OverviewInstanceStat, OverviewOptions,
-    OverviewSummary, OverviewThreadFrame, DEFAULT_MAX_CLASS_TABLE_SIZE, DEFAULT_MAX_THREAD_FRAMES,
+    parse_hprof_overview, parse_hprof_overview_file, GcRootKind, OverviewClassStat,
+    OverviewClassStats, OverviewInstanceStat, OverviewOptions, OverviewSummary,
+    OverviewThreadFrame, DEFAULT_MAX_CLASS_TABLE_SIZE, DEFAULT_MAX_THREAD_FRAMES,
     DEFAULT_TOP_N_CLASSES, DEFAULT_TOP_N_INSTANCES,
 };
 pub use parser::*;

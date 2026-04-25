@@ -1,9 +1,22 @@
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashMap, VecDeque},
+    fs::File,
+    io::{BufReader, Cursor, Read},
+    path::Path,
 };
 
+use super::{
+    binary_parser::read_id,
+    object_graph::{field_types, field_value_size},
+    parser::{parse_hprof_header, skip_bytes},
+    tags::*,
+};
+use crate::errors::{CoreError, CoreResult};
+use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
+
+const PRIMITIVE_ARRAY_CLASS_ID_BASE: u64 = 0xffff_ffff_ffff_ff00;
 
 pub const DEFAULT_TOP_N_CLASSES: usize = 50;
 pub const DEFAULT_TOP_N_INSTANCES: usize = 25;
@@ -40,7 +53,12 @@ impl OverviewSummary {
             thread_frames,
         } = accumulators;
         let class_stats = classes.into_top_class_stats(&class_names, options.top_n_classes);
-        let top_instances = top_instances.into_sorted_vec_desc();
+        let mut top_instances = top_instances.into_sorted_vec_desc();
+        for instance in &mut top_instances {
+            if let Some(class_name) = class_names.get(&instance.class_id) {
+                instance.class_name.clone_from(class_name);
+            }
+        }
         let gc_root_counts = gc_root_counts.into_counts();
         let (thread_frames, thread_frames_truncated) = thread_frames.into_frames();
         let truncated = class_stats.truncated || thread_frames_truncated;
@@ -78,6 +96,11 @@ pub struct OverviewInstanceStat {
     pub object_id: u64,
     pub class_id: u64,
     pub class_name: String,
+    /// Shallow-only size proxy captured from a single HPROF dump subrecord.
+    ///
+    /// Despite the legacy field name, this is not a true retained size. In
+    /// overview mode it is the `INSTANCE_DUMP` / `OBJECT_ARRAY_DUMP` /
+    /// `PRIM_ARRAY_DUMP` record payload size for the object.
     pub approx_retained_bytes: u64,
 }
 
@@ -395,9 +418,528 @@ fn unresolved_class_name(class_id: u64) -> String {
     format!("<unresolved class id 0x{class_id:x}>")
 }
 
+#[derive(Debug, Clone)]
+struct RawStackFrame {
+    method_name_id: u64,
+    source_file_id: u64,
+    class_serial: u32,
+    line_number: i32,
+}
+
+pub fn parse_hprof_overview<R: Read>(
+    mut reader: R,
+    options: &OverviewOptions,
+    heap_path: &str,
+) -> CoreResult<OverviewSummary> {
+    let header = parse_hprof_header(&mut reader)?;
+    let id_size = match header.identifier_size {
+        4 | 8 => header.identifier_size as u8,
+        other => {
+            return Err(CoreError::InvalidInput(format!(
+                "unsupported HPROF identifier size: {other}"
+            )))
+        }
+    };
+
+    let mut total_bytes_processed = header.format.len() as u64 + 1 + 4 + 8;
+    let mut total_record_count = 0u64;
+    let mut accumulators = OverviewAccumulators::new(options.clone());
+    let mut strings = HashMap::new();
+    let mut pending_class_ids_by_string_id: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut class_name_string_ids_by_serial = HashMap::new();
+    let mut stack_frames = HashMap::new();
+
+    loop {
+        let tag = match reader.read_u8() {
+            Ok(tag) => tag,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err.into()),
+        };
+
+        let _time_delta = reader.read_u32::<BigEndian>()?;
+        let length = reader.read_u32::<BigEndian>()?;
+        total_bytes_processed += 9 + u64::from(length);
+        total_record_count += 1;
+
+        match tag {
+            TAG_STRING_IN_UTF8 => parse_string_record(
+                &mut reader,
+                id_size,
+                length,
+                &mut strings,
+                &mut pending_class_ids_by_string_id,
+                &mut accumulators,
+            )?,
+            TAG_LOAD_CLASS => parse_load_class_record(
+                &mut reader,
+                id_size,
+                &strings,
+                &mut pending_class_ids_by_string_id,
+                &mut class_name_string_ids_by_serial,
+                &mut accumulators,
+            )?,
+            TAG_STACK_FRAME => {
+                parse_stack_frame_record(&mut reader, id_size, length, &mut stack_frames)?
+            }
+            TAG_STACK_TRACE => parse_stack_trace_record(
+                &mut reader,
+                id_size,
+                length,
+                &stack_frames,
+                &strings,
+                &class_name_string_ids_by_serial,
+                &mut accumulators,
+            )?,
+            TAG_HEAP_DUMP | TAG_HEAP_DUMP_SEGMENT => {
+                parse_heap_dump_segment_record(&mut reader, id_size, length, &mut accumulators)?;
+            }
+            _ => skip_bytes(&mut reader, u64::from(length))?,
+        }
+    }
+
+    Ok(OverviewSummary::from_accumulators(
+        heap_path,
+        total_bytes_processed,
+        total_record_count,
+        accumulators,
+    ))
+}
+
+pub fn parse_hprof_overview_file(
+    path: impl AsRef<Path>,
+    options: &OverviewOptions,
+) -> CoreResult<OverviewSummary> {
+    let canonical = path.as_ref().canonicalize()?;
+    let file = File::open(&canonical)?;
+    let reader = BufReader::new(file);
+    let heap_path = canonical.to_string_lossy().into_owned();
+    parse_hprof_overview(reader, options, &heap_path)
+}
+
+fn parse_string_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    length: u32,
+    strings: &mut HashMap<u64, String>,
+    pending_class_ids_by_string_id: &mut HashMap<u64, Vec<u64>>,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    if length < u32::from(id_size) {
+        return Err(CoreError::HprofParseError {
+            phase: "string".into(),
+            detail: "STRING_IN_UTF8 record shorter than identifier".into(),
+        });
+    }
+
+    let string_id = read_id(reader, id_size)?;
+    let string_len = length as usize - id_size as usize;
+    let mut buffer = vec![0u8; string_len];
+    reader.read_exact(&mut buffer)?;
+    let value = String::from_utf8_lossy(&buffer).into_owned();
+    strings.insert(string_id, value.clone());
+
+    if let Some(class_ids) = pending_class_ids_by_string_id.remove(&string_id) {
+        for class_id in class_ids {
+            accumulators.record_class_name(class_id, value.clone());
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_load_class_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    strings: &HashMap<u64, String>,
+    pending_class_ids_by_string_id: &mut HashMap<u64, Vec<u64>>,
+    class_name_string_ids_by_serial: &mut HashMap<u32, u64>,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let serial = reader.read_u32::<BigEndian>()?;
+    let class_id = read_id(reader, id_size)?;
+    let _stack_serial = reader.read_u32::<BigEndian>()?;
+    let name_string_id = read_id(reader, id_size)?;
+
+    class_name_string_ids_by_serial.insert(serial, name_string_id);
+    if let Some(class_name) = strings.get(&name_string_id) {
+        accumulators.record_class_name(class_id, class_name.clone());
+    } else {
+        pending_class_ids_by_string_id
+            .entry(name_string_id)
+            .or_default()
+            .push(class_id);
+    }
+
+    Ok(())
+}
+
+fn parse_stack_frame_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    length: u32,
+    stack_frames: &mut HashMap<u64, RawStackFrame>,
+) -> CoreResult<()> {
+    let mut body = vec![0u8; length as usize];
+    reader.read_exact(&mut body)?;
+    let mut cursor = Cursor::new(body);
+
+    let frame_id = read_id(&mut cursor, id_size)?;
+    let method_name_id = read_id(&mut cursor, id_size)?;
+    let _signature_id = read_id(&mut cursor, id_size)?;
+    let source_file_id = read_id(&mut cursor, id_size)?;
+    let class_serial = cursor.read_u32::<BigEndian>()?;
+    let line_number = cursor.read_i32::<BigEndian>()?;
+
+    stack_frames.insert(
+        frame_id,
+        RawStackFrame {
+            method_name_id,
+            source_file_id,
+            class_serial,
+            line_number,
+        },
+    );
+
+    Ok(())
+}
+
+fn parse_stack_trace_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    length: u32,
+    stack_frames: &HashMap<u64, RawStackFrame>,
+    strings: &HashMap<u64, String>,
+    class_name_string_ids_by_serial: &HashMap<u32, u64>,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let mut body = vec![0u8; length as usize];
+    reader.read_exact(&mut body)?;
+    let mut cursor = Cursor::new(body);
+
+    let _serial = cursor.read_u32::<BigEndian>()?;
+    let thread_serial = cursor.read_u32::<BigEndian>()?;
+    let frame_count = cursor.read_u32::<BigEndian>()?;
+
+    for _ in 0..frame_count {
+        let frame_id = read_id(&mut cursor, id_size)?;
+        let Some(frame) = stack_frames.get(&frame_id) else {
+            continue;
+        };
+
+        let class_name = class_name_string_ids_by_serial
+            .get(&frame.class_serial)
+            .and_then(|string_id| strings.get(string_id))
+            .cloned()
+            .unwrap_or_else(|| format!("<unknown_class_serial_{}>", frame.class_serial));
+        let method_name = strings
+            .get(&frame.method_name_id)
+            .cloned()
+            .unwrap_or_else(|| format!("<unknown_method_{}>", frame.method_name_id));
+        let source_file = if frame.source_file_id == 0 {
+            String::new()
+        } else {
+            strings
+                .get(&frame.source_file_id)
+                .cloned()
+                .unwrap_or_else(|| format!("<unknown_source_{}>", frame.source_file_id))
+        };
+
+        accumulators.push_thread_frame(OverviewThreadFrame {
+            thread_serial,
+            class_name,
+            method_name,
+            source_file,
+            line_number: frame.line_number,
+        });
+    }
+
+    Ok(())
+}
+
+fn parse_heap_dump_segment_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    length: u32,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let mut segment = reader.take(length as u64);
+    loop {
+        let sub_tag = match segment.read_u8() {
+            Ok(tag) => tag,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err.into()),
+        };
+        parse_heap_subrecord(&mut segment, id_size, sub_tag, accumulators)?;
+    }
+
+    Ok(())
+}
+
+fn parse_heap_subrecord<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    sub_tag: u8,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    match sub_tag {
+        SUB_ROOT_UNKNOWN
+        | SUB_ROOT_INTERNED_STRING
+        | SUB_ROOT_FINALIZING
+        | SUB_ROOT_DEBUGGER
+        | SUB_ROOT_REFERENCE_CLEANUP
+        | SUB_ROOT_VM_INTERNAL
+        | SUB_ROOT_UNREACHABLE => count_root(reader, id_size, GcRootKind::Unknown, accumulators),
+        SUB_ROOT_JNI_GLOBAL => {
+            count_root_with_extra_ids(reader, id_size, GcRootKind::JniGlobal, 1, accumulators)
+        }
+        SUB_ROOT_JNI_LOCAL => {
+            count_root_with_thread(reader, id_size, GcRootKind::JniLocal, true, accumulators)
+        }
+        SUB_ROOT_JAVA_FRAME => {
+            count_root_with_thread(reader, id_size, GcRootKind::JavaFrame, true, accumulators)
+        }
+        SUB_ROOT_NATIVE_STACK => count_root_with_thread(
+            reader,
+            id_size,
+            GcRootKind::NativeStack,
+            false,
+            accumulators,
+        ),
+        SUB_ROOT_STICKY_CLASS => count_root(reader, id_size, GcRootKind::StickyClass, accumulators),
+        SUB_ROOT_THREAD_BLOCK => count_root_with_thread(
+            reader,
+            id_size,
+            GcRootKind::ThreadBlock,
+            false,
+            accumulators,
+        ),
+        SUB_ROOT_MONITOR_USED => count_root(reader, id_size, GcRootKind::MonitorUsed, accumulators),
+        SUB_ROOT_JNI_MONITOR => {
+            count_root_with_thread(reader, id_size, GcRootKind::Unknown, true, accumulators)
+        }
+        SUB_ROOT_THREAD_OBJECT => count_root_with_thread(
+            reader,
+            id_size,
+            GcRootKind::ThreadObject,
+            true,
+            accumulators,
+        ),
+        SUB_HEAP_DUMP_INFO => {
+            reader.read_u32::<BigEndian>()?;
+            let _ = read_id(reader, id_size)?;
+            Ok(())
+        }
+        SUB_PRIMITIVE_ARRAY_NODATA => {
+            let _ = read_id(reader, id_size)?;
+            reader.read_u32::<BigEndian>()?;
+            reader.read_u32::<BigEndian>()?;
+            reader.read_u8()?;
+            Ok(())
+        }
+        SUB_CLASS_DUMP => skip_class_dump_record(reader, id_size),
+        SUB_INSTANCE_DUMP => parse_instance_dump_record(reader, id_size, accumulators),
+        SUB_OBJ_ARRAY_DUMP => parse_object_array_dump_record(reader, id_size, accumulators),
+        SUB_PRIM_ARRAY_DUMP => parse_primitive_array_dump_record(reader, id_size, accumulators),
+        _ => Err(CoreError::Unsupported(format!(
+            "unsupported HEAP_DUMP sub-tag 0x{sub_tag:02X}"
+        ))),
+    }
+}
+
+fn count_root<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    kind: GcRootKind,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let _ = read_id(reader, id_size)?;
+    accumulators.increment_gc_root(kind);
+    Ok(())
+}
+
+fn count_root_with_extra_ids<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    kind: GcRootKind,
+    extra_ids: usize,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let _ = read_id(reader, id_size)?;
+    for _ in 0..extra_ids {
+        let _ = read_id(reader, id_size)?;
+    }
+    accumulators.increment_gc_root(kind);
+    Ok(())
+}
+
+fn count_root_with_thread<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    kind: GcRootKind,
+    has_frame: bool,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let _ = read_id(reader, id_size)?;
+    reader.read_u32::<BigEndian>()?;
+    if has_frame {
+        reader.read_u32::<BigEndian>()?;
+    }
+    accumulators.increment_gc_root(kind);
+    Ok(())
+}
+
+fn skip_class_dump_record<R: Read>(reader: &mut R, id_size: u8) -> CoreResult<()> {
+    let _ = read_id(reader, id_size)?;
+    reader.read_u32::<BigEndian>()?;
+    let _ = read_id(reader, id_size)?;
+    for _ in 0..5 {
+        let _ = read_id(reader, id_size)?;
+    }
+    reader.read_u32::<BigEndian>()?;
+
+    let constant_pool_entries = reader.read_u16::<BigEndian>()?;
+    for _ in 0..constant_pool_entries {
+        reader.read_u16::<BigEndian>()?;
+        let value_type = reader.read_u8()?;
+        skip_value(reader, value_type, id_size)?;
+    }
+
+    let static_field_count = reader.read_u16::<BigEndian>()?;
+    for _ in 0..static_field_count {
+        let _ = read_id(reader, id_size)?;
+        let value_type = reader.read_u8()?;
+        skip_value(reader, value_type, id_size)?;
+    }
+
+    let instance_field_count = reader.read_u16::<BigEndian>()?;
+    for _ in 0..instance_field_count {
+        let _ = read_id(reader, id_size)?;
+        reader.read_u8()?;
+    }
+
+    Ok(())
+}
+
+fn skip_value<R: Read>(reader: &mut R, value_type: u8, id_size: u8) -> CoreResult<()> {
+    let width =
+        field_value_size(value_type, id_size).ok_or_else(|| CoreError::HprofParseError {
+            phase: "class_dump".into(),
+            detail: format!("unsupported field type 0x{value_type:02X}"),
+        })?;
+    skip_bytes(reader, u64::from(width))
+}
+
+fn parse_instance_dump_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let object_id = read_id(reader, id_size)?;
+    reader.read_u32::<BigEndian>()?;
+    let class_id = read_id(reader, id_size)?;
+    let data_len = reader.read_u32::<BigEndian>()?;
+    let approx_size = u64::from(id_size) + 4 + u64::from(id_size) + 4 + u64::from(data_len);
+
+    accumulators.add_class_instance(class_id, approx_size);
+    accumulators.add_top_instance(OverviewInstanceStat {
+        object_id,
+        class_id,
+        class_name: accumulators
+            .class_names
+            .get(&class_id)
+            .cloned()
+            .unwrap_or_else(|| unresolved_class_name(class_id)),
+        approx_retained_bytes: approx_size,
+    });
+    skip_bytes(reader, u64::from(data_len))
+}
+
+fn parse_object_array_dump_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let object_id = read_id(reader, id_size)?;
+    reader.read_u32::<BigEndian>()?;
+    let num_elements = reader.read_u32::<BigEndian>()?;
+    let class_id = read_id(reader, id_size)?;
+    let element_bytes = u64::from(num_elements) * u64::from(id_size);
+    let approx_size = u64::from(id_size) + 4 + 4 + u64::from(id_size) + element_bytes;
+
+    accumulators.add_class_instance(class_id, approx_size);
+    accumulators.add_top_instance(OverviewInstanceStat {
+        object_id,
+        class_id,
+        class_name: accumulators
+            .class_names
+            .get(&class_id)
+            .cloned()
+            .unwrap_or_else(|| unresolved_class_name(class_id)),
+        approx_retained_bytes: approx_size,
+    });
+    skip_bytes(reader, element_bytes)
+}
+
+fn parse_primitive_array_dump_record<R: Read>(
+    reader: &mut R,
+    id_size: u8,
+    accumulators: &mut OverviewAccumulators,
+) -> CoreResult<()> {
+    let object_id = read_id(reader, id_size)?;
+    reader.read_u32::<BigEndian>()?;
+    let num_elements = reader.read_u32::<BigEndian>()?;
+    let element_type = reader.read_u8()?;
+    let element_width =
+        field_value_size(element_type, id_size).ok_or_else(|| CoreError::HprofParseError {
+            phase: "primitive_array".into(),
+            detail: format!("unsupported primitive array type 0x{element_type:02X}"),
+        })?;
+    let data_bytes = u64::from(num_elements) * u64::from(element_width);
+    let class_id = primitive_array_class_id(element_type);
+    let class_name = primitive_array_class_name(element_type);
+    let approx_size = u64::from(id_size) + 4 + 4 + 1 + data_bytes;
+
+    accumulators.record_class_name(class_id, class_name.clone());
+    accumulators.add_class_instance(class_id, approx_size);
+    accumulators.add_top_instance(OverviewInstanceStat {
+        object_id,
+        class_id,
+        class_name,
+        approx_retained_bytes: approx_size,
+    });
+    skip_bytes(reader, data_bytes)
+}
+
+fn primitive_array_class_id(element_type: u8) -> u64 {
+    PRIMITIVE_ARRAY_CLASS_ID_BASE | u64::from(element_type)
+}
+
+fn primitive_array_class_name(element_type: u8) -> String {
+    let type_name = match element_type {
+        field_types::BOOLEAN => "boolean",
+        field_types::CHAR => "char",
+        field_types::FLOAT => "float",
+        field_types::DOUBLE => "double",
+        field_types::BYTE => "byte",
+        field_types::SHORT => "short",
+        field_types::INT => "int",
+        field_types::LONG => "long",
+        _ => "unknown",
+    };
+    format!("<{type_name}[]>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hprof::{
+        parse_hprof,
+        test_fixtures::{
+            build_segment_fixture, build_thread_stack_fixture, HeapDumpBuilder, HprofBuilder,
+        },
+    };
+    use std::collections::HashSet;
+    use std::io::Cursor;
 
     #[test]
     fn bounded_top_n_keeps_only_largest() {
@@ -556,6 +1098,159 @@ mod tests {
         assert!(summary.truncated);
     }
 
+    #[test]
+    fn overview_parses_synthetic_segment_fixture() {
+        let bytes = build_segment_fixture();
+
+        let summary = parse_hprof_overview(
+            Cursor::new(bytes),
+            &OverviewOptions::default(),
+            "segment-fixture.hprof",
+        )
+        .expect("overview parser should handle heap dump segments");
+
+        assert!(summary.total_record_count > 0);
+        assert!(summary.total_bytes_processed > 0);
+        assert!(!summary.class_stats.entries.is_empty());
+    }
+
+    #[test]
+    fn overview_preserves_thread_stack_frames() {
+        let bytes = build_thread_stack_fixture();
+
+        let summary = parse_hprof_overview(
+            Cursor::new(bytes),
+            &OverviewOptions::default(),
+            "thread-stack-fixture.hprof",
+        )
+        .expect("overview parser should preserve bounded stack frames");
+
+        assert!(!summary.thread_frames.is_empty());
+        assert!(
+            summary
+                .gc_root_counts
+                .get(&GcRootKind::ThreadObject)
+                .copied()
+                .unwrap_or_default()
+                > 0
+        );
+    }
+
+    #[test]
+    fn overview_class_set_matches_deep_class_set_on_small_fixture() {
+        let bytes = build_segment_fixture();
+        let summary = parse_hprof_overview(
+            Cursor::new(bytes.clone()),
+            &OverviewOptions::default(),
+            "segment-fixture.hprof",
+        )
+        .expect("overview parser should succeed");
+        let graph = parse_hprof(&bytes).expect("deep parser should succeed on the same fixture");
+
+        let overview_classes = summary
+            .class_stats
+            .entries
+            .iter()
+            .map(|entry| entry.class_name.clone())
+            .filter(|class_name| !class_name.starts_with('<'))
+            .collect::<HashSet<_>>();
+        let deep_class_name_ids = graph
+            .loaded_classes
+            .values()
+            .map(|loaded_class| (loaded_class.class_obj_id, loaded_class.name_string_id))
+            .collect::<HashMap<_, _>>();
+        let deep_classes = graph
+            .objects
+            .values()
+            .filter_map(|object| (object.class_id != 0).then_some(object.class_id))
+            .filter_map(|class_id| deep_class_name_ids.get(&class_id))
+            .filter_map(|string_id| graph.strings.get(string_id).cloned())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(overview_classes, deep_classes);
+    }
+
+    #[test]
+    fn overview_handles_truncation_when_class_table_overflows() {
+        let bytes = build_segment_fixture();
+        let options = OverviewOptions {
+            max_class_table_size: 1,
+            ..OverviewOptions::default()
+        };
+
+        let summary = parse_hprof_overview(Cursor::new(bytes), &options, "overflow-fixture.hprof")
+            .expect("overview parser should report truncation instead of failing");
+
+        assert!(summary.truncated);
+        assert!(summary.class_stats.entries.len() <= 1);
+    }
+
+    #[test]
+    fn overview_aggregates_gc_roots() {
+        let bytes = build_gc_root_fixture();
+
+        let summary = parse_hprof_overview(
+            Cursor::new(bytes),
+            &OverviewOptions::default(),
+            "gc-roots-fixture.hprof",
+        )
+        .expect("overview parser should aggregate GC roots");
+
+        assert_eq!(summary.gc_root_counts.get(&GcRootKind::JavaFrame), Some(&2));
+        assert_eq!(
+            summary.gc_root_counts.get(&GcRootKind::ThreadObject),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn overview_records_top_n_instances_in_size_order() {
+        let bytes = build_top_instance_fixture();
+        let options = OverviewOptions {
+            top_n_instances: 3,
+            ..OverviewOptions::default()
+        };
+
+        let summary = parse_hprof_overview(Cursor::new(bytes), &options, "top-instances.hprof")
+            .expect("overview parser should rank the largest instances first");
+
+        let ranked_ids = summary
+            .top_instances
+            .iter()
+            .map(|entry| entry.object_id)
+            .collect::<Vec<_>>();
+        let ranked_sizes = summary
+            .top_instances
+            .iter()
+            .map(|entry| entry.approx_retained_bytes)
+            .collect::<Vec<_>>();
+
+        assert_eq!(ranked_ids, vec![0x3000, 0x4000, 0x2001]);
+        assert_eq!(ranked_sizes, vec![64, 57, 40]);
+    }
+
+    #[test]
+    fn overview_skips_heap_dump_segment_subrecords_correctly() {
+        let bytes = build_segment_fixture();
+        let summary = parse_hprof_overview(
+            Cursor::new(bytes),
+            &OverviewOptions::default(),
+            "segment-dispatch-fixture.hprof",
+        )
+        .expect("overview parser should dispatch nested heap dump segment records");
+
+        let class_names = summary
+            .class_stats
+            .entries
+            .iter()
+            .map(|entry| entry.class_name.as_str())
+            .collect::<HashSet<_>>();
+
+        assert!(class_names.contains("com/example/Node"));
+        assert!(class_names.contains("[Lcom/example/Node;"));
+        assert!(summary.top_instances.len() >= 3);
+    }
+
     fn instance_stat(
         object_id: u64,
         class_id: u64,
@@ -582,5 +1277,46 @@ mod tests {
             source_file: String::from("Example.java"),
             line_number: 42,
         }
+    }
+
+    fn build_gc_root_fixture() -> Vec<u8> {
+        let mut builder = HprofBuilder::new(4);
+        let mut heap = HeapDumpBuilder::new(4);
+        heap.add_gc_root_java_frame(0x1000, 7, 0)
+            .add_gc_root_java_frame(0x1001, 7, 1)
+            .add_gc_root_thread_obj(0x1002, 7, 42);
+        builder.add_heap_dump_segment(heap.build());
+        builder.build()
+    }
+
+    fn build_top_instance_fixture() -> Vec<u8> {
+        let mut builder = HprofBuilder::new(8);
+        builder
+            .add_string(1, "java/lang/Object")
+            .add_string(2, "com/example/Node")
+            .add_string(3, "next")
+            .add_string(4, "value")
+            .add_string(5, "[Lcom/example/Node;")
+            .add_load_class(1, 0x100, 0, 1)
+            .add_load_class(2, 0x200, 0, 2)
+            .add_load_class(3, 0x300, 0, 5);
+
+        let mut heap = HeapDumpBuilder::new(8);
+        heap.add_class_dump(0x100, 0, 0, &[])
+            .add_class_dump(0x200, 0x100, 16, &[(3, 2), (4, 10)])
+            .add_instance_dump(0x2001, 0x200, &encode_node_instance(0, 7))
+            .add_obj_array_dump(0x3000, 0x300, &[0x2001, 0, 0, 0, 0])
+            .add_prim_array_dump_i32(0x4000, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        builder.add_heap_dump_segment(heap.build());
+        builder.build()
+    }
+
+    fn encode_node_instance(next_id: u64, value: i32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&next_id.to_be_bytes());
+        bytes.extend_from_slice(&value.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes
     }
 }

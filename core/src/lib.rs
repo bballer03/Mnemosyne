@@ -35,11 +35,12 @@ pub use graph::{
     HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
 pub use hprof::{
-    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options,
-    parse_hprof_with_options, ClassLevelDelta, GcRootKind, HeapDiff, HeapParseJob, HeapSummary,
-    HprofHeader, OverviewClassStat, OverviewClassStats, OverviewInstanceStat, OverviewOptions,
-    OverviewSummary, OverviewThreadFrame, ParseOptions, DEFAULT_MAX_CLASS_TABLE_SIZE,
-    DEFAULT_MAX_THREAD_FRAMES, DEFAULT_TOP_N_CLASSES, DEFAULT_TOP_N_INSTANCES,
+    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options, parse_hprof_overview,
+    parse_hprof_overview_file, parse_hprof_with_options, ClassLevelDelta, GcRootKind, HeapDiff,
+    HeapParseJob, HeapSummary, HprofHeader, OverviewClassStat, OverviewClassStats,
+    OverviewInstanceStat, OverviewOptions, OverviewSummary, OverviewThreadFrame, ParseOptions,
+    DEFAULT_MAX_CLASS_TABLE_SIZE, DEFAULT_MAX_THREAD_FRAMES, DEFAULT_TOP_N_CLASSES,
+    DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};
