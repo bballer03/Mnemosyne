@@ -111,7 +111,14 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ## 🌐 Architecture
 
-![Mnemosyne Architecture Overview](resources/architecture-overview.svg)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, inline Mermaid diagram, and M6 extension points.
+
+**Layers at a glance:**
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, analysis engine, AI insights, MCP server, report generator
+- **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
+- **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
+- **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
 ---
 
