@@ -105,13 +105,22 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
       };
     }
 
+    const objectId: string = selectedObjectId;
+    const shouldLoadLiveRelations = referencesAvailable || referrersAvailable;
+
     setReferencesState(referencesAvailable ? { status: "loading" } : { status: "unavailable" });
     setReferrersState(referrersAvailable ? { status: "loading" } : { status: "unavailable" });
 
+    if (!shouldLoadLiveRelations) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     async function loadLiveRelations() {
       const [referencesResult, referrersResult] = await Promise.all([
-        getObjectReferences(selectedObjectId),
-        getObjectReferrers(selectedObjectId),
+        getObjectReferences(objectId),
+        getObjectReferrers(objectId),
       ]);
 
       if (cancelled) {

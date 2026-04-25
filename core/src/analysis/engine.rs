@@ -795,7 +795,7 @@ fn build_class_name(package_hint: Option<&str>, leak_kind: LeakKind, ordinal: us
 
 fn ranked_class_stats(summary: &HeapSummary) -> Vec<&ClassStat> {
     let mut classes: Vec<&ClassStat> = summary.classes.iter().collect();
-    classes.sort_by(|a, b| b.total_size_bytes.cmp(&a.total_size_bytes));
+    classes.sort_by_key(|b| std::cmp::Reverse(b.total_size_bytes));
     classes
 }
 

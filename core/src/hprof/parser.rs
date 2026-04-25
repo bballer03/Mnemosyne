@@ -169,7 +169,7 @@ fn scan_hprof_records<R: Read>(reader: &mut R) -> CoreResult<(u64, Vec<RecordSta
     }
 
     let mut record_stats: Vec<RecordStat> = stats.into_values().collect();
-    record_stats.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    record_stats.sort_by_key(|b| std::cmp::Reverse(b.bytes));
 
     let object_guess = record_stats
         .iter()
