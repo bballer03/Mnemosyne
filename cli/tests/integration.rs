@@ -12,7 +12,7 @@ use mnemosyne_core::hprof::test_fixtures::{
 use mnemosyne_core::{
     analysis::{AiChatTurn, LeakInsight, LeakKind, LeakSeverity},
     fix::FixStyle,
-    hprof::HeapSummary,
+    hprof::{HeapSummary, OverviewSummary},
     mcp::session::{
         PersistedAiSession, SessionAnalysisSnapshot, SessionConversationSnapshot,
         MCP_SESSION_VERSION,
@@ -738,6 +738,168 @@ fn test_analyze_json_format() {
     let stdout = stdout_string(&output.stdout);
     let json = serde_json::from_str::<Value>(&stdout).unwrap();
     assert!(json.is_object());
+}
+
+#[test]
+fn cli_analyze_default_mode_is_auto_deep_for_small_fixture() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("Mnemosyne Analysis"), "{stdout}");
+    assert!(stdout.contains("Graph Nodes:"), "{stdout}");
+    assert!(
+        !stdout.contains("Overview mode (streaming, no object graph)"),
+        "default auto mode unexpectedly resolved to overview: {stdout}"
+    );
+}
+
+#[test]
+fn cli_analyze_explicit_mode_deep_matches_default() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut default_cmd, _sandbox) = cli_command();
+    let (mut deep_cmd, _sandbox2) = cli_command();
+
+    let default_output = default_cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+    let deep_output = deep_cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "deep"])
+        .output()
+        .unwrap();
+
+    assert!(
+        default_output.status.success(),
+        "{}",
+        stdout_string(&default_output.stderr)
+    );
+    assert!(
+        deep_output.status.success(),
+        "{}",
+        stdout_string(&deep_output.stderr)
+    );
+    assert_eq!(default_output.stdout, deep_output.stdout);
+}
+
+#[test]
+fn cli_analyze_mode_overview_emits_overview_sections() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "overview"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Top Classes by Approximate Shallow Bytes"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("com/example/Node"), "{stdout}");
+}
+
+#[test]
+fn cli_analyze_mode_overview_json_serializes_overview_summary() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let canonical_path = fixture
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "analyze",
+            fixture_path.as_str(),
+            "--mode",
+            "overview",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let summary: OverviewSummary = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(summary.heap_path, canonical_path);
+    assert!(!summary.class_stats.entries.is_empty());
+}
+
+#[test]
+fn cli_analyze_auto_threshold_env_forces_overview() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_analyze_invalid_mode_value_errors_cleanly() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "bogus"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = stdout_string(&output.stderr);
+    assert!(stderr.contains("invalid value 'bogus'"), "{stderr}");
+    assert!(stderr.contains("possible values"), "{stderr}");
+}
+
+#[test]
+fn cli_parse_mode_overview_emits_overview_sections() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["parse", fixture_path.as_str(), "--mode", "overview"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("com/example/Node"), "{stdout}");
 }
 
 #[test]

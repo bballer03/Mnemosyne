@@ -18,18 +18,18 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
         analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_chat_turn_async,
-        generate_ai_insights_async, validate_leak_id, AnalyzeRequest, LeakDetectionOptions,
-        LeakKind, LeakSeverity, ProvenanceKind,
+        generate_ai_insights_async, validate_leak_id, AnalysisMode, AnalyzeRequest,
+        LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
-    hprof::{parse_heap, HeapParseJob, HeapSummary},
+    hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, HeapSummary, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     parse_hprof_file_with_options,
     query::{execute_query, parse_query, CellValue},
-    report::{render_report, ReportRequest},
+    report::{render_overview_report, render_report, ReportArtifact, ReportRequest},
     CoreError, ParseOptions,
 };
 use tokio::signal;
@@ -82,6 +82,8 @@ enum Commands {
 #[derive(Debug, Parser)]
 struct ParseArgs {
     heap: PathBuf,
+    #[arg(long, value_enum, default_value_t = ModeArg::Auto)]
+    mode: ModeArg,
 }
 
 #[derive(Debug, Parser)]
@@ -98,6 +100,8 @@ struct LeakArgs {
 #[derive(Debug, Parser)]
 struct AnalyzeArgs {
     heap: PathBuf,
+    #[arg(long, value_enum, default_value_t = ModeArg::Auto)]
+    mode: ModeArg,
     #[arg(long, value_enum, default_value_t = OutputFormatArg::Text)]
     format: OutputFormatArg,
     #[arg(long)]
@@ -221,6 +225,13 @@ enum OutputFormatArg {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ModeArg {
+    Auto,
+    Deep,
+    Overview,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum FixStyleArg {
     Minimal,
@@ -277,6 +288,16 @@ impl From<OutputFormatArg> for OutputFormat {
             OutputFormatArg::Markdown => OutputFormat::Markdown,
             OutputFormatArg::Html => OutputFormat::Html,
             OutputFormatArg::Json => OutputFormat::Json,
+        }
+    }
+}
+
+impl From<ModeArg> for AnalysisMode {
+    fn from(value: ModeArg) -> Self {
+        match value {
+            ModeArg::Auto => AnalysisMode::Auto,
+            ModeArg::Deep => AnalysisMode::Deep,
+            ModeArg::Overview => AnalysisMode::Overview,
         }
     }
 }
@@ -375,6 +396,18 @@ async fn run() -> Result<()> {
 async fn handle_parse(args: ParseArgs, cfg: &AppConfig) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
+    let resolved_mode = resolve_cli_mode(&args.heap, args.mode)?;
+
+    if resolved_mode == AnalysisMode::Overview {
+        let pb = start_spinner("Parsing heap dump in overview mode...");
+        let summary = parse_hprof_overview_file(&args.heap, &OverviewOptions::default())
+            .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
+        finish_spinner(&pb, "Parsed heap dump overview.");
+        let report = render_overview_report(&summary, OutputFormat::Text)?;
+        println!("{}", report.contents);
+        return Ok(());
+    }
+
     let job = HeapParseJob {
         path: args.heap.to_string_lossy().into(),
         include_strings: false,
@@ -448,6 +481,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
 
     let mut config = base_config.clone();
     config.output = args.format.into();
+    let resolved_mode = resolve_cli_mode(&args.heap, args.mode)?;
     let profile = args.profile.map(AnalysisProfile::from);
     let use_ai = args.ai || config.ai.enabled;
     config.ai.enabled = use_ai;
@@ -499,6 +533,30 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         }
     }
 
+    if resolved_mode == AnalysisMode::Overview {
+        let pb = start_spinner("Analyzing heap dump in overview mode...");
+        if use_ai {
+            warn!(
+                "AI insights requested in overview mode; skipping AI because overview mode does not build the object graph"
+            );
+        }
+
+        let overview_options = OverviewOptions {
+            top_n_classes: top_n,
+            top_n_instances: top_n,
+            ..OverviewOptions::default()
+        };
+        let summary = parse_hprof_overview_file(&args.heap, &overview_options)
+            .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))?;
+        finish_spinner(&pb, "Overview analysis complete.");
+
+        let report = render_overview_report(&summary, config.output.clone())?;
+        if emit_report(&report, args.output.as_deref())? {
+            println!("{}", report.contents);
+        }
+        return Ok(());
+    }
+
     let pb = start_spinner("Analyzing heap dump...");
     if use_ai {
         pb.println("AI insights enabled...");
@@ -529,18 +587,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         format: output_format.clone(),
     })?;
 
-    if let Some(path) = args.output {
-        fs::write(&path, &report.contents)?;
-        println!(
-            "{}",
-            style(format!(
-                "Report ({}) written to {}",
-                report.mime_type,
-                path.display()
-            ))
-            .green()
-        );
-    } else {
+    if emit_report(&report, args.output.as_deref())? {
         println!("{}", report.contents);
         if matches!(output_format, OutputFormat::Text) {
             if let Some(histogram) = &response.histogram {
@@ -1098,6 +1145,40 @@ fn install_tracing() {
         .finish()
         .try_init();
     info!("Tracing initialized");
+}
+
+fn resolve_cli_mode(heap_path: &Path, mode: ModeArg) -> Result<AnalysisMode> {
+    let requested_mode = AnalysisMode::from(mode);
+    let file_size_bytes = fs::metadata(heap_path)?.len();
+    let resolved_mode = requested_mode.resolve(file_size_bytes);
+
+    info!(
+        heap_path = %heap_path.display(),
+        requested_mode = ?requested_mode,
+        resolved_mode = ?resolved_mode,
+        file_size_bytes,
+        "Resolved CLI mode"
+    );
+
+    Ok(resolved_mode)
+}
+
+fn emit_report(report: &ReportArtifact, output_path: Option<&Path>) -> Result<bool> {
+    if let Some(path) = output_path {
+        fs::write(path, &report.contents)?;
+        println!(
+            "{}",
+            style(format!(
+                "Report ({}) written to {}",
+                report.mime_type,
+                path.display()
+            ))
+            .green()
+        );
+        Ok(false)
+    } else {
+        Ok(true)
+    }
 }
 
 fn print_summary(summary: &HeapSummary) {
