@@ -1,14 +1,14 @@
 use crate::{
     analysis::{
         analyze_heap, detect_leaks, focus_leaks, generate_ai_chat_turn_async,
-        generate_ai_insights_async, validate_leak_id, AiChatTurn, AnalyzeRequest,
+        generate_ai_insights_async, validate_leak_id, AiChatTurn, AnalysisMode, AnalyzeRequest,
         LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
     errors::{CoreError, CoreResult},
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest},
-    hprof::{parse_heap, HeapParseJob},
+    hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::session::{
         new_session_id, timestamp_now, top_leak_ids, McpSessionStore, PersistedAiSession,
@@ -243,6 +243,8 @@ impl RpcErrorDetails {
 struct ParseHeapParams {
     path: String,
     #[serde(default)]
+    mode: AnalysisMode,
+    #[serde(default)]
     include_strings: bool,
     #[serde(default)]
     max_objects: Option<u64>,
@@ -300,6 +302,8 @@ struct ChatSessionParams {
 #[derive(Debug, Deserialize, Default)]
 struct AnalyzeHeapParams {
     heap_path: String,
+    #[serde(default)]
+    mode: AnalysisMode,
     #[serde(default)]
     min_severity: Option<LeakSeverity>,
     #[serde(default)]
@@ -461,6 +465,53 @@ impl MapToCodeParams {
     }
 }
 
+const MCP_MODE_PARAM_DESCRIPTION: &str =
+    "Analysis mode. `auto` resolves by file size, `deep` builds the full object graph, and `overview` streams the heap without building the object graph and reports approximate shallow sizes only.";
+
+const MCP_OVERVIEW_TOOL_NOTE: &str =
+    "Overview mode is streaming, builds no object graph, and reports approximate shallow sizes only.";
+
+fn analysis_mode_param() -> Value {
+    json!({
+        "name": "mode",
+        "type": "string",
+        "required": false,
+        "default": "auto",
+        "enum": ["auto", "deep", "overview"],
+        "description": MCP_MODE_PARAM_DESCRIPTION,
+    })
+}
+
+fn resolve_heap_mode(heap_path: &str, requested_mode: AnalysisMode) -> CoreResult<AnalysisMode> {
+    match requested_mode {
+        AnalysisMode::Auto => {
+            let input_size_bytes = std::fs::metadata(heap_path)?.len();
+            Ok(AnalysisMode::Auto.resolve(input_size_bytes))
+        }
+        mode => Ok(mode),
+    }
+}
+
+fn overview_options(top_n: Option<usize>) -> OverviewOptions {
+    if let Some(top_n) = top_n {
+        OverviewOptions {
+            top_n_classes: top_n,
+            top_n_instances: top_n,
+            ..OverviewOptions::default()
+        }
+    } else {
+        OverviewOptions::default()
+    }
+}
+
+fn serialize_overview_summary(summary: crate::hprof::OverviewSummary) -> CoreResult<Value> {
+    let mut value = serde_json::to_value(summary)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("mode".into(), json!("overview"));
+    }
+    Ok(value)
+}
+
 fn tool_catalog() -> Value {
     json!({
         "tools": [
@@ -471,9 +522,12 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "parse_heap",
-                "description": "Parse an HPROF file and return a lightweight heap summary.",
+                "description": format!(
+                    "Parse an HPROF file and return a lightweight heap summary. {MCP_OVERVIEW_TOOL_NOTE}"
+                ),
                 "params": [
                     { "name": "path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    analysis_mode_param(),
                     { "name": "include_strings", "type": "boolean", "required": false, "description": "Accept string extraction in the request, although the summary remains lightweight." },
                     { "name": "max_objects", "type": "number", "required": false, "description": "Optional object cap that falls back to parser.max_objects." }
                 ]
@@ -490,9 +544,12 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "analyze_heap",
-                "description": "Run the full analysis pipeline and return the serialized analysis response.",
+                "description": format!(
+                    "Run the full analysis pipeline and return the serialized analysis response. {MCP_OVERVIEW_TOOL_NOTE}"
+                ),
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    analysis_mode_param(),
                     { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." },
                     { "name": "packages", "type": "array<string>", "required": false, "description": "Optional package prefix filters." },
                     { "name": "leak_types", "type": "array<string>", "required": false, "description": "Optional leak-kind filter list." },
@@ -605,6 +662,12 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         "list_tools" => Ok(tool_catalog()),
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
+            let resolved_mode = resolve_heap_mode(&params.path, params.mode)?;
+            if resolved_mode == AnalysisMode::Overview {
+                let summary = parse_hprof_overview_file(&params.path, &OverviewOptions::default())?;
+                return serialize_overview_summary(summary);
+            }
+
             let job = HeapParseJob {
                 path: params.path,
                 include_strings: params.include_strings,
@@ -753,6 +816,13 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "analyze_heap" => {
             let params: AnalyzeHeapParams = serde_json::from_value(packet.params)?;
+            let resolved_mode = resolve_heap_mode(&params.heap_path, params.mode)?;
+            if resolved_mode == AnalysisMode::Overview {
+                let summary =
+                    parse_hprof_overview_file(&params.heap_path, &overview_options(params.top_n))?;
+                return serialize_overview_summary(summary);
+            }
+
             let mut request_config = config.clone();
             if !params.packages.is_empty() {
                 request_config.analysis.packages = params.packages.clone();
@@ -925,14 +995,314 @@ mod tests {
     use super::*;
     use crate::test_fixtures::build_graph_fixture;
     use serde_json::json;
+    use std::ffi::OsString;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[tokio::test]
-    async fn handle_request_analyze_heap_includes_classloader_report_when_enabled() {
+    fn write_fixture() -> NamedTempFile {
         let fixture = build_graph_fixture();
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(&fixture).unwrap();
+        file
+    }
+
+    async fn analyze_heap_result(heap_path: &str, extra_params: Value) -> Value {
+        let mut params = serde_json::Map::new();
+        params.insert("heap_path".into(), json!(heap_path));
+        if let Some(extra) = extra_params.as_object() {
+            params.extend(extra.clone());
+        }
+
+        handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "analyze_heap".into(),
+                params: Value::Object(params),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn parse_heap_result(path: &str, extra_params: Value) -> Value {
+        let mut params = serde_json::Map::new();
+        params.insert("path".into(), json!(path));
+        if let Some(extra) = extra_params.as_object() {
+            params.extend(extra.clone());
+        }
+
+        handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "parse_heap".into(),
+                params: Value::Object(params),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn mode_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+        crate::analysis::mode::test_mode_env_lock().lock().await
+    }
+
+    async fn list_tools_result() -> Value {
+        handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "list_tools".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap()
+    }
+
+    struct TempEnvVar {
+        key: String,
+        previous: Option<OsString>,
+    }
+
+    impl TempEnvVar {
+        fn set(key: &str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self {
+                key: key.to_owned(),
+                previous,
+            }
+        }
+    }
+
+    impl Drop for TempEnvVar {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => std::env::set_var(&self.key, previous),
+                None => std::env::remove_var(&self.key),
+            }
+        }
+    }
+
+    fn normalize_deep_result(value: &mut Value) {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("elapsed");
+            if let Some(summary) = object.get_mut("summary").and_then(Value::as_object_mut) {
+                summary.remove("generated_at");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_advertises_mode_parameter() {
+        let _guard = mode_test_guard().await;
+        let result = list_tools_result().await;
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let analyze_tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("analyze_heap")))
+            .expect("analyze_heap tool");
+        let mode_param = analyze_tool
+            .get("params")
+            .and_then(Value::as_array)
+            .and_then(|params| {
+                params
+                    .iter()
+                    .find(|param| param.get("name") == Some(&json!("mode")))
+            })
+            .expect("mode param");
+
+        assert_eq!(
+            mode_param.get("enum"),
+            Some(&json!(["auto", "deep", "overview"]))
+        );
+        assert_eq!(mode_param.get("required"), Some(&json!(false)));
+        assert!(
+            analyze_tool
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("streaming")
+                        && description.contains("no object graph")
+                        && description.contains("approximate")
+                }),
+            "analyze_heap description should disclose overview limitations"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_parse_heap_default_mode_keeps_existing_shape() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let result = parse_heap_result(&file.path().to_string_lossy(), json!({})).await;
+
+        assert!(
+            result.get("header").is_some(),
+            "parse_heap should keep the deep summary shape"
+        );
+        assert!(
+            result.get("mode").is_none(),
+            "default parse_heap response should preserve the existing shape"
+        );
+        assert!(result.get("class_stats").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_parse_heap_mode_overview_returns_overview_summary() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let result = parse_heap_result(
+            &file.path().to_string_lossy(),
+            json!({ "mode": "overview" }),
+        )
+        .await;
+
+        assert_eq!(result.get("mode"), Some(&json!("overview")));
+        assert!(result.get("class_stats").is_some());
+        assert!(result.get("header").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_default_mode_uses_deep_for_small_fixture() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let result = analyze_heap_result(&file.path().to_string_lossy(), json!({})).await;
+
+        assert!(
+            result.get("summary").is_some(),
+            "deep response should include summary"
+        );
+        assert!(
+            result.get("leaks").is_some(),
+            "deep response should include leaks"
+        );
+        assert!(
+            result.get("graph").is_some(),
+            "deep response should include graph metrics"
+        );
+        assert!(
+            result.get("class_stats").is_none(),
+            "deep response must not impersonate overview payload"
+        );
+        assert!(
+            result.get("mode").is_none(),
+            "deep response should keep the existing serialized shape"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_mode_deep_explicit_matches_default() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let mut default_result =
+            analyze_heap_result(&file.path().to_string_lossy(), json!({})).await;
+        let mut explicit_result =
+            analyze_heap_result(&file.path().to_string_lossy(), json!({ "mode": "deep" })).await;
+
+        normalize_deep_result(&mut default_result);
+        normalize_deep_result(&mut explicit_result);
+
+        assert_eq!(explicit_result, default_result);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_mode_overview_returns_overview_summary() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let result = analyze_heap_result(
+            &file.path().to_string_lossy(),
+            json!({ "mode": "overview" }),
+        )
+        .await;
+
+        assert_eq!(result.get("mode"), Some(&json!("overview")));
+        assert!(
+            result.get("summary").is_none(),
+            "overview response must not reuse AnalyzeResponse shape"
+        );
+
+        let class_entries = result
+            .get("class_stats")
+            .and_then(|value| value.get("entries"))
+            .and_then(Value::as_array)
+            .expect("overview class_stats entries");
+        assert!(
+            !class_entries.is_empty(),
+            "overview class stats should not be empty"
+        );
+        assert!(class_entries.iter().any(|entry| {
+            entry
+                .get("class_name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("BigCache"))
+        }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_mode_invalid_returns_error() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(17),
+                method: "analyze_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "mode": "bogus"
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(17), &err);
+        let serialized = serde_json::to_value(response).unwrap();
+        assert_eq!(serialized.get("success"), Some(&json!(false)));
+        assert_eq!(
+            serialized
+                .get("error_details")
+                .and_then(|value| value.get("code")),
+            Some(&json!("invalid_params"))
+        );
+        assert!(
+            serialized
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("bogus") && message.contains("overview")),
+            "invalid mode should surface a clean parameter error"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_auto_threshold_env_forces_overview() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let _guard = TempEnvVar::set("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1");
+
+        let result = analyze_heap_result(&heap_path, json!({ "mode": "auto" })).await;
+
+        assert_eq!(result.get("mode"), Some(&json!("overview")));
+        assert!(result.get("class_stats").is_some());
+        assert!(result.get("summary").is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_request_analyze_heap_includes_classloader_report_when_enabled() {
+        let file = write_fixture();
 
         let result = handle_request(
             RpcRequest {

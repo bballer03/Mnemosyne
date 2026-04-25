@@ -43,16 +43,24 @@ fn overview_auto_threshold() -> u64 {
 }
 
 #[cfg(test)]
+pub(crate) fn test_mode_env_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn mode_default_is_auto() {
+        let _guard = test_mode_env_lock().blocking_lock();
         assert_eq!(AnalysisMode::default(), AnalysisMode::Auto);
     }
 
     #[test]
     fn mode_resolves_by_size() {
+        let _guard = test_mode_env_lock().blocking_lock();
         let small = OVERVIEW_AUTO_THRESHOLD_BYTES - 1;
         let large = OVERVIEW_AUTO_THRESHOLD_BYTES + 1;
         assert_eq!(AnalysisMode::Auto.resolve(small), AnalysisMode::Deep);
@@ -61,6 +69,7 @@ mod tests {
 
     #[test]
     fn explicit_modes_pass_through() {
+        let _guard = test_mode_env_lock().blocking_lock();
         assert_eq!(AnalysisMode::Deep.resolve(u64::MAX), AnalysisMode::Deep);
         assert_eq!(AnalysisMode::Overview.resolve(0), AnalysisMode::Overview);
     }
@@ -79,6 +88,7 @@ mod tests {
 
     #[test]
     fn overview_threshold_uses_default_when_env_missing() {
+        let _guard = test_mode_env_lock().blocking_lock();
         assert!(overview_auto_threshold() > 0);
     }
 }
