@@ -61,11 +61,10 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
 - **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 194 passing tests.
 
-### Still in progress
-- **Remaining MAT-parity work**, especially deeper query/explorer coverage beyond the current minimal OQL-style surface.
-- **Post-M5 AI follow-through** (e.g., broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and any streaming follow-through only if later validation proves it necessary).
-- **Large-dump follow-through**: Step 11 is complete. The current benchmark baseline now includes dense synthetic validation at roughly 500 MB / 1 GB / 2 GB, with default-path RSS around 2.87x-2.90x and investigation-path RSS around 3.89x-3.92x. Additional real-world large-dump validation is still useful, but the Step 11 gate is no longer open.
-- **Formal MCP/task automation around the future analysis pipeline.**
+### Still in progress (M6 scope)
+- **Browser UI gaps (moved to M6):** Live object references/referrers in Object Inspector (currently artifact-backed dominator data only); heap-explorer → leak-workspace object-to-leak resolution contract; Tauri desktop packaging.
+- **Post-M5 AI follow-through (narrower scope):** Broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming only if the current request/response transport proves insufficient.
+- **M6 ecosystem:** rustdoc publication, example projects with sample heap dumps, benchmark suite vs MAT, integration guides (GitHub Actions, Jenkins), community infrastructure.
 
 The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
 
@@ -112,6 +111,94 @@ core/
       ├── mod.rs
       └── server.rs       # Was mcp.rs
 ```
+
+## Browser-First UI Layer
+
+> **Status (Apr 2026):** Shipped as M4. All planned routes and feature slices are complete. Three residual gaps (live object refs, heap→leak jumps, Tauri packaging) are moved to M6.
+
+The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail.
+
+### Route Map
+
+| Route | Surface | Data source |
+|-------|---------|-------------|
+| `/` | Artifact loader — drop a JSON artifact or pick a file | — |
+| `/dashboard` | Triage dashboard — summary strip, leak table, histogram panel, graph metrics | Artifact |
+| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail | Artifact |
+| `/heap-explorer/dominators` | Dominator tree browser — retained-size explorer | Artifact |
+| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail | Artifact |
+| `/heap-explorer/query-console` | OQL query console — runs `query_heap` via host bridge | Bridge |
+| `/leaks/:leakId/overview` | Leak overview — suspect summary backed by artifact | Artifact |
+| `/leaks/:leakId/explain` | AI explanation — routed through host bridge when available | Bridge |
+| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall | Bridge |
+| `/leaks/:leakId/source-map` | Source mapping — bridge-backed | Bridge |
+| `/leaks/:leakId/fix` | Fix suggestions — bridge-backed | Bridge |
+
+### Feature Areas
+
+```text
+ui/src/features/
+├── artifact-loader/     # Drop zone, artifact parsing, artifact Zustand store
+├── dashboard/           # Triage dashboard components and dashboard store
+├── artifact-explorer/   # Histogram explorer, analyzer rail, bucket detail
+├── heap-explorer/       # Dominator/object/query pages + cross-nav actions
+└── leak-workspace/      # Leak workspace layout, subpages, live-detail bridge
+```
+
+### Host Bridge Contract
+
+Two optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server):
+
+- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — provides `explainLeak`, `findGcPath`, `mapToCode`, and `proposeFix`
+- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — provides `queryHeap`
+
+When a bridge is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders. Artifact-backed panels always work without any bridge.
+
+### Architecture Diagram
+
+```mermaid
+flowchart TD
+    HD[".hprof Heap Dump"]
+
+    subgraph CLI["CLI  (mnemosyne-cli)"]
+        CMDS["parse · leaks · analyze · diff\nmap · gc-path · query · explain\nchat · fix · serve · config"]
+    end
+
+    subgraph Core["Core Library  (mnemosyne-core)"]
+        PARSER["HPROF Parser\ncore::hprof"]
+        GRAPH["Object Graph + Dominators\ncore::graph"]
+        ANALYSIS["Analysis Engine\ncore::analysis"]
+        AI["AI Insights\ncore::analysis::ai"]
+        MCP["MCP Server\ncore::mcp"]
+        REPORT["Report Generator\ncore::report"]
+        PARSER --> GRAPH --> ANALYSIS --> AI
+        ANALYSIS --> REPORT
+        ANALYSIS --> MCP
+    end
+
+    subgraph UI["Browser-First UI  (ui/)"]
+        LOADER["Artifact Loader"]
+        DASH["Triage Dashboard"]
+        AE["Artifact Explorer"]
+        HE["Heap Explorer"]
+        LW["Leak Workspace"]
+    end
+
+    subgraph External["External"]
+        LLM["AI Provider\n(OpenAI / Anthropic / Local)"]
+        MCPC["MCP Clients\n(VS Code · Cursor · JetBrains)"]
+    end
+
+    HD -->|"hprof input"| CLI
+    CLI --> Core
+    Core -->|"JSON artifact\n--format json --output-file"| LOADER
+    LOADER --> DASH & AE & HE & LW
+    AI -->|"provider call"| LLM
+    MCP --> MCPC
+    MCP -->|"window bridge\n(optional)"| LW & HE
+```
+
+> **Note:** `resources/architecture-overview.svg` and `resources/architecture.svg` are pre-rendered Mermaid exports that predate the UI layer. The diagram above is the authoritative current architecture. The SVG files can be regenerated from a Mermaid source if needed for export.
 
 Repository-level performance tooling now lives alongside the core crate: `core/benches/` holds Criterion benchmarks for parser throughput, graph construction, and dominator computation, while `scripts/measure_rss.sh` profiles `parse`, `analyze`, and `leaks`, computes RSS:dump ratios, and falls back to `/proc/PID/status` VmHWM sampling when `/usr/bin/time` is unavailable so the M3 memory-scaling decision can be grounded in measurements rather than assumptions.
 
@@ -457,7 +544,13 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Support for Additional Formats**: Currently focused on the standard JVM HPROF format, Mnemosyne could be extended to support other heap or memory snapshot formats. For example, Android .hprof files (which are similar but not identical), or IBM/OpenJ9 heap dumps, etc. The parser component can be augmented or new parser modules added for these formats.
 
-**GUI or Web Dashboard**: Build a graphical user interface on top of Mnemosyne. This could be a desktop electron app or a web dashboard that allows users to upload a heap dump and get a nicely formatted report with charts (e.g., pie chart of memory by package, timeline of object count if multiple dumps tracked, etc.). The core logic would remain the same, just a new presentation layer on top.
+**Browser-First UI (shipped, M4)**: The `ui/` React frontend is complete. It ships artifact-backed triage, artifact explorer, heap explorer (dominators, object inspector, query console), and the full leak workspace route family. Three residual gaps are tracked in M6: live object references/referrers in the Object Inspector, heap-explorer → leak-workspace object-to-leak resolution, and Tauri desktop packaging.
+
+**Tauri Desktop Packaging (M6)**: Wrap the existing `ui/` React frontend in a Tauri shell for distribution as a native desktop app. The host bridge contract (`window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__`, `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__`) is already defined and ready for a Tauri implementation.
+
+**Live Object References/Referrers (M6)**: The Object Inspector currently shows artifact-backed dominator data only. Extending the host bridge to expose `getReferences(objectId)` and `getReferrers(objectId)` — using the already-shipped `ObjectGraph` navigation API (`get_references`, `get_referrers`) — would enable live drill-down into an object's reference graph from the browser.
+
+**Heap-Explorer → Leak-Workspace Jumps (M6)**: There is currently no object-to-leak resolution contract. Adding an artifact-backed or host-backed mapping from object ID to leak suspect ID would enable direct navigation from any heap explorer view into the relevant leak workspace.
 
 **Deeper JVM Integration**: In the future, Mnemosyne might integrate with live JVMs via JMX or JVMTI. Instead of requiring a heap dump file, it could connect to a running application (given proper credentials) and trigger a heap dump or even query memory structures in real-time. This would make it more of a live monitoring tool. Combined with the AI, it could act as a continuous memory assistant, not just post-mortem analysis.
 
