@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** April 25, 2026
+> **Last Updated:** April 26, 2026
 > **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -48,10 +48,12 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 ## Current Implementation Snapshot (April 2026)
 
 ### Shipped today
-- **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
+- **Parser:** `core::hprof::parser` streams HPROF headers/records for record-summary stats, `core::hprof::overview` provides the bounded-memory class-resolved overview path used for large-dump triage, and `core::hprof::binary_parser` parses binary heap records into an object graph for deep graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`. `parse` and `analyze` now accept `--mode auto|deep|overview`; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. The `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **Analysis modes:** `AnalysisMode::{Auto, Deep, Overview}` is now shared across CLI, MCP, the analysis engine, and report rendering. Deep mode keeps the v0.2.0 object-graph pipeline, while overview mode is streaming, bounded-memory, and explicitly limited to approximate shallow-size triage without dominators, retained sizes, or leak suspects.
+- **MCP:** `parse_heap` and `analyze_heap` now accept optional `mode: "auto"|"deep"|"overview"`; overview responses carry a `"mode": "overview"` discriminator and return the streaming overview summary instead of pretending to be a deep `AnalyzeResponse`.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
@@ -348,7 +350,7 @@ In essence, MCP is the central controller ensuring that Mnemosyne's components w
 
 The Heap Dump Parser is the component responsible for reading the JVM heap dump file (typically in `.hprof` format) and extracting meaningful data. Implemented in Rust, it emphasizes performance and low memory usage:
 
-**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). `core::hprof::parser` uses sequential buffered reads for summary-level record stats, while `core::hprof::binary_parser` performs the deeper binary HPROF pass that builds the in-memory `ObjectGraph` used by graph-backed analysis.
+**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). `core::hprof::parser` uses sequential buffered reads for summary-level record stats, `core::hprof::overview` now performs bounded-memory class-resolved streaming triage for overview mode, and `core::hprof::binary_parser` performs the deeper binary HPROF pass that builds the in-memory `ObjectGraph` used by graph-backed analysis.
 
 **Data Extraction**: As it parses, it gathers key metrics and structures:
 - **Class Histogram**: A list of classes with their instance counts and total memory usage (so we know top memory consumers).
@@ -365,7 +367,7 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 
 By the end of this stage, Mnemosyne has a concise "snapshot" of the heap's contents. This snapshot is then handed to the AI analysis component for deeper insight.
 
-> **Status (Mar 2026):** Mnemosyne now has two parser paths inside `core::hprof/`: `parser.rs` for streaming summary stats and `binary_parser.rs` for object-level graph construction used by `analyze_heap()`, `detect_leaks()`, and `gc-path`. Some other surfaces, especially diffing, still rely on the lighter summary path.
+> **Status (Apr 2026):** Mnemosyne now has a dual-path analysis story inside `core::hprof/`: `binary_parser.rs` drives the deep object-graph path used by `analyze_heap()`, `detect_leaks()`, and `gc-path`, while `overview.rs` drives the bounded-memory overview path used for large-dump triage. The older `parser.rs` record scanner still powers lightweight summary parsing.
 
 ### 4. AI Analysis Engine (Insight Generator)
 

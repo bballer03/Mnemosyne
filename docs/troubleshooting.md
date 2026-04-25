@@ -167,14 +167,17 @@ What is happening:
 What to do:
 
 - start with `parse` first
+- use `--mode overview` for bounded-memory triage on very large dumps; default `auto` will also pick overview once the dump is at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides it
 - use plain `analyze` before enabling every investigation flag
 - turn on deep modules only when you already have a concrete question
 - use `--profile ci-regression` for CI instead of the full investigation set
+- do not confuse `--profile overview` with `--mode overview`; the profile stays on the deep path, while the mode changes the parser/analysis path
 
 Lean first-pass commands:
 
 ```bash
 mnemosyne-cli parse heap.hprof
+mnemosyne-cli parse heap.hprof --mode overview
 mnemosyne-cli analyze heap.hprof
 mnemosyne-cli leaks heap.hprof
 ```
@@ -189,13 +192,15 @@ mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instanc
 
 What is happening:
 
-- Mnemosyne's current analysis architecture is still in-memory
+- deep graph-backed analysis is still in-memory
+- overview mode avoids `ObjectGraph` construction and keeps only bounded accumulators
 - the default graph-backed `analyze` and `leaks` path has been validated around roughly `2.87x-2.90x` RSS-to-dump ratio on dense synthetic large-dump tiers
 - investigation-heavy runs have measured around `3.89x-3.92x` on the same tiers
 
 What to do:
 
 - treat `parse` as your first triage tool when memory headroom is tight
+- force `--mode overview` when you need class-resolved triage without paying for the object graph
 - avoid investigation flags in CI unless you need them for the specific regression signal
 - close other large processes before running deep analysis on multi-GB dumps
 - use a machine with comfortable free RAM for graph-backed investigation
@@ -203,7 +208,7 @@ What to do:
 Practical recommendation:
 
 ```text
-Use `parse` first for quick triage. Move to `analyze` only after you know the dump is worth the deeper pass.
+Use `parse` first for quick triage. For very large dumps, move to `--mode overview` before you decide whether the dump is worth a deep graph-backed pass.
 ```
 
 ## 3. AI Provider Issues
@@ -402,14 +407,17 @@ Still growing:
 - broader object-string rendering and explorer ergonomics
 - deeper interactive browsing semantics
 
-### Large dumps still pay the cost of an in-memory architecture
+### Deep mode still pays the cost of an in-memory architecture
 
-Mnemosyne has cleared its current large-dump validation gate, but it is not pretending to be a zero-memory-cost analyzer. Deep graph-backed commands still need meaningful headroom.
+Mnemosyne has cleared its current large-dump validation gate, and overview mode now exists for bounded-memory triage, but it is not pretending that deep graph-backed analysis is free. Deep commands still need meaningful headroom.
 
 Best practice:
 
 - triage with `parse`
+- use `--mode overview` when you only need graph-free class/instance triage
 - escalate to `analyze`, `leaks`, `query`, or `gc-path` only when needed
+
+Remember the honesty contract: overview mode reports approximate shallow sizes only. Retained sizes, the dominator tree, and leak suspects remain unavailable until you run the deep path.
 
 ### Fix suggestions can occasionally look more optimistic than a fresh analyze run
 

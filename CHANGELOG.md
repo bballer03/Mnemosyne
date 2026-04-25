@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `AnalysisMode { auto, deep, overview }` across core, CLI, MCP, and report rendering, including the bounded-memory `core::hprof::overview` parser for class-resolved streaming triage on large dumps without building the `ObjectGraph`
+- CLI `parse` / `analyze` `--mode auto|deep|overview`, MCP `parse_heap` / `analyze_heap` `mode`, the `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` env override for the 4 GiB auto-mode cutoff, and overview responses/renderers that label approximate shallow sizes honestly instead of implying retained-size semantics
 - Browser-UI follow-through in the shared frontend: heap explorer panes can now resolve selected objects back to leak IDs for direct cross-navigation into the leak workspace, and the repository now ships the supporting documentation set (`docs/user-guide.md`, `docs/troubleshooting.md`, `docs/benchmarks.md`, `docs/integrations/`) plus reproducible Java example projects under `examples/`
 - An in-repo Tauri desktop scaffold under `tauri/` that bundles the shared `ui/` frontend, injects both host bridges, and exposes native commands for heap loading, query execution, references/referrers, leak explanation, GC-path lookup, source mapping, and fix suggestions
 - `examples/cache-leak`, `examples/thread-leak`, and `examples/string-duplication` as reproducible Java sample apps with walkthroughs for practicing Mnemosyne analysis flows

@@ -10,6 +10,12 @@ mnemosyne-cli parse heap.hprof
 
 Use `parse` first when you want the header, record counts, and aggregate record-category totals without paying for the richer object-graph path.
 
+For very large dumps, switch to overview mode when you want bounded-memory class-resolved triage:
+
+```bash
+mnemosyne-cli parse heap.hprof --mode overview
+```
+
 ## 2. Triage Leak Suspects
 
 ```bash
@@ -21,10 +27,12 @@ Use `leaks` to narrow the shortlist before you spend time on a full report. Repe
 ## 3. Run Full Analysis
 
 ```bash
-mnemosyne-cli analyze heap.hprof --group-by package --threads --strings --collections --classloaders --top-instances --top-n 10 --min-capacity 32
+mnemosyne-cli analyze heap.hprof --mode deep --group-by package --threads --strings --collections --classloaders --top-instances --top-n 10 --min-capacity 32
 ```
 
 This is the richer operator path when you need grouped histogram output plus the optional thread, string, collection, classloader, and top-instance reports in one run.
+
+If you only need graph-free triage, use `--mode overview` instead. That path is streaming and bounded-memory, but it reports approximate shallow sizes only and does not produce retained sizes or leak suspects.
 
 ## 4. Compare Before and After
 
@@ -62,4 +70,5 @@ Use `gc-path` when you need a retention chain to confirm why an object is still 
 
 - `leaks` and `analyze` both attempt the graph-backed path first, then fall back to heuristic output with explicit provenance markers when the heap dump cannot support the full graph path.
 - `analyze` is the richer path because it can attach grouped histogram data and the optional investigation reports to the same run.
+- `auto` is the default mode on `parse` and `analyze`; it resolves to overview at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides the cutoff.
 - `diff` gains class-level instance, shallow-byte, and retained-byte deltas when both snapshots successfully build object graphs.

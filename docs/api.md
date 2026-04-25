@@ -167,12 +167,22 @@ Return the live MCP tool catalog with descriptions and parameter metadata.
           "type": "string",
           "required": true,
           "description": "Path to the heap dump."
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": false,
+          "default": "auto",
+          "enum": ["auto", "deep", "overview"],
+          "description": "Analysis mode. `auto` resolves by file size, `deep` builds the full object graph, and `overview` streams the heap without building the object graph and reports approximate shallow sizes only."
         }
       ]
     }
   ]
 }
 ```
+
+`list_tools` is also where clients discover that `parse_heap` and `analyze_heap` advertise overview mode as partial, graph-free data.
 
 ## `parse_heap`
 
@@ -186,6 +196,7 @@ Parse an HPROF file and return a lightweight heap summary.
   "method": "parse_heap",
   "params": {
     "path": "heap.hprof",
+    "mode": "overview",
     "include_strings": false,
     "max_objects": 500000
   }
@@ -195,12 +206,15 @@ Parse an HPROF file and return a lightweight heap summary.
 ### Params
 
 - `path` string, required
+- `mode` string, optional, `auto|deep|overview`, defaults to `auto`
 - `include_strings` boolean, optional, currently accepted but not surfaced in the summary
 - `max_objects` number, optional, defaults to config `parser.max_objects`
 
+`auto` resolves by file size. The default cutoff is 4 GiB and can be overridden by setting `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` (bytes) in the MCP server environment.
+
 ### Result Shape
 
-`result` is a serialized `HeapSummary`:
+When mode resolves to `deep` (or `auto` on a small dump), `result` is a serialized `HeapSummary` and omits a `mode` field for backward compatibility:
 
 ```json
 {
@@ -232,6 +246,54 @@ Parse an HPROF file and return a lightweight heap summary.
   ]
 }
 ```
+
+When mode resolves to `overview`, `result` is a serialized `OverviewSummary` plus a top-level discriminator:
+
+```json
+{
+  "mode": "overview",
+  "heap_path": "heap.hprof",
+  "total_bytes_processed": 2576980377,
+  "total_record_count": 5678901,
+  "class_stats": {
+    "entries": [
+      {
+        "class_id": 8192,
+        "class_name": "com.example.UserSessionCache",
+        "instance_count": 125432,
+        "approx_shallow_bytes": 536870912
+      }
+    ],
+    "truncated": false
+  },
+  "top_instances": [
+    {
+      "object_id": 4096,
+      "class_id": 8192,
+      "class_name": "com.example.UserSessionCache",
+      "approx_retained_bytes": 65536
+    }
+  ],
+  "gc_root_counts": {
+    "ThreadObject": 12,
+    "StickyClass": 104
+  },
+  "thread_frames": [],
+  "truncated": false,
+  "options": {
+    "top_n_classes": 50,
+    "top_n_instances": 25,
+    "max_class_table_size": 200000,
+    "max_thread_frames": 1024
+  }
+}
+```
+
+Honesty contract for overview mode:
+
+- it is streaming and builds no object graph
+- `approx_shallow_bytes` is approximate shallow data, not retained size
+- despite the legacy field name, `top_instances[].approx_retained_bytes` is also a shallow-only proxy from a single HPROF subrecord, not a true retained-size calculation
 
 ## `detect_leaks`
 
@@ -292,6 +354,7 @@ Run the full analysis pipeline and return the serialized `AnalyzeResponse`.
   "method": "analyze_heap",
   "params": {
     "heap_path": "heap.hprof",
+    "mode": "auto",
     "min_severity": "MEDIUM",
     "packages": ["com.example"],
     "leak_types": ["CACHE"],
@@ -312,6 +375,7 @@ Run the full analysis pipeline and return the serialized `AnalyzeResponse`.
 ### Params
 
 - `heap_path` string, required
+- `mode` string, optional, `auto|deep|overview`, defaults to `auto`
 - `min_severity` string, optional
 - `packages` string array, optional
 - `leak_types` string array, optional
@@ -328,7 +392,7 @@ Run the full analysis pipeline and return the serialized `AnalyzeResponse`.
 
 ### Result Shape
 
-`result` is a serialized `AnalyzeResponse` object with optional sections omitted when not requested or not available:
+When mode resolves to `deep` (or `auto` on a small dump), `result` is a serialized `AnalyzeResponse` object with optional sections omitted when not requested or not available:
 
 ```json
 {
@@ -391,6 +455,9 @@ Notes:
 - `ai` is omitted when AI is disabled or unavailable
 - optional report sections are omitted when `None`
 - the server serializes the raw Rust structs directly under `result`
+- deep-mode responses omit `mode` when it would be `"deep"`, preserving the older JSON shape
+
+When mode resolves to `overview`, the MCP server does **not** serialize `AnalyzeResponse`. It returns the same `OverviewSummary` shape shown under `parse_heap`, plus `"mode": "overview"`. That response is intentionally graph-free and only carries approximate shallow-size triage data.
 
 ## `query_heap`
 

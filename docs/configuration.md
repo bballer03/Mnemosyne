@@ -72,6 +72,7 @@ Notes:
 - both `[ai]` and `[llm]` are accepted; `[ai]` wins if both are present
 - `[general].output_format` and top-level `output` both feed `AppConfig.output`
 - `[general].enable_ai` feeds `ai.enabled`
+- `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` is a live env-only runtime toggle for `AnalysisMode::Auto`; it is not loaded from TOML and will not appear in `mnemosyne-cli config`
 - `[analysis].accumulation_threshold` exists in core defaults and runtime analysis, but the current config loader does not load it from TOML or environment yet
 - `[code_mapping]`, `[report]`, `[mcp]`, and `[performance]` tables are not part of the active config loader in this branch
 - `verbose = ...` in TOML is not a live setting
@@ -278,6 +279,14 @@ export MNEMOSYNE_PACKAGES="com.example,org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD,HTTP_RESPONSE"
 ```
 
+### Mode Auto-Threshold
+
+```bash
+export MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=4294967296
+```
+
+This value is in bytes. The default is `4294967296` (4 GiB). It affects `mode=auto` for CLI `parse` / `analyze` and MCP `parse_heap` / `analyze_heap`, but it is not part of the TOML config surface.
+
 ### AI
 
 ```bash
@@ -327,10 +336,10 @@ Live subcommand surfaces:
 ### `parse`
 
 ```bash
-mnemosyne-cli parse <HEAP>
+mnemosyne-cli parse <HEAP> --mode auto|deep|overview
 ```
 
-The command currently has no parse-specific flags beyond the global `-v` and `-c` options.
+The command now exposes `--mode auto|deep|overview` in addition to the global `-v` and `-c` options. `auto` defaults to a 4 GiB threshold and consults `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` (bytes).
 
 ### `leaks`
 
@@ -342,6 +351,7 @@ mnemosyne-cli leaks <HEAP> --min-severity high --package com.example --leak-kind
 
 ```bash
 mnemosyne-cli analyze <HEAP> \
+  --mode auto \
   --format json \
   --profile incident-response \
   --group-by package \
@@ -360,6 +370,7 @@ mnemosyne-cli analyze <HEAP> \
 Important truth:
 
 - `analyze` does not currently expose `--min-severity`
+- `--profile overview` is a deep-mode preset and is distinct from `--mode overview`
 
 ### `diff`
 
@@ -459,5 +470,7 @@ Current MCP methods:
 - `propose_fix`
 
 There is no `apply_fix` method.
+
+`parse_heap` and `analyze_heap` both accept an optional `mode: "auto"|"deep"|"overview"` parameter. When the server resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
 
 See `docs/api.md` for the actual wire contract.

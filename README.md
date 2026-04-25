@@ -46,11 +46,13 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - Blazing-fast Rust-based `.hprof` parser
 - Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
+- `mnemosyne-cli parse` and `mnemosyne-cli analyze` now accept `--mode auto|deep|overview`; `auto` flips to overview at 4 GiB by default and can be overridden with `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`
+- Overview mode is a streaming, graph-free triage path with approximate shallow sizes only. Retained sizes, dominator data, and leak suspects remain deep-mode-only.
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
 - `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields plus retained instance-field projection/filtering on query paths
-- `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults without changing the underlying graph-backed analysis pipeline
+- `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
@@ -104,6 +106,8 @@ Available MCP methods:
 - propose_fix
 
 Call `list_tools` first if your client wants machine-readable method descriptions and parameter metadata.
+
+`parse_heap` and `analyze_heap` now also accept an optional `mode: "auto"|"deep"|"overview"` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
 
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
@@ -227,6 +231,8 @@ When you specify multiple `packages`, Mnemosyne first treats them as an allow-li
 
 Prefer shell overrides? Export `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` before running the CLI to apply the same defaults without a file.
 
+Need to change the auto-mode cutoff for large-dump triage or benchmarking? Export `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=<bytes>`. The default is `4294967296` (4 GiB). This env var is read directly by CLI and MCP mode resolution, so it does not appear in `mnemosyne-cli config` output.
+
 ### 8. Run
 The packaged binary name is `mnemosyne-cli`:
 
@@ -275,6 +281,13 @@ Top record tags:
 ```
 
 Those numbers come straight from Mnemosyne's lightweight record-stat histogram derived from the HPROF stream. The parse view is intentionally record-category oriented, while richer class- and object-level retained-size semantics still live in the graph-backed analysis path. If a record-category label is truncated to fit the terminal table, Mnemosyne prints a follow-up disclosure section with the full value.
+
+Both `parse` and `analyze` now accept `--mode auto|deep|overview` (default `auto`). `auto` resolves to overview at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides the cutoff. Overview mode is streaming and honest: it does not build the object graph, and it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
+
+```bash
+mnemosyne-cli parse heap.hprof --mode overview
+mnemosyne-cli analyze heap.hprof --mode overview --format json
+```
 
 #### Detect memory leaks
 ```bash
@@ -419,6 +432,8 @@ Code Fix Available: Run 'mnemosyne-cli fix heap.hprof' to generate patch
 
 When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible cloud and local endpoints plus Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is available through `mnemosyne-cli chat`, and MCP now ships persisted heap-bound AI sessions via `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Session files default to a per-user local Mnemosyne data directory, and `[ai.sessions].directory` lets operators pin that storage to a specific path. Broader conversation semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming remain future follow-on work rather than part of the shipped milestone contract.
 
+If you pass `--ai` together with `--mode overview`, Mnemosyne prints a notice and skips AI because overview mode never builds the object graph the AI path depends on.
+
 Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
 #### Output TOON (for CI/CD)
@@ -469,6 +484,9 @@ section ai
 # Quick analysis
 mnemosyne-cli analyze heap.hprof
 
+# Force bounded-memory streaming triage
+mnemosyne-cli parse huge.hprof --mode overview
+
 # Use an explicit config file
 mnemosyne-cli analyze heap.hprof --config ./ops/prod.toml
 
@@ -483,6 +501,9 @@ mnemosyne-cli analyze heap.hprof --leak-kind cache,thread
 
 # Group the analysis histogram by package
 mnemosyne-cli analyze heap.hprof --group-by package
+
+# Keep the full object graph even when auto would switch to overview
+mnemosyne-cli analyze heap.hprof --mode deep --group-by package
 
 # Add investigation reports to the same analysis run
 mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instances --top-n 15 --min-capacity 32
@@ -606,8 +627,8 @@ Once configured, you can ask your AI assistant:
 | Command | Description |
 |---|---|
 | `list_tools` | Return machine-readable MCP method descriptions and parameter metadata |
-| `parse_heap` | Parse a heap dump and return summary |
-| `analyze_heap` | Run the full heap analysis pipeline and return `AnalyzeResponse` |
+| `parse_heap` | Parse a heap dump and return a summary; optional `mode` selects deep or streaming overview, and overview responses carry `"mode": "overview"` |
+| `analyze_heap` | Run deep analysis or, in overview mode, return the streaming partial summary instead of a deep `AnalyzeResponse` |
 | `query_heap` | Execute an OQL-style query and return tabular results, including retained instance-field access on query paths |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |

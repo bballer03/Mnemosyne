@@ -41,6 +41,13 @@ mnemosyne-cli parse heap.hprof
 
 `parse` is the lightweight path. It reports header metadata, total records, and record-category byte totals without building the full object graph.
 
+Both `parse` and `analyze` accept `--mode auto|deep|overview` (default `auto`). `auto` resolves to overview for dumps at or above 4 GiB by default, or whatever byte threshold `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` supplies. Overview mode is streaming and graph-free: it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
+
+```bash
+mnemosyne-cli parse heap.hprof --mode overview
+mnemosyne-cli analyze heap.hprof --mode overview --format json
+```
+
 ## Step 3: Detect Leaks
 
 ```bash
@@ -72,6 +79,7 @@ Useful live options:
 
 ```bash
 mnemosyne-cli analyze heap.hprof --format json
+mnemosyne-cli analyze heap.hprof --mode overview --format json
 mnemosyne-cli analyze heap.hprof --group-by package
 mnemosyne-cli analyze heap.hprof --threads --strings --collections --classloaders --top-instances
 mnemosyne-cli analyze heap.hprof --profile incident-response
@@ -94,6 +102,8 @@ Profile presets currently mean:
 - `incident-response`: enables all optional investigation reports and bumps `top_n` to at least `15` plus `min_capacity` to at least `32`
 - `ci-regression`: enables `top-instances` with tighter defaults
 
+`--profile overview` is a deep-mode preset. It is not the same thing as `--mode overview`.
+
 ## Step 5: AI Insights
 
 The CLI flag is still `--ai`:
@@ -110,6 +120,8 @@ Current AI modes:
 - `provider`: calls a configured provider and parses strict TOON back into the stable `AiInsights` contract
 
 Provider-backed AI is configured through `[ai]` or environment variables. OpenAI-compatible, local, and Anthropic provider paths all have targeted verification coverage in this branch.
+
+If you pair `--ai` with `--mode overview`, Mnemosyne skips AI and tells you why: overview mode never builds the object graph the AI path relies on.
 
 Start a bounded leak-focused chat session with:
 
@@ -196,6 +208,7 @@ Config lookup order:
 ```bash
 export MNEMOSYNE_OUTPUT_FORMAT=json
 export MNEMOSYNE_MAX_OBJECTS=500000
+export MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=4294967296
 export MNEMOSYNE_MIN_SEVERITY=HIGH
 export MNEMOSYNE_PACKAGES="com.example,org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
@@ -212,6 +225,7 @@ Notes:
 
 - `MNEMOSYNE_VERBOSE` is not a real config/env knob
 - `MNEMOSYNE_USE_MMAP` and `MNEMOSYNE_THREADS` are loaded, but they are not currently documented as changing the active CLI execution path in this branch
+- `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` is measured in bytes, defaults to 4 GiB, and affects `mode=auto` for CLI `parse` / `analyze` plus MCP `parse_heap` / `analyze_heap`
 
 ## MCP Setup
 
@@ -240,6 +254,8 @@ Current MCP methods:
 
 There is currently no `apply_fix` MCP method.
 
+`parse_heap` and `analyze_heap` both accept an optional `mode` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
+
 ## Memory Scaling Status
 
 Step 11 is complete.
@@ -249,6 +265,7 @@ The current published memory-scaling story is:
 - default graph-backed `analyze` / `leaks`: about `2.87x-2.90x` RSS:dump on dense synthetic ~500 MB / ~1 GB / ~2 GB tiers
 - investigation-heavy path: about `3.89x-3.92x` on the same tiers
 - `parse`: remains near-constant and very small in RSS because it stays on the streaming summary path
+- overview mode now provides a bounded-memory class-resolved triage path for larger dumps; it stays graph-free and reports approximate shallow sizes only
 
 See `docs/performance/memory-scaling.md` for the measured tables.
 

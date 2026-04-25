@@ -23,8 +23,8 @@ v0.2.0 is not a prototype foundation anymore. The core parser, object-graph anal
 | UI | ✅ Shipped | Browser-first React, artifact/heap/leak explorer flows |
 | Desktop | ⚠️ Scaffold | Tauri shell exists, not yet distributable |
 | Distribution | ✅ Full | 4 end-user channels plus automated release pipeline |
-| Testing | ✅ Solid | 228 Rust tests + 143 UI tests |
-| Scale | ⚠️ Limited | Validated to ~2 GB dense tiers; 10 GB+ needs overview mode |
+| Testing | ✅ Solid | 268 Rust tests + 143 UI tests |
+| Scale | ⚠️ In progress | Deep mode is validated to ~2 GB dense tiers; M7-1 overview mode now covers 10 GB+ streaming triage, and M7-5 still needs published head-to-head proof |
 
 **Active roadmap rule:** M1-M6 are complete and archived. The only active milestone is M7, followed by the M8+ backlog.
 
@@ -34,7 +34,7 @@ Mnemosyne is already ahead of MAT on provenance, AI assistance, MCP-native IDE w
 
 ### Critical gaps
 
-- **Streaming / large-dump handling (10 GB+):** the deep analysis path is still in-memory. It is validated through roughly the 2 GB tier, but not yet credible for very large production dumps.
+- **Published large-dump proof (10 GB+):** M7-1 overview mode now provides bounded-memory streaming triage for very large dumps, but M7-5 still needs to publish the comparative benchmark evidence that makes those claims defensible.
 - **Full OQL depth:** the shipped query engine covers high-value basics, not MAT's full predicate, function, and traversal depth.
 
 ### Important gaps
@@ -56,21 +56,21 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 | Dimension | Mnemosyne | Eclipse MAT | hprof-slurp |
 |---|---|---|---|
 | Core analysis depth | Strong and shipped; query/diff still narrower | Best today | Shallow triage only |
-| Large-dump handling | Needs M7 overview mode | Disk-index capable but heavyweight | Best-in-class streaming / low RSS |
+| Large-dump handling | M7-1 overview mode shipped; M7-5 benchmarks still pending | Disk-index capable but heavyweight | Best-in-class streaming / low RSS |
 | Automation / CI | Strong JSON/TOON story; M7 can widen it | Weak | Basic scripting only |
 | IDE / AI integration | MCP + AI + provenance | Eclipse-only, no AI | None |
 | User experience | Modern CLI + browser-first UI | Mature but dated desktop UX | Fast CLI, minimal exploration |
 
 **Where Mnemosyne wins now:** provenance, MCP-native IDE integration, AI-assisted diagnosis, browser-first UI, and distribution breadth.
 
-**Where Mnemosyne still loses:** very large dumps, full OQL depth, and object-level diff.
+**Where Mnemosyne still loses:** published large-dump benchmark proof, full OQL depth, and object-level diff.
 
 **Where Mnemosyne can become unique:** CI regression policies and allocation-site flame graphs widen a category neither MAT nor hprof-slurp currently owns.
 
 ## 4. Milestone 7 — Production Readiness & Scale
 
-**Design reference:** `docs/design/milestone-7-production-readiness.md`  
-**Status:** 🔲 Pending
+**Design reference:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md)  
+**Status:** ⚠️ In progress
 
 M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
 
@@ -83,9 +83,11 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 | M7-5 | Comparative benchmarks vs MAT/hprof-slurp | Credibility | P2 | M |
 | M7-6 | v0.3.0 release | Release | P1 | S |
 
+**Status detail:** ✅ M7-1 is complete and implemented against [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md). M7-2 through M7-6 remain planned.
+
 ### Phase 1 — Foundation
 
-Deliver **M7-1** first. Streaming overview mode is the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data.
+**M7-1 is complete.** Streaming overview mode is now the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data. The next active slices remain M7-2 and M7-3.
 
 ### Phase 2 — Differentiation
 
@@ -112,7 +114,7 @@ Close with **M7-5** and **M7-6**. Publish comparative evidence, then ship `v0.3.
 
 - All P1 items in M7 are delivered and covered by tests.
 - Comparative benchmark publication exists before the release tag is cut.
-- Test count reaches at least 260 without regressing the existing suite.
+- Test count remains at or above 260 without regressing the existing suite (already at 268 after M7-1).
 - Roadmap, STATUS, and release notes align on the shipped M7 scope.
 - M1-M6 remain archive-only and are not reopened through scope creep.
 
@@ -149,7 +151,7 @@ This scorecard keeps the roadmap honest: it shows what already matches MAT, what
 | Collection inspection | ✅ | — |
 | Full OQL | ⚠️ 20% | M7-4 → M8-2 |
 | Object-level diff | ❌ | M8-1 |
-| Large dump handling | ❌ | M7-1 |
+| Large dump handling | ⚠️ M7-1 shipped; comparative validation still pending | M7-5 |
 | Persistent indexes | ❌ | M8-8 |
 | CI/CD automation | ✅ Better than MAT | M7-2 widens lead |
 | AI-assisted diagnosis | ✅ MAT has none | Unique moat |
@@ -188,7 +190,7 @@ These design documents remain the reference trail for completed milestones and s
 | M6 supporting design | [design/m6-tauri-desktop-packaging.md](design/m6-tauri-desktop-packaging.md) | ✅ |
 | M6 supporting design | [design/m6-plugin-extension-system.md](design/m6-plugin-extension-system.md) | ✅ |
 | Scaling support design | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
-| M7 — Production Readiness & Scale | `docs/design/milestone-7-production-readiness.md` | 🔲 Pending |
+| M7 — Production Readiness & Scale | [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) | ⚠️ In progress |
 
 ---
 

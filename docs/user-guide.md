@@ -22,7 +22,7 @@ Mnemosyne is a good fit for:
 - CI and release pipelines that need machine-readable heap summaries or regression artifacts.
 - Editor-based workflows where heap analysis should be callable through MCP instead of a one-off shell session.
 
-What makes it different from a basic heap-summary tool is that the fast path and the deep path live in one CLI. You can start with a lightweight parse, move into graph-backed investigation, then keep going into AI explanation, source mapping, or MCP automation without changing tools.
+What makes it different from a basic heap-summary tool is that the lightweight parse path, the graph-free overview path, and the full deep path live in one CLI. You can start with a lightweight parse, move into bounded-memory overview triage or graph-backed investigation, then keep going into AI explanation, source mapping, or MCP automation without changing tools.
 
 ## 2. Installation
 
@@ -105,20 +105,22 @@ mnemosyne-cli parse heap.hprof
 
 Flags:
 
-- no parse-specific CLI flags beyond the global `-c` and `-v` options
+- `--mode auto|deep|overview`
 - `parser.max_objects` from config or `MNEMOSYNE_MAX_OBJECTS` still affects the underlying parse job
 
 What it does:
 
 - validates the input path
+- resolves the requested mode at the CLI boundary (`auto` by default)
 - reads the HPROF header
-- prints summary metadata, record counts, aggregate record-category sizes, and top record tags
-- stays on the lightweight summary path instead of building the full object graph
+- in `deep`, prints summary metadata, record counts, aggregate record-category sizes, and top record tags without building the full object graph
+- in `overview`, uses bounded accumulators to surface class-resolved top-N data, GC-root counts, and capped thread-frame samples without building the `ObjectGraph`
 
 Example:
 
 ```bash
 mnemosyne-cli parse heap.hprof
+mnemosyne-cli parse heap.hprof --mode overview
 ```
 
 Expected output pattern:
@@ -138,6 +140,8 @@ Top record tags:
 
 Choose `parse` first when you want to confirm that a dump is valid, estimate scale, or decide whether a deeper investigation is worth the time and memory.
 
+`auto` resolves to overview for dumps at or above 4 GiB by default, or whatever byte threshold `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` supplies. Overview mode is streaming and honest: it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
+
 ### `analyze`
 
 `analyze` is the main report-generation command. It runs the graph-backed analysis pipeline when possible, can attach optional investigation reports, and is the only CLI surface that currently owns `--format` and `--output-file`.
@@ -150,6 +154,7 @@ mnemosyne-cli analyze <HEAP> [OPTIONS]
 
 Flags:
 
+- `--mode auto|deep|overview`
 - `--format text|markdown|html|json|toon`
 - `--profile overview|incident-response|ci-regression`
 - `--group-by class|package|classloader`
@@ -168,9 +173,10 @@ Flags:
 What it does:
 
 - validates the heap file
-- builds a full analysis response
+- resolves the requested mode at the CLI boundary (`auto` by default)
 - uses the configured analysis filters plus any command-line overrides
-- attempts graph-backed retained-size analysis first and falls back honestly when needed
+- in `deep`, builds the full analysis response, attempts graph-backed retained-size analysis first, and falls back honestly when needed
+- in `overview`, skips object-graph analysis entirely and renders the streaming partial summary with approximate shallow sizes only
 - renders the result in text, Markdown, HTML, JSON, or TOON
 
 Profile behavior:
@@ -179,10 +185,13 @@ Profile behavior:
 - `incident-response`: enables threads, strings, collections, classloaders, and top instances; ensures at least `--top-n 15` and `--min-capacity 32`
 - `ci-regression`: enables top instances with tighter defaults and uses `--min-capacity 64`
 
+Important distinction: `--profile overview` is a deep-mode preset. It is not the same thing as `--mode overview`.
+
 Examples:
 
 ```bash
 mnemosyne-cli analyze heap.hprof
+mnemosyne-cli analyze heap.hprof --mode overview --format json
 mnemosyne-cli analyze heap.hprof --group-by package --top-instances
 mnemosyne-cli analyze heap.hprof --profile incident-response --threads --strings --collections
 mnemosyne-cli analyze heap.hprof --format html --output-file heap-report.html
@@ -216,6 +225,8 @@ When you write to a file, the CLI prints a confirmation instead of dumping the r
 ```text
 Report (text/plain) written to heap-report.txt
 ```
+
+Overview mode renders a different banner-led report focused on top classes, instance samples, GC roots, and capped thread frames. It explicitly states that retained sizes, the dominator tree, and leak suspects are not available in that mode.
 
 ### `leaks`
 
@@ -930,6 +941,8 @@ Useful MCP methods to know up front:
 - `explain_leak`
 - `propose_fix`
 
+`parse_heap` and `analyze_heap` both accept an optional `mode: "auto"|"deep"|"overview"` parameter. When the server resolves to overview, the response carries `"mode": "overview"` and returns the streaming partial summary instead of deep-mode object-graph data.
+
 ## 8. Output Formats
 
 Mnemosyne currently renders five output formats through `analyze`.
@@ -971,6 +984,8 @@ Interpretation:
 - `SYNTHETIC`: Mnemosyne generated a stand-in artifact rather than extracting a direct runtime truth
 - `PARTIAL`: the command produced a real result, but with incomplete supporting context
 - `PLACEHOLDER`: the field exists, but full implementation is not yet there
+
+Overview mode is the main current example of `PARTIAL`: the parser streams real class-resolved aggregates, but it does not build the graph needed for retained sizes, dominators, or leak suspects.
 
 In text-like formats these usually appear as bracketed labels such as `[FALLBACK]`. In JSON they are structured data.
 
@@ -1031,9 +1046,12 @@ Current caveats:
 ```bash
 export MNEMOSYNE_OUTPUT_FORMAT=json
 export MNEMOSYNE_MAX_OBJECTS=500000
+export MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=4294967296
 export MNEMOSYNE_MIN_SEVERITY=HIGH
 export MNEMOSYNE_PACKAGES="com.example,org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
 ```
+
+`MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` is env-only, measured in bytes, and defaults to 4 GiB. It affects `mode=auto` for CLI and MCP mode resolution, but it is not a TOML key and will not appear in `mnemosyne-cli config` output.
 
 Use `mnemosyne-cli config` any time you want to confirm the final merged config and the source it came from.
