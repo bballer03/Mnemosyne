@@ -1,6 +1,6 @@
 import "../../../test/setup";
 
-import { render, waitFor, within } from "@testing-library/react";
+import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
 
@@ -53,12 +53,8 @@ const artifact: AnalysisArtifact = {
   provenance: [],
 };
 
-const globalWindow = globalThis as typeof globalThis & {
-  __MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?: Window["__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__"];
-};
-
 function clearHeapExplorerBridge() {
-  delete globalWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+  delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 }
 
 function renderPanel(selectedRowIndex?: number) {
@@ -75,6 +71,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   afterEach(() => {
+    cleanup();
     clearHeapExplorerBridge();
   });
 
@@ -109,7 +106,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows per-section unavailable messages when the bridge lacks reference methods", () => {
-    globalWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
       queryHeap: async () => ({
         columns: [],
         rows: [],
@@ -130,7 +127,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("renders reference entries as navigable links when the bridge returns data", async () => {
-    globalWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
       getReferences: async () => ({
         objectId: "0xcafebabe",
         references: [
@@ -170,7 +167,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows empty messages when the bridge returns empty relations", async () => {
-    globalWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
       getReferences: async () => ({
         objectId: "0xdeadbeef",
         references: [],
@@ -190,7 +187,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows an error message when the bridge rejects the references lookup", async () => {
-    globalWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
       getReferences: async () => {
         throw new Error("bridge down");
       },
