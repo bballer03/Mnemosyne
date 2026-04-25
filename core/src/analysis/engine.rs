@@ -121,7 +121,10 @@ impl ProvenanceMarker {
 /// Response payload returned to callers (CLI, MCP, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzeResponse {
-    #[serde(default = "default_response_mode")]
+    #[serde(
+        default = "default_response_mode",
+        skip_serializing_if = "is_deep_response_mode"
+    )]
     pub mode: AnalysisMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview: Option<OverviewSummary>,
@@ -152,6 +155,10 @@ pub struct AnalyzeResponse {
 
 fn default_response_mode() -> AnalysisMode {
     AnalysisMode::Deep
+}
+
+fn is_deep_response_mode(mode: &AnalysisMode) -> bool {
+    *mode == AnalysisMode::Deep
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1204,10 +1211,13 @@ mod tests {
         }
     }
 
-    fn sample_analyze_response() -> AnalyzeResponse {
+    fn sample_analyze_response(
+        mode: AnalysisMode,
+        overview: Option<OverviewSummary>,
+    ) -> AnalyzeResponse {
         AnalyzeResponse {
-            mode: AnalysisMode::Overview,
-            overview: Some(OverviewSummary::default()),
+            mode,
+            overview,
             summary: summary_with_size(0),
             leaks: Vec::new(),
             recommendations: Vec::new(),
@@ -1227,8 +1237,11 @@ mod tests {
 
     #[test]
     fn analyze_response_json_back_compat() {
-        let mut value = serde_json::to_value(sample_analyze_response())
-            .expect("sample response should serialize");
+        let mut value = serde_json::to_value(sample_analyze_response(
+            AnalysisMode::Overview,
+            Some(OverviewSummary::default()),
+        ))
+        .expect("sample response should serialize");
         let object = value
             .as_object_mut()
             .expect("serialized response should be an object");
@@ -1243,6 +1256,24 @@ mod tests {
             "missing mode must default to Deep"
         );
         assert!(response.overview.is_none(), "missing overview must be None");
+    }
+
+    #[test]
+    fn analyze_response_deep_mode_omits_new_fields() {
+        let value = serde_json::to_value(sample_analyze_response(AnalysisMode::Deep, None))
+            .expect("sample response should serialize");
+        let object = value
+            .as_object()
+            .expect("serialized response should be an object");
+
+        assert!(
+            !object.contains_key("mode"),
+            "deep mode should not add a new serialized field in slice A"
+        );
+        assert!(
+            !object.contains_key("overview"),
+            "missing overview should remain omitted"
+        );
     }
 
     #[test]
