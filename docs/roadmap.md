@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap & Milestones
 
-> **Last updated:** 2026-04-14 (roadmap/design alignment for shipped M3, approved-scope M5, and current M4 browser-first slice)
+> **Last updated:** 2026-04-25 (M4 closed, M6 expanded with three M4 residual gaps, stale plans/specs cleaned up)
 > **Owner:** Tech PM Agent
 > **Status:** Living document — updated after each major implementation batch
 
@@ -724,45 +724,30 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 ---
 
-### Milestone 4 — UI & Usability
+### Milestone 4 — UI & Usability ✅ Complete
 
 > **Design Reference:** [docs/design/milestone-4-ui-and-usability.md](design/milestone-4-ui-and-usability.md)
+> **Closed:** 2026-04-25
 
 **Objective:** Make Mnemosyne visually accessible to developers who prefer graphical exploration.
 
-**Why it matters:** Most memory analysis is inherently visual — tree browsing, graph navigation, pattern recognition. A UI dramatically widens the user base.
+**Shipped deliverables:**
+1. ✅ Browser-first React frontend under `ui/` — Bun-backed scripts, local JSON artifact loading
+2. ✅ Triage dashboard — summary strip, leak table, histogram panel, graph metrics panel, provenance badges
+3. ✅ Artifact explorer — histogram explorer with analyzer rail (strings, collections, unreachable, top instances, classloaders) and selected-bucket detail
+4. ✅ Heap explorer — dominator tree browser, object inspector (artifact-backed), OQL query console (bridge-backed)
+5. ✅ Leak workspace route family — `/leaks/:leakId/{overview,explain,gc-path,source-map,fix}` with artifact-backed overview and bridge-backed live-detail routes
+6. ✅ Host bridge contracts — `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` and `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` defined with honest `ready`/`fallback`/`unavailable` states
+7. ✅ Context activation — `projectRoot` and `objectId` controls in the leak workspace shell, route-seeded leak identity, per-leak recent object-target history with GC-path recall
+8. ✅ Cross-navigation — dominator/object/query explorer cross-nav actions between heap explorer panes
+9. ✅ 143 passing frontend tests (Bun test runner)
 
-**Key Deliverables:**
-1. Static interactive HTML reports — self-contained, JS-enabled, collapsible, searchable
-2. Browser-first local UI — shared React frontend with local JSON artifact loading for interactive triage
-3. Dominator tree browser — expandable tree view with retained size bars
-4. Object inspector — click any object to see fields, references, size
-5. Leak report dashboard — visual summary with drill-down
-6. GC path visualizer — interactive path from object to GC root
-7. Search and filter across all views
+**Residual gaps — moved to M6:**
+1. **Live object references/referrers** — Object Inspector currently shows artifact-backed dominator data only; live refs/referrers require extending the host bridge with `getReferences`/`getReferrers`
+2. **Heap-explorer → leak-workspace jumps** — no object-to-leak resolution contract exists; needs artifact-backed or host-backed mapping from object ID to leak suspect ID
+3. **Tauri desktop packaging** — host bridge contract is ready; Tauri wrapper is the remaining step for native desktop distribution
 
-**Dependencies:** M1 (object graph), M3 (analysis features)
-
-**Modules/files affected:** `core/src/report/renderer.rs`, shared output contracts, `ui/`, HTML templates, static assets
-
-**Complexity:** High
-
-**Implementation order:**
-1. Enhanced HTML reports (Phase UI-2)
-2. Local web server scaffolding
-3. Dashboard view
-4. Dominator tree browser
-5. Object inspector
-6. Leak report view
-7. GC path visualizer
-8. Query console (if M3 OQL exists)
-
-**Definition of done:**
-- `mnemosyne serve --web` opens a browser with interactive heap exploration
-- Dominator tree is navigable with expand/collapse
-- Can click any object to see its fields and references
-- Provenance badges are visible throughout
-- Works with dumps up to 2GB without browser crashes
+**Dependencies met:** M1 (object graph ✅), M3 (analysis features ✅)
 
 ---
 
@@ -809,46 +794,53 @@ All M1 batches were delivered and validated. Initial synthetic-only validation r
 
 ---
 
-### Milestone 6 — Ecosystem & Community
+### Milestone 6 — Ecosystem, Community & UI Completion
 
 > **Design Reference:** [docs/design/milestone-6-ecosystem-and-community.md](design/milestone-6-ecosystem-and-community.md)
 
-**Objective:** Build the community and ecosystem that makes Mnemosyne self-sustaining.
+**Objective:** Build the community and ecosystem that makes Mnemosyne self-sustaining, and complete the three residual UI gaps carried over from M4.
 
-**Why it matters:** Open-source success requires more than good code. It requires documentation, examples, community infrastructure, and ongoing engagement.
+**Why UI gaps belong here:** The three M4 residual gaps (live refs, heap→leak jumps, Tauri) each require cross-cutting decisions about the host bridge contract or native packaging. They are discrete, well-scoped slices that fit naturally alongside the ecosystem hardening work rather than re-opening M4.
 
-**Key Deliverables:**
-1. Comprehensive documentation — API docs (rustdoc), user guide, tutorials
-2. Example projects — sample Java apps with known memory issues + heap dumps
-3. Benchmark suite — reproducible perf benchmarks vs MAT and other tools
-4. Plugin/extension system — custom analyzers, output formats, LLM backends
-5. Community infrastructure — Discord/Slack, contributor guide, office hours
-6. Integration examples — GitHub Actions workflow, Jenkins pipeline, GitLab CI
-7. Case studies — real-world usage stories
-8. Conference talks / blog posts
+**Key Deliverables — UI Completion (from M4):**
+1. **Live object references/referrers** — extend `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` / `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` with `getReferences(objectId)` and `getReferrers(objectId)`; wire into Object Inspector using the already-shipped `ObjectGraph.get_references()` / `get_referrers()` Rust API; display refs/referrers as navigable lists with cross-nav actions into dominator view
+2. **Heap-explorer → leak-workspace resolution** — define an artifact-backed or host-backed `resolveObjectToLeak(objectId)` contract; enable cross-nav actions in dominator/object/query panes that jump directly into the relevant leak workspace overview
+3. **Tauri desktop packaging** — implement the two bridge interfaces (`LeakWorkspaceHostBridge`, `HeapExplorerBridge`) in a Rust Tauri backend using `core::mcp` handlers; bundle as a native desktop app for macOS, Linux, and Windows; add Tauri build to CI release workflow
 
-**Dependencies:** M1-M5 (need a mature tool to evangelize)
+**Key Deliverables — Ecosystem & Community:**
+4. Comprehensive rustdoc published to docs.rs or GitHub Pages
+5. Example projects — 3+ sample Java apps with known memory issues and committed heap dumps
+6. Benchmark suite — reproducible perf benchmarks vs Eclipse MAT and heaptrack
+7. CI integration guide — GitHub Actions workflow, Jenkins pipeline, GitLab CI examples
+8. User guide / tutorials — getting started, CLI reference, MCP integration, AI provider setup
+9. Community infrastructure — Discord or Slack, contributor guide, issue triage process
+10. Plugin/extension system design — custom analyzers, output formats, LLM backends
 
-**Modules/files affected:** `docs/`, `examples/`, `benches/`, `.github/`
+**Dependencies:** M1-M5 complete ✅, M4 shipped ✅
 
-**Complexity:** Medium (mostly documentation and content)
+**Modules/files affected:** `ui/src/features/heap-explorer/`, `ui/src/features/leak-workspace/`, new `tauri/` directory, `docs/`, `examples/`, `.github/`
+
+**Complexity:** Medium-High (Tauri is the most complex new piece; ecosystem work is mostly documentation and content)
 
 **Implementation order:**
-1. API docs (rustdoc)
-2. Example projects + sample dumps
-3. Benchmark suite
-4. Integration examples
-5. User guide / tutorials
-6. Plugin system design
-7. Community channels
-8. Content creation
+1. Live object references/referrers (smallest bridge extension, high value)
+2. Heap-explorer → leak-workspace resolution (depends on bridge patterns from #1)
+3. rustdoc + user guide (ecosystem foundation)
+4. Example projects + sample dumps
+5. CI integration guide
+6. Tauri desktop packaging (largest piece, needs stable bridge contract from #1 and #2)
+7. Benchmark suite vs MAT
+8. Plugin/extension system design
+9. Community channels + content creation
 
 **Definition of done:**
-- rustdoc published
-- 3+ example projects with heap dumps
-- Benchmarks show parsing performance vs alternatives
-- CI integration guide exists for GitHub Actions + Jenkins
-- Active community channel with 50+ members
+- Object Inspector shows live references and referrers when bridge present
+- Can jump from any heap explorer view directly into the related leak workspace
+- Tauri app distributes via GitHub Releases for macOS/Linux/Windows
+- rustdoc published and linked from README
+- 3+ example projects with heap dumps committed to `examples/`
+- CI integration guide covers GitHub Actions + one other CI system
+- Active community channel with documented triage process
 
 ---
 
@@ -1179,9 +1171,7 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 **Dependencies:** configurable AI task runner (✅ delivered)
 
 ### Step 14: M5 Phase 2 — Prompt/Provider Hardening
-**Design addendum:** `docs/superpowers/specs/2026-04-12-ai-prompt-templates-design.md`
-**Design addendum:** `docs/superpowers/specs/2026-04-12-ai-anthropic-transport-design.md`
-**Design addendum:** `docs/superpowers/specs/2026-04-12-ai-cli-chat-design.md`
+**Design addendum:** Prompt templates, Anthropic transport, and CLI chat design specs (completed — see commit history for specs)
 **Why next:** This was the hardening phase that closed the approved M5 scope after the first provider slice made the AI path real.
 **Actions:**
   - (a) ✅ **Configurable prompt templates** (backlog #25) — provider-mode instruction sections now load from YAML via an embedded default plus optional `[ai.prompts].template_dir` override directory
@@ -1203,12 +1193,20 @@ hprof-slurp explicitly does not attempt leak detection, dominator trees, or reta
 **Effort:** Small
 **Dependencies:** Steps 10-12
 
-### Remaining Roadmap Order
-The remaining roadmap should now execute in this order:
-1. **Small remaining M3 closeout work** — README badge qualifier, real usage examples, IntelliJ stacktrace compatibility, and benchmark/query follow-through only where still justified
-2. **M4 (UI & Usability)** — the next full open milestone: interactive HTML reports plus a browser-first local UI on top of shipped M3/M5 capabilities; the loader, triage dashboard, and leak workspace route family now exist, but the milestone remains open for broader explorer coverage and stronger live-detail context seeding
-3. **M5 follow-on only where evidence supports it** — broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and transport streaming only if the current request/response contract proves insufficient
-4. **M6 (Ecosystem & Community)** — docs, examples, benchmarks, integrations, and community infrastructure after M4 and any justified M5 follow-on
+### Current Focus: M6
+
+**M1 ✅ M1.5 ✅ M2 ✅ M3 ✅ M4 ✅ M5 ✅ — M6 is the active milestone.**
+
+M6 combines the original ecosystem/community program with three residual UI gaps from M4. Start with the UI gaps (they are the smallest, highest-value items and unblock Tauri):
+
+1. **Live object references/referrers** — extend the host bridge, wire into Object Inspector, add cross-nav
+2. **Heap-explorer → leak-workspace resolution** — define the object-to-leak contract, enable cross-nav jumps
+3. **rustdoc + user guide** — ecosystem foundation that unblocks community work
+4. **Example projects + CI guide** — concrete usage evidence
+5. **Tauri desktop packaging** — requires stable bridge contract from items 1 and 2
+6. **Benchmark suite, plugin design, community** — final ecosystem program
+
+See [Milestone 6](#milestone-6--ecosystem-community--ui-completion) for full scope and definition of done.
 
 **Why this order:**
 - M3 is no longer a broadly open milestone; the remaining work is narrow and should be finished before opening larger milestone work
