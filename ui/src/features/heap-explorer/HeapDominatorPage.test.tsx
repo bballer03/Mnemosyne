@@ -53,6 +53,19 @@ function createArtifactFixture() {
   };
 }
 
+function createMatchingLeak() {
+  return {
+    id: "leak-cache-1",
+    className: "com.example.cache.LruCache",
+    leakKind: "dominator",
+    severity: "high",
+    retainedSizeBytes: 1024,
+    instances: 1,
+    description: "Large cache",
+    provenance: [],
+  };
+}
+
 describe("HeapDominatorPage", () => {
   beforeEach(() => {
     act(() => {
@@ -146,6 +159,28 @@ describe("HeapDominatorPage", () => {
     expect(page.getByRole("link", { name: /open query console/i })).toHaveAttribute(
       "href",
       "/heap-explorer/query-console?objectId=cache%20root%2F0x2a%3F",
+    );
+  });
+
+  it("renders the leak workspace link when the selected object resolves to a leak", () => {
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: {
+          ...createArtifactFixture(),
+          leaks: [createMatchingLeak()],
+        },
+      });
+    });
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const page = within(view.container);
+
+    expect(page.getByRole("link", { name: /open leak workspace/i })).toHaveAttribute(
+      "href",
+      "/leaks/leak-cache-1/overview",
     );
   });
 
@@ -247,7 +282,7 @@ describe("HeapDominatorPage", () => {
     expect(duplicateButtons[0]?.getAttribute("aria-pressed")).toBe("true");
     expect(duplicateButtons[1]?.getAttribute("aria-pressed")).toBe("false");
 
-    await user.click(duplicateButtons[1]!);
+    await user.click(duplicateButtons[1]);
 
     const updatedButtons = page.getAllByRole("button", { name: /select com\.example\.duplicateartifactrow/i });
     expect(updatedButtons[0]?.getAttribute("aria-pressed")).toBe("false");

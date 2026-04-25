@@ -111,12 +111,13 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ## 🌐 Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, inline Mermaid diagram, and M6 extension points.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
 
 **Layers at a glance:**
 - **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
 - **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, analysis engine, AI insights, MCP server, report generator
 - **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
+- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
 - **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
 - **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
@@ -129,8 +130,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
-### Browser-first dashboard (current M4 slice)
-The current UI slice lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships a local artifact loader plus a leak triage flow that now includes a dedicated leak workspace route family under `/leaks/:leakId` with `overview`, `explain`, `gc-path`, `source-map`, and `fix` subroutes. `overview` stays artifact-backed and immediate, while the other subroutes cross a narrow local live-detail adapter boundary instead of a generalized app-wide browser RPC layer. `source-map`, `fix`, and `gc-path` may still remain unavailable when `projectRoot` or `objectId` are not yet seeded. Tauri remains a later wrapper path, not part of this slice.
+### Browser-first dashboard and desktop scaffold
+The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, and the leak workspace route family under `/leaks/:leakId`. Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, and query-console views can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references and referrers, and the leak-workspace detail routes call bridge-backed actions. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects both host bridges, but native desktop bundles are not yet part of the tagged release pipeline.
 
 ```bash
 cd ui
@@ -138,6 +139,8 @@ npx --yes bun run test
 npx --yes bun run build
 npx --yes bun run lint
 ```
+
+The optional desktop shell currently validates with `cargo check --manifest-path tauri/Cargo.toml`.
 
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
@@ -646,7 +649,9 @@ mnemosyne/
 ├── .github/
 │ └── workflows/ci.yml   # GitHub Actions workspace validation
 │
-├── ui/                    # Browser-first React dashboard (current M4 first slice)
+├── ui/                  # Shared React frontend: dashboard, artifact explorer, heap explorer, leak workspace
+├── tauri/               # Optional native desktop scaffold for the shared frontend
+├── examples/            # Sample Java memory-problem projects with walkthroughs
 │
 └── Cargo.toml
 ```
@@ -660,6 +665,8 @@ Mnemosyne is built for speed and efficiency:
 ### Benchmarks
 
 > **Captured:** 2026-04-12 after Step 11 completion. Includes the 156 MB real fixture plus dense synthetic validation at roughly 500 MB, 1 GB, and 2 GB tiers.
+
+See [docs/benchmarks.md](docs/benchmarks.md) for the current benchmark-comparison write-up and usage notes.
 
 **Measured results (Criterion, release profile):**
 
@@ -705,10 +712,11 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 ## 🗺 Roadmap
 
 ### Current Snapshot
-- M3 is mostly complete: core parity shipped, with small closeout items first and deeper query/scale follow-through only where evidence justifies it
-- M4 remains open: the browser-first `ui/` frontend now ships the local artifact loader, triage dashboard, and leak workspace route family under `/leaks/:leakId`; broader explorer coverage and stronger context seeding are still pending
+- M3 is complete for the approved scope: core parity shipped, with deeper query/scale work now treated as evidence-driven follow-on
+- M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
-- M6 follows M4 and any justified M5 follow-on: ecosystem and community expansion
+- M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
+- Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---
 
@@ -758,10 +766,15 @@ It aims to make heap analysis faster, smarter, and more accessible.
 ## 📚 Additional Documentation
 
 - **[Quick Start Guide](docs/QUICKSTART.md)** - Get started in 5 minutes
+- **[User Guide](docs/user-guide.md)** - End-to-end CLI, MCP, and workflow reference
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Common errors, limits, and recovery steps
 - **[Architecture](ARCHITECTURE.md)** - Detailed system design
 - **[API Reference](docs/api.md)** - MCP API documentation
 - **[Configuration Guide](docs/configuration.md)** - All configuration options
+- **[Benchmarks](docs/benchmarks.md)** - Current benchmark baseline and comparison context
+- **[Integration Guides](docs/integrations/README.md)** - CI/CD usage for GitHub Actions and Jenkins
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Examples](docs/examples/)** - Usage examples and scripts
+- **[Example Projects](examples/README.md)** - Reproducible Java memory-problem walkthroughs
 - **[Changelog](CHANGELOG.md)** - Version history
 - **[Status](STATUS.md)** - Snapshot of shipped vs. planned functionality

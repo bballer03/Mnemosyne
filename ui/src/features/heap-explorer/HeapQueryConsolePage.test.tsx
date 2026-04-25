@@ -53,6 +53,19 @@ function createArtifactFixture() {
   };
 }
 
+function createMatchingLeak() {
+  return {
+    id: "leak-cache-1",
+    className: "com.example.cache.LruCache",
+    leakKind: "dominator",
+    severity: "high",
+    retainedSizeBytes: 1024,
+    instances: 1,
+    description: "Large cache",
+    provenance: [],
+  };
+}
+
 function seedArtifactWithDominators() {
   act(() => {
     useArtifactStore.setState({
@@ -65,7 +78,7 @@ function seedArtifactWithDominators() {
 
 describe("HeapQueryConsolePage", () => {
   beforeEach(() => {
-    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -74,7 +87,7 @@ describe("HeapQueryConsolePage", () => {
 
   afterEach(() => {
     cleanup();
-    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -91,10 +104,46 @@ describe("HeapQueryConsolePage", () => {
     expect(page.getByText(/query execution is unavailable in this browser session/i)).toBeInTheDocument();
   });
 
+  it("renders cross-navigation actions alongside the unavailable state", () => {
+    seedArtifactWithDominators();
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const page = within(view.container);
+
+    expect(page.getByRole("link", { name: /open object inspector/i })).toHaveAttribute(
+      "href",
+      "/heap-explorer/object-inspector?objectId=0xdeadbeef",
+    );
+    expect(page.getByText(/query execution is unavailable in this browser session/i)).toBeInTheDocument();
+  });
+
+  it("renders the leak workspace link when the selected object resolves to a leak", () => {
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: {
+          ...createArtifactFixture(),
+          leaks: [createMatchingLeak()],
+        },
+      });
+    });
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const page = within(view.container);
+
+    expect(page.getByRole("link", { name: /open leak workspace/i })).toHaveAttribute(
+      "href",
+      "/leaks/leak-cache-1/overview",
+    );
+  });
+
   it("runs a query and renders result rows", async () => {
     const user = userEvent.setup();
     seedArtifactWithDominators();
-    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
       queryHeap: async () => ({
         columns: ["object_id", "class_name"],
         rows: [["0x2a", "com.example.Cache"]],

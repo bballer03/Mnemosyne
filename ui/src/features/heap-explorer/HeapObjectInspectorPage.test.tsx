@@ -54,6 +54,19 @@ function createArtifactFixture() {
   };
 }
 
+function createMatchingLeak() {
+  return {
+    id: "leak-cache-1",
+    className: "com.example.cache.LruCache",
+    leakKind: "dominator",
+    severity: "high",
+    retainedSizeBytes: 1024,
+    instances: 1,
+    description: "Large cache",
+    provenance: [],
+  };
+}
+
 describe("HeapObjectInspectorPage", () => {
   beforeEach(() => {
     act(() => {
@@ -140,6 +153,27 @@ describe("HeapObjectInspectorPage", () => {
     expect(view.getByRole("link", { name: /open query console/i })).toHaveAttribute(
       "href",
       "/heap-explorer/query-console?objectId=worker%20queue%2F0xdead%20beef",
+    );
+  });
+
+  it("renders the leak workspace link when the selected object resolves to a leak", () => {
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: {
+          ...createArtifactFixture(),
+          leaks: [createMatchingLeak()],
+        },
+      });
+    });
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/object-inspector"] });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    expect(view.getByRole("link", { name: /open leak workspace/i })).toHaveAttribute(
+      "href",
+      "/leaks/leak-cache-1/overview",
     );
   });
 });
