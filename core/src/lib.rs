@@ -18,8 +18,8 @@ pub mod report;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, generate_ai_insights_async, AiInsights, AiWireExchange,
-    AiWireFormat, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakSuspect,
-    ProvenanceKind, ProvenanceMarker,
+    AiWireFormat, AnalysisMode, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakSuspect,
+    ProvenanceKind, ProvenanceMarker, OVERVIEW_AUTO_THRESHOLD_BYTES,
 };
 pub use config::{
     AiConfig, AiMode, AiPromptConfig, AiProvider, AiSessionConfig, AiTaskDefinition, AiTaskKind,
@@ -37,7 +37,7 @@ pub use graph::{
 pub use hprof::{
     parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options,
     parse_hprof_with_options, ClassLevelDelta, HeapDiff, HeapParseJob, HeapSummary, HprofHeader,
-    ParseOptions,
+    OverviewSummary, ParseOptions,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
 pub use report::{ReportArtifact, ReportRequest};

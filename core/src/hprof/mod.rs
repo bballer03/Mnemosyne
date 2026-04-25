@@ -1,5 +1,6 @@
 pub mod binary_parser;
 pub mod object_graph;
+pub mod overview;
 pub mod parser;
 pub mod tags;
 
@@ -8,6 +9,7 @@ pub mod test_fixtures;
 
 pub use binary_parser::*;
 pub use object_graph::*;
+pub use overview::OverviewSummary;
 pub use parser::*;
 pub use tags::*;
 

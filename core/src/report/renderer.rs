@@ -730,6 +730,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -806,6 +808,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -871,6 +875,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -938,6 +944,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,

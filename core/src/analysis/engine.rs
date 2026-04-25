@@ -1,7 +1,7 @@
 use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
     analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
-    inspect_threads, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
+    inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
     TopInstancesReport,
 };
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     },
     hprof::{
         parse_heap, parse_hprof_file_with_options, ClassDelta, ClassLevelDelta, ClassStat,
-        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, ParseOptions,
+        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,10 @@ impl ProvenanceMarker {
 /// Response payload returned to callers (CLI, MCP, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzeResponse {
+    #[serde(default = "default_response_mode")]
+    pub mode: AnalysisMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<OverviewSummary>,
     pub summary: HeapSummary,
     pub leaks: Vec<LeakInsight>,
     pub recommendations: Vec<String>,
@@ -144,6 +148,10 @@ pub struct AnalyzeResponse {
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
+}
+
+fn default_response_mode() -> AnalysisMode {
+    AnalysisMode::Deep
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,6 +353,8 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     };
 
     Ok(AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
         summary,
         leaks,
         recommendations: if dominator_result.is_some() {
@@ -1146,7 +1156,7 @@ where
 mod tests {
     use super::*;
     use crate::hprof::{ClassInfo, ClassStat, RecordStat};
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
         HeapSummary {
@@ -1192,6 +1202,47 @@ mod tests {
             total_size_bytes: bytes,
             percentage,
         }
+    }
+
+    fn sample_analyze_response() -> AnalyzeResponse {
+        AnalyzeResponse {
+            mode: AnalysisMode::Overview,
+            overview: Some(OverviewSummary::default()),
+            summary: summary_with_size(0),
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_secs(0),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
+            provenance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn analyze_response_json_back_compat() {
+        let mut value = serde_json::to_value(sample_analyze_response())
+            .expect("sample response should serialize");
+        let object = value
+            .as_object_mut()
+            .expect("serialized response should be an object");
+        object.remove("mode");
+        object.remove("overview");
+
+        let response: AnalyzeResponse =
+            serde_json::from_value(value).expect("should deserialize old JSON");
+        assert_eq!(
+            response.mode,
+            AnalysisMode::Deep,
+            "missing mode must default to Deep"
+        );
+        assert!(response.overview.is_none(), "missing overview must be None");
     }
 
     #[test]
