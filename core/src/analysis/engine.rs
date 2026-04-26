@@ -1051,6 +1051,7 @@ fn build_heap_diff(before: HeapSummary, after: HeapSummary) -> HeapDiff {
         delta_objects: after.total_objects as i64 - before.total_objects as i64,
         changed_classes,
         class_diff: None,
+        object_diff: None,
     }
 }
 
