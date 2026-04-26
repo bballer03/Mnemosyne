@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{
     presets::ASCII_BORDERS_ONLY_CONDENSED, Attribute, Cell, CellAlignment, ContentArrangement,
     Table,
@@ -28,9 +28,10 @@ use mnemosyne_core::{
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     parse_hprof_file_with_options,
+    policy::{render_json_envelope, render_text_report, PolicyRenderContext},
     query::{execute_query, parse_query, CellValue},
     report::{render_overview_report, render_report, ReportArtifact, ReportRequest},
-    CoreError, ParseOptions,
+    CoreError, ParseOptions, Policy, PolicyInput, Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -59,6 +60,8 @@ enum Commands {
     Leaks(LeakArgs),
     /// Run the full AI-assisted analysis pipeline.
     Analyze(AnalyzeArgs),
+    /// Evaluate a heap dump against a TOML policy and emit a CI result.
+    CiCheck(CiCheckArgs),
     /// Compare two heap dumps and highlight changes.
     Diff(DiffArgs),
     /// Map a leak candidate to likely source files.
@@ -90,7 +93,7 @@ struct ParseArgs {
 struct LeakArgs {
     heap: PathBuf,
     #[arg(long, value_enum)]
-    min_severity: Option<SeverityArg>,
+    min_severity: Option<LeakSeverityArg>,
     #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
@@ -139,6 +142,21 @@ struct AnalyzeArgs {
     leak_kind: Vec<LeakKindArg>,
 }
 
+#[derive(Args, Debug)]
+struct CiCheckArgs {
+    heap: PathBuf,
+    #[arg(long)]
+    policy: PathBuf,
+    #[arg(long, value_enum, default_value_t = ModeArg::Auto)]
+    mode: ModeArg,
+    #[arg(long, value_enum, default_value_t = CiCheckFormat::Text)]
+    format: CiCheckFormat,
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
+    fail_on: SeverityArg,
+}
+
 #[derive(Debug, Parser)]
 struct DiffArgs {
     before: PathBuf,
@@ -177,7 +195,7 @@ struct ExplainArgs {
     #[arg(long = "leak-id")]
     leak_id: Option<String>,
     #[arg(long, value_enum)]
-    min_severity: Option<SeverityArg>,
+    min_severity: Option<LeakSeverityArg>,
     #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
@@ -209,10 +227,24 @@ struct ServeArgs {
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
-enum SeverityArg {
+enum LeakSeverityArg {
     Low,
     Medium,
     High,
+    Critical,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CiCheckFormat {
+    Text,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SeverityArg {
+    Info,
+    Warning,
+    Error,
     Critical,
 }
 
@@ -269,13 +301,24 @@ enum ProfileArg {
     CiRegression,
 }
 
-impl From<SeverityArg> for LeakSeverity {
+impl From<LeakSeverityArg> for LeakSeverity {
+    fn from(value: LeakSeverityArg) -> Self {
+        match value {
+            LeakSeverityArg::Low => LeakSeverity::Low,
+            LeakSeverityArg::Medium => LeakSeverity::Medium,
+            LeakSeverityArg::High => LeakSeverity::High,
+            LeakSeverityArg::Critical => LeakSeverity::Critical,
+        }
+    }
+}
+
+impl From<SeverityArg> for PolicySeverity {
     fn from(value: SeverityArg) -> Self {
         match value {
-            SeverityArg::Low => LeakSeverity::Low,
-            SeverityArg::Medium => LeakSeverity::Medium,
-            SeverityArg::High => LeakSeverity::High,
-            SeverityArg::Critical => LeakSeverity::Critical,
+            SeverityArg::Info => PolicySeverity::Info,
+            SeverityArg::Warning => PolicySeverity::Warning,
+            SeverityArg::Error => PolicySeverity::Error,
+            SeverityArg::Critical => PolicySeverity::Critical,
         }
     }
 }
@@ -350,20 +393,7 @@ impl From<ProfileArg> for AnalysisProfile {
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
-        eprintln!("{} {err:#}", style("Error:").red().bold());
-
-        if let Some(core_err) = err.downcast_ref::<CoreError>() {
-            match core_err {
-                CoreError::NotAnHprof { detail, .. } => {
-                    eprintln!("  {} {detail}", style("hint:").yellow().bold());
-                }
-                _ => {
-                    if let Some(hint) = core_err.suggestion() {
-                        eprintln!("  {} {hint}", style("hint:").yellow().bold());
-                    }
-                }
-            }
-        }
+        print_cli_error(&err);
 
         process::exit(1);
     }
@@ -379,6 +409,7 @@ async fn run() -> Result<()> {
         Commands::Parse(args) => handle_parse(args, &loaded_config.data).await?,
         Commands::Leaks(args) => handle_leaks(args, &loaded_config.data).await?,
         Commands::Analyze(args) => handle_analyze(args, &loaded_config.data).await?,
+        Commands::CiCheck(args) => handle_ci_check(args, &loaded_config.data).await?,
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
@@ -1145,6 +1176,135 @@ fn install_tracing() {
         .finish()
         .try_init();
     info!("Tracing initialized");
+}
+
+fn print_cli_error(err: &anyhow::Error) {
+    eprintln!("{} {err:#}", style("Error:").red().bold());
+
+    if let Some(core_err) = err.downcast_ref::<CoreError>() {
+        match core_err {
+            CoreError::NotAnHprof { detail, .. } => {
+                eprintln!("  {} {detail}", style("hint:").yellow().bold());
+            }
+            _ => {
+                if let Some(hint) = core_err.suggestion() {
+                    eprintln!("  {} {hint}", style("hint:").yellow().bold());
+                }
+            }
+        }
+    }
+}
+
+fn exit_ci_check_with_error(code: i32, err: anyhow::Error) -> ! {
+    print_cli_error(&err);
+    process::exit(code);
+}
+
+async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
+    let requested_mode = AnalysisMode::from(args.mode);
+    let fail_on = PolicySeverity::from(args.fail_on);
+    let policy = match Policy::from_toml_file(&args.policy) {
+        Ok(policy) => policy,
+        Err(err) => exit_ci_check_with_error(2, err.into()),
+    };
+
+    let resolved_mode = match validate_heap_file(&args.heap)
+        .and_then(|_| resolve_cli_mode(&args.heap, args.mode))
+    {
+        Ok(mode) => mode,
+        Err(err) => exit_ci_check_with_error(3, err),
+    };
+
+    let pb = start_spinner("Evaluating heap policy...");
+    let result = match resolved_mode {
+        AnalysisMode::Overview => {
+            let summary = match parse_hprof_overview_file(&args.heap, &OverviewOptions::default())
+                .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))
+            {
+                Ok(summary) => summary,
+                Err(err) => exit_ci_check_with_error(3, err),
+            };
+            finish_spinner(&pb, "Heap policy evaluation complete.");
+            mnemosyne_core::evaluate(&policy, &PolicyInput::Overview(&summary), requested_mode)
+        }
+        AnalysisMode::Deep => {
+            let response = match analyze_heap(AnalyzeRequest {
+                heap_path: args.heap.to_string_lossy().into(),
+                config: cfg.clone(),
+                leak_options: LeakDetectionOptions::from(&cfg.analysis),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                enable_classloaders: false,
+                enable_threads: false,
+                enable_strings: false,
+                enable_collections: false,
+                enable_top_instances: false,
+                top_n: 10,
+                min_collection_capacity: 16,
+                min_duplicate_count: 2,
+            })
+            .await
+            .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))
+            {
+                Ok(response) => response,
+                Err(err) => exit_ci_check_with_error(3, err),
+            };
+            finish_spinner(&pb, "Heap policy evaluation complete.");
+            mnemosyne_core::evaluate(&policy, &PolicyInput::Deep(&response), requested_mode)
+        }
+        AnalysisMode::Auto => unreachable!("resolved CLI mode should never remain auto"),
+    };
+
+    let rendered = match args.format {
+        CiCheckFormat::Text => render_text_report(&PolicyRenderContext {
+            heap_path: &args.heap,
+            policy_path: &args.policy,
+            policy: &policy,
+            result: &result,
+            fail_on,
+        }),
+        CiCheckFormat::Json => render_json_envelope(&result, env!("CARGO_PKG_VERSION"))?,
+    };
+
+    if let Some(output_path) = args.output.as_deref() {
+        fs::write(output_path, &rendered)?;
+    } else {
+        println!("{rendered}");
+    }
+
+    let exit_code = ci_check_exit_code(&result, fail_on);
+    if exit_code == 0 {
+        Ok(())
+    } else {
+        process::exit(exit_code);
+    }
+}
+
+fn ci_check_exit_code(result: &mnemosyne_core::PolicyResult, fail_on: PolicySeverity) -> i32 {
+    if result
+        .violations
+        .iter()
+        .any(is_explicit_overview_mode_mismatch)
+    {
+        4
+    } else if result
+        .violations
+        .iter()
+        .any(|violation| violation.severity >= fail_on)
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn is_explicit_overview_mode_mismatch(violation: &mnemosyne_core::Violation) -> bool {
+    violation.severity == PolicySeverity::Critical
+        && violation.actual.is_null()
+        && violation.expected.is_null()
+        && violation
+            .message
+            .contains("cannot run in explicit overview mode")
 }
 
 fn resolve_cli_mode(heap_path: &Path, mode: ModeArg) -> Result<AnalysisMode> {

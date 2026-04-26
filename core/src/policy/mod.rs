@@ -5,10 +5,12 @@ use std::{collections::HashSet, fs, path::Path};
 
 mod eval;
 mod input;
+pub mod render;
 mod result;
 
 pub use eval::evaluate;
 pub use input::PolicyInput;
+pub use render::{render_json_envelope, render_text_report, PolicyRenderContext};
 pub use result::{Evaluation, PolicyResult, SkipReason, SkippedRule, Violation};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

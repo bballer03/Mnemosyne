@@ -65,6 +65,12 @@ fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn write_sandbox_file(root: &Path, name: &str, contents: impl AsRef<[u8]>) -> PathBuf {
+    let path = root.join(name);
+    fs::write(&path, contents).unwrap();
+    path
+}
+
 fn seed_persisted_ai_session(root: &Path, session: &PersistedAiSession) {
     fs::create_dir_all(root).unwrap();
     let path = root.join(format!("{}.json", session.session_id));
@@ -738,6 +744,377 @@ fn test_analyze_json_format() {
     let stdout = stdout_string(&output.stdout);
     let json = serde_json::from_str::<Value>(&stdout).unwrap();
     assert!(json.is_object());
+}
+
+#[test]
+fn ci_check_passes_on_below_threshold_returns_zero() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-pass.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("RESULT: PASS"), "{stdout}");
+}
+
+#[test]
+fn ci_check_fails_on_above_threshold_returns_one() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-fail.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len().saturating_sub(1) as u64
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("RESULT: FAIL"), "{stdout}");
+}
+
+#[test]
+fn ci_check_invalid_policy_file_returns_two() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-invalid.toml",
+        "[[rule]]\nid = \"broken\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = \n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("policy") || stderr.contains("TOML"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_check_missing_heap_returns_three() {
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-missing-heap.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1024\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+    let missing_heap = sandbox.path().join("missing.hprof");
+    let missing_heap_arg = path_arg(&missing_heap);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            missing_heap_arg.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("missing.hprof")
+            || stderr.contains("not found")
+            || stderr.contains("Heap dump"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_check_explicit_overview_with_deep_only_rule_returns_four() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-deep-only.toml",
+        "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--mode",
+            "overview",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let combined = format!(
+        "{}{}",
+        stdout_string(&output.stdout),
+        stdout_string(&output.stderr)
+    );
+    assert!(combined.contains("no-critical-leaks"), "{combined}");
+}
+
+#[test]
+fn ci_check_auto_resolved_overview_skips_deep_only_rule_returns_zero_when_no_other_violations() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-auto-overview-skip.toml",
+        "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let skipped = json
+        .get("result")
+        .and_then(|value| value.get("skipped"))
+        .and_then(Value::as_array)
+        .expect("skipped array");
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(
+        skipped[0].get("reason").and_then(Value::as_str),
+        Some("deep_only_in_overview_mode")
+    );
+}
+
+#[test]
+fn ci_check_format_json_envelope_well_formed() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-json-envelope.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+    assert_eq!(
+        json.get("subcommand"),
+        Some(&Value::String("ci-check".into()))
+    );
+    assert_eq!(
+        json.get("version").and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert!(json.get("result").and_then(Value::as_object).is_some());
+}
+
+#[test]
+fn ci_check_format_text_includes_grouped_violations() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-text-groups.toml",
+        "[[rule]]\nid = \"critical-heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"critical\"\n\n[[rule]]\nid = \"error-instance-budget\"\npredicate = \"total_instances\"\nop = \"<=\"\nvalue = 0\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("[CRITICAL]"), "{stdout}");
+    assert!(stdout.contains("[ERROR]"), "{stdout}");
+    assert!(stdout.contains("critical-heap-budget"), "{stdout}");
+    assert!(stdout.contains("error-instance-budget"), "{stdout}");
+}
+
+#[test]
+fn ci_check_fail_on_warning_flips_exit_when_warning_violation() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut default_cmd, sandbox) = cli_command();
+    let (mut warning_cmd, _sandbox2) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-warning.toml",
+        "[[rule]]\nid = \"warning-heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"warning\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let default_output = default_cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+    let warning_output = warning_cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--fail-on",
+            "warning",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(default_output.status.code(), Some(0));
+    assert_eq!(warning_output.status.code(), Some(1));
+}
+
+#[test]
+fn ci_check_output_to_file_when_flag_set() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-output.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+    let output_path = sandbox.path().join("ci-result.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+            "--output",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout_string(&output.stdout).trim().is_empty());
+
+    let written = fs::read_to_string(&output_path).unwrap();
+    let json = serde_json::from_str::<Value>(&written).unwrap();
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+}
+
+#[test]
+fn ci_check_existing_subcommands_unchanged() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("Mnemosyne Analysis"), "{stdout}");
+    assert!(stdout.contains("Graph Nodes:"), "{stdout}");
+    assert!(
+        !stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
 }
 
 #[test]
