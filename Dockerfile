@@ -6,7 +6,7 @@
 
 # NOTE: Pin to a specific digest in production. Run:
 #   docker pull rust:1.91-bookworm && docker inspect --format='{{index .RepoDigests 0}}' rust:1.91-bookworm
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.95-bookworm AS builder
 
 WORKDIR /app
 
