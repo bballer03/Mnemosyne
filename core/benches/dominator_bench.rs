@@ -1,9 +1,10 @@
 use std::{
     fs,
+    hint::black_box,
     path::{Path, PathBuf},
 };
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use mnemosyne_core::{
     build_dominator_tree,
     hprof::{parse_hprof, parse_hprof_file, test_fixtures::build_graph_fixture},
