@@ -67,7 +67,7 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 
 ## 4. Milestone 7 — Production Readiness & Scale
 
-**Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md), [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md), [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md), and [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md)  
+**Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md), [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md), [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md), [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md), and [design/milestone-7-6-v0-3-0-release.md](design/milestone-7-6-v0-3-0-release.md)  
 **Status:** ⚠️ In progress
 
 M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
@@ -81,7 +81,7 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 | M7-5 | Comparative benchmarks vs MAT/hprof-slurp | Credibility | P2 | M |
 | M7-6 | v0.3.0 release | Release | P1 | S |
 
-**Status detail:** ✅ M7-1 through M7-4 are complete (4/6 slices). M7-5 is now 🟡 partial: the reference spec, fixture/tooling docs, `scripts/bench/` harness, raw WSL artifacts, and the partial publication in [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) are landed, but the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending. M7-6 is the next release slice.
+**Status detail:** ✅ M7-1 through M7-4 are complete (4/6 slices). M7-5 is now 🟡 partial: the reference spec, fixture/tooling docs, `scripts/bench/` harness, raw WSL artifacts, and the partial publication in [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) are landed, but the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending. M7-6 is now ⚠️ in progress: Slice A bumps the workspace to `0.3.0` and starts the release-facing docs sweep on this branch, Slice B adds the release notes, and Slice C remains the explicit tag gate. v0.3.0 cut is imminent once those release-prep slices finish.
 
 ### Phase 1 — Foundation
 
@@ -97,7 +97,7 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 
 ### Phase 4 — Validation & Release
 
-M7-5 now has a published partial WSL comparative report. Close with the native-Linux reference-spec rerun for **M7-5**, then ship **M7-6** with a clear story: Mnemosyne is now credible at larger scale and differentiated in automation and visualization.
+M7-5 now has a published partial WSL comparative report with loud caveats. With that caveat preserved, **M7-6 is now in progress** and the `v0.3.0` cut is imminent once the release-notes and final-validation slices land. The native-Linux reference-spec rerun remains important follow-up evidence, but it is no longer treated as a blocker to the release closeout.
 
 ### Success criteria
 

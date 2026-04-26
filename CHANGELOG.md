@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-26
+
 ### Added
 - M7-5 comparative benchmark publication artifacts: the Linux-first harness under `scripts/bench/`, the reference workstation / fixture / tooling docs under `docs/benchmarks/`, and the published partial WSL report in `docs/benchmarks/comparative-v0.3.0.md`. The current publication covers `mnemo-overview` and `hprof-slurp` on `small`, `medium`, and `large` only; the native-Linux reference-spec rerun for Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending.
 - Targeted OQL expansion across the shared query surfaces: `@retainedSize`, synthetic `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS` one-hop projection, `IS NULL` / `IS NOT NULL`, single-quoted string literals, and structured deep-only query errors

@@ -142,7 +142,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 
 ## 🛠 Installation
 
-> Mnemosyne v0.2.0 (alpha) is now available.
+> Mnemosyne v0.3.0 release prep is underway on this branch. The install examples below use the upcoming `0.3.0` artifacts and image tags; **v0.2.0 remains the current published release until the tag is cut**.
 > Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, the repository includes a Homebrew formula for macOS release archives, and tagged releases publish a Docker image to `ghcr.io/bballer03/mnemosyne`.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
@@ -163,7 +163,7 @@ The optional desktop shell currently validates with `cargo check --manifest-path
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
 
 ### 2. Install with Cargo
-Both `mnemosyne-core` and `mnemosyne-cli` are published on crates.io.
+Both `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, but crates.io publication is not part of the `v0.3.0` release channels.
 
 Install the CLI with:
 
@@ -185,16 +185,16 @@ Tagged releases now publish a container image to GHCR with version, major.minor,
 
 ```bash
 # Use a specific version tag instead of :latest for reproducibility
-docker pull ghcr.io/bballer03/mnemosyne:0.2.0
+docker pull ghcr.io/bballer03/mnemosyne:0.3.0
 
 # Parse a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 parse /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 parse /data/heap.hprof
 
 # Analyze a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 analyze /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 analyze /data/heap.hprof
 
 # Detect leaks
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 leaks /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 leaks /data/heap.hprof
 ```
 
 The image runs as a non-root user, uses `/data` as its working directory, and sets `mnemosyne-cli` as the entrypoint so heap dumps can be mounted directly into the container.
@@ -835,7 +835,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
-- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks is now partial with a published WSL report and shipped harness, and the native-Linux reference-spec rerun remains pending before M7-6 release work
+- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks is now partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 release prep is now underway
 - Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---
