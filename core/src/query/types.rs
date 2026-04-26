@@ -72,7 +72,12 @@ pub enum ComparisonOp {
     Lt,
     Ge,
     Le,
+    /// SQL-style string pattern match.
+    ///
+    /// `%` matches any sequence, `_` matches any single character, and all
+    /// other regex metacharacters are treated literally.
     Like,
+    /// Case-sensitive substring match on string values.
     Contains,
     IsNull,
     IsNotNull,

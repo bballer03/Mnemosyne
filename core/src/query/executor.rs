@@ -4,12 +4,18 @@ use super::types::{
     SelectClause, Value,
 };
 use crate::{
+    analysis::string_analysis::extract_string_value,
     graph::DominatorTree,
     hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
 };
+use regex::Regex;
 
 const RETAINED_SIZE_OVERVIEW_HINT: &str =
     "re-run with --mode deep or use @shallowSize for a per-object approximation.";
+const STRING_PREDICATE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; LIKE and CONTAINS on instance fields require deep-mode field data.";
+const TO_STRING_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; @toString requires deep-mode field data.";
 
 pub fn execute_query(
     query: &Query,
@@ -88,17 +94,33 @@ fn validate_supported_query(
         return Err(slice_a_not_implemented("@gcRootPath query evaluation"));
     }
 
-    if query_uses_deferred_predicates(query) {
+    if query_uses_deferred_null_predicates(query) {
         return Err(slice_a_not_implemented(
-            "CONTAINS / IS NULL / IS NOT NULL query evaluation",
+            "IS NULL / IS NOT NULL query evaluation",
         ));
     }
 
-    if dominator.is_none() && query_uses_retained_size(query) {
-        return Err(QueryError::feature_unavailable_in_overview_mode(
-            "@retainedSize",
-            RETAINED_SIZE_OVERVIEW_HINT,
-        ));
+    if dominator.is_none() {
+        if query_uses_retained_size(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@retainedSize",
+                RETAINED_SIZE_OVERVIEW_HINT,
+            ));
+        }
+
+        if query_uses_to_string(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@toString",
+                TO_STRING_OVERVIEW_HINT,
+            ));
+        }
+
+        if let Some(feature) = query_uses_instance_string_predicates(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                feature,
+                STRING_PREDICATE_OVERVIEW_HINT,
+            ));
+        }
     }
 
     Ok(())
@@ -114,13 +136,36 @@ fn query_references_gc_root_path(query: &Query) -> bool {
         })
 }
 
-fn query_uses_deferred_predicates(query: &Query) -> bool {
+fn query_uses_deferred_null_predicates(query: &Query) -> bool {
     query.filter.as_ref().is_some_and(|filter| {
-        filter.conditions.iter().any(|condition| {
-            matches!(
-                condition.op,
-                ComparisonOp::Contains | ComparisonOp::IsNull | ComparisonOp::IsNotNull
-            )
+        filter
+            .conditions
+            .iter()
+            .any(|condition| matches!(condition.op, ComparisonOp::IsNull | ComparisonOp::IsNotNull))
+    })
+}
+
+fn query_uses_to_string(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::ToString)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::ToString))
+        })
+}
+
+fn query_uses_instance_string_predicates(query: &Query) -> Option<String> {
+    query.filter.as_ref().and_then(|filter| {
+        filter.conditions.iter().find_map(|condition| {
+            if !matches!(condition.op, ComparisonOp::Like | ComparisonOp::Contains) {
+                return None;
+            }
+
+            match &condition.field {
+                FieldRef::InstanceField(name) => Some(name.clone()),
+                _ => None,
+            }
         })
     })
 }
@@ -284,7 +329,9 @@ fn resolve_instance_field_value(
             .unwrap_or(CellValue::Null),
         FieldValue::Float(value) => CellValue::Str(value.to_string()),
         FieldValue::Double(value) => CellValue::Str(value.to_string()),
-        FieldValue::ObjectRef(Some(reference)) => CellValue::Id(reference),
+        FieldValue::ObjectRef(Some(reference)) => extract_string_value(graph, reference)
+            .map(CellValue::Str)
+            .unwrap_or(CellValue::Id(reference)),
         FieldValue::ObjectRef(None) => CellValue::Null,
     }
 }
@@ -347,7 +394,8 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
         (CellValue::Str(left), Value::Str(right)) => match op {
             ComparisonOp::Eq => left == *right,
             ComparisonOp::Ne => left != *right,
-            ComparisonOp::Like => glob_match(&right.replace('%', "*"), &left),
+            ComparisonOp::Like => like_match(right, &left),
+            ComparisonOp::Contains => left.contains(right),
             _ => false,
         },
         (CellValue::Bool(left), Value::Bool(right)) => match op {
@@ -356,6 +404,9 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
             _ => false,
         },
         (CellValue::Null, Value::Null) => matches!(op, ComparisonOp::Eq),
+        (CellValue::Id(_), Value::Null) | (CellValue::Str(_), Value::Null) => {
+            matches!(op, ComparisonOp::Ne)
+        }
         (CellValue::Id(left), Value::Int(right)) => match op {
             ComparisonOp::Eq => left == *right as u64,
             ComparisonOp::Ne => left != *right as u64,
@@ -367,6 +418,22 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
         },
         _ => false,
     }
+}
+
+fn like_match(pattern: &str, value: &str) -> bool {
+    let mut regex_pattern = String::from("(?s)^");
+    for ch in pattern.chars() {
+        match ch {
+            '%' => regex_pattern.push_str(".*"),
+            '_' => regex_pattern.push('.'),
+            _ => regex_pattern.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    regex_pattern.push('$');
+
+    Regex::new(&regex_pattern)
+        .map(|regex| regex.is_match(value))
+        .unwrap_or(false)
 }
 
 fn project_row(

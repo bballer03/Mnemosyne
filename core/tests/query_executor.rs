@@ -1,6 +1,11 @@
 use byteorder::{BigEndian, WriteBytesExt};
 use mnemosyne_core::{
-    build_dominator_tree, parse_hprof_with_options,
+    build_dominator_tree,
+    hprof::{
+        field_types, ClassInfo, FieldDescriptor, GcRoot, GcRootType, HeapObject, ObjectGraph,
+        ObjectId, ObjectKind,
+    },
+    parse_hprof_with_options,
     query::{execute_query, parse_query, CellValue, QueryError},
     ParseOptions,
 };
@@ -18,6 +23,161 @@ fn write_record(buf: &mut Vec<u8>, tag: u8, body: &[u8]) {
     buf.write_u32::<BigEndian>(0).unwrap();
     buf.write_u32::<BigEndian>(body.len() as u32).unwrap();
     buf.extend_from_slice(body);
+}
+
+fn object_ref_bytes(id: u64) -> Vec<u8> {
+    id.to_be_bytes().to_vec()
+}
+
+fn int_field_bytes(value: i32) -> Vec<u8> {
+    value.to_be_bytes().to_vec()
+}
+
+fn string_field_bytes(value_array_id: u64, coder: i8) -> Vec<u8> {
+    let mut bytes = object_ref_bytes(value_array_id);
+    bytes.push(coder as u8);
+    bytes
+}
+
+fn add_class(
+    graph: &mut ObjectGraph,
+    class_id: ObjectId,
+    super_class_id: ObjectId,
+    name: &str,
+    fields: Vec<FieldDescriptor>,
+) {
+    graph.classes.insert(
+        class_id,
+        ClassInfo {
+            class_obj_id: class_id,
+            super_class_id,
+            class_loader_id: 0,
+            instance_size: 0,
+            name: Some(name.into()),
+            instance_fields: fields,
+            static_references: Vec::new(),
+        },
+    );
+}
+
+fn add_string_object(
+    graph: &mut ObjectGraph,
+    string_id: ObjectId,
+    array_id: ObjectId,
+    value: &str,
+) {
+    graph.objects.insert(
+        array_id,
+        HeapObject {
+            id: array_id,
+            class_id: 0,
+            shallow_size: value.len() as u32,
+            references: Vec::new(),
+            field_data: value.as_bytes().to_vec(),
+            kind: ObjectKind::PrimitiveArray {
+                element_type: field_types::BYTE,
+                length: value.len() as u32,
+            },
+        },
+    );
+
+    graph.objects.insert(
+        string_id,
+        HeapObject {
+            id: string_id,
+            class_id: 2,
+            shallow_size: 24,
+            references: vec![array_id],
+            field_data: string_field_bytes(array_id, 0),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: string_id,
+        root_type: GcRootType::StickyClass,
+    });
+}
+
+fn add_user_object(graph: &mut ObjectGraph, user_id: ObjectId, name_id: ObjectId, kind: i32) {
+    let mut field_data = object_ref_bytes(name_id);
+    field_data.extend_from_slice(&int_field_bytes(kind));
+    let references = if name_id == 0 {
+        Vec::new()
+    } else {
+        vec![name_id]
+    };
+
+    graph.objects.insert(
+        user_id,
+        HeapObject {
+            id: user_id,
+            class_id: 3,
+            shallow_size: 32,
+            references,
+            field_data,
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: user_id,
+        root_type: GcRootType::StickyClass,
+    });
+}
+
+fn build_string_query_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        2,
+        1,
+        "java.lang.String",
+        vec![
+            FieldDescriptor {
+                name: Some("value".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("coder".into()),
+                field_type: field_types::BYTE,
+            },
+        ],
+    );
+    add_class(
+        &mut graph,
+        3,
+        1,
+        "com.example.User",
+        vec![
+            FieldDescriptor {
+                name: Some("name".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("kind".into()),
+                field_type: field_types::INT,
+            },
+        ],
+    );
+
+    add_string_object(&mut graph, 10, 100, "admin");
+    add_string_object(&mut graph, 11, 101, "guest@1");
+    add_string_object(&mut graph, 12, 102, ".foo");
+    add_string_object(&mut graph, 13, 103, "exact");
+    add_string_object(&mut graph, 14, 104, "adminRoot");
+    add_string_object(&mut graph, 15, 105, "hello world");
+    add_string_object(&mut graph, 16, 106, "aXbYc");
+
+    add_user_object(&mut graph, 0x2000, 10, 1);
+    add_user_object(&mut graph, 0x2001, 11, 2);
+    add_user_object(&mut graph, 0x2002, 12, 3);
+    add_user_object(&mut graph, 0x2003, 13, 4);
+    add_user_object(&mut graph, 0x2004, 14, 7);
+    add_user_object(&mut graph, 0x2005, 0, 8);
+    add_user_object(&mut graph, 0x2006, 16, 9);
+
+    graph
 }
 
 fn build_graph_fixture() -> Vec<u8> {
@@ -557,4 +717,269 @@ fn executor_returns_not_yet_implemented_for_objects_select() {
         .expect_err("slice A should reject OBJECTS execution");
 
     assert!(error.to_string().contains("slice A"));
+}
+
+#[test]
+fn like_with_percent_wildcard_matches_prefix() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "admin%""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2004)]]
+    );
+}
+
+#[test]
+fn like_with_percent_wildcard_matches_suffix() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "%@1""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2001)]]);
+}
+
+#[test]
+fn like_with_underscore_matches_single_char() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "admi_""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2000)]]);
+}
+
+#[test]
+fn like_with_no_wildcards_matches_exact() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "exact""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2003)]]);
+}
+
+#[test]
+fn like_with_special_regex_chars_in_pattern_treated_literally() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE ".foo""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2002)]]);
+}
+
+#[test]
+fn like_with_multiple_percent_wildcards_matches_segments_in_order() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "a%b%c""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2006)]]);
+}
+
+#[test]
+fn like_no_match_returns_empty_result() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "nomatch%""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn like_in_overview_mode_returns_unavailable_error() {
+    let graph = build_string_query_graph();
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "admin%""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode string predicates should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "name" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn contains_with_substring_matches() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name CONTAINS "min""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2004)]]
+    );
+}
+
+#[test]
+fn contains_with_no_match_returns_empty() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name CONTAINS "zzz""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn contains_in_overview_mode_returns_unavailable_error() {
+    let graph = build_string_query_graph();
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name CONTAINS "min""#)
+            .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode string predicates should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "name" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn where_at_to_string_like_matches_string_content() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "java.lang.String" WHERE @toString LIKE "hello%""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(15)]]);
+}
+
+#[test]
+fn where_at_to_string_contains_substring_works() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "java.lang.String" WHERE @toString CONTAINS "world""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(15)]]);
+}
+
+#[test]
+fn select_at_to_string_projects_into_result_column() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId, @toString FROM "java.lang.String" LIMIT 3"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "@toString"]);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![CellValue::Id(10), CellValue::Str("admin".into())],
+            vec![CellValue::Id(11), CellValue::Str("guest@1".into())],
+            vec![CellValue::Id(12), CellValue::Str(".foo".into())],
+        ]
+    );
+}
+
+#[test]
+fn at_to_string_in_overview_mode_returns_unavailable_error() {
+    let graph = build_string_query_graph();
+    let query =
+        parse_query(r#"SELECT @objectId FROM "java.lang.String" WHERE @toString LIKE "hello%""#)
+            .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode @toString predicates should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "@toString" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn like_combined_with_instanceof_works() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE name LIKE "admin%" AND name INSTANCEOF "java.lang.String""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2004)]]
+    );
+}
+
+#[test]
+fn contains_combined_with_field_equality_works() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE name CONTAINS "min" AND kind = 7"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2004)]]);
+}
+
+#[test]
+fn field_ne_null_matches_non_null_object_ref() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE entries != null"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
 }

@@ -171,7 +171,7 @@ impl<'a> Parser<'a> {
 
     fn parse_value(&mut self) -> Result<Value, QueryParseError> {
         self.skip_ws();
-        if self.peek_char() == Some('"') {
+        if matches!(self.peek_char(), Some('"' | '\'')) {
             return Ok(Value::Str(self.parse_quoted_string()?));
         }
         if self.consume_keyword("null") {
@@ -204,13 +204,14 @@ impl<'a> Parser<'a> {
 
     fn parse_quoted_string(&mut self) -> Result<String, QueryParseError> {
         self.skip_ws();
-        if !self.consume_char('"') {
+        let Some(delimiter @ ('"' | '\'')) = self.peek_char() else {
             return Err(self.error("expected quoted string"));
-        }
+        };
+        self.pos += delimiter.len_utf8();
 
         let start = self.pos;
         while let Some(ch) = self.peek_char() {
-            if ch == '"' {
+            if ch == delimiter {
                 let value = self.input[start..self.pos].to_string();
                 self.pos += 1;
                 return Ok(value);
