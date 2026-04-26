@@ -113,6 +113,7 @@ pub enum CellValue {
 pub enum QueryError {
     FeatureUnavailableInOverviewMode { feature: String, hint: String },
     NotImplemented(String),
+    Unsupported(String),
 }
 
 impl QueryError {
@@ -135,6 +136,9 @@ impl fmt::Display for QueryError {
             }
             QueryError::NotImplemented(detail) => {
                 write!(f, "Operation not yet implemented: {detail}")
+            }
+            QueryError::Unsupported(detail) => {
+                write!(f, "Unsupported operation: {detail}")
             }
         }
     }

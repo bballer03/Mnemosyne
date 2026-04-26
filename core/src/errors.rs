@@ -71,6 +71,7 @@ impl From<QueryError> for CoreError {
                 CoreError::FeatureUnavailableInOverviewMode { feature, hint }
             }
             QueryError::NotImplemented(detail) => CoreError::NotImplemented(detail),
+            QueryError::Unsupported(detail) => CoreError::Unsupported(detail),
         }
     }
 }

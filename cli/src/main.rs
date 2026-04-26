@@ -1380,7 +1380,7 @@ fn exit_flamegraph_with_error(message: &str) -> ! {
 fn exit_query_with_error(err: QueryError) -> ! {
     let code = match err {
         QueryError::FeatureUnavailableInOverviewMode { .. } => 6,
-        QueryError::NotImplemented(_) => 1,
+        QueryError::NotImplemented(_) | QueryError::Unsupported(_) => 1,
     };
     let error = anyhow::Error::new(CoreError::from(err));
     print_cli_error(&error);

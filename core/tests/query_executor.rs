@@ -180,6 +180,138 @@ fn build_string_query_graph() -> ObjectGraph {
     graph
 }
 
+fn node_projection_field_bytes(
+    parent_id: ObjectId,
+    depth: i32,
+    count: i32,
+    payload_id: ObjectId,
+) -> Vec<u8> {
+    let mut field_data = object_ref_bytes(parent_id);
+    field_data.extend_from_slice(&int_field_bytes(depth));
+    field_data.extend_from_slice(&int_field_bytes(count));
+    field_data.extend_from_slice(&object_ref_bytes(payload_id));
+    field_data
+}
+
+fn add_projection_parent(graph: &mut ObjectGraph, object_id: ObjectId, class_id: ObjectId) {
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id,
+        root_type: GcRootType::StickyClass,
+    });
+}
+
+fn add_projection_payload(graph: &mut ObjectGraph, object_id: ObjectId, shallow_size: u32) {
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id: 6,
+            shallow_size,
+            references: Vec::new(),
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+}
+
+fn add_projection_node(
+    graph: &mut ObjectGraph,
+    object_id: ObjectId,
+    class_id: ObjectId,
+    parent_id: ObjectId,
+    depth: i32,
+    count: i32,
+    payload_id: ObjectId,
+) {
+    let mut references = Vec::new();
+    if parent_id != 0 {
+        references.push(parent_id);
+    }
+    if payload_id != 0 {
+        references.push(payload_id);
+    }
+
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id,
+            shallow_size: 32,
+            references,
+            field_data: node_projection_field_bytes(parent_id, depth, count, payload_id),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id,
+        root_type: GcRootType::StickyClass,
+    });
+}
+
+fn build_objects_projection_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(&mut graph, 2, 1, "com.example.ParentNode", Vec::new());
+    add_class(&mut graph, 3, 1, "com.example.OtherParent", Vec::new());
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Node",
+        vec![
+            FieldDescriptor {
+                name: Some("parent".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("depth".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("count".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("payload".into()),
+                field_type: field_types::OBJECT,
+            },
+        ],
+    );
+    add_class(&mut graph, 5, 4, "com.example.DeepNode", Vec::new());
+    add_class(&mut graph, 6, 1, "com.example.Payload", Vec::new());
+
+    add_projection_parent(&mut graph, 0x2100, 2);
+    add_projection_parent(&mut graph, 0x2200, 2);
+    add_projection_parent(&mut graph, 0x2300, 2);
+    add_projection_parent(&mut graph, 0x2400, 3);
+
+    add_projection_payload(&mut graph, 0x6100, 64);
+    add_projection_payload(&mut graph, 0x6200, 8);
+    add_projection_payload(&mut graph, 0x6400, 32);
+
+    add_projection_node(&mut graph, 0x4100, 4, 0x2100, 4, 1, 0x6100);
+    add_projection_node(&mut graph, 0x4200, 5, 0x2200, 9, 2, 0x6200);
+    add_projection_node(&mut graph, 0x4300, 4, 0x2300, 8, 3, 0);
+    add_projection_node(&mut graph, 0x4400, 4, 0x2300, 7, 4, 0x6400);
+    add_projection_node(&mut graph, 0x4500, 4, 0, 10, 0, 0);
+    add_projection_node(&mut graph, 0x4600, 4, 0x9999, 11, 0, 0);
+    add_projection_node(&mut graph, 0x4700, 4, 0x2400, 6, 5, 0);
+
+    graph
+}
+
 fn build_graph_fixture() -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
@@ -701,22 +833,224 @@ fn execute_query_supports_instanceof_filters_on_instance_fields() {
 }
 
 #[test]
-fn executor_returns_not_yet_implemented_for_objects_select() {
-    let graph = parse_hprof_with_options(
-        &build_graph_fixture(),
-        ParseOptions {
-            retain_field_data: true,
-        },
-    )
-    .expect("fixture should parse");
+fn objects_projection_returns_referenced_target() {
+    let graph = build_objects_projection_graph();
     let dominator = build_dominator_tree(&graph);
-    let query = parse_query(r#"SELECT OBJECTS entries FROM "com.example.BigCache""#)
+    let query = parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE count = 1"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "@className"]);
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x2100),
+            CellValue::Str("com.example.ParentNode".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_omits_rows_with_null_field() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE depth = 10"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_omits_rows_with_unresolved_target() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE depth = 11"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_keeps_duplicates_when_multiple_sources_share_target() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE count >= 3 AND count < 5"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn objects_projection_combined_with_where_filter() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE depth > 5"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 3);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2400),
+                CellValue::Str("com.example.OtherParent".into()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn objects_projection_combined_with_instanceof() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent FROM INSTANCEOF "com.example.Node" WHERE parent INSTANCEOF "com.example.ParentNode""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 4);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2100),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2200),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn objects_projection_in_overview_mode_returns_unavailable_error() {
+    let graph = build_objects_projection_graph();
+    let query = parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode OBJECTS should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "OBJECTS" && hint.contains("OBJECTS") && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn objects_projection_on_primitive_field_returns_clear_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.count FROM "com.example.Node""#)
         .expect("query should parse");
 
     let error = execute_query(&query, &graph, Some(&dominator))
-        .expect_err("slice A should reject OBJECTS execution");
+        .expect_err("primitive OBJECTS fields should fail clearly");
 
-    assert!(error.to_string().contains("slice A"));
+    assert!(error.to_string().contains("count"));
+    assert!(error.to_string().contains("object-reference"));
+}
+
+#[test]
+fn objects_projection_multi_hop_returns_not_supported_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.parent.parent FROM "com.example.Node""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("multi-hop OBJECTS should be deferred cleanly");
+
+    assert!(error.to_string().contains("multi-hop OBJECTS"));
+    assert!(error.to_string().contains("not yet supported"));
+}
+
+#[test]
+fn objects_projection_with_unknown_field_returns_clear_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS n.missing FROM "com.example.Node""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("missing OBJECTS fields should fail clearly");
+
+    assert!(error.to_string().contains("missing"));
+    assert!(error.to_string().contains("com.example.Node"));
+}
+
+#[test]
+fn objects_projection_combined_with_at_retained_size_predicate_works() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE @retainedSize > 60"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2100),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+        ]
+    );
 }
 
 #[test]

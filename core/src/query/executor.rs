@@ -6,10 +6,12 @@ use super::types::{
 use crate::{
     analysis::string_analysis::extract_string_value,
     graph::DominatorTree,
-    hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
+    hprof::{field_types, read_field, FieldValue, ObjectGraph, ObjectId},
 };
 use regex::Regex;
 
+const OBJECTS_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; OBJECTS requires deep-mode object field traversal.";
 const RETAINED_SIZE_OVERVIEW_HINT: &str =
     "re-run with --mode deep or use @shallowSize for a per-object approximation.";
 const STRING_PREDICATE_OVERVIEW_HINT: &str =
@@ -43,6 +45,11 @@ pub fn execute_query(
     }
 
     matched_ids.sort_unstable();
+
+    if let SelectClause::Objects(field) = &query.select {
+        return execute_objects_projection(query, graph, field, matched_ids, columns);
+    }
+
     let total_before_limit = matched_ids.len();
     if let Some(limit) = query.limit {
         matched_ids.truncate(limit);
@@ -86,10 +93,6 @@ fn validate_supported_query(
     query: &Query,
     dominator: Option<&DominatorTree>,
 ) -> Result<(), QueryError> {
-    if matches!(query.select, SelectClause::Objects(_)) {
-        return Err(slice_a_not_implemented("SELECT OBJECTS execution"));
-    }
-
     if query_references_gc_root_path(query) {
         return Err(slice_a_not_implemented("@gcRootPath query evaluation"));
     }
@@ -101,6 +104,13 @@ fn validate_supported_query(
     }
 
     if dominator.is_none() {
+        if matches!(query.select, SelectClause::Objects(_)) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "OBJECTS",
+                OBJECTS_OVERVIEW_HINT,
+            ));
+        }
+
         if query_uses_retained_size(query) {
             return Err(QueryError::feature_unavailable_in_overview_mode(
                 "@retainedSize",
@@ -190,6 +200,130 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
 
 fn slice_a_not_implemented(feature: &str) -> QueryError {
     QueryError::NotImplemented(format!("{feature} is not yet implemented in slice A"))
+}
+
+fn execute_objects_projection(
+    query: &Query,
+    graph: &ObjectGraph,
+    field: &FieldRef,
+    matched_ids: Vec<ObjectId>,
+    columns: Vec<String>,
+) -> Result<QueryResult, QueryError> {
+    let mut rows = Vec::with_capacity(matched_ids.len());
+
+    for object_id in matched_ids {
+        // Match MAT-style OBJECTS behavior: null and dangling refs do not emit a row.
+        let Some(target_id) = resolve_objects_projection_target(field, graph, object_id)? else {
+            continue;
+        };
+
+        rows.push(project_row(&SelectClause::All, graph, None, target_id));
+    }
+
+    let total_before_limit = rows.len();
+    if let Some(limit) = query.limit {
+        rows.truncate(limit);
+    }
+
+    Ok(QueryResult {
+        columns,
+        rows,
+        total_matched: total_before_limit.min(query.limit.unwrap_or(total_before_limit)),
+        truncated: query.limit.is_some_and(|limit| total_before_limit > limit),
+    })
+}
+
+fn resolve_objects_projection_target(
+    field: &FieldRef,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> Result<Option<ObjectId>, QueryError> {
+    let FieldRef::InstanceField(path) = field else {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires an instance field expression".into(),
+        ));
+    };
+
+    let field_name = normalize_objects_field_name(path)?;
+    let Some(object) = graph.get_object(object_id) else {
+        return Ok(None);
+    };
+    let class_name = graph
+        .class_name(object.class_id)
+        .unwrap_or("<unknown>")
+        .replace('/', ".");
+
+    let Some(field_type) = lookup_instance_field_type(graph, object.class_id, field_name) else {
+        return Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' does not exist on class '{class_name}'"
+        )));
+    };
+
+    if field_type != field_types::OBJECT {
+        return Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' on class '{class_name}' is not an object-reference field"
+        )));
+    }
+
+    match read_field(object, &graph.classes, field_name, graph.identifier_size) {
+        Some(FieldValue::ObjectRef(Some(target_id))) if graph.get_object(target_id).is_some() => {
+            Ok(Some(target_id))
+        }
+        Some(FieldValue::ObjectRef(Some(_))) | Some(FieldValue::ObjectRef(None)) => Ok(None),
+        Some(_) => Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' on class '{class_name}' is not an object-reference field"
+        ))),
+        None => Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' could not be read from class '{class_name}'"
+        ))),
+    }
+}
+
+fn normalize_objects_field_name(path: &str) -> Result<&str, QueryError> {
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    match segments.as_slice() {
+        [field_name] => Ok(field_name),
+        [_, field_name] => Ok(field_name),
+        _ => Err(QueryError::NotImplemented(format!(
+            "multi-hop OBJECTS not yet supported: '{path}'"
+        ))),
+    }
+}
+
+fn lookup_instance_field_type(
+    graph: &ObjectGraph,
+    class_id: ObjectId,
+    field_name: &str,
+) -> Option<u8> {
+    fn collect_class_ids(graph: &ObjectGraph, class_id: ObjectId, class_ids: &mut Vec<ObjectId>) {
+        if class_id == 0 {
+            return;
+        }
+
+        let Some(class_info) = graph.classes.get(&class_id) else {
+            return;
+        };
+
+        collect_class_ids(graph, class_info.super_class_id, class_ids);
+        class_ids.push(class_id);
+    }
+
+    let mut class_ids = Vec::new();
+    collect_class_ids(graph, class_id, &mut class_ids);
+
+    class_ids.into_iter().find_map(|candidate| {
+        graph.classes.get(&candidate).and_then(|class_info| {
+            class_info
+                .instance_fields
+                .iter()
+                .find(|descriptor| descriptor.name.as_deref() == Some(field_name))
+                .map(|descriptor| descriptor.field_type)
+        })
+    })
 }
 
 fn matches_class_pattern(
