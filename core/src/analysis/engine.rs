@@ -13,8 +13,8 @@ use crate::{
         HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
     hprof::{
-        parse_heap, parse_hprof_file_with_options, ClassDelta, ClassLevelDelta, ClassStat,
-        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
+        parse_heap, parse_hprof_file_with_options, ClassDelta, ClassStat, HeapDiff, HeapParseJob,
+        HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -426,6 +426,18 @@ pub async fn analyze_heap_with_graph(
 
 /// Compare two heap snapshots and produce a structured diff of their dominant classes.
 pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapDiff> {
+    match crate::diff::run_diff(crate::diff::DiffRequest::class(before_path, after_path)).await? {
+        crate::diff::DiffResult::Class(diff) => Ok(diff),
+        crate::diff::DiffResult::Object(report) => {
+            let _ = report;
+            Err(CoreError::Unsupported(
+                "class diff requested but object diff report was returned".into(),
+            ))
+        }
+    }
+}
+
+pub(crate) async fn diff_heaps_class(before_path: &str, after_path: &str) -> CoreResult<HeapDiff> {
     info!(%before_path, %after_path, "computing heap diff");
 
     let before_job = HeapParseJob {
@@ -449,7 +461,7 @@ pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapD
     if let (Some((before_graph, before_dom)), Some((after_graph, after_dom))) =
         (before_graph, after_graph)
     {
-        diff.class_diff = Some(compute_class_level_diff(
+        diff.class_diff = Some(crate::diff::class::compute_class_level_diff(
             &before_graph,
             &before_dom,
             &after_graph,
@@ -528,7 +540,7 @@ impl LeakDetectionOptions {
 
 /// Attempt to parse the HPROF file into an object graph and build a dominator tree.
 /// Returns None if parsing fails (graceful fallback to heuristic path).
-fn try_build_dominator(
+pub(crate) fn try_build_dominator(
     heap_path: &str,
     retain_field_data: bool,
 ) -> Option<(ObjectGraph, DominatorTree)> {
@@ -1040,93 +1052,6 @@ fn build_heap_diff(before: HeapSummary, after: HeapSummary) -> HeapDiff {
         changed_classes,
         class_diff: None,
     }
-}
-
-fn compute_class_level_diff(
-    before_graph: &ObjectGraph,
-    before_dom: &DominatorTree,
-    after_graph: &ObjectGraph,
-    after_dom: &DominatorTree,
-) -> Vec<ClassLevelDelta> {
-    let before = collect_class_level_stats(before_graph, before_dom);
-    let after = collect_class_level_stats(after_graph, after_dom);
-    let mut merged: HashMap<String, ClassLevelDelta> = HashMap::new();
-
-    for (class_name, stats) in before {
-        merged.insert(
-            class_name.clone(),
-            ClassLevelDelta {
-                class_name,
-                before_instances: stats.instances,
-                after_instances: 0,
-                before_shallow_bytes: stats.shallow_bytes,
-                after_shallow_bytes: 0,
-                before_retained_bytes: stats.retained_bytes,
-                after_retained_bytes: 0,
-            },
-        );
-    }
-
-    for (class_name, stats) in after {
-        let entry = merged.entry(class_name.clone()).or_insert(ClassLevelDelta {
-            class_name,
-            before_instances: 0,
-            after_instances: 0,
-            before_shallow_bytes: 0,
-            after_shallow_bytes: 0,
-            before_retained_bytes: 0,
-            after_retained_bytes: 0,
-        });
-        entry.after_instances = stats.instances;
-        entry.after_shallow_bytes = stats.shallow_bytes;
-        entry.after_retained_bytes = stats.retained_bytes;
-    }
-
-    let mut deltas: Vec<ClassLevelDelta> = merged
-        .into_values()
-        .filter(|entry| {
-            entry.before_instances != entry.after_instances
-                || entry.before_shallow_bytes != entry.after_shallow_bytes
-                || entry.before_retained_bytes != entry.after_retained_bytes
-        })
-        .collect();
-
-    deltas.sort_by(|a, b| {
-        let delta_a = (a.after_retained_bytes as i128 - a.before_retained_bytes as i128).abs();
-        let delta_b = (b.after_retained_bytes as i128 - b.before_retained_bytes as i128).abs();
-        delta_b
-            .cmp(&delta_a)
-            .then_with(|| a.class_name.cmp(&b.class_name))
-    });
-    deltas.truncate(20);
-    deltas
-}
-
-#[derive(Default)]
-struct ClassLevelStats {
-    instances: u64,
-    shallow_bytes: u64,
-    retained_bytes: u64,
-}
-
-fn collect_class_level_stats(
-    graph: &ObjectGraph,
-    dom: &DominatorTree,
-) -> HashMap<String, ClassLevelStats> {
-    let mut stats: HashMap<String, ClassLevelStats> = HashMap::new();
-
-    for (&obj_id, obj) in &graph.objects {
-        let class_name = graph
-            .class_name(obj.class_id)
-            .unwrap_or("<unknown>")
-            .to_string();
-        let entry = stats.entry(class_name).or_default();
-        entry.instances += 1;
-        entry.shallow_bytes += u64::from(obj.shallow_size);
-        entry.retained_bytes += dom.retained_size(obj_id);
-    }
-
-    stats
 }
 
 fn collect_changed_classes(before: &HeapSummary, after: &HeapSummary) -> Vec<ClassDelta> {
@@ -1920,7 +1845,12 @@ mod tests {
         add_class(&mut after_graph, 0x200, "com.example.Cache");
         let after_dom = build_dominator_tree(&after_graph);
 
-        let diff = compute_class_level_diff(&before_graph, &before_dom, &after_graph, &after_dom);
+        let diff = crate::diff::class::compute_class_level_diff(
+            &before_graph,
+            &before_dom,
+            &after_graph,
+            &after_dom,
+        );
 
         assert_eq!(diff.len(), 2);
         let cache = diff
