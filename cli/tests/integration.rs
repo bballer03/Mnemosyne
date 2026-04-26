@@ -71,6 +71,10 @@ fn write_sandbox_file(root: &Path, name: &str, contents: impl AsRef<[u8]>) -> Pa
     path
 }
 
+fn read_json_file(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
 fn seed_persisted_ai_session(root: &Path, session: &PersistedAiSession) {
     fs::create_dir_all(root).unwrap();
     let path = root.join(format!("{}.json", session.session_id));
@@ -1215,6 +1219,386 @@ fn ci_check_format_github_actions_emits_workflow_commands() {
     assert!(stdout.contains("::error file="), "{stdout}");
     assert!(stdout.contains("title=heap-budget"), "{stdout}");
     assert!(stdout.contains("Mnemosyne ci-check:"), "{stdout}");
+}
+
+#[test]
+fn flamegraph_default_writes_svg_to_output() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    let trimmed = written.trim_start();
+    assert!(!trimmed.is_empty());
+    assert!(
+        trimmed.starts_with("<?xml") || trimmed.starts_with("<svg"),
+        "{trimmed}"
+    );
+}
+
+#[test]
+fn flamegraph_format_folded_writes_folded_stacks_text() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.folded");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "folded-stack",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    let first_line = written
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .expect("expected at least one folded stack line");
+    assert!(first_line.contains(';'), "{first_line}");
+    let (_, weight) = first_line.rsplit_once(' ').expect("weight suffix");
+    assert!(weight.parse::<u64>().is_ok(), "{first_line}");
+}
+
+#[test]
+fn flamegraph_format_json_writes_envelope() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+    assert_eq!(
+        json.get("subcommand"),
+        Some(&Value::String("flamegraph".into()))
+    );
+    assert!(json.get("strategy").is_some(), "{json}");
+    assert!(
+        json.get("stacks").and_then(Value::as_array).is_some(),
+        "{json}"
+    );
+    assert!(
+        json.get("total_weight").and_then(Value::as_u64).is_some(),
+        "{json}"
+    );
+    assert!(
+        json.get("frame_count").and_then(Value::as_u64).is_some(),
+        "{json}"
+    );
+}
+
+#[test]
+fn flamegraph_root_class_hierarchy() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-class-hierarchy.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "class-hierarchy",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(
+        json.get("strategy"),
+        Some(&Value::String("class-hierarchy".into()))
+    );
+}
+
+#[test]
+fn flamegraph_root_gc_root_path() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-gc-root-path.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "gc-root-path",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(
+        json.get("strategy"),
+        Some(&Value::String("gc-root-path".into()))
+    );
+}
+
+#[test]
+fn flamegraph_explicit_overview_returns_exit_five() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("should-not-exist.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--mode",
+            "overview",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("flame graph requires deep mode; received --mode overview"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn flamegraph_auto_resolved_to_overview_returns_exit_five() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("should-not-exist-auto.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains(
+            "flame graph requires deep mode; current heap size triggers auto-overview; pass --mode deep to override"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn flamegraph_explicit_deep_with_large_file_warns_but_proceeds() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-deep.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--mode",
+            "deep",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    assert!(output_path.exists());
+}
+
+#[test]
+fn flamegraph_min_fraction_truncates_to_other() {
+    let fixture = write_fixture(&build_thread_stack_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-truncated.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "class-hierarchy",
+            "--min-fraction",
+            "0.45",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    let truncated = json
+        .get("truncated_to_other")
+        .and_then(Value::as_u64)
+        .expect("truncated_to_other should be present");
+    assert!(truncated > 0, "{json}");
+}
+
+#[test]
+fn flamegraph_max_frames_caps_count() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-capped.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--max-frames",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    let frame_count = json
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .expect("frame_count should be present");
+    assert!(frame_count <= 2, "{json}");
+}
+
+#[test]
+fn flamegraph_title_appears_in_svg() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-title.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--title",
+            "test heap",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    assert!(written.contains("test heap"), "{written}");
+}
+
+#[test]
+fn flamegraph_existing_subcommands_unchanged() {
+    let analyze_fixture = write_fixture(&build_graph_fixture());
+    let analyze_fixture_path = path_arg(analyze_fixture.path());
+    let (mut analyze_cmd, _analyze_sandbox) = cli_command();
+
+    let analyze_output = analyze_cmd
+        .args(["analyze", analyze_fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(
+        analyze_output.status.success(),
+        "{}",
+        stdout_string(&analyze_output.stderr)
+    );
+    let analyze_stdout = stdout_string(&analyze_output.stdout);
+    assert!(
+        analyze_stdout.contains("Mnemosyne Analysis"),
+        "{analyze_stdout}"
+    );
+    assert!(analyze_stdout.contains("Graph Nodes:"), "{analyze_stdout}");
+
+    let ci_fixture = write_fixture(&build_simple_fixture());
+    let ci_fixture_path = path_arg(ci_fixture.path());
+    let (mut ci_cmd, ci_sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        ci_sandbox.path(),
+        "flamegraph-regression-policy.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1048576\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let ci_output = ci_cmd
+        .args([
+            "ci-check",
+            ci_fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(ci_output.status.code(), Some(0));
+    let ci_stdout = stdout_string(&ci_output.stdout);
+    assert!(ci_stdout.contains("RESULT: PASS"), "{ci_stdout}");
 }
 
 #[test]

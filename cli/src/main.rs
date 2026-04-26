@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     process,
     time::Duration,
@@ -17,9 +18,10 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, detect_leaks, diff_heaps, focus_leaks, generate_ai_chat_turn_async,
-        generate_ai_insights_async, validate_leak_id, AnalysisMode, AnalyzeRequest,
-        LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
+        analyze_heap, analyze_heap_with_graph, detect_leaks, diff_heaps, focus_leaks,
+        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AnalysisMode,
+        AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
+        OVERVIEW_AUTO_THRESHOLD_BYTES,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix_with_config, FixRequest, FixStyle},
@@ -33,7 +35,13 @@ use mnemosyne_core::{
         render_text_report, PolicyRenderContext,
     },
     query::{execute_query, parse_query, CellValue},
-    report::{render_overview_report, render_report, ReportArtifact, ReportRequest},
+    report::{
+        flamegraph::{
+            collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
+            FlameFormat, FlameRoot,
+        },
+        render_overview_report, render_report, ReportArtifact, ReportRequest,
+    },
     CoreError, ParseOptions, Policy, PolicyInput, Severity as PolicySeverity,
 };
 use tokio::signal;
@@ -65,6 +73,8 @@ enum Commands {
     Analyze(AnalyzeArgs),
     /// Evaluate a heap dump against a TOML policy and emit a CI result.
     CiCheck(CiCheckArgs),
+    /// Render a flame graph from a heap dump (deep mode required).
+    Flamegraph(FlameGraphArgs),
     /// Compare two heap dumps and highlight changes.
     Diff(DiffArgs),
     /// Map a leak candidate to likely source files.
@@ -158,6 +168,25 @@ struct CiCheckArgs {
     output: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
     fail_on: SeverityArg,
+}
+
+#[derive(Args, Debug)]
+struct FlameGraphArgs {
+    heap: PathBuf,
+    #[arg(short = 'o', long)]
+    output: PathBuf,
+    #[arg(long, value_enum, default_value_t = FlameRootArg::Dominator)]
+    root: FlameRootArg,
+    #[arg(long, value_enum, default_value_t = FlameFormatArg::Svg)]
+    format: FlameFormatArg,
+    #[arg(long, default_value_t = 0.001)]
+    min_fraction: f64,
+    #[arg(long)]
+    title: Option<String>,
+    #[arg(long, default_value_t = 5000)]
+    max_frames: usize,
+    #[arg(long, value_enum, default_value_t = ModeArg::Auto)]
+    mode: ModeArg,
 }
 
 #[derive(Debug, Parser)]
@@ -270,6 +299,20 @@ enum ModeArg {
     Overview,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum FlameRootArg {
+    Dominator,
+    ClassHierarchy,
+    GcRootPath,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum FlameFormatArg {
+    Svg,
+    FoldedStack,
+    Json,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum FixStyleArg {
     Minimal,
@@ -351,6 +394,26 @@ impl From<ModeArg> for AnalysisMode {
     }
 }
 
+impl From<FlameRootArg> for FlameRoot {
+    fn from(value: FlameRootArg) -> Self {
+        match value {
+            FlameRootArg::Dominator => FlameRoot::Dominator,
+            FlameRootArg::ClassHierarchy => FlameRoot::ClassHierarchy,
+            FlameRootArg::GcRootPath => FlameRoot::GcRootPath,
+        }
+    }
+}
+
+impl From<FlameFormatArg> for FlameFormat {
+    fn from(value: FlameFormatArg) -> Self {
+        match value {
+            FlameFormatArg::Svg => FlameFormat::Svg,
+            FlameFormatArg::FoldedStack => FlameFormat::FoldedStack,
+            FlameFormatArg::Json => FlameFormat::Json,
+        }
+    }
+}
+
 impl From<FixStyleArg> for FixStyle {
     fn from(value: FixStyleArg) -> Self {
         match value {
@@ -416,6 +479,7 @@ async fn run() -> Result<()> {
         Commands::Leaks(args) => handle_leaks(args, &loaded_config.data).await?,
         Commands::Analyze(args) => handle_analyze(args, &loaded_config.data).await?,
         Commands::CiCheck(args) => handle_ci_check(args, &loaded_config.data).await?,
+        Commands::Flamegraph(args) => handle_flamegraph(args, &loaded_config.data).await?,
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
@@ -703,6 +767,105 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
             }
         }
     }
+    Ok(())
+}
+
+async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Result<()> {
+    validate_heap_file(&args.heap)?;
+
+    let file_size_bytes = fs::metadata(&args.heap)?.len();
+    let requested_mode = AnalysisMode::from(args.mode);
+    let resolved_mode = requested_mode.resolve(file_size_bytes);
+
+    info!(
+        heap_path = %args.heap.display(),
+        requested_mode = ?requested_mode,
+        resolved_mode = ?resolved_mode,
+        file_size_bytes,
+        "Resolved flamegraph CLI mode"
+    );
+
+    match requested_mode {
+        AnalysisMode::Overview => {
+            exit_flamegraph_with_error("flame graph requires deep mode; received --mode overview");
+        }
+        AnalysisMode::Auto if resolved_mode == AnalysisMode::Overview => {
+            exit_flamegraph_with_error(
+                "flame graph requires deep mode; current heap size triggers auto-overview; pass --mode deep to override",
+            );
+        }
+        AnalysisMode::Deep if file_size_bytes > OVERVIEW_AUTO_THRESHOLD_BYTES => {
+            warn!(
+                heap_path = %args.heap.display(),
+                file_size_bytes,
+                "deep-mode flame graph on a large dump may exhaust host memory"
+            );
+        }
+        _ => {}
+    }
+
+    if resolved_mode != AnalysisMode::Deep {
+        exit_flamegraph_with_error(
+            "flame graph requires deep mode; analysis did not resolve to deep mode",
+        );
+    }
+
+    let mut config = base_config.clone();
+    config.ai.enabled = false;
+    let leak_options = LeakDetectionOptions::from(&config.analysis);
+    let strategy = FlameRoot::from(args.root);
+    let format = FlameFormat::from(args.format);
+    let collapse_options = CollapseOptions {
+        min_fraction: args.min_fraction,
+        max_frames: args.max_frames,
+    };
+
+    let pb = start_spinner("Building flame graph...");
+    let (response, graph, dom) = analyze_heap_with_graph(AnalyzeRequest {
+        heap_path: args.heap.to_string_lossy().into(),
+        config,
+        leak_options,
+        enable_ai: false,
+        histogram_group_by: HistogramGroupBy::Class,
+        enable_classloaders: false,
+        enable_threads: false,
+        enable_strings: false,
+        enable_collections: false,
+        enable_top_instances: false,
+        top_n: 10,
+        min_collection_capacity: 16,
+        min_duplicate_count: 2,
+    })
+    .await
+    .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))?;
+
+    if response.mode != AnalysisMode::Deep {
+        exit_flamegraph_with_error(
+            "flame graph requires deep mode; analysis did not return deep mode",
+        );
+    }
+
+    let stacks = collapse_flamegraph(strategy, &graph, &dom, &collapse_options);
+    let output_file = fs::File::create(&args.output)
+        .with_context(|| format!("Failed to create output file: {}", args.output.display()))?;
+    let mut writer = BufWriter::new(output_file);
+    render_flamegraph(&stacks, format, args.title.as_deref(), &mut writer)
+        .with_context(|| format!("Failed to render flame graph: {}", args.output.display()))?;
+    writer
+        .flush()
+        .with_context(|| format!("Failed to flush output file: {}", args.output.display()))?;
+    finish_spinner(&pb, "Flame graph complete.");
+
+    println!(
+        "flame graph written: {} (strategy={}, format={}, frames={}, total_bytes={}, truncated_to_other={})",
+        args.output.display(),
+        flame_root_label(stacks.strategy),
+        flame_format_label(format),
+        stacks.frame_count,
+        stacks.total_weight,
+        stacks.truncated_to_other,
+    );
+
     Ok(())
 }
 
@@ -1206,6 +1369,11 @@ fn exit_ci_check_with_error(code: i32, err: anyhow::Error) -> ! {
     process::exit(code);
 }
 
+fn exit_flamegraph_with_error(message: &str) -> ! {
+    eprintln!("{message}");
+    process::exit(5);
+}
+
 async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
     let requested_mode = AnalysisMode::from(args.mode);
     let fail_on = PolicySeverity::from(args.fail_on);
@@ -1331,6 +1499,22 @@ fn resolve_cli_mode(heap_path: &Path, mode: ModeArg) -> Result<AnalysisMode> {
     );
 
     Ok(resolved_mode)
+}
+
+fn flame_root_label(root: FlameRoot) -> &'static str {
+    match root {
+        FlameRoot::Dominator => "dominator",
+        FlameRoot::ClassHierarchy => "class-hierarchy",
+        FlameRoot::GcRootPath => "gc-root-path",
+    }
+}
+
+fn flame_format_label(format: FlameFormat) -> &'static str {
+    match format {
+        FlameFormat::Svg => "svg",
+        FlameFormat::FoldedStack => "folded-stack",
+        FlameFormat::Json => "json",
+    }
 }
 
 fn emit_report(report: &ReportArtifact, output_path: Option<&Path>) -> Result<bool> {
