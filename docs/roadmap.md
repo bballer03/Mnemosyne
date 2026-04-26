@@ -5,13 +5,13 @@
 > **Goal:** Reach Eclipse MAT-level analysis depth and quality while maintaining Mnemosyne's unique differentiators
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
 
-Mnemosyne has closed M1 through M6 and shipped v0.2.0 across releases, Docker, crates.io, and Homebrew. The active roadmap is now deliberately narrow: close the highest-value MAT gaps, solve large-dump credibility, and widen the project's CI/AI/MCP moat rather than reopening completed milestone detail.
+Mnemosyne has closed M1 through M6 and shipped v0.3.0 across releases, Docker, crates.io, and Homebrew. The active roadmap is now deliberately narrow: close the highest-value MAT gaps, solve large-dump credibility, and widen the project's CI/AI/MCP moat rather than reopening completed milestone detail.
 
 ---
 
-## 1. Where We Are (v0.2.0)
+## 1. Where We Are (v0.3.0)
 
-v0.2.0 is not a prototype foundation anymore. The core parser, object-graph analysis, dominator tree, UI, MCP server, and AI integration are shipped. The remaining question is not whether Mnemosyne works, but which gaps matter most on the path from a strong alpha to a credible MAT alternative.
+v0.3.0 is not a prototype foundation anymore. The core parser, object-graph analysis, dominator tree, UI, MCP server, and AI integration are shipped. The remaining question is not whether Mnemosyne works, but which gaps matter most on the path from a strong alpha to a credible MAT alternative.
 
 | Area | Status | Key Metric |
 |---|---|---|
@@ -26,7 +26,7 @@ v0.2.0 is not a prototype foundation anymore. The core parser, object-graph anal
 | Testing | ✅ Solid | 448 Rust tests + 143 UI tests |
 | Scale | ⚠️ In progress | Deep mode is validated to ~2 GB dense tiers; M7-5 now has a published partial WSL comparison for `mnemo-overview` vs `hprof-slurp` on `small`/`medium`/`large`, but the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, and the `10 GiB` fixture is still pending |
 
-**Active roadmap rule:** M1-M6 are complete and archived. The only active milestone is M7, followed by the M8+ backlog.
+**Active roadmap rule:** M1-M6 are complete and archived, and M7 is now shipped. Next milestone planning is pending Tech PM review; until that review lands, M8+ remains backlog rather than an active committed milestone.
 
 ## 2. The MAT Gap — What's Missing
 
@@ -68,9 +68,9 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 ## 4. Milestone 7 — Production Readiness & Scale
 
 **Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md), [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md), [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md), [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md), and [design/milestone-7-6-v0-3-0-release.md](design/milestone-7-6-v0-3-0-release.md)  
-**Status:** ⚠️ In progress
+**Status:** ✅ Shipped 2026-04-26
 
-M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
+M7 is the shipped milestone that closed v0.3.0. Its job was not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
 
 | # | Item | Type | Priority | Effort |
 |---|---|---|---|---|
@@ -81,15 +81,15 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 | M7-5 | Comparative benchmarks vs MAT/hprof-slurp | Credibility | P2 | M |
 | M7-6 | v0.3.0 release | Release | P1 | S |
 
-**Status detail:** ✅ M7-1 through M7-4 are complete (4/6 slices). M7-5 is now 🟡 partial: the reference spec, fixture/tooling docs, `scripts/bench/` harness, raw WSL artifacts, and the partial publication in [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) are landed, but the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending. M7-6 is now ⚠️ in progress: Slice A bumps the workspace to `0.3.0` and starts the release-facing docs sweep on this branch, Slice B adds the release notes, and Slice C remains the explicit tag gate. v0.3.0 cut is imminent once those release-prep slices finish.
+**Status detail:** M7 is now ✅ shipped as the `v0.3.0` milestone (6/6 slices closed for release). M7-1 through M7-4 are complete and verified. M7-5 remains 🟡 partial: the reference spec, fixture/tooling docs, `scripts/bench/` harness, raw WSL artifacts, and the partial publication in [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) are landed, but the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending. M7-6 is ✅ shipped on 2026-04-26 through tag `v0.3.0`, the published GitHub Release, GHCR images, and the Homebrew formula bump.
 
 ### Phase 1 — Foundation
 
-**M7-1 is complete.** Streaming overview mode is now the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data. The remaining active slices are the M7-5 reference-spec rerun and M7-6.
+**M7-1 is complete.** Streaming overview mode is now the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data. The release milestone is shipped; the remaining follow-up evidence is the native-Linux M7-5 reference-spec rerun.
 
 ### Phase 2 — Differentiation
 
-**M7-2 and M7-3 are complete.** `mnemosyne-cli ci-check` gives Mnemosyne a one-command CI gate with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub Actions outputs, and `mnemosyne-cli flamegraph` now exports retained-size SVG/folded-stack/JSON artifacts from deep-mode heap analysis. **M7-4 is now complete** as the targeted parity follow-through, and the next active closeout work is the native-Linux rerun for **M7-5**.
+**M7-2 and M7-3 are complete.** `mnemosyne-cli ci-check` gives Mnemosyne a one-command CI gate with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub Actions outputs, and `mnemosyne-cli flamegraph` now exports retained-size SVG/folded-stack/JSON artifacts from deep-mode heap analysis. **M7-4 is now complete** as the targeted parity follow-through, and the native-Linux rerun for **M7-5** remains the main post-release credibility follow-up.
 
 ### Phase 3 — Depth
 
@@ -97,7 +97,7 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 
 ### Phase 4 — Validation & Release
 
-M7-5 now has a published partial WSL comparative report with loud caveats. With that caveat preserved, **M7-6 is now in progress** and the `v0.3.0` cut is imminent once the release-notes and final-validation slices land. The native-Linux reference-spec rerun remains important follow-up evidence, but it is no longer treated as a blocker to the release closeout.
+M7-5 now has a published partial WSL comparative report with loud caveats. With that caveat preserved, **M7-6 is complete** and `v0.3.0` shipped on 2026-04-26 to all current release channels. The native-Linux reference-spec rerun remains important post-release evidence, but it is no longer treated as a blocker to the release closeout.
 
 ### Success criteria
 
@@ -118,7 +118,7 @@ M7-5 now has a published partial WSL comparative report with loud caveats. With 
 
 ## 5. M8+ Backlog — The Long Road to Full MAT Parity
 
-M8+ absorbs the valuable work that is real, but not required for the M7 credibility jump. This is where the long tail of parity, indexing, richer time-series workflows, and desktop hardening belongs.
+M8+ absorbs the valuable work that is real, but not required for the M7 credibility jump. Next milestone planning is pending Tech PM review, so this is currently a candidate backlog rather than a committed active milestone. This is where the long tail of parity, indexing, richer time-series workflows, and desktop hardening belongs.
 
 | # | Item | Origin | Priority | Notes |
 |---|---|---|---|---|
@@ -164,7 +164,7 @@ Only active risks belong here. Resolved risks and milestone-history detail live 
 |---|---|---|
 | Large-dump architecture still lacks 10 GB+ proof | M7 credibility depends on it | Ship overview mode first and benchmark it on larger fixtures |
 | OQL scope creep | Full MAT parity is an endless tail | Keep M7 to targeted predicates; defer full expansion to M8-2 |
-| Full reference-spec comparative claims remain unproven beyond the partial WSL run | Performance messaging is only as good as published evidence | Keep the native-Linux M7-5 rerun as a release gate |
+| Full reference-spec comparative claims remain unproven beyond the partial WSL run | Performance messaging is only as good as published evidence | Keep the native-Linux M7-5 rerun as post-release credibility follow-up evidence |
 | Provider-specific AI quality drift | Multi-provider UX can erode trust | Keep strict wire contracts, provider tests, and rules fallback |
 | Desktop hardening could consume roadmap bandwidth early | Native packaging is not the main blocker to MAT credibility | Keep desktop release work in M8-9 until adoption data justifies it |
 | Post-M7 scope sprawl | Reopening M1-M6 detail would stall delivery | Treat archive content as historical; keep M7 exit criteria explicit |
@@ -190,7 +190,7 @@ These design documents remain the reference trail for completed milestones and s
 | Scaling support design | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
 | M7 supporting design | [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md) | ✅ |
 | M7 supporting design | [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md) | ✅ |
-| M7 — Production Readiness & Scale | [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) | ⚠️ In progress |
+| M7 — Production Readiness & Scale | [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) | ✅ Shipped |
 
 ---
 

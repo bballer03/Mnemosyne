@@ -1,15 +1,15 @@
 class Mnemosyne < Formula
   desc "AI-powered JVM heap analysis tool — parse HPROF dumps, detect memory leaks, trace GC paths"
   homepage "https://github.com/bballer03/mnemosyne"
-  version "0.2.0"
+  version "0.3.0"
   license "Apache-2.0"
 
   if Hardware::CPU.arm?
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-aarch64-apple-darwin.tar.gz"
-    sha256 "54cd280bcd55901ac84faa201605e70288124a0a8141e14a86deea54fbbe46d2"
+    sha256 "693db9604b1da4c61a1ead859c9b64071ec26f797bdb1c109a500d1636e4b6ad"
   else
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-x86_64-apple-darwin.tar.gz"
-    sha256 "d60334546086d2254633908f57249df981c16da474b501069cf3e619b3b27c5a"
+    sha256 "50ec498f04923087bc4fa79fb088837402f116c0a54ed77df0654640acde73ae"
   end
 
   def install

@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional integration coverage for zero-leak confirmation and M3 Phase 2 analyze flags, bringing the validated workspace total to 129 tests
 
 ### Changed
+- Release closeout from merge commit `81c1b27` published the tagged GitHub Release with five platform archives and GHCR image tags `0.3.0`, `0.3`, and `latest`, and bumped `HomebrewFormula/mnemosyne.rb` to `0.3.0` with Intel + Apple Silicon SHA-256 values
 - `core::analysis::engine` now exposes `analyze_heap_with_graph()` for deep-mode callers that need the `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without changing the serialized `analyze_heap()` contract, and `core::report` now includes the dedicated `flamegraph/` subtree backed by `inferno` 0.11 for SVG rendering
 - The browser-first UI now spans the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace, with direct heap-explorer → leak-workspace jumps driven by `resolveObjectToLeak()`
 - Owned project docs now reflect the shipped M6 UI/ecosystem state, including the desktop scaffold story, integration guides, benchmark comparison doc, and contributor/community guidance
