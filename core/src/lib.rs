@@ -12,6 +12,7 @@ pub mod hprof;
 pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod policy;
 pub mod prompts;
 pub mod query;
 pub mod report;
@@ -43,6 +44,7 @@ pub use hprof::{
     DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
+pub use policy::{Comparison, ModeRequirement, Policy, PolicyRule, Predicate, Severity};
 pub use report::{ReportArtifact, ReportRequest};
 
 #[cfg(any(test, feature = "test-fixtures"))]
