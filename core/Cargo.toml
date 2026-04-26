@@ -32,7 +32,7 @@ inferno = { version = "0.11.21", default-features = false, features = ["nameattr
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 tempfile.workspace = true
 
 [[bench]]
