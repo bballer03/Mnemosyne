@@ -229,6 +229,25 @@ mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
 mnemosyne-cli analyze heap.hprof --mode overview --format json
 ```
 
+### `query` exits `6`
+
+Typical message shape:
+
+```text
+Error: '@retainedSize' is a deep-mode-only OQL feature.
+```
+
+What it usually means:
+
+- a deep-only OQL feature such as `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or retained-field `LIKE` / `CONTAINS` was evaluated without a deep graph
+- the current `query` CLI normally builds the deep path itself, so this usually shows up when an embedded or reused query path fed overview-style data into the shared query engine
+
+What to do:
+
+- rerun the investigation through the normal graph-backed `query` command against the heap dump instead of an overview-only summary path
+- switch to overview-safe triage when you only need a class-level answer, for example `analyze --mode overview` or `@shallowSize` instead of `@retainedSize`
+- if you are embedding the core or MCP query engine, make sure the query runs on a deep object graph before using the deep-only pseudo-attributes or string/null operators
+
 ## 2. Performance Issues
 
 ### Large dumps take too long
@@ -479,11 +498,14 @@ Today it already supports:
 - built-in fields
 - retained instance-field projection and filtering on the query path
 - `INSTANCEOF`
+- `@retainedSize`, `@toString`, and `@gcRootPath`
+- `LIKE`, `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
+- single-quoted string literals alongside double-quoted ones
 
 Still growing:
 
-- richer predicates
-- broader object-string rendering and explorer ergonomics
+- multi-hop traversal and subqueries
+- broader set algebra and explorer ergonomics
 - deeper interactive browsing semantics
 
 ### Deep mode still pays the cost of an in-memory architecture

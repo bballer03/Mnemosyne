@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Targeted OQL expansion across the shared query surfaces: `@retainedSize`, synthetic `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS` one-hop projection, `IS NULL` / `IS NOT NULL`, single-quoted string literals, and structured deep-only query errors
 - `mnemosyne-cli flamegraph <heap.hprof> -o <file>` as a deep-mode-only retained-size flame graph export surface with three rooting strategies (`dominator`, `class-hierarchy`, `gc-root-path`), three output formats (`svg`, `folded-stack`, `json`), a structured JSON envelope, and exit code `5` when the command is run in explicit or auto-resolved overview mode
 - `mnemosyne-cli ci-check <heap.hprof> --policy <file>` as a dedicated CI regression gate with TOML-backed policy evaluation, 10 predicates across overview/deep inputs, the `info|warning|error|critical` severity ladder plus `--fail-on`, four output formats (`text|json|junit|github-actions`), and the supporting GitHub Actions / Jenkins integration docs
 - `AnalysisMode { auto, deep, overview }` across core, CLI, MCP, and report rendering, including the bounded-memory `core::hprof::overview` parser for class-resolved streaming triage on large dumps without building the `ObjectGraph`

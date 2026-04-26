@@ -461,7 +461,7 @@ When mode resolves to `overview`, the MCP server does **not** serialize `Analyze
 
 ## `query_heap`
 
-Execute the OQL-style heap query engine over the parsed object graph, including built-in fields plus retained instance-field projection and filtering on the query path.
+Execute the OQL-style heap query engine over the parsed object graph, including built-in fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), retained instance-field projection/filtering, `OBJECTS` one-hop projection, and `IS NULL` / `IS NOT NULL`.
 
 ### Request
 
@@ -500,6 +500,14 @@ Execute the OQL-style heap query engine over the parsed object graph, including 
 - `{ "Str": "com.example.BigCache" }`
 - `{ "Int": 8192 }`
 - `"Null"`
+
+### Query Notes
+
+- query text accepts both single-quoted and double-quoted string literals
+- supported targeted-expansion operators include `LIKE`, `CONTAINS`, `OBJECTS x.field`, `IS NULL`, and `IS NOT NULL`
+- `SELECT @gcRootPath` returns a joined `GcRoot/... -> ... -> target` string, or `Null` when the matched object is unreachable from any GC root
+- when callers reuse the shared query engine without a deep graph, failures use `error_details.code = "feature_unavailable_in_overview_mode"` and populate `error_details.details.feature` plus `error_details.details.hint`
+- for the full targeted-expansion semantics and explicit non-scope, see [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md)
 
 ## `map_to_code`
 

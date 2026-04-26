@@ -551,6 +551,30 @@ mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.
 mnemosyne-cli query heap.hprof "SELECT @objectId, entries FROM \"com.example.BigCache\" LIMIT 10"
 ```
 
+Pseudo-attributes:
+
+| Field | Semantics | Example |
+|---|---|---|
+| `@retainedSize` | Real retained bytes for each matched object. | `SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1048576` |
+| `@toString` | Synthetic string rendering: real `java.lang.String` contents when available, otherwise a stable class-and-id form. | `SELECT @objectId FROM "java.lang.String" WHERE @toString LIKE 'hello%'` |
+| `@gcRootPath` | Shortest GC-root path rendered as `GcRoot/... -> ... -> target`, or `null` for unreachable objects. | `SELECT @gcRootPath FROM "com.example.Target" WHERE @gcRootPath CONTAINS 'ThreadLocal'` |
+
+Operators:
+
+| Operator | Semantics | Example |
+|---|---|---|
+| `LIKE` | SQL-style string pattern matching with `%` and `_` wildcards on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name LIKE 'admin%'` |
+| `CONTAINS` | Plain substring matching on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
+| `OBJECTS x.field` | One-hop referent projection for object-reference fields. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
+| `IS NULL` / `IS NOT NULL` | Nullability checks for object-reference fields. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+
+Other query notes:
+
+- single-quoted string literals now work alongside double-quoted ones
+- `OBJECTS` is intentionally single-hop only in the shipped surface
+- `SELECT @gcRootPath` returns `Null` for matched objects that are unreachable from any GC root
+- the targeted M7-4 slice is documented in [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md)
+
 Expected output pattern:
 
 ```text
@@ -559,7 +583,9 @@ Matched: 1
 0x00001000 | 42
 ```
 
-Current limitation: the query surface is real, but still smaller than a full MAT-style OQL environment. Built-in fields, retained instance-field projection/filtering, and `INSTANCEOF` support are in place; richer predicates and broader explorer semantics are still future work.
+Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields.
+
+Current limitation: the query surface is real, but it is still smaller than a full MAT-style OQL environment. The targeted expansion now covers the highest-value predicates and projections, but multi-hop traversal, subqueries, broader set algebra, and deeper explorer semantics are still future work.
 
 ### `explain`
 

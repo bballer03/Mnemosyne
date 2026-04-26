@@ -51,7 +51,7 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
-- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields plus retained instance-field projection/filtering on query paths
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
@@ -504,6 +504,25 @@ mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --ro
 
 This command requires deep mode. If you pass `--mode overview`, or `--mode auto` resolves to overview because the heap is at or above the 4 GiB cutoff, Mnemosyne exits `5` and tells you to rerun with `--mode deep` if you have enough RAM. If you only need large-dump triage, stay on `parse` or `analyze --mode overview` instead.
 
+#### Run targeted OQL queries
+```bash
+mnemosyne-cli query heap.hprof "SELECT @objectId, @retainedSize FROM \"com.example.BigCache\" WHERE @retainedSize > 1048576"
+```
+
+`query` keeps the graph-backed path and now ships the targeted M7-4 parity slice. Single-quoted string literals are accepted alongside double-quoted ones, and the current operator surface is:
+
+| Feature | Semantics | Example |
+|---|---|---|
+| `@retainedSize` | Compare real retained bytes for each matched object. | `SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1048576` |
+| `@toString` | Project or filter on the synthetic string form of an object. | `SELECT @objectId FROM "java.lang.String" WHERE @toString LIKE 'hello%'` |
+| `@gcRootPath` | Project or filter on a joined `GcRoot/... -> ... -> target` path string. | `SELECT @gcRootPath FROM "com.example.Target" WHERE @gcRootPath CONTAINS 'ThreadLocal'` |
+| `LIKE` | Match SQL-style string patterns on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name LIKE 'admin%'` |
+| `CONTAINS` | Match plain substrings on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
+| `OBJECTS x.field` | Project the one-hop referent of an object-reference field instead of the matched source object. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
+| `IS NULL` / `IS NOT NULL` | Test whether an object-reference field is unset or present. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+
+These additions stay intentionally narrower than full MAT OQL: no subqueries, no multi-hop `OBJECTS`, and no broad set algebra. For the full semantics and explicit non-scope, see [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md).
+
 #### Output TOON (for CI/CD)
 ```bash
 mnemosyne-cli analyze heap.hprof --format toon > report.toon
@@ -706,7 +725,7 @@ Once configured, you can ask your AI assistant:
 | `list_tools` | Return machine-readable MCP method descriptions and parameter metadata |
 | `parse_heap` | Parse a heap dump and return a summary; optional `mode` selects deep or streaming overview, and overview responses carry `"mode": "overview"` |
 | `analyze_heap` | Run deep analysis or, in overview mode, return the streaming partial summary instead of a deep `AnalyzeResponse` |
-| `query_heap` | Execute an OQL-style query and return tabular results, including retained instance-field access on query paths |
+| `query_heap` | Execute an OQL-style query and return tabular results, including pseudo-attributes, `OBJECTS`, and structured deep-only feature errors from the shared query engine |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
@@ -814,7 +833,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
-- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, and M7-3 allocation-site flame graphs are complete, and M7-4 OQL targeted expansion is the next active slice
+- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete, and M7-5 comparative benchmarks is the next active slice
 - Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---
