@@ -246,6 +246,59 @@ fn count_occurrences(input: &str, needle: &str) -> usize {
     input.match_indices(needle).count()
 }
 
+fn assert_well_formed_xml_like(input: &str) {
+    let mut stack = Vec::new();
+    let mut cursor = input;
+
+    while let Some(start) = cursor.find('<') {
+        cursor = &cursor[start..];
+
+        if let Some(rest) = cursor.strip_prefix("<![CDATA[") {
+            let end = rest.find("]]>").expect("CDATA must terminate");
+            cursor = &rest[end + 3..];
+            continue;
+        }
+
+        if let Some(rest) = cursor.strip_prefix("<?") {
+            let end = rest
+                .find("?>")
+                .expect("processing instruction must terminate");
+            cursor = &rest[end + 2..];
+            continue;
+        }
+
+        if let Some(rest) = cursor.strip_prefix("<!--") {
+            let end = rest.find("-->").expect("comment must terminate");
+            cursor = &rest[end + 3..];
+            continue;
+        }
+
+        let end = cursor.find('>').expect("tag must terminate");
+        let tag = &cursor[1..end];
+        let trimmed = tag.trim();
+
+        if let Some(rest) = trimmed.strip_prefix('/') {
+            let name = rest.trim();
+            let expected = stack.pop().expect("closing tag must have matching opener");
+            assert_eq!(name, expected, "closing tag order mismatch");
+        } else if !trimmed.starts_with('!') {
+            let self_closing = trimmed.ends_with('/');
+            let name = trimmed
+                .trim_end_matches('/')
+                .split_whitespace()
+                .next()
+                .expect("opening tag name must exist");
+            if !self_closing {
+                stack.push(name.to_string());
+            }
+        }
+
+        cursor = &cursor[end + 1..];
+    }
+
+    assert!(stack.is_empty(), "all XML tags should be closed");
+}
+
 #[test]
 fn test_parse_prints_summary() {
     let fixture = write_fixture(&build_simple_fixture());
@@ -1094,6 +1147,74 @@ fn ci_check_output_to_file_when_flag_set() {
     let written = fs::read_to_string(&output_path).unwrap();
     let json = serde_json::from_str::<Value>(&written).unwrap();
     assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+}
+
+#[test]
+fn ci_check_format_junit_writes_valid_xml_to_file() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-junit.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+    let output_path = sandbox.path().join("mnemosyne-policy.xml");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "junit",
+            "--output",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let written = fs::read_to_string(&output_path).unwrap();
+    assert_well_formed_xml_like(&written);
+    assert!(written.contains("<testsuites>"), "{written}");
+    assert!(written.contains("<testsuite"), "{written}");
+    assert!(written.contains("<testcase"), "{written}");
+}
+
+#[test]
+fn ci_check_format_github_actions_emits_workflow_commands() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-gh-actions.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "github-actions",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("::error file="), "{stdout}");
+    assert!(stdout.contains("title=heap-budget"), "{stdout}");
+    assert!(stdout.contains("Mnemosyne ci-check:"), "{stdout}");
 }
 
 #[test]

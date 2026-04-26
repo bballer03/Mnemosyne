@@ -176,3 +176,60 @@ stage('Archive Mnemosyne reports') {
 ```
 
 If you use the Jenkins HTML Publisher plugin, you can publish `reports/analysis.html` in addition to archiving it.
+
+## 5. Heap regression checks with `mnemosyne ci-check`
+
+Use `mnemosyne-cli ci-check` when the Jenkins pipeline should fail based on a checked-in policy file instead of ad hoc Groovy thresholds. `analyze --profile ci-regression` still produces a richer artifact, but `ci-check` is the deterministic gate and JUnit producer.
+
+```groovy
+stage('Heap regression checks') {
+  steps {
+    script {
+      int ciStatus = sh(
+        returnStatus: true,
+        script: '''
+          set +e
+          "$WORKSPACE/bin/mnemosyne-cli" ci-check "$HEAP_FILE" \
+            --policy .mnemosyne/policy.toml \
+            --format json \
+            --output mnemosyne-policy.json
+          status=$?
+
+          "$WORKSPACE/bin/mnemosyne-cli" ci-check "$HEAP_FILE" \
+            --policy .mnemosyne/policy.toml \
+            --format junit \
+            --output mnemosyne-policy.xml
+          junit_status=$?
+
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          exit "$junit_status"
+        '''
+      )
+
+      junit testResults: 'mnemosyne-policy.xml', allowEmptyResults: false
+      archiveArtifacts artifacts: 'mnemosyne-policy.json, mnemosyne-policy.xml', fingerprint: true, onlyIfSuccessful: false
+
+      if (ciStatus != 0) {
+        error("Mnemosyne ci-check failed with exit code ${ciStatus}")
+      }
+    }
+  }
+}
+```
+
+Exit codes from `mnemosyne-cli ci-check`:
+
+- `0` - policy clean, or only violations below `--fail-on`
+- `1` - at least one violation met or exceeded `--fail-on`
+- `2` - invalid policy file or schema error
+- `3` - unreadable heap dump or analysis failure
+- `4` - explicit `--mode overview` with a deep-only policy rule
+
+Notes:
+
+- `junit 'mnemosyne-policy.xml'` makes each policy rule appear as one test case in Jenkins test reporting.
+- Keep archiving the JSON output even when Jenkins also ingests JUnit. The JSON file is the easier artifact for later diffing or dashboard ingestion.
+- If you already run `mnemosyne-cli analyze --profile ci-regression`, keep that stage for richer artifacts. `ci-check` is the policy gate, not a replacement for the broader analysis report.

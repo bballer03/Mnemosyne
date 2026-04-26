@@ -28,7 +28,10 @@ use mnemosyne_core::{
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     parse_hprof_file_with_options,
-    policy::{render_json_envelope, render_text_report, PolicyRenderContext},
+    policy::{
+        render_github_actions_report, render_json_envelope, render_junit_report,
+        render_text_report, PolicyRenderContext,
+    },
     query::{execute_query, parse_query, CellValue},
     report::{render_overview_report, render_report, ReportArtifact, ReportRequest},
     CoreError, ParseOptions, Policy, PolicyInput, Severity as PolicySeverity,
@@ -238,6 +241,9 @@ enum LeakSeverityArg {
 enum CiCheckFormat {
     Text,
     Json,
+    Junit,
+    #[value(name = "github-actions")]
+    GithubActions,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1255,15 +1261,19 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
         AnalysisMode::Auto => unreachable!("resolved CLI mode should never remain auto"),
     };
 
+    let render_context = PolicyRenderContext {
+        heap_path: &args.heap,
+        policy_path: &args.policy,
+        policy: &policy,
+        result: &result,
+        fail_on,
+    };
+
     let rendered = match args.format {
-        CiCheckFormat::Text => render_text_report(&PolicyRenderContext {
-            heap_path: &args.heap,
-            policy_path: &args.policy,
-            policy: &policy,
-            result: &result,
-            fail_on,
-        }),
+        CiCheckFormat::Text => render_text_report(&render_context),
         CiCheckFormat::Json => render_json_envelope(&result, env!("CARGO_PKG_VERSION"))?,
+        CiCheckFormat::Junit => render_junit_report(&render_context),
+        CiCheckFormat::GithubActions => render_github_actions_report(&render_context),
     };
 
     if let Some(output_path) = args.output.as_deref() {

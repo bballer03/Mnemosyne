@@ -406,3 +406,120 @@ jobs:
 ```
 
 This example is a good starting point when you want one workflow to produce reviewer-facing output and still enforce an automated leak budget.
+
+## 8. Heap regression checks with `mnemosyne ci-check`
+
+Use `mnemosyne-cli ci-check` when you want Mnemosyne itself to own the pass/fail policy decision. `analyze --profile ci-regression` is still useful for producing a richer JSON artifact, but `ci-check` is the deterministic gate that turns policy violations into exit codes, JUnit XML, and GitHub Actions workflow commands.
+
+The workflow below assumes an earlier job captures one or more `.hprof` files and uploads them as artifacts. The matrix fan-out then downloads those heaps, runs policy evaluation with GitHub Actions annotations, writes a JUnit XML report for each heap, uploads the reports, and finally fails each matrix item with the original `ci-check` exit code.
+
+```yaml
+name: Heap Regression Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  capture-heaps:
+    runs-on: ubuntu-latest
+    outputs:
+      heaps: ${{ steps.heap-list.outputs.heaps }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run the test job that writes heap dumps
+        run: |
+          set -euo pipefail
+          mkdir -p heaps
+          ./scripts/capture-test-heaps.sh heaps
+
+      - id: heap-list
+        shell: bash
+        run: echo 'heaps=["checkout.hprof","search.hprof"]' >> "$GITHUB_OUTPUT"
+
+      - name: Upload heap dump artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: heap-dumps
+          path: heaps/*.hprof
+
+  heap-regression:
+    needs: capture-heaps
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        heap: ${{ fromJson(needs.capture-heaps.outputs.heaps) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+
+      - name: Install Mnemosyne CLI
+        run: cargo install mnemosyne-cli --locked --version 0.2.0
+
+      - name: Download heap dump artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: heap-dumps
+          path: heaps
+
+      - name: Emit workflow annotations
+        id: ci_check
+        shell: bash
+        run: |
+          set +e
+          mnemosyne-cli ci-check "heaps/${{ matrix.heap }}" \
+            --policy .mnemosyne/policy.toml \
+            --format github-actions
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Write JUnit XML report
+        id: junit
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports
+          mnemosyne-cli ci-check "heaps/${{ matrix.heap }}" \
+            --policy .mnemosyne/policy.toml \
+            --format junit \
+            --output "reports/${{ matrix.heap }}.xml"
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload JUnit report artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mnemosyne-junit-${{ matrix.heap }}
+          path: reports/${{ matrix.heap }}.xml
+
+      - name: Fail matrix item when the policy gate fails
+        if: steps.ci_check.outputs.status != '0'
+        shell: bash
+        run: exit "${{ steps.ci_check.outputs.status }}"
+```
+
+Exit codes from `mnemosyne-cli ci-check`:
+
+- `0` - policy clean, or only violations below `--fail-on`
+- `1` - at least one violation met or exceeded `--fail-on`
+- `2` - invalid policy file or schema error
+- `3` - unreadable heap dump or analysis failure
+- `4` - explicit `--mode overview` with a deep-only policy rule
+
+Notes:
+
+- The `github-actions` format intentionally emits `file=` but not `line=` today because policy source spans are not tracked yet.
+- If you also want the richer analysis artifact, add a separate `mnemosyne-cli analyze --profile ci-regression --format json --output-file reports/analysis.json` step. That complements `ci-check`; it does not replace it.

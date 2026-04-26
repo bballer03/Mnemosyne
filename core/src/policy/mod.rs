@@ -10,7 +10,10 @@ mod result;
 
 pub use eval::evaluate;
 pub use input::PolicyInput;
-pub use render::{render_json_envelope, render_text_report, PolicyRenderContext};
+pub use render::{
+    render_github_actions_report, render_json_envelope, render_junit_report, render_text_report,
+    PolicyRenderContext,
+};
 pub use result::{Evaluation, PolicyResult, SkipReason, SkippedRule, Violation};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
