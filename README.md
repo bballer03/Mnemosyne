@@ -21,7 +21,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted dia
 
 ![language](https://img.shields.io/badge/language-rust-orange?style=flat-square)
 ![license](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-![status](https://img.shields.io/badge/status-v0.2.0--alpha-yellow?style=flat-square)
+![status](https://img.shields.io/badge/status-v0.3.0-brightgreen?style=flat-square)
 
 ---
 
@@ -142,8 +142,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 
 ## 🛠 Installation
 
-> Mnemosyne v0.3.0 release prep is underway on this branch. The install examples below use the upcoming `0.3.0` artifacts and image tags; **v0.2.0 remains the current published release until the tag is cut**.
-> Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, the repository includes a Homebrew formula for macOS release archives, and tagged releases publish a Docker image to `ghcr.io/bballer03/mnemosyne`.
+> Mnemosyne v0.3.0 shipped on 2026-04-26 and is the current published release.
+> Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `v0.3.0` is live as a GitHub Release with five platform archives, GHCR images tagged `0.3.0`, `0.3`, and `latest`, and a Homebrew formula with Intel + Apple Silicon SHA-256 values.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
@@ -835,8 +835,8 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
-- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks is now partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 release prep is now underway
-- Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
+- M7 is shipped: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks remains 🟡 partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 shipped on 2026-04-26
+- Post-v0.3.0 milestone planning is pending Tech PM review; current follow-on remains evidence-driven around richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---
 
