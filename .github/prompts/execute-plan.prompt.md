@@ -170,7 +170,7 @@ The Testing Agent must:
 3. Add new tests if specified in the testing plan
 4. Verify no existing tests broke
 
-If tests fail, hand findings back to the Implementation Agent for a fix cycle. Do not loop more than **2 fix cycles** — after that, stop and report the failure.
+If tests fail, hand findings back to the Implementation Agent for a fix cycle. Do not loop more than **3 fix cycles per task** (consistent with the [subagent-driven-development](../skills/subagent-driven-development/SKILL.md) BLOCKED-state escalation limit) — after that, stop and report the failure.
 
 ### STEP 6 — Static Analysis
 
@@ -233,7 +233,7 @@ For each task:
 
 - **`cargo clippy`**: clean / N findings (list P0/P1/P2)
 - **`cargo fmt --check`**: clean / needs formatting
-- **Fix cycles used**: 0 / 1 / 2
+- **Fix cycles used**: 0 / 1 / 2 / 3
 
 ### SECTION E — Testing Results
 
@@ -241,7 +241,7 @@ For each task:
 - **`cargo test`**: X passed, Y failed, Z ignored
 - **New tests added**: count and descriptions
 - **Regressions**: none / list
-- **Fix cycles used**: 0 / 1 / 2
+- **Fix cycles used**: 0 / 1 / 2 / 3
 
 ### SECTION F — Documentation Updates
 
@@ -276,7 +276,7 @@ These rules are mandatory and override any conflicting instruction:
 5. **No duplicate work.** If a sub-agent already inspected a file, do not re-inspect it in the same step.
 6. **No scope creep.** Do not fix nearby issues that are outside the milestone's declared scope. Note them for follow-up.
 7. **Minimal diffs.** Instruct sub-agents to make the smallest safe change. Do not rewrite unchanged code.
-8. **No blind retries.** If a step fails, analyze the failure before retrying. Maximum 2 fix cycles per step.
+8. **No blind retries.** If a step fails, analyze the failure before retrying. Maximum 3 fix cycles per step (matches the BLOCKED-state escalation limit in [subagent-driven-development](../skills/subagent-driven-development/SKILL.md)).
 9. **Mandatory handoff contracts.** Every sub-agent must return the 9-field handoff contract. Reject incomplete handoffs.
 10. **Fail fast.** If a prerequisite is unmet, a runtime capability is missing, or a P0 blocker is found, stop immediately and report. Do not work around blockers silently.
 11. **Traceability.** Every change in the progress report must trace back to a task in the plan.
@@ -290,19 +290,19 @@ These rules are mandatory and override any conflicting instruction:
 1. Return the error to the Implementation Agent with the exact compiler output
 2. Implementation Agent fixes within its owned files
 3. Re-run `cargo check` via Testing Agent
-4. If still failing after 2 cycles → stop, report, and recommend manual intervention
+4. If still failing after 3 cycles → stop, report, and recommend manual intervention
 
 ### Tests fail after implementation
 1. Determine if the failure is in new code or a regression in existing code
 2. If new code → hand back to Implementation Agent
 3. If regression → hand back to Implementation Agent with the specific failing test
 4. If test itself needs updating (expected behavior changed per plan) → hand to Testing Agent
-5. Maximum 2 cycles → then stop and report
+5. Maximum 3 fix cycles → then stop and report
 
 ### Clippy P0 finding
 1. Route the specific finding back to the Implementation Agent
 2. Re-run clippy via Static Analysis Agent after the fix
-3. Maximum 2 cycles → then stop and report
+3. Maximum 3 fix cycles → then stop and report
 
 ### Sub-agent reports a blocker
 1. Record the blocker in the progress report
@@ -318,4 +318,4 @@ These rules are mandatory and override any conflicting instruction:
 - Does NOT push to git. The commit message is presented for user approval.
 - Does NOT approve breaking changes. Those require explicit user confirmation.
 - Does NOT expand scope. If new work is discovered, it goes into a follow-up plan.
-- Does NOT run indefinitely. Maximum 2 fix cycles per step, then stop and report.
+- Does NOT run indefinitely. Maximum 3 fix cycles per step, then stop and report.

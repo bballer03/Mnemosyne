@@ -111,6 +111,8 @@ after all tasks:
 
 Never silently retry the same subagent with the same prompt after BLOCKED.
 
+**Hard cap:** maximum **3 fix cycles per task** before escalating to the user. This limit is shared with [.github/prompts/execute-plan.prompt.md](../../prompts/execute-plan.prompt.md) — both must agree. After 3 cycles, stop and report rather than looping further.
+
 ## Subagent dispatch contract
 
 Every dispatch must provide the subagent:

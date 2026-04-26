@@ -1,5 +1,7 @@
 # Mnemosyne Skills Library
 
+> **Last updated:** 2026-04-26 · See also [agents](../agents/README.md), [prompts](../prompts/), [copilot-instructions](../copilot-instructions.md).
+
 Skills are **mandatory workflow gates** that Mnemosyne agents invoke during their work. Each skill is a self-contained procedure with bundled context. Agents reference required skills in their `## Skills Used` section and must follow them when triggered.
 
 ## What lives here

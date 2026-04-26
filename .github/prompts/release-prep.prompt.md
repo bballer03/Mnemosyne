@@ -236,7 +236,13 @@ Rules:
 - Ensure capability checkmarks match what's being released
 - Do not add capabilities that aren't implemented — only reflect reality
 
-### 3.4 Update README.md (if needed)
+### 3.4 Update SECURITY.md supported versions
+
+- Update the **Supported Versions** table in [SECURITY.md](../../SECURITY.md) to include `{target_version}.x` as supported
+- If the new release ends support for an older line, mark that line as no longer supported
+- Do not invent new policy text — only update the table
+
+### 3.5 Update README.md (if needed)
 
 - If new CLI commands, flags, or major features were added, verify the README reflects them
 - If installation instructions reference a version, update to target version

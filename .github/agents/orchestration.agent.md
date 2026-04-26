@@ -17,7 +17,7 @@ agents:
   - Tech PM
   - GitHub Ops
   - Security
-model: Claude Opus 4.6 (copilot)
+model: Claude Opus 4.7 (copilot)
 target: vscode
 handoffs:
   - label: Design Gate

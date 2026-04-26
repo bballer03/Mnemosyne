@@ -6,7 +6,6 @@ tools: [search, codebase, changes, usages]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode
-user-invocable: true
 handoffs:
   - label: Return To Orchestration
     agent: Orchestration

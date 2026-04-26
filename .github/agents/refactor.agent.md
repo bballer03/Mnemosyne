@@ -2,7 +2,7 @@
 name: Refactor
 description: Perform cleanup-only Mnemosyne refactors after correctness and contract work are stable.
 argument-hint: Describe the cleanup target, the proof that behavior is already stable, and which files are safe to refactor.
-tools: [search, edit, changes, codebase, problems, usages]
+tools: [search, edit, changes, codebase, problems, usages, runInTerminal]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

@@ -4,7 +4,7 @@ description: Technical Product Manager agent that reviews the project, proposes 
 argument-hint: Describe the product question, planning horizon, or area of the project to evaluate for roadmap and feature proposals.
 tools: ['changes', 'codebase', 'editFiles', 'search', 'usages']
 agents: []
-model: Claude Opus 4.6 (copilot)
+model: Claude Opus 4.7 (copilot)
 target: vscode
 handoffs:
   - label: Back To Orchestration

@@ -1,5 +1,27 @@
 # GitHub Copilot Instructions
 
+> **Last updated:** 2026-04-26 · **Source of truth for:** agent workflow, design gate, handoff contract, commit conventions.
+> When this file conflicts with [`docs/agent-workflow.md`](../docs/agent-workflow.md), this file wins.
+
+## TL;DR (read this even if you skip the rest)
+
+1. **Design gate first.** No source-code edits without a design doc under `docs/design/` and a Design Consulting verdict of READY.
+2. **Orchestration owns routing.** Only the Orchestration Agent decomposes tasks and assigns file ownership. Sub-agents never claim files outside their grant.
+3. **Mandatory 9-field handoff.** Every sub-agent returns: task received · scope · non-scope · files inspected · files owned · changes made · risks/blockers · follow-up · recommended next agent.
+4. **Fail fast.** If a runtime tool (write, terminal, MCP) is missing, name it and stop. No silent fallback to patch-only output.
+5. **No scope creep.** Adjacent issues become follow-up notes, not in-flight commits.
+6. **Verify before claiming done.** Run `cargo {check,test,clippy --workspace --all-targets -- -D warnings,fmt --all -- --check}` and quote the output.
+
+## Quick links
+
+- Issue templates → [`.github/ISSUE_TEMPLATE/`](ISSUE_TEMPLATE/) (`bug_report.yml`, `heap_dump_bug.yml`, `feature_request.yml`)
+- PR template → [`PULL_REQUEST_TEMPLATE.md`](PULL_REQUEST_TEMPLATE.md) (risk + contract + perf + rollback gates)
+- Agents → [`.github/agents/`](agents/) ([roster](agents/README.md))
+- Skills → [`.github/skills/`](skills/) ([library](skills/README.md))
+- Prompts → [`.github/prompts/`](prompts/) (`/brainstorm`, `/write-plan`, `/execute-plan`, `/plan-and-execute`, `/review-milestone`, `/release-prep`, `/finish-branch`)
+- Code ownership → [`CODEOWNERS`](CODEOWNERS)
+- Labels → [`labels.yml`](labels.yml)
+
 ## Project Context
 
 Mnemosyne is an existing Rust workspace for JVM heap analysis with:
@@ -233,17 +255,39 @@ After editing:
 
 ## Commit Messages
 
-When generating commit messages, keep them professional but add a touch of humor related to:
-- Greek mythology (especially memory-related deities)
-- Memory management puns
-- Heap dump jokes
-- AI/LLM references
+Mnemosyne uses **Conventional Commits**. Format:
+
+```
+<type>(<optional scope>): <subject ≤ 50 chars>
+
+<optional body — wrap at 72 chars>
+
+<optional footer: BREAKING CHANGE, Closes #123>
+```
+
+| Type | Use for |
+|------|---------|
+| `feat` | New user-visible behavior |
+| `fix` | Bug fix |
+| `perf` | Performance change |
+| `refactor` | Cleanup, no behavior change |
+| `test` | Test-only change |
+| `docs` | Documentation-only |
+| `build` | Dockerfile / packaging / Cargo metadata (also used by Dependabot for `docker`) |
+| `ci` | GitHub Actions workflows / dependabot config |
+| `deps` | Dependency bump (also used by Dependabot for `cargo`) |
+| `ui` | Changes scoped to `ui/` (also used by Dependabot for `npm`) |
+| `release` | Version-bump + release-prep commits |
+| `chore` | Anything else with no user impact |
+
+**Subject line:** lowercase, imperative, no trailing period. **Body:** explain the WHY, not the WHAT. **Breaking changes:** must include `BREAKING CHANGE: <description>` in the footer AND mark the type with `!` (e.g., `feat(cli)!: rename --leak to --leak-detect`).
+
+**Tone:** professional first. A subtle Greek-mythology / memory pun in the body or footer is welcome but never at the cost of clarity. The subject line stays factual.
 
 Examples:
-- "feat: Mnemosyne remembers things now (unlike my production server)"
-- "fix: stopped the heap from forgetting to free itself"
-- "refactor: taught the parser to remember where it left off"
-- "docs: added wisdom from the goddess of memory herself"
-- "perf: made heap analysis faster than Zeus's lightning bolt"
 
-Keep it light and fun, but ensure the actual change description is clear and informative.
+- `feat(parser): support HPROF 1.0.2 record tags`
+- `fix(graph): preserve dominator depth across reachability passes`
+- `perf(leak): fold scan and weigh into one traversal — Mnemosyne hates wasted cycles`
+- `refactor(report)!: rename "summary" key to "overview"\n\nBREAKING CHANGE: report consumers must update key lookups.`
+- `ci: pin actions/checkout to commit SHA`

@@ -1,4 +1,5 @@
 ---
+mode: agent
 description: "Translate a spec from docs/superpowers/specs/ into a bite-sized plan under docs/superpowers/plans/. Each plan task is a 2-5 minute RED → GREEN → REFACTOR cycle. Use this after /brainstorm and before /execute-plan."
 agent: "Orchestration"
 argument-hint: "Name the feature or pass the spec file path. The orchestrator picks the most recent matching spec if no path is given."
@@ -9,6 +10,17 @@ tools:
   - usages
   - editFiles
 ---
+
+## Contract
+
+| | |
+|---|---|
+| **Inputs** | A spec under `docs/superpowers/specs/`. Feature name OR explicit spec path. |
+| **Outputs** | One plan file `docs/superpowers/plans/YYYY-MM-DD-<feature>.md` with ordered RED→GREEN→REFACTOR tasks, every task self-contained. |
+| **Success criteria** | Every task ≤5 min; every task names exact `cargo test ...` command; every behavior-changing task starts RED; reviewer assigned per task. |
+| **Exit criteria** | Plan saved AND task count + reviewer assignments reported AND next command (`/execute-plan`) recommended. |
+| **Failure modes** | No matching spec → stop, recommend `/brainstorm`. Multiple matching specs → list and ask. |
+| **Out of scope** | Implementation, multi-behavior tasks, per-task human approvals. |
 
 You are the plan-writer for Mnemosyne.
 

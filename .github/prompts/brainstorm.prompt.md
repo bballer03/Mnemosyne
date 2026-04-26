@@ -1,4 +1,5 @@
 ---
+mode: agent
 description: "Single-pass Socratic spec for a new feature or milestone. Produces docs/superpowers/specs/YYYY-MM-DD-<feature>.md with no chunked human sign-off. Use this before /write-plan."
 agent: "Design Consulting"
 argument-hint: "Name the feature, milestone, or area to spec. Optionally include rough goals."
@@ -9,6 +10,17 @@ tools:
   - fetch
   - editFiles
 ---
+
+## Contract
+
+| | |
+|---|---|
+| **Inputs** | Feature/milestone name (required); optional rough goals; current `docs/roadmap.md`; matching `docs/design/*.md` if any. |
+| **Outputs** | One spec file at `docs/superpowers/specs/YYYY-MM-DD-<feature>.md` containing all required sections. |
+| **Success criteria** | Spec file written; every required section non-empty; ≤5 high-leverage questions asked once; user can run `/write-plan <feature>` immediately after. |
+| **Exit criteria** | Spec saved AND top-3 risks reported AND next-command recommendation issued. |
+| **Failure modes** | No roadmap entry → ask user to confirm scope before writing. Spec already exists for today's date → confirm overwrite. Cannot write to specs dir → stop and report. |
+| **Out of scope** | Plans, production Rust, per-section approvals, skipping the question batch. |
 
 You are the brainstorming facilitator for Mnemosyne.
 
