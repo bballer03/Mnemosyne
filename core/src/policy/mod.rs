@@ -102,6 +102,8 @@ pub struct PolicyRule {
     pub severity_filter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leak_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -212,6 +214,8 @@ struct RawPolicyRule {
     severity_filter: Option<String>,
     #[serde(default)]
     scope: Option<String>,
+    #[serde(default)]
+    leak_id: Option<String>,
 }
 
 impl RawPolicyRule {
@@ -229,6 +233,7 @@ impl RawPolicyRule {
             kind: self.kind,
             severity_filter: self.severity_filter,
             scope: self.scope,
+            leak_id: self.leak_id,
         }
     }
 }
