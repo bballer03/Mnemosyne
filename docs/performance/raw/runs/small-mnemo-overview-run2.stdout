@@ -1,0 +1,1343 @@
+{
+  "heap_path": "/mnt/d/Mnemosyne/resources/test-fixtures/heap.hprof",
+  "total_bytes_processed": 274640397,
+  "total_size_bytes": 274640397,
+  "total_record_count": 41476,
+  "total_instances": 3284580,
+  "loaded_class_count": 728,
+  "class_stats": {
+    "entries": [
+      {
+        "class_id": 18446744073709551368,
+        "class_name": "<byte[]>",
+        "instance_count": 1008220,
+        "approx_shallow_bytes": 116728154
+      },
+      {
+        "class_id": 4292873424,
+        "class_name": "java/lang/String",
+        "instance_count": 1007768,
+        "approx_shallow_bytes": 38295184
+      },
+      {
+        "class_id": 3792403928,
+        "class_name": "SyntheticHeapApp$Node",
+        "instance_count": 304000,
+        "approx_shallow_bytes": 30400000
+      },
+      {
+        "class_id": 4292961000,
+        "class_name": "java/util/HashMap$Node",
+        "instance_count": 305016,
+        "approx_shallow_bytes": 15860832
+      },
+      {
+        "class_id": 4292950656,
+        "class_name": "java/util/ArrayList$SubList",
+        "instance_count": 304000,
+        "approx_shallow_bytes": 15808000
+      },
+      {
+        "class_id": 3792404152,
+        "class_name": "SyntheticHeapApp$MiniPayload",
+        "instance_count": 304000,
+        "approx_shallow_bytes": 14592000
+      },
+      {
+        "class_id": 18446744073709551370,
+        "class_name": "<int[]>",
+        "instance_count": 1701,
+        "approx_shallow_bytes": 13383197
+      },
+      {
+        "class_id": 4292897416,
+        "class_name": "[Ljava/lang/Object;",
+        "instance_count": 1435,
+        "approx_shallow_bytes": 8103576
+      },
+      {
+        "class_id": 18446744073709551365,
+        "class_name": "<char[]>",
+        "instance_count": 37936,
+        "approx_shallow_bytes": 7991764
+      },
+      {
+        "class_id": 4292960888,
+        "class_name": "[Ljava/util/HashMap$Node;",
+        "instance_count": 277,
+        "approx_shallow_bytes": 5027064
+      },
+      {
+        "class_id": 3792404040,
+        "class_name": "[LSyntheticHeapApp$Node;",
+        "instance_count": 19,
+        "approx_shallow_bytes": 2432456
+      },
+      {
+        "class_id": 4292947112,
+        "class_name": "java/util/concurrent/ConcurrentHashMap$Node",
+        "instance_count": 1208,
+        "approx_shallow_bytes": 62816
+      },
+      {
+        "class_id": 4293083400,
+        "class_name": "jdk/internal/org/objectweb/asm/SymbolTable$Entry",
+        "instance_count": 640,
+        "approx_shallow_bytes": 51200
+      },
+      {
+        "class_id": 4292947360,
+        "class_name": "[Ljava/util/concurrent/ConcurrentHashMap$Node;",
+        "instance_count": 22,
+        "approx_shallow_bytes": 46736
+      },
+      {
+        "class_id": 4293083512,
+        "class_name": "[Ljdk/internal/org/objectweb/asm/SymbolTable$Entry;",
+        "instance_count": 28,
+        "approx_shallow_bytes": 36896
+      },
+      {
+        "class_id": 4292894096,
+        "class_name": "java/lang/invoke/MethodType",
+        "instance_count": 391,
+        "approx_shallow_bytes": 28152
+      },
+      {
+        "class_id": 4293012712,
+        "class_name": "[Ljava/lang/ref/SoftReference;",
+        "instance_count": 196,
+        "approx_shallow_bytes": 27440
+      },
+      {
+        "class_id": 4292894352,
+        "class_name": "java/lang/invoke/MemberName",
+        "instance_count": 355,
+        "approx_shallow_bytes": 24140
+      },
+      {
+        "class_id": 4292935072,
+        "class_name": "java/lang/invoke/LambdaForm$Name",
+        "instance_count": 353,
+        "approx_shallow_bytes": 20474
+      },
+      {
+        "class_id": 4292897304,
+        "class_name": "[Ljava/lang/Class;",
+        "instance_count": 425,
+        "approx_shallow_bytes": 20424
+      },
+      {
+        "class_id": 4292911968,
+        "class_name": "java/util/HashMap",
+        "instance_count": 280,
+        "approx_shallow_bytes": 20160
+      },
+      {
+        "class_id": 4292921656,
+        "class_name": "java/lang/module/ModuleDescriptor$Exports",
+        "instance_count": 362,
+        "approx_shallow_bytes": 17376
+      },
+      {
+        "class_id": 4292940536,
+        "class_name": "java/lang/invoke/MethodType$ConcurrentWeakInternSet$WeakEntry",
+        "instance_count": 277,
+        "approx_shallow_bytes": 16620
+      },
+      {
+        "class_id": 4293079776,
+        "class_name": "jdk/internal/math/FDBigInteger",
+        "instance_count": 341,
+        "approx_shallow_bytes": 13981
+      },
+      {
+        "class_id": 4292938984,
+        "class_name": "[Ljava/lang/invoke/MethodHandle;",
+        "instance_count": 34,
+        "approx_shallow_bytes": 12992
+      },
+      {
+        "class_id": 4292937288,
+        "class_name": "[Ljava/lang/invoke/LambdaForm$Name;",
+        "instance_count": 139,
+        "approx_shallow_bytes": 11024
+      },
+      {
+        "class_id": 4292954512,
+        "class_name": "java/util/ImmutableCollections$Set12",
+        "instance_count": 249,
+        "approx_shallow_bytes": 9960
+      },
+      {
+        "class_id": 4292929624,
+        "class_name": "java/net/URI",
+        "instance_count": 62,
+        "approx_shallow_bytes": 9424
+      },
+      {
+        "class_id": 4293082456,
+        "class_name": "jdk/internal/org/objectweb/asm/MethodWriter",
+        "instance_count": 26,
+        "approx_shallow_bytes": 9100
+      },
+      {
+        "class_id": 4292877360,
+        "class_name": "java/lang/Long",
+        "instance_count": 257,
+        "approx_shallow_bytes": 8224
+      },
+      {
+        "class_id": 4292979920,
+        "class_name": "java/lang/module/ModuleDescriptor$Requires",
+        "instance_count": 132,
+        "approx_shallow_bytes": 7392
+      },
+      {
+        "class_id": 4292876960,
+        "class_name": "java/lang/Integer",
+        "instance_count": 262,
+        "approx_shallow_bytes": 7336
+      },
+      {
+        "class_id": 4292910176,
+        "class_name": "java/lang/module/ModuleDescriptor",
+        "instance_count": 62,
+        "approx_shallow_bytes": 7316
+      },
+      {
+        "class_id": 4292981344,
+        "class_name": "jdk/internal/module/ModuleReferenceImpl",
+        "instance_count": 62,
+        "approx_shallow_bytes": 6696
+      },
+      {
+        "class_id": 4292876656,
+        "class_name": "java/lang/Short",
+        "instance_count": 256,
+        "approx_shallow_bytes": 6656
+      },
+      {
+        "class_id": 4292876352,
+        "class_name": "java/lang/Byte",
+        "instance_count": 266,
+        "approx_shallow_bytes": 6650
+      },
+      {
+        "class_id": 4292895208,
+        "class_name": "java/lang/invoke/LambdaForm",
+        "instance_count": 85,
+        "approx_shallow_bytes": 6630
+      },
+      {
+        "class_id": 4292935280,
+        "class_name": "java/lang/invoke/LambdaForm$NamedFunction",
+        "instance_count": 134,
+        "approx_shallow_bytes": 6432
+      },
+      {
+        "class_id": 4292910672,
+        "class_name": "java/util/HashSet",
+        "instance_count": 197,
+        "approx_shallow_bytes": 6304
+      },
+      {
+        "class_id": 4292932696,
+        "class_name": "java/lang/invoke/MethodTypeForm",
+        "instance_count": 103,
+        "approx_shallow_bytes": 6180
+      },
+      {
+        "class_id": 4292873120,
+        "class_name": "java/lang/Module",
+        "instance_count": 68,
+        "approx_shallow_bytes": 6052
+      },
+      {
+        "class_id": 4292878832,
+        "class_name": "java/lang/ref/SoftReference",
+        "instance_count": 84,
+        "approx_shallow_bytes": 5376
+      },
+      {
+        "class_id": 4292954648,
+        "class_name": "java/util/ImmutableCollections$SetN",
+        "instance_count": 137,
+        "approx_shallow_bytes": 4932
+      },
+      {
+        "class_id": 4292894704,
+        "class_name": "java/lang/invoke/ResolvedMethodName",
+        "instance_count": 198,
+        "approx_shallow_bytes": 4752
+      },
+      {
+        "class_id": 4293009808,
+        "class_name": "jdk/internal/org/objectweb/asm/Label",
+        "instance_count": 49,
+        "approx_shallow_bytes": 4704
+      },
+      {
+        "class_id": 4292899344,
+        "class_name": "java/util/concurrent/ConcurrentHashMap",
+        "instance_count": 40,
+        "approx_shallow_bytes": 4320
+      },
+      {
+        "class_id": 4292880648,
+        "class_name": "java/lang/StringBuilder",
+        "instance_count": 116,
+        "approx_shallow_bytes": 4292
+      },
+      {
+        "class_id": 4292930272,
+        "class_name": "jdk/internal/org/objectweb/asm/ClassWriter",
+        "instance_count": 17,
+        "approx_shallow_bytes": 4012
+      },
+      {
+        "class_id": 4292951392,
+        "class_name": "java/util/ImmutableCollections$List12",
+        "instance_count": 95,
+        "approx_shallow_bytes": 3800
+      },
+      {
+        "class_id": 4292933760,
+        "class_name": "java/lang/invoke/LambdaForm$Kind",
+        "instance_count": 68,
+        "approx_shallow_bytes": 3536
+      },
+      {
+        "class_id": 4293082680,
+        "class_name": "jdk/internal/org/objectweb/asm/Frame",
+        "instance_count": 44,
+        "approx_shallow_bytes": 3520
+      },
+      {
+        "class_id": 4292899656,
+        "class_name": "java/util/ArrayList",
+        "instance_count": 87,
+        "approx_shallow_bytes": 3480
+      },
+      {
+        "class_id": 4292944736,
+        "class_name": "jdk/internal/loader/BuiltinClassLoader$LoadedModule",
+        "instance_count": 61,
+        "approx_shallow_bytes": 3416
+      },
+      {
+        "class_id": 4292933272,
+        "class_name": "java/lang/invoke/DirectMethodHandle$Accessor",
+        "instance_count": 47,
+        "approx_shallow_bytes": 3337
+      },
+      {
+        "class_id": 4292875376,
+        "class_name": "java/lang/Character",
+        "instance_count": 128,
+        "approx_shallow_bytes": 3328
+      },
+      {
+        "class_id": 4293081840,
+        "class_name": "jdk/internal/org/objectweb/asm/ByteVector",
+        "instance_count": 89,
+        "approx_shallow_bytes": 3204
+      },
+      {
+        "class_id": 4292874040,
+        "class_name": "java/lang/Thread",
+        "instance_count": 19,
+        "approx_shallow_bytes": 3097
+      },
+      {
+        "class_id": 4293079968,
+        "class_name": "[Ljdk/internal/math/FDBigInteger;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2744
+      },
+      {
+        "class_id": 4292893168,
+        "class_name": "java/lang/invoke/DirectMethodHandle",
+        "instance_count": 44,
+        "approx_shallow_bytes": 2596
+      },
+      {
+        "class_id": 4293081688,
+        "class_name": "jdk/internal/org/objectweb/asm/AnnotationWriter",
+        "instance_count": 33,
+        "approx_shallow_bytes": 2541
+      },
+      {
+        "class_id": 4292929264,
+        "class_name": "java/lang/module/ResolvedModule",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 4292998784,
+        "class_name": "jdk/internal/module/ServicesCatalog$ServiceProvider",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 4292983152,
+        "class_name": "jdk/internal/module/SystemModuleFinders$2",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 18446744073709551371,
+        "class_name": "<long[]>",
+        "instance_count": 10,
+        "approx_shallow_bytes": 2434
+      },
+      {
+        "class_id": 4292979784,
+        "class_name": "java/lang/module/ModuleDescriptor$Provides",
+        "instance_count": 60,
+        "approx_shallow_bytes": 2400
+      },
+      {
+        "class_id": 4292872392,
+        "class_name": "java/lang/Object",
+        "instance_count": 97,
+        "approx_shallow_bytes": 2328
+      },
+      {
+        "class_id": 4292896520,
+        "class_name": "[Ljava/lang/Long;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 4292896744,
+        "class_name": "[Ljava/lang/Short;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 4292896408,
+        "class_name": "[Ljava/lang/Integer;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 4292896856,
+        "class_name": "[Ljava/lang/Byte;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 3792404264,
+        "class_name": "SyntheticHeapApp$Cluster",
+        "instance_count": 19,
+        "approx_shallow_bytes": 2052
+      },
+      {
+        "class_id": 4292983264,
+        "class_name": "jdk/internal/module/SystemModuleFinders$3",
+        "instance_count": 60,
+        "approx_shallow_bytes": 1920
+      },
+      {
+        "class_id": 4293008768,
+        "class_name": "jdk/internal/org/objectweb/asm/Type",
+        "instance_count": 41,
+        "approx_shallow_bytes": 1804
+      },
+      {
+        "class_id": 4292906192,
+        "class_name": "java/io/ObjectStreamField",
+        "instance_count": 26,
+        "approx_shallow_bytes": 1794
+      },
+      {
+        "class_id": 4293081976,
+        "class_name": "jdk/internal/org/objectweb/asm/SymbolTable",
+        "instance_count": 17,
+        "approx_shallow_bytes": 1700
+      },
+      {
+        "class_id": 4292881384,
+        "class_name": "java/security/AccessControlContext",
+        "instance_count": 22,
+        "approx_shallow_bytes": 1672
+      },
+      {
+        "class_id": 4292937944,
+        "class_name": "java/lang/invoke/VarHandle$AccessMode",
+        "instance_count": 31,
+        "approx_shallow_bytes": 1612
+      },
+      {
+        "class_id": 4292879944,
+        "class_name": "java/lang/reflect/Field",
+        "instance_count": 13,
+        "approx_shallow_bytes": 1586
+      },
+      {
+        "class_id": 4293010544,
+        "class_name": "java/lang/invoke/LambdaFormEditor$Transform",
+        "instance_count": 19,
+        "approx_shallow_bytes": 1520
+      },
+      {
+        "class_id": 4292936456,
+        "class_name": "[Lsun/invoke/util/Wrapper;",
+        "instance_count": 16,
+        "approx_shallow_bytes": 1440
+      },
+      {
+        "class_id": 4293083040,
+        "class_name": "jdk/internal/org/objectweb/asm/FieldWriter",
+        "instance_count": 13,
+        "approx_shallow_bytes": 1352
+      },
+      {
+        "class_id": 4292897528,
+        "class_name": "[Ljava/lang/String;",
+        "instance_count": 23,
+        "approx_shallow_bytes": 1328
+      },
+      {
+        "class_id": 4292936680,
+        "class_name": "java/lang/invoke/InvokerBytecodeGenerator",
+        "instance_count": 11,
+        "approx_shallow_bytes": 1320
+      },
+      {
+        "class_id": 4292951528,
+        "class_name": "java/util/ImmutableCollections$ListN",
+        "instance_count": 39,
+        "approx_shallow_bytes": 1287
+      },
+      {
+        "class_id": 4292872536,
+        "class_name": "java/lang/Class",
+        "instance_count": 9,
+        "approx_shallow_bytes": 1260
+      },
+      {
+        "class_id": 4292950544,
+        "class_name": "java/util/ArrayList$Itr",
+        "instance_count": 28,
+        "approx_shallow_bytes": 1232
+      },
+      {
+        "class_id": 4292936224,
+        "class_name": "[Ljava/lang/invoke/LambdaForm;",
+        "instance_count": 3,
+        "approx_shallow_bytes": 1224
+      },
+      {
+        "class_id": 4292998592,
+        "class_name": "java/util/concurrent/CopyOnWriteArrayList",
+        "instance_count": 30,
+        "approx_shallow_bytes": 1200
+      },
+      {
+        "class_id": 4292907640,
+        "class_name": "java/lang/invoke/MethodHandles$Lookup",
+        "instance_count": 23,
+        "approx_shallow_bytes": 1196
+      },
+      {
+        "class_id": 4293007808,
+        "class_name": "java/lang/invoke/InnerClassLambdaMetafactory",
+        "instance_count": 6,
+        "approx_shallow_bytes": 1194
+      },
+      {
+        "class_id": 4293045976,
+        "class_name": "sun/util/locale/BaseLocale",
+        "instance_count": 19,
+        "approx_shallow_bytes": 1140
+      },
+      {
+        "class_id": 4293003240,
+        "class_name": "java/lang/invoke/BoundMethodHandle$SpeciesData",
+        "instance_count": 11,
+        "approx_shallow_bytes": 1056
+      },
+      {
+        "class_id": 4292896632,
+        "class_name": "[Ljava/lang/Character;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 1048
+      },
+      {
+        "class_id": 4292903128,
+        "class_name": "java/util/Locale",
+        "instance_count": 19,
+        "approx_shallow_bytes": 988
+      },
+      {
+        "class_id": 4292945456,
+        "class_name": "java/util/jar/Attributes$Name",
+        "instance_count": 26,
+        "approx_shallow_bytes": 936
+      },
+      {
+        "class_id": 4292913080,
+        "class_name": "sun/invoke/util/Wrapper",
+        "instance_count": 10,
+        "approx_shallow_bytes": 900
+      },
+      {
+        "class_id": 18446744073709551364,
+        "class_name": "<boolean[]>",
+        "instance_count": 4,
+        "approx_shallow_bytes": 836
+      },
+      {
+        "class_id": 4292888752,
+        "class_name": "java/lang/OutOfMemoryError",
+        "instance_count": 12,
+        "approx_shallow_bytes": 816
+      },
+      {
+        "class_id": 4293083176,
+        "class_name": "[Ljdk/internal/org/objectweb/asm/Type;",
+        "instance_count": 23,
+        "approx_shallow_bytes": 800
+      },
+      {
+        "class_id": 4293005888,
+        "class_name": "java/lang/invoke/BoundMethodHandle$Species_LL",
+        "instance_count": 11,
+        "approx_shallow_bytes": 726
+      }
+    ],
+    "truncated": true
+  },
+  "top_instances": [
+    {
+      "object_id": 4118282768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 523761
+    },
+    {
+      "object_id": 3850383656,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 511705
+    },
+    {
+      "object_id": 3965222352,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 492081
+    },
+    {
+      "object_id": 3929596368,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 466481
+    },
+    {
+      "object_id": 3897622112,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 453849
+    },
+    {
+      "object_id": 3964737488,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 452657
+    },
+    {
+      "object_id": 3896592472,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 434913
+    },
+    {
+      "object_id": 3898164400,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 430529
+    },
+    {
+      "object_id": 3897127904,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 418449
+    },
+    {
+      "object_id": 3849953344,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 417729
+    },
+    {
+      "object_id": 3964257552,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 408305
+    },
+    {
+      "object_id": 3848920984,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 401513
+    },
+    {
+      "object_id": 3849456704,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 390081
+    },
+    {
+      "object_id": 3928638472,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 375801
+    },
+    {
+      "object_id": 3827310696,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 357217
+    },
+    {
+      "object_id": 3929184008,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 354553
+    },
+    {
+      "object_id": 4117930720,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 351521
+    },
+    {
+      "object_id": 3800090184,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 324681
+    },
+    {
+      "object_id": 3872595000,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 320457
+    },
+    {
+      "object_id": 3928187168,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 302817
+    },
+    {
+      "object_id": 3799443168,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 298561
+    },
+    {
+      "object_id": 3896202128,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 295649
+    },
+    {
+      "object_id": 3963323144,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 294137
+    },
+    {
+      "object_id": 3848511552,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 286657
+    },
+    {
+      "object_id": 3781718880,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3784310784,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3796377248,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3821556160,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3833133584,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3845490312,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3864894024,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3866115848,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3878790360,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3884673496,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3903848448,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3906180968,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3907212712,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3913556224,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3917702496,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3947708664,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3948937216,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 4064300504,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 4137490856,
+      "class_id": 4292960888,
+      "class_name": "[Ljava/util/HashMap$Node;",
+      "approx_retained_bytes": 262168
+    },
+    {
+      "object_id": 3799116672,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 249617
+    },
+    {
+      "object_id": 3799793096,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 246329
+    },
+    {
+      "object_id": 3962849992,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 243001
+    },
+    {
+      "object_id": 3898881896,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 242641
+    },
+    {
+      "object_id": 3927750608,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 215089
+    },
+    {
+      "object_id": 3872181248,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 209921
+    },
+    {
+      "object_id": 3810267768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 191545
+    },
+    {
+      "object_id": 3962377448,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 191257
+    },
+    {
+      "object_id": 3809615984,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 188193
+    },
+    {
+      "object_id": 3895795768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 183041
+    },
+    {
+      "object_id": 3871683896,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 182985
+    },
+    {
+      "object_id": 3827130424,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 171977
+    },
+    {
+      "object_id": 3798842496,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 148353
+    },
+    {
+      "object_id": 3875386192,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3876304520,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3877424408,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3879078600,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3879912136,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3881144872,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3883019264,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3884300592,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3884609432,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3900178432,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3900366336,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3900638128,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3902799872,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3905752080,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3906116880,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3908459432,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3912514464,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3913285632,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3913882168,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3913946208,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3917606048,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3923072624,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3931635736,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3938162280,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3938226392,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3939727592,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3939791680,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3940548608,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3945554400,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3945659080,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3946890200,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3947644648,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3953428904,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 3958265080,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4063232000,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4063296016,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4064770824,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4065114176,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4069309480,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4077944640,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4137193184,
+      "class_id": 3792404040,
+      "class_name": "[LSyntheticHeapApp$Node;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4137257224,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4137321312,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    },
+    {
+      "object_id": 4137385352,
+      "class_id": 4292897416,
+      "class_name": "[Ljava/lang/Object;",
+      "approx_retained_bytes": 128024
+    }
+  ],
+  "gc_root_counts": {
+    "JniGlobal": 51,
+    "ThreadObject": 7,
+    "StickyClass": 580,
+    "JavaFrame": 16
+  },
+  "thread_frames": [
+    {
+      "thread_serial": 1,
+      "class_name": "java/lang/Thread",
+      "method_name": "sleep",
+      "source_file": "Thread.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "java/lang/Thread",
+      "method_name": "sleep",
+      "source_file": "Thread.java",
+      "line_number": 344
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "java/util/concurrent/TimeUnit",
+      "method_name": "sleep",
+      "source_file": "TimeUnit.java",
+      "line_number": 446
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "SyntheticHeapApp",
+      "method_name": "main",
+      "source_file": "SyntheticHeapApp.java",
+      "line_number": 30
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference",
+      "method_name": "waitForReferencePendingList",
+      "source_file": "Reference.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference",
+      "method_name": "processPendingReferences",
+      "source_file": "Reference.java",
+      "line_number": 253
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference$ReferenceHandler",
+      "method_name": "run",
+      "source_file": "Reference.java",
+      "line_number": 215
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/Object",
+      "method_name": "wait",
+      "source_file": "Object.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 155
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 176
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/Finalizer$FinalizerThread",
+      "method_name": "run",
+      "source_file": "Finalizer.java",
+      "line_number": 172
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/Object",
+      "method_name": "wait",
+      "source_file": "Object.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 155
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "jdk/internal/ref/CleanerImpl",
+      "method_name": "run",
+      "source_file": "CleanerImpl.java",
+      "line_number": 140
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/Thread",
+      "method_name": "run",
+      "source_file": "Thread.java",
+      "line_number": 840
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "jdk/internal/misc/InnocuousThread",
+      "method_name": "run",
+      "source_file": "InnocuousThread.java",
+      "line_number": 162
+    }
+  ],
+  "truncated": true,
+  "options": {
+    "top_n_classes": 100,
+    "top_n_instances": 100,
+    "max_class_table_size": 200000,
+    "max_thread_frames": 1024
+  },
+  "provenance": []
+}

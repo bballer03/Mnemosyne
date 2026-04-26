@@ -1,0 +1,18 @@
+Linux DESKTOP-8KSNRFK 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 GNU/Linux
+16
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       1.3Gi        12Gi       5.0Mi       2.2Gi        14Gi
+Swap:          4.0Gi          0B       4.0Gi
+Filesystem      Size  Used Avail Use% Mounted on
+D:\             954G  798G  157G  84% /mnt/d
+
+/usr/lib/jvm/java-17-amazon-corretto/bin/java
+/usr/lib/jvm/java-17-amazon-corretto/bin/javac
+/mnt/c/Users/sarfa/AppData/Roaming/Code/User/globalStorage/pleiades.java-extension-pack-jdk/maven/latest/bin/mvn
+/home/bballer09/.cargo/bin/cargo
+/usr/sbin/curl
+
+cargo 1.91.1 (ea2d97820 2025-10-10)
+bash: line 1: /usr/bin/time: No such file or directory
+
+

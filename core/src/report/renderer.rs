@@ -1,11 +1,16 @@
 use crate::{
-    analysis::{AnalyzeResponse, ProvenanceKind},
+    analysis::{AnalysisMode, AnalyzeResponse, ProvenanceKind},
     config::OutputFormat,
     errors::CoreResult,
+    hprof::{GcRootKind, OverviewSummary},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use std::fmt::Write as _;
+
+const OVERVIEW_BANNER: &str = "Overview mode (streaming, no object graph)";
+const OVERVIEW_LIMITATION_NOTE: &str =
+    "Approximate shallow sizes only. Retained sizes, dominator tree, and leak suspects are not available.";
 
 fn escape_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -52,6 +57,12 @@ pub struct ReportArtifact {
 
 /// Generate a textual artifact from the provided analysis output.
 pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
+    if matches!(request.analysis.mode, AnalysisMode::Overview) {
+        if let Some(overview) = &request.analysis.overview {
+            return render_overview_report(overview, request.format.clone());
+        }
+    }
+
     let (contents, mime_type) = match request.format {
         OutputFormat::Text => (render_text(&request.analysis), "text/plain"),
         OutputFormat::Toon => (render_toon(&request.analysis), "application/x-toon"),
@@ -64,6 +75,444 @@ pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
         mime_type: mime_type.into(),
         contents,
     })
+}
+
+pub fn render_overview_report(
+    summary: &OverviewSummary,
+    format: OutputFormat,
+) -> CoreResult<ReportArtifact> {
+    let (contents, mime_type) = match format {
+        OutputFormat::Text => (render_overview_text(summary), "text/plain"),
+        OutputFormat::Toon => (render_overview_toon(summary), "application/x-toon"),
+        OutputFormat::Markdown => (render_overview_markdown(summary), "text/markdown"),
+        OutputFormat::Html => (render_overview_html(summary), "text/html"),
+        OutputFormat::Json => (render_overview_json(summary)?, "application/json"),
+    };
+
+    Ok(ReportArtifact {
+        mime_type: mime_type.into(),
+        contents,
+    })
+}
+
+fn render_overview_json(summary: &OverviewSummary) -> CoreResult<String> {
+    Ok(to_string_pretty(summary)?)
+}
+
+fn render_overview_text(summary: &OverviewSummary) -> String {
+    let mut body = String::new();
+    let _ = writeln!(body, "{OVERVIEW_BANNER}");
+    let _ = writeln!(body, "{}", "=".repeat(OVERVIEW_BANNER.len()));
+    let _ = writeln!(body, "Heap: {}", summary.heap_path);
+    let _ = writeln!(
+        body,
+        "Bytes processed: {}",
+        format_byte_count(summary.total_bytes_processed)
+    );
+    let _ = writeln!(body, "HPROF records: {}", summary.total_record_count);
+    let _ = writeln!(body, "{OVERVIEW_LIMITATION_NOTE}");
+    let _ = writeln!(body, "Retained sizes: not available in overview mode");
+    let _ = writeln!(body, "Leak suspects: not available in overview mode");
+    let _ = writeln!(body, "Dominator tree: not available in overview mode");
+
+    body.push_str(
+        "\nTop Classes by Approximate Shallow Bytes\n---------------------------------------\n",
+    );
+    if summary.class_stats.entries.is_empty() {
+        body.push_str("No class aggregates captured.\n");
+    } else {
+        for entry in &summary.class_stats.entries {
+            let _ = writeln!(
+                body,
+                "- {}: {} instances, {} approx shallow",
+                entry.class_name,
+                entry.instance_count,
+                format_byte_count(entry.approx_shallow_bytes)
+            );
+        }
+    }
+
+    body.push_str(
+        "\nLargest Single Instances (approximate shallow size, not retained)\n---------------------------------------------------------------\n",
+    );
+    if summary.top_instances.is_empty() {
+        body.push_str("No instance-level samples captured.\n");
+    } else {
+        for instance in &summary.top_instances {
+            let _ = writeln!(
+                body,
+                "- {} {}: {}",
+                format_object_id(instance.object_id),
+                instance.class_name,
+                format_byte_count(instance.approx_retained_bytes)
+            );
+        }
+    }
+
+    body.push_str("\nGC Root Counts\n--------------\n");
+    for (label, count) in ordered_gc_root_counts(summary) {
+        let _ = writeln!(body, "- {label}: {count}");
+    }
+
+    body.push_str("\nThread Frame Sample (capped)\n---------------------------\n");
+    if summary.thread_frames.is_empty() {
+        body.push_str("No thread frames captured.\n");
+    } else {
+        for frame in &summary.thread_frames {
+            let _ = writeln!(body, "- {}", format_thread_frame(frame));
+        }
+    }
+
+    body.push_str("\nTruncation Flags\n----------------\n");
+    let _ = writeln!(body, "- truncated: {}", yes_no(summary.truncated));
+    let _ = writeln!(
+        body,
+        "- class table cap: {}",
+        summary.options.max_class_table_size
+    );
+    let _ = writeln!(
+        body,
+        "- thread frame cap: {}",
+        summary.options.max_thread_frames
+    );
+
+    body
+}
+
+fn render_overview_markdown(summary: &OverviewSummary) -> String {
+    let mut doc = String::new();
+    doc.push_str("# Overview mode (streaming, no object graph)\n\n");
+    doc.push_str(&format!("- **Heap:** {}\n", summary.heap_path));
+    doc.push_str(&format!(
+        "- **Bytes processed:** {}\n",
+        format_byte_count(summary.total_bytes_processed)
+    ));
+    doc.push_str(&format!(
+        "- **HPROF records:** {}\n",
+        summary.total_record_count
+    ));
+    doc.push_str(&format!("- **Note:** {OVERVIEW_LIMITATION_NOTE}\n"));
+    doc.push_str("- **Retained sizes:** not available in overview mode\n");
+    doc.push_str("- **Leak suspects:** not available in overview mode\n");
+    doc.push_str("- **Dominator tree:** not available in overview mode\n");
+
+    doc.push_str("\n## Top Classes by Approximate Shallow Bytes\n\n");
+    if summary.class_stats.entries.is_empty() {
+        doc.push_str("_No class aggregates captured._\n");
+    } else {
+        for entry in &summary.class_stats.entries {
+            doc.push_str(&format!(
+                "- `{}`: {} instances, {} approx shallow\n",
+                entry.class_name,
+                entry.instance_count,
+                format_byte_count(entry.approx_shallow_bytes)
+            ));
+        }
+    }
+
+    doc.push_str("\n## Largest Single Instances (approximate shallow size, not retained)\n\n");
+    if summary.top_instances.is_empty() {
+        doc.push_str("_No instance-level samples captured._\n");
+    } else {
+        for instance in &summary.top_instances {
+            doc.push_str(&format!(
+                "- `{}` `{}`: {}\n",
+                format_object_id(instance.object_id),
+                instance.class_name,
+                format_byte_count(instance.approx_retained_bytes)
+            ));
+        }
+    }
+
+    doc.push_str("\n## GC Root Counts\n\n");
+    for (label, count) in ordered_gc_root_counts(summary) {
+        doc.push_str(&format!("- **{label}:** {count}\n"));
+    }
+
+    doc.push_str("\n## Thread Frame Sample (capped)\n\n");
+    if summary.thread_frames.is_empty() {
+        doc.push_str("_No thread frames captured._\n");
+    } else {
+        for frame in &summary.thread_frames {
+            doc.push_str(&format!("- `{}`\n", format_thread_frame(frame)));
+        }
+    }
+
+    doc.push_str("\n## Truncation Flags\n\n");
+    doc.push_str(&format!("- **truncated:** {}\n", yes_no(summary.truncated)));
+    doc.push_str(&format!(
+        "- **class table cap:** {}\n",
+        summary.options.max_class_table_size
+    ));
+    doc.push_str(&format!(
+        "- **thread frame cap:** {}\n",
+        summary.options.max_thread_frames
+    ));
+
+    doc
+}
+
+fn render_overview_toon(summary: &OverviewSummary) -> String {
+    let mut doc = String::new();
+    doc.push_str("TOON v1\n");
+    doc.push_str("section overview\n");
+    push_kv(&mut doc, 2, "mode", "overview");
+    push_kv(&mut doc, 2, "note", OVERVIEW_LIMITATION_NOTE);
+    push_kv(&mut doc, 2, "heap", &summary.heap_path);
+    push_kv(
+        &mut doc,
+        2,
+        "bytes_processed",
+        summary.total_bytes_processed,
+    );
+    push_kv(&mut doc, 2, "record_count", summary.total_record_count);
+    push_kv(&mut doc, 2, "retained_sizes", "not_available");
+    push_kv(&mut doc, 2, "leak_suspects", "not_available");
+    push_kv(&mut doc, 2, "dominator_tree", "not_available");
+    push_kv(&mut doc, 2, "truncated", yes_no(summary.truncated));
+
+    doc.push_str("section top_classes\n");
+    if summary.class_stats.entries.is_empty() {
+        push_kv(&mut doc, 2, "status", "empty");
+    } else {
+        for (idx, entry) in summary.class_stats.entries.iter().enumerate() {
+            doc.push_str(&format!("  class#{idx}\n"));
+            push_kv(&mut doc, 4, "class_name", &entry.class_name);
+            push_kv(&mut doc, 4, "instance_count", entry.instance_count);
+            push_kv(
+                &mut doc,
+                4,
+                "approx_shallow_bytes",
+                entry.approx_shallow_bytes,
+            );
+        }
+    }
+
+    doc.push_str("section top_instances\n");
+    if summary.top_instances.is_empty() {
+        push_kv(&mut doc, 2, "status", "empty");
+    } else {
+        for (idx, instance) in summary.top_instances.iter().enumerate() {
+            doc.push_str(&format!("  instance#{idx}\n"));
+            push_kv(
+                &mut doc,
+                4,
+                "object_id",
+                format_object_id(instance.object_id),
+            );
+            push_kv(&mut doc, 4, "class_name", &instance.class_name);
+            push_kv(
+                &mut doc,
+                4,
+                "approx_shallow_bytes",
+                instance.approx_retained_bytes,
+            );
+        }
+    }
+
+    doc.push_str("section gc_roots\n");
+    for (label, count) in ordered_gc_root_counts(summary) {
+        push_kv(&mut doc, 2, label, count);
+    }
+
+    doc.push_str("section thread_frames\n");
+    if summary.thread_frames.is_empty() {
+        push_kv(&mut doc, 2, "status", "empty");
+    } else {
+        for (idx, frame) in summary.thread_frames.iter().enumerate() {
+            doc.push_str(&format!("  frame#{idx}\n"));
+            push_kv(&mut doc, 4, "thread_serial", frame.thread_serial);
+            push_kv(&mut doc, 4, "frame", format_thread_frame(frame));
+        }
+    }
+
+    doc
+}
+
+fn render_overview_html(summary: &OverviewSummary) -> String {
+    let top_classes = if summary.class_stats.entries.is_empty() {
+        String::from("<p>No class aggregates captured.</p>")
+    } else {
+        let items: String = summary
+            .class_stats
+            .entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "<li><strong>{}</strong>: {} instances, {} approx shallow</li>",
+                    escape_html(&entry.class_name),
+                    entry.instance_count,
+                    format_byte_count(entry.approx_shallow_bytes)
+                )
+            })
+            .collect();
+        format!("<ul>{items}</ul>")
+    };
+
+    let top_instances = if summary.top_instances.is_empty() {
+        String::from("<p>No instance-level samples captured.</p>")
+    } else {
+        let items: String = summary
+            .top_instances
+            .iter()
+            .map(|instance| {
+                format!(
+                    "<li><strong>{}</strong> {}: {}</li>",
+                    escape_html(&format_object_id(instance.object_id)),
+                    escape_html(&instance.class_name),
+                    format_byte_count(instance.approx_retained_bytes)
+                )
+            })
+            .collect();
+        format!("<ul>{items}</ul>")
+    };
+
+    let gc_roots: String = ordered_gc_root_counts(summary)
+        .into_iter()
+        .map(|(label, count)| format!("<li><strong>{}</strong>: {count}</li>", escape_html(label)))
+        .collect();
+
+    let thread_frames = if summary.thread_frames.is_empty() {
+        String::from("<p>No thread frames captured.</p>")
+    } else {
+        let items: String = summary
+            .thread_frames
+            .iter()
+            .map(|frame| format!("<li>{}</li>", escape_html(&format_thread_frame(frame))))
+            .collect();
+        format!("<ul>{items}</ul>")
+    };
+
+    format!(
+        r#"<section>
+  <h1>{banner}</h1>
+  <p><strong>Heap:</strong> {heap}</p>
+  <p><strong>Bytes processed:</strong> {bytes}</p>
+  <p><strong>HPROF records:</strong> {records}</p>
+  <p><strong>Note:</strong> {note}</p>
+  <ul>
+    <li><strong>Retained sizes:</strong> not available in overview mode</li>
+    <li><strong>Leak suspects:</strong> not available in overview mode</li>
+    <li><strong>Dominator tree:</strong> not available in overview mode</li>
+  </ul>
+  <section>
+    <h2>Top Classes by Approximate Shallow Bytes</h2>
+    {top_classes}
+  </section>
+  <section>
+    <h2>Largest Single Instances (approximate shallow size, not retained)</h2>
+    {top_instances}
+  </section>
+  <section>
+    <h2>GC Root Counts</h2>
+    <ul>{gc_roots}</ul>
+  </section>
+  <section>
+    <h2>Thread Frame Sample (capped)</h2>
+    {thread_frames}
+  </section>
+  <section>
+    <h2>Truncation Flags</h2>
+    <ul>
+      <li><strong>truncated:</strong> {truncated}</li>
+      <li><strong>class table cap:</strong> {class_cap}</li>
+      <li><strong>thread frame cap:</strong> {thread_cap}</li>
+    </ul>
+  </section>
+</section>"#,
+        banner = escape_html(OVERVIEW_BANNER),
+        heap = escape_html(&summary.heap_path),
+        bytes = format_byte_count(summary.total_bytes_processed),
+        records = summary.total_record_count,
+        note = escape_html(OVERVIEW_LIMITATION_NOTE),
+        top_classes = top_classes,
+        top_instances = top_instances,
+        gc_roots = gc_roots,
+        thread_frames = thread_frames,
+        truncated = yes_no(summary.truncated),
+        class_cap = summary.options.max_class_table_size,
+        thread_cap = summary.options.max_thread_frames,
+    )
+}
+
+fn format_byte_count(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+fn ordered_gc_root_counts(summary: &OverviewSummary) -> Vec<(&'static str, u64)> {
+    [
+        GcRootKind::JniGlobal,
+        GcRootKind::JniLocal,
+        GcRootKind::JavaFrame,
+        GcRootKind::NativeStack,
+        GcRootKind::StickyClass,
+        GcRootKind::ThreadBlock,
+        GcRootKind::MonitorUsed,
+        GcRootKind::ThreadObject,
+        GcRootKind::Unknown,
+    ]
+    .into_iter()
+    .map(|kind| {
+        (
+            gc_root_kind_label(kind),
+            summary.gc_root_counts.get(&kind).copied().unwrap_or(0),
+        )
+    })
+    .collect()
+}
+
+fn gc_root_kind_label(kind: GcRootKind) -> &'static str {
+    match kind {
+        GcRootKind::JniGlobal => "jni_global",
+        GcRootKind::JniLocal => "jni_local",
+        GcRootKind::JavaFrame => "java_frame",
+        GcRootKind::NativeStack => "native_stack",
+        GcRootKind::StickyClass => "sticky_class",
+        GcRootKind::ThreadBlock => "thread_block",
+        GcRootKind::MonitorUsed => "monitor_used",
+        GcRootKind::ThreadObject => "thread_object",
+        GcRootKind::Unknown => "unknown",
+    }
+}
+
+fn format_object_id(object_id: u64) -> String {
+    format!("0x{object_id:016X}")
+}
+
+fn format_thread_frame(frame: &crate::hprof::OverviewThreadFrame) -> String {
+    let source = if frame.source_file.is_empty() {
+        String::from("Unknown Source")
+    } else if frame.line_number > 0 {
+        format!("{}:{}", frame.source_file, frame.line_number)
+    } else {
+        frame.source_file.clone()
+    };
+
+    format!(
+        "thread#{} {}.{}({})",
+        frame.thread_serial, frame.class_name, frame.method_name, source
+    )
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn render_json(analysis: &AnalyzeResponse) -> CoreResult<String> {
@@ -730,6 +1179,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -806,6 +1257,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -871,6 +1324,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,
@@ -938,6 +1393,8 @@ mod tests {
         use std::time::{Duration, SystemTime};
 
         let response = AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
             summary: HeapSummary {
                 heap_path: "test.hprof".into(),
                 total_objects: 100,

@@ -73,3 +73,23 @@ fn parse_query_rejects_invalid_syntax() {
         "unexpected parse error: {error}"
     );
 }
+
+#[test]
+fn parse_query_supports_single_quoted_string_literals() {
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE @className LIKE 'com.example.%'"#,
+    )
+    .expect("query should parse");
+
+    assert_eq!(
+        query.filter,
+        Some(WhereClause {
+            conditions: vec![Condition {
+                field: FieldRef::BuiltIn(BuiltInField::ClassName),
+                op: ComparisonOp::Like,
+                value: Value::Str("com.example.%".into()),
+            }],
+            operators: Vec::new(),
+        })
+    );
+}

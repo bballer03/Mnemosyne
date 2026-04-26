@@ -12,7 +12,7 @@ use mnemosyne_core::hprof::test_fixtures::{
 use mnemosyne_core::{
     analysis::{AiChatTurn, LeakInsight, LeakKind, LeakSeverity},
     fix::FixStyle,
-    hprof::HeapSummary,
+    hprof::{HeapSummary, OverviewSummary},
     mcp::session::{
         PersistedAiSession, SessionAnalysisSnapshot, SessionConversationSnapshot,
         MCP_SESSION_VERSION,
@@ -63,6 +63,16 @@ fn parse_first_json_value(input: &str) -> Value {
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn write_sandbox_file(root: &Path, name: &str, contents: impl AsRef<[u8]>) -> PathBuf {
+    let path = root.join(name);
+    fs::write(&path, contents).unwrap();
+    path
+}
+
+fn read_json_file(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
 fn seed_persisted_ai_session(root: &Path, session: &PersistedAiSession) {
@@ -238,6 +248,59 @@ fn extract_all_between(input: &str, prefix: &str, suffix: &str) -> Vec<String> {
 
 fn count_occurrences(input: &str, needle: &str) -> usize {
     input.match_indices(needle).count()
+}
+
+fn assert_well_formed_xml_like(input: &str) {
+    let mut stack = Vec::new();
+    let mut cursor = input;
+
+    while let Some(start) = cursor.find('<') {
+        cursor = &cursor[start..];
+
+        if let Some(rest) = cursor.strip_prefix("<![CDATA[") {
+            let end = rest.find("]]>").expect("CDATA must terminate");
+            cursor = &rest[end + 3..];
+            continue;
+        }
+
+        if let Some(rest) = cursor.strip_prefix("<?") {
+            let end = rest
+                .find("?>")
+                .expect("processing instruction must terminate");
+            cursor = &rest[end + 2..];
+            continue;
+        }
+
+        if let Some(rest) = cursor.strip_prefix("<!--") {
+            let end = rest.find("-->").expect("comment must terminate");
+            cursor = &rest[end + 3..];
+            continue;
+        }
+
+        let end = cursor.find('>').expect("tag must terminate");
+        let tag = &cursor[1..end];
+        let trimmed = tag.trim();
+
+        if let Some(rest) = trimmed.strip_prefix('/') {
+            let name = rest.trim();
+            let expected = stack.pop().expect("closing tag must have matching opener");
+            assert_eq!(name, expected, "closing tag order mismatch");
+        } else if !trimmed.starts_with('!') {
+            let self_closing = trimmed.ends_with('/');
+            let name = trimmed
+                .trim_end_matches('/')
+                .split_whitespace()
+                .next()
+                .expect("opening tag name must exist");
+            if !self_closing {
+                stack.push(name.to_string());
+            }
+        }
+
+        cursor = &cursor[end + 1..];
+    }
+
+    assert!(stack.is_empty(), "all XML tags should be closed");
 }
 
 #[test]
@@ -738,6 +801,987 @@ fn test_analyze_json_format() {
     let stdout = stdout_string(&output.stdout);
     let json = serde_json::from_str::<Value>(&stdout).unwrap();
     assert!(json.is_object());
+}
+
+#[test]
+fn ci_check_passes_on_below_threshold_returns_zero() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-pass.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("RESULT: PASS"), "{stdout}");
+}
+
+#[test]
+fn ci_check_fails_on_above_threshold_returns_one() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-fail.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len().saturating_sub(1) as u64
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("RESULT: FAIL"), "{stdout}");
+}
+
+#[test]
+fn ci_check_invalid_policy_file_returns_two() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-invalid.toml",
+        "[[rule]]\nid = \"broken\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = \n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("policy") || stderr.contains("TOML"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_check_missing_heap_returns_three() {
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-missing-heap.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1024\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+    let missing_heap = sandbox.path().join("missing.hprof");
+    let missing_heap_arg = path_arg(&missing_heap);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            missing_heap_arg.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("missing.hprof")
+            || stderr.contains("not found")
+            || stderr.contains("Heap dump"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_check_explicit_overview_with_deep_only_rule_returns_four() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-deep-only.toml",
+        "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--mode",
+            "overview",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let combined = format!(
+        "{}{}",
+        stdout_string(&output.stdout),
+        stdout_string(&output.stderr)
+    );
+    assert!(combined.contains("no-critical-leaks"), "{combined}");
+}
+
+#[test]
+fn ci_check_auto_resolved_overview_skips_deep_only_rule_returns_zero_when_no_other_violations() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-auto-overview-skip.toml",
+        "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let skipped = json
+        .get("result")
+        .and_then(|value| value.get("skipped"))
+        .and_then(Value::as_array)
+        .expect("skipped array");
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(
+        skipped[0].get("reason").and_then(Value::as_str),
+        Some("deep_only_in_overview_mode")
+    );
+}
+
+#[test]
+fn ci_check_format_json_envelope_well_formed() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-json-envelope.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+    assert_eq!(
+        json.get("subcommand"),
+        Some(&Value::String("ci-check".into()))
+    );
+    assert_eq!(
+        json.get("version").and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert!(json.get("result").and_then(Value::as_object).is_some());
+}
+
+#[test]
+fn ci_check_format_text_includes_grouped_violations() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-text-groups.toml",
+        "[[rule]]\nid = \"critical-heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"critical\"\n\n[[rule]]\nid = \"error-instance-budget\"\npredicate = \"total_instances\"\nop = \"<=\"\nvalue = 0\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("[CRITICAL]"), "{stdout}");
+    assert!(stdout.contains("[ERROR]"), "{stdout}");
+    assert!(stdout.contains("critical-heap-budget"), "{stdout}");
+    assert!(stdout.contains("error-instance-budget"), "{stdout}");
+}
+
+#[test]
+fn ci_check_fail_on_warning_flips_exit_when_warning_violation() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut default_cmd, sandbox) = cli_command();
+    let (mut warning_cmd, _sandbox2) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-warning.toml",
+        "[[rule]]\nid = \"warning-heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"warning\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let default_output = default_cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+    let warning_output = warning_cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--fail-on",
+            "warning",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(default_output.status.code(), Some(0));
+    assert_eq!(warning_output.status.code(), Some(1));
+}
+
+#[test]
+fn ci_check_output_to_file_when_flag_set() {
+    let fixture_bytes = build_simple_fixture();
+    let fixture = write_fixture(&fixture_bytes);
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-output.toml",
+        format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture_bytes.len() as u64 + 1024
+        ),
+    );
+    let policy_arg = path_arg(&policy_path);
+    let output_path = sandbox.path().join("ci-result.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "json",
+            "--output",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout_string(&output.stdout).trim().is_empty());
+
+    let written = fs::read_to_string(&output_path).unwrap();
+    let json = serde_json::from_str::<Value>(&written).unwrap();
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+}
+
+#[test]
+fn ci_check_format_junit_writes_valid_xml_to_file() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-junit.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+    let output_path = sandbox.path().join("mnemosyne-policy.xml");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "junit",
+            "--output",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let written = fs::read_to_string(&output_path).unwrap();
+    assert_well_formed_xml_like(&written);
+    assert!(written.contains("<testsuites>"), "{written}");
+    assert!(written.contains("<testsuite"), "{written}");
+    assert!(written.contains("<testcase"), "{written}");
+}
+
+#[test]
+fn ci_check_format_github_actions_emits_workflow_commands() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-gh-actions.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1\nseverity = \"critical\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--format",
+            "github-actions",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("::error file="), "{stdout}");
+    assert!(stdout.contains("title=heap-budget"), "{stdout}");
+    assert!(stdout.contains("Mnemosyne ci-check:"), "{stdout}");
+}
+
+#[test]
+fn flamegraph_default_writes_svg_to_output() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    let trimmed = written.trim_start();
+    assert!(!trimmed.is_empty());
+    assert!(
+        trimmed.starts_with("<?xml") || trimmed.starts_with("<svg"),
+        "{trimmed}"
+    );
+}
+
+#[test]
+fn flamegraph_format_folded_writes_folded_stacks_text() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.folded");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "folded-stack",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    let first_line = written
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .expect("expected at least one folded stack line");
+    assert!(first_line.contains(';'), "{first_line}");
+    let (_, weight) = first_line.rsplit_once(' ').expect("weight suffix");
+    assert!(weight.parse::<u64>().is_ok(), "{first_line}");
+}
+
+#[test]
+fn flamegraph_format_json_writes_envelope() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(json.get("tool"), Some(&Value::String("mnemosyne".into())));
+    assert_eq!(
+        json.get("subcommand"),
+        Some(&Value::String("flamegraph".into()))
+    );
+    assert!(json.get("strategy").is_some(), "{json}");
+    assert!(
+        json.get("stacks").and_then(Value::as_array).is_some(),
+        "{json}"
+    );
+    assert!(
+        json.get("total_weight").and_then(Value::as_u64).is_some(),
+        "{json}"
+    );
+    assert!(
+        json.get("frame_count").and_then(Value::as_u64).is_some(),
+        "{json}"
+    );
+}
+
+#[test]
+fn flamegraph_root_class_hierarchy() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-class-hierarchy.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "class-hierarchy",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(
+        json.get("strategy"),
+        Some(&Value::String("class-hierarchy".into()))
+    );
+}
+
+#[test]
+fn flamegraph_root_gc_root_path() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-gc-root-path.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "gc-root-path",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    assert_eq!(
+        json.get("strategy"),
+        Some(&Value::String("gc-root-path".into()))
+    );
+}
+
+#[test]
+fn flamegraph_explicit_overview_returns_exit_five() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("should-not-exist.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--mode",
+            "overview",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("flame graph requires deep mode; received --mode overview"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn flamegraph_auto_resolved_to_overview_returns_exit_five() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("should-not-exist-auto.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains(
+            "flame graph requires deep mode; current heap size triggers auto-overview; pass --mode deep to override"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn flamegraph_explicit_deep_with_large_file_warns_but_proceeds() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-deep.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--mode",
+            "deep",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    assert!(output_path.exists());
+}
+
+#[test]
+fn flamegraph_min_fraction_truncates_to_other() {
+    let fixture = write_fixture(&build_thread_stack_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-truncated.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--root",
+            "class-hierarchy",
+            "--min-fraction",
+            "0.45",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    let truncated = json
+        .get("truncated_to_other")
+        .and_then(Value::as_u64)
+        .expect("truncated_to_other should be present");
+    assert!(truncated > 0, "{json}");
+}
+
+#[test]
+fn flamegraph_max_frames_caps_count() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-capped.json");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--format",
+            "json",
+            "--max-frames",
+            "2",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let json = read_json_file(&output_path);
+    let frame_count = json
+        .get("frame_count")
+        .and_then(Value::as_u64)
+        .expect("frame_count should be present");
+    assert!(frame_count <= 2, "{json}");
+}
+
+#[test]
+fn flamegraph_title_appears_in_svg() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let output_path = sandbox.path().join("flame-title.svg");
+    let output_arg = path_arg(&output_path);
+
+    let output = cmd
+        .args([
+            "flamegraph",
+            fixture_path.as_str(),
+            "-o",
+            output_arg.as_str(),
+            "--title",
+            "test heap",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let written = fs::read_to_string(&output_path).unwrap();
+    assert!(written.contains("test heap"), "{written}");
+}
+
+#[test]
+fn flamegraph_existing_subcommands_unchanged() {
+    let analyze_fixture = write_fixture(&build_graph_fixture());
+    let analyze_fixture_path = path_arg(analyze_fixture.path());
+    let (mut analyze_cmd, _analyze_sandbox) = cli_command();
+
+    let analyze_output = analyze_cmd
+        .args(["analyze", analyze_fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(
+        analyze_output.status.success(),
+        "{}",
+        stdout_string(&analyze_output.stderr)
+    );
+    let analyze_stdout = stdout_string(&analyze_output.stdout);
+    assert!(
+        analyze_stdout.contains("Mnemosyne Analysis"),
+        "{analyze_stdout}"
+    );
+    assert!(analyze_stdout.contains("Graph Nodes:"), "{analyze_stdout}");
+
+    let ci_fixture = write_fixture(&build_simple_fixture());
+    let ci_fixture_path = path_arg(ci_fixture.path());
+    let (mut ci_cmd, ci_sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        ci_sandbox.path(),
+        "flamegraph-regression-policy.toml",
+        "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1048576\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let ci_output = ci_cmd
+        .args([
+            "ci-check",
+            ci_fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(ci_output.status.code(), Some(0));
+    let ci_stdout = stdout_string(&ci_output.stdout);
+    assert!(ci_stdout.contains("RESULT: PASS"), "{ci_stdout}");
+}
+
+#[test]
+fn ci_check_existing_subcommands_unchanged() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("Mnemosyne Analysis"), "{stdout}");
+    assert!(stdout.contains("Graph Nodes:"), "{stdout}");
+    assert!(
+        !stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_analyze_default_mode_is_auto_deep_for_small_fixture() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("Mnemosyne Analysis"), "{stdout}");
+    assert!(stdout.contains("Graph Nodes:"), "{stdout}");
+    assert!(
+        !stdout.contains("Overview mode (streaming, no object graph)"),
+        "default auto mode unexpectedly resolved to overview: {stdout}"
+    );
+}
+
+#[test]
+fn cli_analyze_explicit_mode_deep_matches_default() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut default_cmd, _sandbox) = cli_command();
+    let (mut deep_cmd, _sandbox2) = cli_command();
+
+    let default_output = default_cmd
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+    let deep_output = deep_cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "deep"])
+        .output()
+        .unwrap();
+
+    assert!(
+        default_output.status.success(),
+        "{}",
+        stdout_string(&default_output.stderr)
+    );
+    assert!(
+        deep_output.status.success(),
+        "{}",
+        stdout_string(&deep_output.stderr)
+    );
+    assert_eq!(default_output.stdout, deep_output.stdout);
+}
+
+#[test]
+fn cli_analyze_mode_overview_emits_overview_sections() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "overview"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Top Classes by Approximate Shallow Bytes"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("com/example/Node"), "{stdout}");
+}
+
+#[test]
+fn cli_analyze_mode_overview_json_serializes_overview_summary() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let canonical_path = fixture
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args([
+            "analyze",
+            fixture_path.as_str(),
+            "--mode",
+            "overview",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    let summary: OverviewSummary = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(summary.heap_path, canonical_path);
+    assert!(!summary.class_stats.entries.is_empty());
+}
+
+#[test]
+fn cli_analyze_auto_threshold_env_forces_overview() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .env("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1")
+        .args(["analyze", fixture_path.as_str()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn cli_analyze_invalid_mode_value_errors_cleanly() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--mode", "bogus"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = stdout_string(&output.stderr);
+    assert!(stderr.contains("invalid value 'bogus'"), "{stderr}");
+    assert!(stderr.contains("possible values"), "{stderr}");
+}
+
+#[test]
+fn cli_parse_mode_overview_emits_overview_sections() {
+    let fixture = write_fixture(&build_simple_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["parse", fixture_path.as_str(), "--mode", "overview"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert!(
+        stdout.contains("Overview mode (streaming, no object graph)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("com/example/Node"), "{stdout}");
 }
 
 #[test]

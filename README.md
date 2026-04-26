@@ -46,17 +46,32 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - Blazing-fast Rust-based `.hprof` parser
 - Streaming I/O with low memory overhead
 - Suitable for multi-gigabyte heap dumps
+- `mnemosyne-cli parse` and `mnemosyne-cli analyze` now accept `--mode auto|deep|overview`; `auto` flips to overview at 4 GiB by default and can be overridden with `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`
+- Overview mode is a streaming, graph-free triage path with approximate shallow sizes only. Retained sizes, dominator data, and leak suspects remain deep-mode-only.
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
-- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields plus retained instance-field projection/filtering on query paths
-- `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults without changing the underlying graph-backed analysis pipeline
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
+- `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
 - Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
+
+### 🧪 CI Regression Policies
+- `mnemosyne-cli ci-check <heap.hprof> --policy policy.toml` turns heap analysis into a first-class CI gate instead of requiring custom `jq` or Groovy glue
+- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 10 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`
+- The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
+- Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
+
+### 🔥 Retained-Size Flame Graphs
+- `mnemosyne-cli flamegraph <heap.hprof> -o flame.svg` renders post-mortem retained-size flame graphs from the deep object-graph path
+- Rooting strategies: `--root dominator|class-hierarchy|gc-root-path`
+- Output formats: `--format svg|folded-stack|json`
+- Flame graphs are deep-mode-only: explicit `--mode overview` or an `auto` run that resolves to overview exits `5`; pass `--mode deep` to override the 4 GiB auto cutoff when you have enough RAM
+- The SVG renderer is powered by `inferno` 0.11, giving Mnemosyne a browser-openable, searchable flame graph artifact directly from a heap dump
 
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
@@ -105,25 +120,35 @@ Available MCP methods:
 
 Call `list_tools` first if your client wants machine-readable method descriptions and parameter metadata.
 
+`parse_heap` and `analyze_heap` now also accept an optional `mode: "auto"|"deep"|"overview"` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
+
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ---
 
 ## 🌐 Architecture
 
-![Mnemosyne Architecture Overview](resources/architecture-overview.svg)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
+
+**Layers at a glance:**
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, AI insights, MCP server, report generator
+- **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
+- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
+- **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
+- **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
 ---
 
 ## 🛠 Installation
 
-> Mnemosyne v0.2.0 (alpha) is now available.
+> Mnemosyne v0.3.0 release prep is underway on this branch. The install examples below use the upcoming `0.3.0` artifacts and image tags; **v0.2.0 remains the current published release until the tag is cut**.
 > Tagged GitHub releases now publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows. `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, the repository includes a Homebrew formula for macOS release archives, and tagged releases publish a Docker image to `ghcr.io/bballer03/mnemosyne`.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
-### Browser-first dashboard (current M4 slice)
-The current UI slice lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships a local artifact loader plus a leak triage flow that now includes a dedicated leak workspace route family under `/leaks/:leakId` with `overview`, `explain`, `gc-path`, `source-map`, and `fix` subroutes. `overview` stays artifact-backed and immediate, while the other subroutes cross a narrow local live-detail adapter boundary instead of a generalized app-wide browser RPC layer. `source-map`, `fix`, and `gc-path` may still remain unavailable when `projectRoot` or `objectId` are not yet seeded. Tauri remains a later wrapper path, not part of this slice.
+### Browser-first dashboard and desktop scaffold
+The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, and the leak workspace route family under `/leaks/:leakId`. Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, and query-console views can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references and referrers, and the leak-workspace detail routes call bridge-backed actions. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects both host bridges, but native desktop bundles are not yet part of the tagged release pipeline.
 
 ```bash
 cd ui
@@ -132,11 +157,13 @@ npx --yes bun run build
 npx --yes bun run lint
 ```
 
+The optional desktop shell currently validates with `cargo check --manifest-path tauri/Cargo.toml`.
+
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
 
 ### 2. Install with Cargo
-Both `mnemosyne-core` and `mnemosyne-cli` are published on crates.io.
+Both `mnemosyne-core` and `mnemosyne-cli` are published on crates.io, but crates.io publication is not part of the `v0.3.0` release channels.
 
 Install the CLI with:
 
@@ -158,16 +185,16 @@ Tagged releases now publish a container image to GHCR with version, major.minor,
 
 ```bash
 # Use a specific version tag instead of :latest for reproducibility
-docker pull ghcr.io/bballer03/mnemosyne:0.2.0
+docker pull ghcr.io/bballer03/mnemosyne:0.3.0
 
 # Parse a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 parse /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 parse /data/heap.hprof
 
 # Analyze a heap dump
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 analyze /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 analyze /data/heap.hprof
 
 # Detect leaks
-docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.2.0 leaks /data/heap.hprof
+docker run --rm -v /path/to/dumps:/data:ro ghcr.io/bballer03/mnemosyne:0.3.0 leaks /data/heap.hprof
 ```
 
 The image runs as a non-root user, uses `/data` as its working directory, and sets `mnemosyne-cli` as the entrypoint so heap dumps can be mounted directly into the container.
@@ -217,6 +244,8 @@ When you specify multiple `packages`, Mnemosyne first treats them as an allow-li
 
 Prefer shell overrides? Export `MNEMOSYNE_MIN_SEVERITY`, `MNEMOSYNE_PACKAGES`, and `MNEMOSYNE_LEAK_TYPES` before running the CLI to apply the same defaults without a file.
 
+Need to change the auto-mode cutoff for large-dump triage or benchmarking? Export `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=<bytes>`. The default is `4294967296` (4 GiB). This env var is read directly by CLI and MCP mode resolution, so it does not appear in `mnemosyne-cli config` output.
+
 ### 8. Run
 The packaged binary name is `mnemosyne-cli`:
 
@@ -265,6 +294,13 @@ Top record tags:
 ```
 
 Those numbers come straight from Mnemosyne's lightweight record-stat histogram derived from the HPROF stream. The parse view is intentionally record-category oriented, while richer class- and object-level retained-size semantics still live in the graph-backed analysis path. If a record-category label is truncated to fit the terminal table, Mnemosyne prints a follow-up disclosure section with the full value.
+
+Both `parse` and `analyze` now accept `--mode auto|deep|overview` (default `auto`). `auto` resolves to overview at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides the cutoff. Overview mode is streaming and honest: it does not build the object graph, and it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
+
+```bash
+mnemosyne-cli parse heap.hprof --mode overview
+mnemosyne-cli analyze heap.hprof --mode overview --format json
+```
 
 #### Detect memory leaks
 ```bash
@@ -409,14 +445,90 @@ Code Fix Available: Run 'mnemosyne-cli fix heap.hprof' to generate patch
 
 When `--ai` is enabled, the CLI and reports include an **AI Insights** block that summarizes the suspected root cause, model confidence, and recommended remediation steps. By default this uses the configurable local `rules` mode so the UX stays consistent offline. If you switch `[ai].mode` to `provider`, Mnemosyne will call the configured provider transport and map the returned TOON payload back into the same response shape. OpenAI-compatible cloud and local endpoints plus Anthropic provider paths now have targeted core/CLI verification coverage in this branch, and Step `14(d)` now includes provider-mode prompt redaction, opt-in hashed audit logging, and a minimal prompt-budget guard that trims leak context first while preserving the instruction section. CLI-first conversation mode is available through `mnemosyne-cli chat`, and MCP now ships persisted heap-bound AI sessions via `create_ai_session`, `resume_ai_session`, `get_ai_session`, `close_ai_session`, and `chat_session`. Session files default to a per-user local Mnemosyne data directory, and `[ai.sessions].directory` lets operators pin that storage to a specific path. Broader conversation semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming remain future follow-on work rather than part of the shipped milestone contract.
 
+If you pass `--ai` together with `--mode overview`, Mnemosyne prints a notice and skips AI because overview mode never builds the object graph the AI path depends on.
+
 Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
+
+#### Run CI regression checks
+Create a policy file with one or more rules:
+
+```toml
+[meta]
+name = "checkout-service"
+
+[defaults]
+severity = "error"
+
+[[rule]]
+id = "heap-budget"
+predicate = "total_bytes"
+op = "<="
+value = 2147483648
+
+[[rule]]
+id = "no-critical-leaks"
+predicate = "leak_count"
+op = "=="
+value = 0
+severity = "critical"
+severity_filter = "critical"
+```
+
+Then run the gate:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --fail-on error
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output heap-policy.xml
+```
+
+`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 10 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`.
+
+The shipped severity ladder is `info < warning < error < critical`; `--fail-on` defaults to `error` and changes the process exit status when any violation meets or exceeds that threshold. All renderers still show every violation and skipped rule; `--fail-on` controls the exit code only.
+
+Use `--format text|json|junit|github-actions` and optional `--output <FILE>` to choose the consumer. `--format github-actions` emits workflow commands, `--format junit` emits one testcase per rule, and `--format json` writes a structured envelope containing `{ tool, subcommand, version, result }`. Exit codes are `0` (clean or below threshold), `1` (policy violation), `2` (invalid policy), `3` (unreadable heap or analysis failure), and `4` (explicit `--mode overview` with a deep-only rule). In `auto` mode, deep-only rules are skipped instead when the heap resolves to overview. For the full predicate catalog and schema details, see [docs/design/milestone-7-2-ci-regression-policies.md](docs/design/milestone-7-2-ci-regression-policies.md).
+
+#### Render a retained-size flame graph
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+```
+
+Useful variations:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep --root dominator
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --root gc-root-path
+```
+
+`flamegraph` is the export surface for retained-size visualization. `dominator` is the default strategy for "what holds memory", `class-hierarchy` groups by inheritance chain, and `gc-root-path` emphasizes why important objects remain reachable. SVG output opens as a searchable, zoomable flame graph in a browser, while `folded-stack` and `json` are better fits for downstream tooling.
+
+This command requires deep mode. If you pass `--mode overview`, or `--mode auto` resolves to overview because the heap is at or above the 4 GiB cutoff, Mnemosyne exits `5` and tells you to rerun with `--mode deep` if you have enough RAM. If you only need large-dump triage, stay on `parse` or `analyze --mode overview` instead.
+
+#### Run targeted OQL queries
+```bash
+mnemosyne-cli query heap.hprof "SELECT @objectId, @retainedSize FROM \"com.example.BigCache\" WHERE @retainedSize > 1048576"
+```
+
+`query` keeps the graph-backed path and now ships the targeted M7-4 parity slice. Single-quoted string literals are accepted alongside double-quoted ones, and the current operator surface is:
+
+| Feature | Semantics | Example |
+|---|---|---|
+| `@retainedSize` | Compare real retained bytes for each matched object. | `SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1048576` |
+| `@toString` | Project or filter on the synthetic string form of an object. | `SELECT @objectId FROM "java.lang.String" WHERE @toString LIKE 'hello%'` |
+| `@gcRootPath` | Project or filter on a joined `GcRoot/... -> ... -> target` path string. | `SELECT @gcRootPath FROM "com.example.Target" WHERE @gcRootPath CONTAINS 'ThreadLocal'` |
+| `LIKE` | Match SQL-style string patterns on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name LIKE 'admin%'` |
+| `CONTAINS` | Match plain substrings on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
+| `OBJECTS x.field` | Project the one-hop referent of an object-reference field instead of the matched source object. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
+| `IS NULL` / `IS NOT NULL` | Test whether an object-reference field is unset or present. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+
+These additions stay intentionally narrower than full MAT OQL: no subqueries, no multi-hop `OBJECTS`, and no broad set algebra. For the full semantics and explicit non-scope, see [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md).
 
 #### Output TOON (for CI/CD)
 ```bash
 mnemosyne-cli analyze heap.hprof --format toon > report.toon
 ```
 
-Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection.
+Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection. If you need Mnemosyne itself to own the pass/fail contract, use `mnemosyne-cli ci-check` instead of shell logic around `analyze`.
 
 **Example TOON payload:**
 ```
@@ -459,6 +571,9 @@ section ai
 # Quick analysis
 mnemosyne-cli analyze heap.hprof
 
+# Force bounded-memory streaming triage
+mnemosyne-cli parse huge.hprof --mode overview
+
 # Use an explicit config file
 mnemosyne-cli analyze heap.hprof --config ./ops/prod.toml
 
@@ -474,14 +589,26 @@ mnemosyne-cli analyze heap.hprof --leak-kind cache,thread
 # Group the analysis histogram by package
 mnemosyne-cli analyze heap.hprof --group-by package
 
+# Keep the full object graph even when auto would switch to overview
+mnemosyne-cli analyze heap.hprof --mode deep --group-by package
+
 # Add investigation reports to the same analysis run
 mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instances --top-n 15 --min-capacity 32
 
 # Export HTML report
 mnemosyne-cli analyze heap.hprof --format html --output-file report.html
 
-# Emit JSON for CI
+# Emit a JSON analysis artifact for CI
 mnemosyne-cli analyze heap.hprof --format json --output-file report.json
+
+# Run a policy gate in CI
+mnemosyne-cli ci-check heap.hprof --policy .mnemosyne/policy.toml --format junit --output heap-policy.xml
+
+# Export a retained-size flame graph
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+
+# Emit folded stacks for external flamegraph tooling
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
 
 # Compare two heap dumps
 mnemosyne-cli diff before.hprof after.hprof
@@ -521,7 +648,7 @@ Heap diff: before.hprof -> after.hprof
     java.lang.String                    +410  398.00 -> 421.00 MB      +44.00 MB
 ```
 
-The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) to fail builds when heap growth crosses your budget.
+The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) when you want a before/after artifact; use `mnemosyne-cli ci-check` when you want Mnemosyne itself to own the policy gate and exit code.
 
 ---
 
@@ -596,9 +723,9 @@ Once configured, you can ask your AI assistant:
 | Command | Description |
 |---|---|
 | `list_tools` | Return machine-readable MCP method descriptions and parameter metadata |
-| `parse_heap` | Parse a heap dump and return summary |
-| `analyze_heap` | Run the full heap analysis pipeline and return `AnalyzeResponse` |
-| `query_heap` | Execute an OQL-style query and return tabular results, including retained instance-field access on query paths |
+| `parse_heap` | Parse a heap dump and return a summary; optional `mode` selects deep or streaming overview, and overview responses carry `"mode": "overview"` |
+| `analyze_heap` | Run deep analysis or, in overview mode, return the streaming partial summary instead of a deep `AnalyzeResponse` |
+| `query_heap` | Execute an OQL-style query and return tabular results, including pseudo-attributes, `OBJECTS`, and structured deep-only feature errors from the shared query engine |
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
@@ -639,7 +766,9 @@ mnemosyne/
 ├── .github/
 │ └── workflows/ci.yml   # GitHub Actions workspace validation
 │
-├── ui/                    # Browser-first React dashboard (current M4 first slice)
+├── ui/                  # Shared React frontend: dashboard, artifact explorer, heap explorer, leak workspace
+├── tauri/               # Optional native desktop scaffold for the shared frontend
+├── examples/            # Sample Java memory-problem projects with walkthroughs
 │
 └── Cargo.toml
 ```
@@ -653,6 +782,10 @@ Mnemosyne is built for speed and efficiency:
 ### Benchmarks
 
 > **Captured:** 2026-04-12 after Step 11 completion. Includes the 156 MB real fixture plus dense synthetic validation at roughly 500 MB, 1 GB, and 2 GB tiers.
+
+See [docs/benchmarks.md](docs/benchmarks.md) for the current benchmark-comparison write-up and usage notes.
+
+Partial M7-5 publication: [docs/benchmarks/comparative-v0.3.0.md](docs/benchmarks/comparative-v0.3.0.md) captures a WSL execution of `mnemo-overview` versus `hprof-slurp` on `small`, `medium`, and `large` only. Treat it as a partial benchmark publication; the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending.
 
 **Measured results (Criterion, release profile):**
 
@@ -698,10 +831,12 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 ## 🗺 Roadmap
 
 ### Current Snapshot
-- M3 is mostly complete: core parity shipped, with small closeout items first and deeper query/scale follow-through only where evidence justifies it
-- M4 remains open: the browser-first `ui/` frontend now ships the local artifact loader, triage dashboard, and leak workspace route family under `/leaks/:leakId`; broader explorer coverage and stronger context seeding are still pending
+- M3 is complete for the approved scope: core parity shipped, with deeper query/scale work now treated as evidence-driven follow-on
+- M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
-- M6 follows M4 and any justified M5 follow-on: ecosystem and community expansion
+- M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
+- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks is now partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 release prep is now underway
+- Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---
 
@@ -751,10 +886,15 @@ It aims to make heap analysis faster, smarter, and more accessible.
 ## 📚 Additional Documentation
 
 - **[Quick Start Guide](docs/QUICKSTART.md)** - Get started in 5 minutes
+- **[User Guide](docs/user-guide.md)** - End-to-end CLI, MCP, and workflow reference
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Common errors, limits, and recovery steps
 - **[Architecture](ARCHITECTURE.md)** - Detailed system design
 - **[API Reference](docs/api.md)** - MCP API documentation
 - **[Configuration Guide](docs/configuration.md)** - All configuration options
+- **[Benchmarks](docs/benchmarks.md)** - Current benchmark baseline and comparison context
+- **[Integration Guides](docs/integrations/README.md)** - CI/CD usage for GitHub Actions and Jenkins
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Examples](docs/examples/)** - Usage examples and scripts
+- **[Example Projects](examples/README.md)** - Reproducible Java memory-problem walkthroughs
 - **[Changelog](CHANGELOG.md)** - Version history
 - **[Status](STATUS.md)** - Snapshot of shipped vs. planned functionality

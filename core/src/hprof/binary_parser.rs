@@ -714,7 +714,7 @@ fn resolve_layout(
 
 // ── Low-level read helpers ─────────────────────────────────────────
 
-fn read_id<R: Read>(reader: &mut R, id_size: u8) -> CoreResult<u64> {
+pub(super) fn read_id<R: Read>(reader: &mut R, id_size: u8) -> CoreResult<u64> {
     match id_size {
         4 => Ok(u64::from(reader.read_u32::<BigEndian>()?)),
         8 => Ok(reader.read_u64::<BigEndian>()?),

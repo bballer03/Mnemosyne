@@ -118,7 +118,7 @@ The plan MUST contain all 8 mandatory sections:
 
 If the user specified a focus area, the plan must prioritize that area in Section E. Otherwise, use the roadmap's "Recommended Immediate Next Steps" to determine the next milestone.
 
-Save the complete plan to session memory at `/memories/session/current-plan.md` so it persists across the pipeline stages.
+Save the complete plan to `docs/superpowers/plans/YYYY-MM-DD-<feature>.md` (the canonical artifact location used everywhere else in this system). Stage 4 will read the plan from that file. **Do not rely on session memory for cross-stage persistence** — the path has no defined VS Code Copilot semantics and may silently no-op.
 
 ---
 
@@ -176,7 +176,7 @@ You must follow the execution prompt's rules exactly:
 - Never edit files yourself
 - Never skip the design gate
 - One milestone at a time
-- Maximum 2 fix cycles per step
+- Maximum 3 fix cycles per step
 - Fail fast on blockers
 
 Capture the full progress report from the execution prompt.
@@ -288,7 +288,7 @@ These rules are absolute and override any conflicting instruction.
 6. **Never skip the design gate.** Even if the plan says the design doc exists, the Design Consulting Agent must confirm.
 7. **Fail fast.** If any stage produces a blocker, stop the pipeline and report. Do not work around it silently.
 8. **No scope creep.** If you discover adjacent issues during execution, note them for follow-up. Do not add them to the current milestone.
-9. **No blind retries.** Analyze every failure before retrying. Maximum 2 fix cycles per step, maximum 2 additional cycles in post-execution verification.
+9. **No blind retries.** Analyze every failure before retrying. Maximum 3 fix cycles per step, maximum 2 additional cycles in post-execution verification.
 10. **No speculative changes.** Every change must trace to a plan task, which traces to a roadmap item or gap analysis finding.
 
 ### Quality Rules

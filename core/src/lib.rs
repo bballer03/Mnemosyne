@@ -12,14 +12,15 @@ pub mod hprof;
 pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod policy;
 pub mod prompts;
 pub mod query;
 pub mod report;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, generate_ai_insights_async, AiInsights, AiWireExchange,
-    AiWireFormat, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakSuspect,
-    ProvenanceKind, ProvenanceMarker,
+    AiWireFormat, AnalysisMode, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakSuspect,
+    ProvenanceKind, ProvenanceMarker, OVERVIEW_AUTO_THRESHOLD_BYTES,
 };
 pub use config::{
     AiConfig, AiMode, AiPromptConfig, AiProvider, AiSessionConfig, AiTaskDefinition, AiTaskKind,
@@ -35,11 +36,18 @@ pub use graph::{
     HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
 pub use hprof::{
-    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options,
-    parse_hprof_with_options, ClassLevelDelta, HeapDiff, HeapParseJob, HeapSummary, HprofHeader,
-    ParseOptions,
+    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options, parse_hprof_overview,
+    parse_hprof_overview_file, parse_hprof_with_options, ClassLevelDelta, GcRootKind, HeapDiff,
+    HeapParseJob, HeapSummary, HprofHeader, OverviewClassStat, OverviewClassStats,
+    OverviewInstanceStat, OverviewOptions, OverviewSummary, OverviewThreadFrame, ParseOptions,
+    DEFAULT_MAX_CLASS_TABLE_SIZE, DEFAULT_MAX_THREAD_FRAMES, DEFAULT_TOP_N_CLASSES,
+    DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
+pub use policy::{
+    evaluate, Comparison, Evaluation, ModeRequirement, Policy, PolicyInput, PolicyResult,
+    PolicyRule, Predicate, Severity, SkipReason, SkippedRule, Violation,
+};
 pub use report::{ReportArtifact, ReportRequest};
 
 #[cfg(any(test, feature = "test-fixtures"))]

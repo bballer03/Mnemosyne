@@ -13,6 +13,9 @@ Thank you for your interest in contributing to Mnemosyne! We appreciate your hel
 - [Commit Message Guidelines](#commit-message-guidelines)
 - [Pull Request Process](#pull-request-process)
 - [Issue Reporting](#issue-reporting)
+- [Architecture for Contributors](#architecture-for-contributors)
+- [Contributor Ladder](#contributor-ladder)
+- [Community](#community)
 
 ---
 
@@ -137,7 +140,7 @@ mnemosyne/
 │   │   ├── main.rs         # CLI entry point
 │   │   └── config_loader.rs
 │   └── tests/
-│       └── integration.rs  # 23 CLI integration tests
+│       └── integration.rs  # CLI integration coverage
 ├── core/
 │   ├── Cargo.toml
 │   └── src/
@@ -454,6 +457,102 @@ For questions:
 - Check existing issues and documentation first
 - Use GitHub Discussions for general questions
 - Tag with `question` label
+
+---
+
+## Architecture for Contributors
+
+If you are picking up your first issue, start with the high-level module layout in [ARCHITECTURE.md](ARCHITECTURE.md) and the tree in [Project Structure](#project-structure). The walkthrough below is the practical version contributors usually need when deciding where a change belongs.
+
+### How a Heap Dump Flows Through the System
+
+1. `core::hprof::parser` reads the HPROF header and record tags in a streaming pass. This is the fast path for quick triage and summary-oriented commands.
+2. `core::hprof::binary_parser` performs the full binary parse and builds the `ObjectGraph` used by deep analysis.
+3. `core::graph::dominator` computes the Lengauer-Tarjan dominator tree and retained sizes on top of that graph.
+4. `core::analysis::engine` runs `analyze_heap()` and `detect_leaks()`, preferring graph-backed analysis and falling back to heuristics when the full graph path is unavailable.
+5. `core::graph::gc_path` traces GC root paths with `ObjectGraph` BFS plus documented fallbacks when the heap data is incomplete.
+6. `core::report::renderer` turns analysis results into the supported output formats: Text, Markdown, HTML, TOON, and JSON.
+7. `cli::main` is the CLI entry point that wires user-facing commands onto the shared core APIs.
+8. `core::mcp::server` exposes the same analysis capabilities over stdio JSON-RPC for editor and IDE integration.
+
+### Module Ownership Guide
+
+| Module | What it does | Good first issues |
+| --- | --- | --- |
+| `hprof/` | HPROF parsing, record decoding, and object graph construction | fixture coverage, parser edge cases, clearer parse errors, tag handling fixes |
+| `analysis/` | leak detection, AI integration, and investigation analyzers | ranking tweaks, new analyzers, provenance fixes, small request/response improvements |
+| `graph/` | dominator tree, GC paths, and graph metrics | traversal bugs, retained-size correctness checks, metrics polish, fallback behavior cleanup |
+| `report/` | output formatting and escaping | renderer consistency, table/layout polish, escaping fixes, output parity across formats |
+| `config.rs` | configuration types, defaults, and config plumbing | default-value cleanup, validation improvements, config documentation alignment |
+| `fix/` | fix suggestion generation | better heuristics, output shaping, provenance labeling, safer fallback messaging |
+| `mcp/` | stdio server transport and tool wiring | request validation, error contract cleanup, method coverage, transport robustness |
+
+### Key Types to Understand
+
+- `ObjectGraph` is the central heap model shared by parsing, dominator analysis, GC-path tracing, and higher-level investigation code.
+- `AnalyzeRequest` and `AnalyzeResponse` define the main analysis contract used by the CLI, reports, and MCP surfaces.
+- `LeakInsight` represents one leak candidate, including severity, retained-size context, and provenance markers.
+- `AppConfig` is the configuration hierarchy that controls parsing, analysis, AI, and output behavior.
+- `ProvenanceMarker` labels fallback, partial, synthetic, and placeholder data so contributors can preserve honest output semantics.
+
+### Development Flow
+
+The full setup is already covered in [Development Setup](#development-setup), [Testing Guidelines](#testing-guidelines), and [Pull Request Process](#pull-request-process). For day-to-day work, the short loop is:
+
+- Run `cargo check` frequently while developing.
+- Run `cargo test --workspace` before pushing.
+- Run `cargo clippy --workspace --all-targets -- -D warnings` to catch lint regressions.
+- Run `cargo fmt --all -- --check` to verify formatting.
+
+---
+
+## Contributor Ladder
+
+Mnemosyne welcomes small first fixes just as much as deeper subsystem work. The ladder below is not a rigid program; it is the usual path from a first PR to broader project responsibility.
+
+### First-Time Contributor
+
+Start with issues labeled `good first issue` or `help wanted`. These are the best entry points for learning the codebase, the review expectations, and the testing loop without having to understand every subsystem at once.
+
+- Pick a focused issue, fork the repository, and open a pull request.
+- If you are unsure whether an issue is still available or where a change should land, comment on the issue and ping the maintainer before you invest heavily.
+- Draft pull requests are welcome for first contributions, especially when you want feedback on direction early.
+
+### Regular Contributor
+
+After a few merged pull requests, contributors usually become comfortable moving between parser, analysis, graph, and reporting work.
+
+- Expect to take on slightly broader changes that may touch more than one module.
+- Keep pull requests focused, test behavior changes, and update docs when the user-facing contract moves.
+- Participate in review discussions by responding promptly and explaining tradeoffs clearly.
+
+### Trusted Contributor
+
+Trusted contributors have a track record of consistent, high-signal changes and good review hygiene.
+
+- You may be asked to take on larger features or trickier bug investigations.
+- Reviews at this stage should show strong attention to correctness, fallback behavior, and contract stability across CLI, MCP, and docs.
+- Trusted contributors are often the first people maintainers look to for milestone follow-through and cross-module cleanup.
+
+### Maintainer
+
+Maintainers are responsible for more than code changes. They help keep the project healthy and predictable for everyone else.
+
+- Typical maintainer responsibilities include issue triage, pull request review, release management, and keeping roadmap work aligned with the shipped behavior.
+- Maintainer access is earned through a demonstrated track record of high-quality contributions, thoughtful review participation, and reliable follow-through over time.
+- There is no shortcut here: the clearest path is steady, correct work and good collaboration across multiple contribution cycles.
+
+### Review and Mentorship Notes
+
+- Code review expectations are the same at every level: clear problem statement, focused changes, tests for behavior changes when practical, and responsiveness to feedback.
+- For your first PR, it is fine to ask for guidance explicitly. A short note in the issue or PR description is enough.
+- If you want help choosing a starter task, begin with the issue labels above and use [Getting Help](#getting-help) when you need clarification.
+
+---
+
+## Community
+
+For questions, ideas, and feedback, use GitHub Discussions. For bugs and feature requests, use the issue tracker and follow the guidance in [Issue Reporting](#issue-reporting). For private security disclosures, please follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ---
 

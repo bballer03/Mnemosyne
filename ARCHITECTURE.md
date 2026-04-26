@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** April 13, 2026
+> **Last Updated:** April 26, 2026
 > **Version:** 0.2.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -48,24 +48,34 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 ## Current Implementation Snapshot (April 2026)
 
 ### Shipped today
-- **Parser:** `core::hprof::parser` streams HPROF headers/records for summary-level stats, and `core::hprof::binary_parser` parses binary heap records into an object graph for graph-backed analysis.
+- **Parser:** `core::hprof::parser` streams HPROF headers/records for record-summary stats, `core::hprof::overview` provides the bounded-memory class-resolved overview path used for large-dump triage, and `core::hprof::binary_parser` parses binary heap records into an object graph for deep graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`. The `analyze` command now accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **CLI:** `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`, except `ci-check`, which uses `--output` for its policy-gate artifacts, and `flamegraph`, which requires `-o/--output` because the artifact is SVG, folded-stack text, or JSON. `parse`, `analyze`, `ci-check`, and `flamegraph` all use `--mode auto|deep|overview` where appropriate; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. `ci-check` adds `--policy`, `--format text|json|junit|github-actions`, and `--fail-on info|warning|error|critical`; `flamegraph` adds `--root dominator|class-hierarchy|gc-root-path`, `--format svg|folded-stack|json`, `--min-fraction`, `--title`, and `--max-frames`, and exits `5` when the user requests or auto-resolves to overview mode; the `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **Query engine:** `core::query` now carries the targeted M7-4 parity slice on top of the earlier OQL foundation: built-in pseudo-attributes `@retainedSize`, `@toString`, and `@gcRootPath`; `LIKE` / `CONTAINS`; `OBJECTS` single-hop projection; `IS NULL` / `IS NOT NULL`; and single-quoted string literals. `core::query::synth` owns synthetic string rendering so the query layer can decode real `java.lang.String` contents when field data is available and fall back honestly elsewhere.
+- **Shared GC-root-path helper:** `core::graph::gc_root_path` now owns the shortest-path helper reused by both `core::query` and `core::report::flamegraph::collapse::gc_root_path`, keeping `@gcRootPath` query output and GC-root-path flamegraph collapse byte-identical.
+- **Analysis modes:** `AnalysisMode::{Auto, Deep, Overview}` is now shared across CLI, MCP, the analysis engine, and report rendering. Deep mode keeps the v0.2.0 object-graph pipeline, while overview mode is streaming, bounded-memory, and explicitly limited to approximate shallow-size triage without dominators, retained sizes, or leak suspects.
+- **Policy engine:** `core::policy` is now a top-level sibling of `analysis`, `report`, `query`, `mapper`, `fix`, and `mcp`. It loads dedicated TOML policy files, consumes finalized `AnalyzeResponse` or streaming `OverviewSummary` values through `PolicyInput`, evaluates those rules into `PolicyResult`, and owns its own renderer family under `core::policy::render::{text,json,junit,github_actions}` rather than routing through `core::report`.
+- **MCP:** `parse_heap` and `analyze_heap` now accept optional `mode: "auto"|"deep"|"overview"`; overview responses carry a `"mode": "overview"` discriminator and return the streaming overview summary instead of pretending to be a deep `AnalyzeResponse`. Failures keep the legacy string `error` field and also attach machine-readable `error_details`, including structured `feature_unavailable_in_overview_mode` details when deep-only query features are evaluated without a deep graph.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
+- **Flame graph reporting:** `core::analysis::analyze_heap_with_graph()` now gives deep-mode callers a stable way to retrieve `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without widening the serialized `AnalyzeResponse` contract. `core::report::flamegraph` then collapses those graph internals into dominator, class-hierarchy, or GC-root-path folded stacks and renders SVG through `inferno` 0.11.x (CDDL-1.0), plus folded-stack text and a JSON envelope.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
 - **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
 - **AI insights:** `core::analysis::ai` now supports `rules`, `stub`, and `provider` modes plus chat-turn generation that still returns `AiInsights` / `AiWireExchange` in TOON. `provider` mode uses a small `core::llm` transport for OpenAI-compatible chat-completions endpoints, renders provider instruction sections from `core::prompts` YAML templates (embedded default plus optional override directory), redacts `heap_path` and regex-matched content from the fully rendered outbound prompt via `[ai.privacy]` before external calls, emits opt-in hashed audit metadata for the redacted prompt, applies a minimal `max_tokens` prompt-budget guard, and parses strict TOON responses back into the existing contract, while `rules` remains the default offline-safe path. `core::fix::propose_fix()` preserves the legacy one-argument API, and `core::fix::propose_fix_with_config()` reuses the same provider/privacy path for a one-file, one-snippet AI-backed patch-generation slice with heuristic fallback.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
-- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 194 passing tests.
+- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 448 passing Rust tests plus targeted UI/Tauri validation.
 
-### Still in progress
-- **Remaining MAT-parity work**, especially deeper query/explorer coverage beyond the current minimal OQL-style surface.
-- **Post-M5 AI follow-through** (e.g., broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and any streaming follow-through only if later validation proves it necessary).
-- **Large-dump follow-through**: Step 11 is complete. The current benchmark baseline now includes dense synthetic validation at roughly 500 MB / 1 GB / 2 GB, with default-path RSS around 2.87x-2.90x and investigation-path RSS around 3.89x-3.92x. Additional real-world large-dump validation is still useful, but the Step 11 gate is no longer open.
-- **Formal MCP/task automation around the future analysis pipeline.**
+### M6 closeout delivered
+- **Browser UI follow-through:** The Object Inspector can request live references/referrers through `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__`, heap explorer routes resolve selected objects back to leak IDs for cross-navigation into the leak workspace, and the shared frontend now covers the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace.
+- **Desktop scaffold:** `tauri/` now wraps the shared `ui/` build, injects both host bridges, and exposes native commands for `load_heap`, `unload_heap`, `query_heap`, `get_references`, `get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, and `propose_fix`.
+- **Ecosystem/docs:** The repo now includes the user guide, troubleshooting guide, benchmark comparison doc, CI integration guides, example projects, and the plugin/extension system design reference.
+
+### Still in progress (post-M6 follow-on)
+- **Desktop distribution hardening:** The Tauri shell cargo-checks cleanly and bundles the shared frontend, but it is not yet part of the tagged release/distribution pipeline.
+- **Post-M5 AI follow-through (narrower scope):** Broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming only if the current request/response transport proves insufficient.
+- **Broader ecosystem follow-through:** docs.rs publication, external community hosting, and apples-to-apples benchmark reruns against external tools remain optional future work rather than hidden incomplete milestone scope.
 
 The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
 
@@ -93,18 +103,30 @@ core/
    │   └── metrics.rs      # Graph metrics / summaries (was graph.rs)
    ├── analysis/           # Leak detection + AI orchestration
    │   ├── mod.rs
-   │   ├── engine.rs       # Analysis engine (was analysis.rs)
+   │   ├── engine.rs       # Analysis engine + analyze_heap_with_graph()
    │   ├── thread.rs       # Thread inspection + stack trace correlation
    │   ├── string_analysis.rs # Duplicate strings + top strings by size
    │   ├── collection.rs   # HashMap/ArrayList/etc. waste inspection
    │   ├── top_instances.rs # Largest-instance ranking
    │   └── ai.rs
+   ├── policy/             # CI regression policy engine
+   │   ├── mod.rs
+   │   ├── eval.rs
+   │   ├── input.rs
+   │   ├── result.rs
+   │   └── render/         # text/json/junit/github-actions outputs
    ├── mapper/             # Source code mapping
    │   ├── mod.rs
    │   └── source.rs       # Was mapper.rs
    ├── report/             # Report rendering
    │   ├── mod.rs
-   │   └── renderer.rs     # Was report.rs
+   │   ├── renderer.rs     # Analyze-report rendering (was report.rs)
+   │   └── flamegraph/     # Flame graph rendering + folded-stack projection
+   │      ├── mod.rs
+   │      ├── types.rs
+   │      ├── budget.rs
+   │      ├── collapse/    # dominator/class_hierarchy/gc_root_path
+   │      └── render/      # svg/folded-stack/json outputs
    ├── fix/                # Fix generation
    │   ├── mod.rs
    │   └── generator.rs    # Was fix.rs
@@ -112,6 +134,99 @@ core/
       ├── mod.rs
       └── server.rs       # Was mcp.rs
 ```
+
+## Browser-First UI Layer
+
+> **Status (Apr 2026):** Shipped as M4 with the planned M6 follow-through now delivered: live object references/referrers when a bridge is present, object-to-leak cross-navigation across heap-explorer panes, and an in-repo Tauri desktop scaffold.
+
+The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail.
+
+### Route Map
+
+| Route | Surface | Data source |
+|-------|---------|-------------|
+| `/` | Artifact loader — drop a JSON artifact or pick a file | — |
+| `/dashboard` | Triage dashboard — summary strip, leak table, histogram panel, graph metrics | Artifact |
+| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail | Artifact |
+| `/heap-explorer/dominators` | Dominator tree browser — retained-size explorer | Artifact |
+| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail, live refs/referrers | Artifact + Bridge |
+| `/heap-explorer/query-console` | OQL query console — runs `query_heap` via host bridge | Bridge |
+| `/leaks/:leakId/overview` | Leak overview — suspect summary backed by artifact | Artifact |
+| `/leaks/:leakId/explain` | AI explanation — routed through host bridge when available | Bridge |
+| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall | Bridge |
+| `/leaks/:leakId/source-map` | Source mapping — bridge-backed | Bridge |
+| `/leaks/:leakId/fix` | Fix suggestions — bridge-backed | Bridge |
+
+### Feature Areas
+
+```text
+ui/src/features/
+├── artifact-loader/     # Drop zone, artifact parsing, artifact Zustand store
+├── dashboard/           # Triage dashboard components and dashboard store
+├── artifact-explorer/   # Histogram explorer, analyzer rail, bucket detail
+├── heap-explorer/       # Dominator/object/query pages + cross-nav actions
+└── leak-workspace/      # Leak workspace layout, subpages, live-detail bridge
+```
+
+### Host Bridge Contract
+
+Two optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server):
+
+- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — provides `explainLeak`, `findGcPath`, `mapToCode`, and `proposeFix`
+- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — provides `queryHeap`, `getReferences`, and `getReferrers`
+
+The current `tauri/` scaffold already injects both bridges via `tauri/src/bridge.ts` and backs them with native commands in `tauri/src/commands.rs`.
+
+When a bridge is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders. Artifact-backed panels always work without any bridge.
+
+### Architecture Diagram
+
+```mermaid
+flowchart TD
+    HD[".hprof Heap Dump"]
+
+    subgraph CLI["CLI  (mnemosyne-cli)"]
+         CMDS["parse · leaks · analyze · ci-check · flamegraph\ndiff · map · gc-path · query\nexplain · chat · fix · serve · config"]
+    end
+
+    subgraph Core["Core Library  (mnemosyne-core)"]
+        PARSER["HPROF Parser\ncore::hprof"]
+        GRAPH["Object Graph + Dominators\ncore::graph"]
+        ANALYSIS["Analysis Engine\ncore::analysis"]
+      POLICY["Policy Engine\ncore::policy"]
+        AI["AI Insights\ncore::analysis::ai"]
+        MCP["MCP Server\ncore::mcp"]
+        REPORT["Report Generator\ncore::report"]
+        PARSER --> GRAPH --> ANALYSIS --> AI
+        ANALYSIS --> REPORT
+      PARSER --> POLICY
+      ANALYSIS --> POLICY
+        ANALYSIS --> MCP
+    end
+
+    subgraph UI["Browser-First UI  (ui/)"]
+        LOADER["Artifact Loader"]
+        DASH["Triage Dashboard"]
+        AE["Artifact Explorer"]
+        HE["Heap Explorer"]
+        LW["Leak Workspace"]
+    end
+
+    subgraph External["External"]
+        LLM["AI Provider\n(OpenAI / Anthropic / Local)"]
+        MCPC["MCP Clients\n(VS Code · Cursor · JetBrains)"]
+    end
+
+    HD -->|"hprof input"| CLI
+    CLI --> Core
+    Core -->|"JSON artifact\n--format json --output-file"| LOADER
+    LOADER --> DASH & AE & HE & LW
+    AI -->|"provider call"| LLM
+    MCP --> MCPC
+    MCP -->|"window bridge\n(optional)"| LW & HE
+```
+
+> **Note:** `resources/architecture-overview.svg` and `resources/architecture.svg` are pre-rendered Mermaid exports that predate the UI layer. The diagram above is the authoritative current architecture. The SVG files can be regenerated from a Mermaid source if needed for export.
 
 Repository-level performance tooling now lives alongside the core crate: `core/benches/` holds Criterion benchmarks for parser throughput, graph construction, and dominator computation, while `scripts/measure_rss.sh` profiles `parse`, `analyze`, and `leaks`, computes RSS:dump ratios, and falls back to `/proc/PID/status` VmHWM sampling when `/usr/bin/time` is unavailable so the M3 memory-scaling decision can be grounded in measurements rather than assumptions.
 
@@ -126,12 +241,12 @@ Mnemosyne's architecture is organized into clear layers, separating the concerns
 │  ┌────────────────────────┐       ┌─────────────────────────────────┐  │
 │  │    CLI  (clap-based)   │       │ MCP Server (stdio JSON lines)  │  │
 │  │ parse · leaks · analyze│       │ list_tools · parse_heap        │  │
-│  │ diff · map · fix       │       │ detect_leaks · analyze_heap    │  │
-│  │ query · gc-path · serve│       │ query_heap · map_to_code       │  │
-│  │ chat · explain · config│       │ find_gc_path · explain_leak    │  │
-│  │ --format text|md|html  │       │ create_ai_session ·            │  │
-│  │   |toon|json           │       │ resume_ai_session ·            │  │
-│  │                        │       │ get_ai_session ·               │  │
+│  │ ci-check · flamegraph  │       │ detect_leaks · analyze_heap    │  │
+│  │ diff · map · fix       │       │ query_heap · map_to_code       │  │
+│  │ query · gc-path · serve│       │ find_gc_path · explain_leak    │  │
+│  │ chat · explain · config│       │ create_ai_session ·            │  │
+│  │ --format text|md|html  │       │ resume_ai_session ·            │  │
+│  │   |toon|json           │       │ get_ai_session ·               │  │
 │  │                        │       │ close_ai_session ·             │  │
 │  │                        │       │ chat_session · propose_fix     │  │
 │  └───────────┬────────────┘       └──────────────┬──────────────────┘  │
@@ -222,7 +337,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Argument Parsing & Config**: Reading options (e.g. output format selection, AI model settings, filters) – likely using a crate like clap for ergonomic CLI design.
 
-**User Commands**: Handling shipped subcommands for different actions: `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config`.
+**User Commands**: Handling shipped subcommands for different actions: `parse`, `leaks`, `analyze`, `ci-check`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config`.
 
 **Triggering Workflow**: After parsing inputs, the CLI invokes the MCP to perform the requested operation. It essentially hands off control along with user-provided parameters (file path, config flags).
 
@@ -230,7 +345,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
 
-> **Status (Apr 2026):** The clap-based CLI is fully wired with `--output-file` support, `--format` selection (text/markdown/html/toon/json), provenance display for `leaks`/`gc-path`/`fix` output, and a CLI-first `chat` command for bounded leak-focused follow-up. Richer progress UI and non-CLI conversation surfaces remain future work.
+> **Status (Apr 2026):** The clap-based CLI is fully wired with `--output-file` on `analyze`, `--output` on `ci-check`, `--format` selection for both analysis and policy-gating surfaces (`text/markdown/html/toon/json` plus policy `text/json/junit/github-actions`), provenance display for `leaks`/`gc-path`/`fix` output, and a CLI-first `chat` command for bounded leak-focused follow-up. Richer progress UI and non-CLI conversation surfaces remain future work.
 
 ### 2. Master Control Program (Orchestrator - MCP)
 
@@ -254,7 +369,7 @@ In essence, MCP is the central controller ensuring that Mnemosyne's components w
 
 The Heap Dump Parser is the component responsible for reading the JVM heap dump file (typically in `.hprof` format) and extracting meaningful data. Implemented in Rust, it emphasizes performance and low memory usage:
 
-**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). `core::hprof::parser` uses sequential buffered reads for summary-level record stats, while `core::hprof::binary_parser` performs the deeper binary HPROF pass that builds the in-memory `ObjectGraph` used by graph-backed analysis.
+**Streaming Parse**: The parser processes the heap dump in a streaming fashion (without loading the entire file in memory). `core::hprof::parser` uses sequential buffered reads for summary-level record stats, `core::hprof::overview` now performs bounded-memory class-resolved streaming triage for overview mode, and `core::hprof::binary_parser` performs the deeper binary HPROF pass that builds the in-memory `ObjectGraph` used by graph-backed analysis.
 
 **Data Extraction**: As it parses, it gathers key metrics and structures:
 - **Class Histogram**: A list of classes with their instance counts and total memory usage (so we know top memory consumers).
@@ -271,7 +386,7 @@ The Heap Dump Parser is the component responsible for reading the JVM heap dump 
 
 By the end of this stage, Mnemosyne has a concise "snapshot" of the heap's contents. This snapshot is then handed to the AI analysis component for deeper insight.
 
-> **Status (Mar 2026):** Mnemosyne now has two parser paths inside `core::hprof/`: `parser.rs` for streaming summary stats and `binary_parser.rs` for object-level graph construction used by `analyze_heap()`, `detect_leaks()`, and `gc-path`. Some other surfaces, especially diffing, still rely on the lighter summary path.
+> **Status (Apr 2026):** Mnemosyne now has a dual-path analysis story inside `core::hprof/`: `binary_parser.rs` drives the deep object-graph path used by `analyze_heap()`, `detect_leaks()`, and `gc-path`, while `overview.rs` drives the bounded-memory overview path used for large-dump triage. The older `parser.rs` record scanner still powers lightweight summary parsing.
 
 ### 4. AI Analysis Engine (Insight Generator)
 
@@ -322,7 +437,7 @@ In summary, the LLM Integration is the bridge between Mnemosyne and the AI. By i
 
 ### 6. Report Generator (Output Formatter)
 
-The final component takes all the gathered information – raw data from the parser and insights from the AI – and produces a coherent report for the user. The Report Generator focuses on presenting results clearly and in the requested format:
+The final component takes all the gathered information – raw data from the parser and insights from the AI – and produces a coherent report or export artifact for the user. The Report Generator focuses on presenting results clearly and in the requested format:
 
 **Terminal Report**: By default, Mnemosyne can print a nicely formatted summary to the console. This includes sections like "Top 10 Memory-Consuming Classes", "Suspected Memory Leaks", "Duplicated Strings Summary", etc., with ASCII tables or bullet points. Important items can be highlighted (using ANSI colors) – e.g. red for critical issues, yellow for warnings, green for OK – to draw attention to potential problems (if the terminal supports it).
 
@@ -330,15 +445,17 @@ The final component takes all the gathered information – raw data from the par
 
 **JSON Output**: When integration with automation is needed, a JSON output mode allows the results to be machine-readable. This is useful for CI pipelines or automated regression tests: for example, a script could run Mnemosyne after a load test and parse the JSON to decide if the number of certain objects exceeds a threshold (indicating a leak). The JSON would contain structured data like the class histogram, and any flags like `suspected_leak: true` for particular classes or objects.
 
+**Flame Graph Exports**: The dedicated `mnemosyne flamegraph` surface also lives under `core::report`. It consumes graph-backed deep analysis through `analyze_heap_with_graph()`, collapses that data into folded stacks, and renders either interactive SVG via `inferno` 0.11.x (CDDL-1.0), plain folded-stack text, or a JSON envelope with `{ tool, subcommand, version, strategy, total_weight, truncated_to_other, frame_count, stacks }`. That makes the visualization pipeline reusable without teaching the main `AnalyzeResponse` renderer about flamegraph-specific formats.
+
 **Severity Levels**: The report tags findings with severity levels (informational, low, medium, high, critical). For instance, a minor uptick in memory usage might be informational, whereas an outright memory leak pattern is critical. These levels can be used to filter output (e.g., "show only high severity issues") and help prioritize attention.
 
 **Contextual Details**: Where possible, the report provides context for each finding. For example, if it flags a class `com.example.FooCache` as a leak suspect, it might include a line like: "Suspected leak: FooCache -> FooItem[] retains ~500MB (500k instances) – possibly an unbounded cache that never clears." This combines data from the parser with insight from the AI in a readable sentence or two. The report generator's job is to assemble such sentences from the pieces given by the analysis engine.
 
 **Formatting and Styles**: The code in this module is responsible for aligning tables, truncating or abbreviating excessively long class names or field data, and ensuring the output is clean. It may also manage saving the report to a file if requested, handling file I/O errors gracefully.
 
-Because the Report Generator is modular, adding a new output format later (say, HTML for a web UI, or direct Slack message formatting) would be straightforward. We simply plug in a new formatter without disturbing the core logic. In the initial implementation, terminal and Markdown outputs, plus JSON, cover the most common needs.
+Because the Report Generator is modular, adding a new output format later (say, direct Slack message formatting, or a richer GUI artifact) remains straightforward. We simply plug in a new formatter without disturbing the core logic. The current implementation now covers analyze-report text/Markdown/HTML/TOON/JSON plus flamegraph SVG/folded-stack/JSON.
 
-> **Status (Mar 2026):** Text, Markdown, HTML, TOON, and JSON reports are rendered via the shared `render_report` helper with `--output-file` support. HTML output is XSS-hardened; TOON values are properly escaped. Provenance markers are rendered in all non-JSON formats. GUI visualizations remain future work.
+> **Status (Apr 2026):** Text, Markdown, HTML, TOON, and JSON analyze reports are rendered via the shared `render_report` helper with `--output-file` support, and `core::report::flamegraph` now adds SVG/folded-stack/JSON flamegraph exports through `mnemosyne-cli flamegraph`. HTML output is XSS-hardened; TOON values are properly escaped; flamegraph SVG is rendered through `inferno` 0.11.x (CDDL-1.0). GUI embedding of those artifacts remains future work.
 
 ## Execution Flow (from CLI to AI and Back)
 
@@ -457,11 +574,13 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Support for Additional Formats**: Currently focused on the standard JVM HPROF format, Mnemosyne could be extended to support other heap or memory snapshot formats. For example, Android .hprof files (which are similar but not identical), or IBM/OpenJ9 heap dumps, etc. The parser component can be augmented or new parser modules added for these formats.
 
-**GUI or Web Dashboard**: Build a graphical user interface on top of Mnemosyne. This could be a desktop electron app or a web dashboard that allows users to upload a heap dump and get a nicely formatted report with charts (e.g., pie chart of memory by package, timeline of object count if multiple dumps tracked, etc.). The core logic would remain the same, just a new presentation layer on top.
+**Browser-First UI (shipped, M4 + M6 follow-through)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer, heap explorer (dominators, object inspector, query console), and the full leak workspace route family. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers whenever a host bridge is present.
+
+**Desktop distribution hardening (post-M6)**: `tauri/` already wraps the shared `ui/` React frontend and injects both host bridges through native commands. The remaining follow-on work is release-grade packaging, signing, and distribution only if native desktop delivery proves worth the added complexity.
 
 **Deeper JVM Integration**: In the future, Mnemosyne might integrate with live JVMs via JMX or JVMTI. Instead of requiring a heap dump file, it could connect to a running application (given proper credentials) and trigger a heap dump or even query memory structures in real-time. This would make it more of a live monitoring tool. Combined with the AI, it could act as a continuous memory assistant, not just post-mortem analysis.
 
-**Custom Analysis Plugins**: Organizations might have specific patterns they care about (for example, a certain cache class that often leaks). We can add a plugin system where you can drop in custom analysis logic. This might be done via scripting (maybe load a WASM plugin or a Lua script that gets the heap data). Alternatively, extending the AI prompts: allow users to add their own prompt templates for domain-specific analysis.
+**Custom Analysis Plugins**: Organizations might have specific patterns they care about (for example, a certain cache class that often leaks). M6 now ships the design reference in `docs/design/m6-plugin-extension-system.md`; runtime plugin loading remains future work once the core APIs stabilize further. This might be done via scripting (maybe load a WASM plugin or a Lua script that gets the heap data). Alternatively, extending the AI prompts: allow users to add their own prompt templates for domain-specific analysis.
 
 **Local LLM Integration**: As local open-source LLMs become more capable, Mnemosyne could integrate a lightweight model for offline use. In the future, one could imagine shipping a small model fine-tuned for analyzing memory patterns. While it might not be as powerful as GPT-4, it could handle simpler analyses without an internet connection. The architecture already separates the AI service, so plugging in a local inference (perhaps via llama-rs or similar crates) is feasible.
 

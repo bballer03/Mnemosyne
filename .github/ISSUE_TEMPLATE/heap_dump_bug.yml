@@ -1,0 +1,158 @@
+name: Heap dump bug
+description: Bug specific to parsing or analyzing a JVM heap dump (HPROF). Use this for parser crashes, wrong leak/dominator results, OQL failures, mapper mismatches.
+title: "[Heap Bug]: "
+labels: ["bug", "heap-dump", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Heap-dump bugs need specific provenance to reproduce. Without dump metadata, the issue cannot be triaged.
+
+        **Do not attach the heap dump itself** unless you confirm it contains no sensitive data. Prefer a synthetic repro or a redacted snippet.
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I confirmed the dump contains no PII, credentials, or proprietary business data — or I will only share a synthetic repro.
+          required: true
+        - label: I ran the latest Mnemosyne release or recent `main`.
+          required: true
+
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Affected subsystem
+      multiple: true
+      options:
+        - HPROF parser
+        - Object graph / dominator tree
+        - Leak detection
+        - String analysis
+        - Collection inspection
+        - Top instances
+        - OQL
+        - Classloader analysis
+        - Thread inspection
+        - Mapper (source line resolution)
+        - MCP server
+        - Reporting
+        - AI explanations
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command invoked
+      render: shell
+      placeholder: "mnemosyne-cli analyze ./dump.hprof --leak --top 50"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What did you expect Mnemosyne to report?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the exact output, error, or wrong answer. Compare against another heap analyzer (Eclipse MAT, VisualVM, jhat) if possible.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: dump-size
+    attributes:
+      label: Heap dump file size
+      placeholder: "1.4 GB"
+    validations:
+      required: true
+
+  - type: input
+    id: dump-format
+    attributes:
+      label: Heap dump format / version
+      description: HPROF format byte (e.g., 1.0.1, 1.0.2). Run `head -c 19 dump.hprof` to read the header.
+      placeholder: "JAVA PROFILE 1.0.2"
+
+  - type: dropdown
+    id: jvm-vendor
+    attributes:
+      label: JVM vendor that produced the dump
+      options:
+        - HotSpot (OpenJDK / Oracle)
+        - Eclipse Temurin
+        - Azul Zulu / Prime
+        - Amazon Corretto
+        - GraalVM
+        - IBM J9 / OpenJ9
+        - Android ART
+        - Unknown / other
+    validations:
+      required: true
+
+  - type: input
+    id: jvm-version
+    attributes:
+      label: JVM version
+      placeholder: "OpenJDK 21.0.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dump-trigger
+    attributes:
+      label: How was the dump generated?
+      options:
+        - jmap -dump:format=b,live
+        - jmap -dump:format=b (live + unreachable)
+        - HeapDumpOnOutOfMemoryError
+        - jcmd GC.heap_dump
+        - Programmatic (HotSpotDiagnosticMXBean)
+        - Container OOM / kubelet
+        - Other / unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cross-check
+    attributes:
+      label: Verified with another tool?
+      description: If MAT/VisualVM/jhat agrees with Mnemosyne, the dump itself may be the issue. If they disagree, this is a genuine Mnemosyne bug.
+      options:
+        - "Eclipse MAT — disagrees with Mnemosyne"
+        - "Eclipse MAT — agrees with Mnemosyne"
+        - "VisualVM — disagrees with Mnemosyne"
+        - "VisualVM — agrees with Mnemosyne"
+        - "jhat — disagrees with Mnemosyne"
+        - "Did not cross-check"
+
+  - type: textarea
+    id: synthetic-repro
+    attributes:
+      label: Synthetic reproducer
+      description: Smallest Java/Kotlin/Scala program that produces a dump exhibiting the bug. Massively speeds up triage.
+      render: java
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (RUST_LOG=debug RUST_BACKTRACE=1)
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context

@@ -103,7 +103,7 @@ pub fn parse_heap(job: &HeapParseJob) -> CoreResult<HeapSummary> {
     })
 }
 
-fn parse_hprof_header<R: Read>(reader: &mut R) -> CoreResult<HprofHeader> {
+pub(super) fn parse_hprof_header<R: Read>(reader: &mut R) -> CoreResult<HprofHeader> {
     let mut header_bytes = Vec::with_capacity(64);
     loop {
         let mut byte = [0u8; 1];
@@ -169,7 +169,7 @@ fn scan_hprof_records<R: Read>(reader: &mut R) -> CoreResult<(u64, Vec<RecordSta
     }
 
     let mut record_stats: Vec<RecordStat> = stats.into_values().collect();
-    record_stats.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    record_stats.sort_by_key(|b| std::cmp::Reverse(b.bytes));
 
     let object_guess = record_stats
         .iter()
@@ -180,7 +180,7 @@ fn scan_hprof_records<R: Read>(reader: &mut R) -> CoreResult<(u64, Vec<RecordSta
     Ok((total_records, record_stats, object_guess))
 }
 
-fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
+pub(super) fn skip_bytes<R: Read>(reader: &mut R, len: u64) -> CoreResult<()> {
     let mut remaining = len;
     let mut buffer = [0u8; 8 * 1024];
     while remaining > 0 {

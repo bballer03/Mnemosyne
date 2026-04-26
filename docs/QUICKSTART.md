@@ -41,6 +41,13 @@ mnemosyne-cli parse heap.hprof
 
 `parse` is the lightweight path. It reports header metadata, total records, and record-category byte totals without building the full object graph.
 
+Both `parse` and `analyze` accept `--mode auto|deep|overview` (default `auto`). `auto` resolves to overview for dumps at or above 4 GiB by default, or whatever byte threshold `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` supplies. Overview mode is streaming and graph-free: it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
+
+```bash
+mnemosyne-cli parse heap.hprof --mode overview
+mnemosyne-cli analyze heap.hprof --mode overview --format json
+```
+
 ## Step 3: Detect Leaks
 
 ```bash
@@ -72,6 +79,7 @@ Useful live options:
 
 ```bash
 mnemosyne-cli analyze heap.hprof --format json
+mnemosyne-cli analyze heap.hprof --mode overview --format json
 mnemosyne-cli analyze heap.hprof --group-by package
 mnemosyne-cli analyze heap.hprof --threads --strings --collections --classloaders --top-instances
 mnemosyne-cli analyze heap.hprof --profile incident-response
@@ -94,7 +102,72 @@ Profile presets currently mean:
 - `incident-response`: enables all optional investigation reports and bumps `top_n` to at least `15` plus `min_capacity` to at least `32`
 - `ci-regression`: enables `top-instances` with tighter defaults
 
-## Step 5: AI Insights
+`--profile overview` is a deep-mode preset. It is not the same thing as `--mode overview`.
+
+## Step 5: Run CI Regression Checks
+
+Create a small policy file:
+
+```toml
+[meta]
+name = "heap-regression"
+
+[defaults]
+severity = "error"
+
+[[rule]]
+id = "heap-budget"
+predicate = "total_bytes"
+op = "<="
+value = 2147483648
+```
+
+Run the gate:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml
+```
+
+Useful live options:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+```
+
+Notes:
+
+- `ci-check` uses a dedicated TOML policy file; it is separate from `mnemosyne-cli config`
+- severities are `info`, `warning`, `error`, and `critical`; `--fail-on` defaults to `error`
+- all renderers still show every violation and skipped rule; `--fail-on` changes the process exit status only
+- exit codes are `0` clean or below threshold, `1` violation at or above `--fail-on`, `2` invalid policy, `3` unreadable heap or analysis failure, `4` explicit `--mode overview` with a deep-only rule
+- `--mode auto` may resolve to overview and skip deep-only rules; explicit `--mode overview` with a deep-only policy returns exit `4`
+- the current policy surface supports 10 predicates; the full catalog lives in `docs/design/milestone-7-2-ci-regression-policies.md`
+
+## Step 6: Generate a Flame Graph
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+```
+
+Useful live options:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep --root dominator
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --root gc-root-path
+```
+
+Notes:
+
+- `flamegraph` requires `-o/--output`; it always writes an artifact instead of stdout-friendly prose
+- rooting strategies are `dominator`, `class-hierarchy`, and `gc-root-path`
+- output formats are `svg`, `folded-stack`, and `json`
+- `flamegraph` requires deep mode and exits `5` if you pass `--mode overview` or if `--mode auto` resolves to overview at the 4 GiB cutoff
+- if you need the visualization on a large dump, rerun with `--mode deep` only when you have enough RAM for full object-graph analysis; otherwise use `analyze --mode overview` for bounded-memory triage
+
+## Step 7: AI Insights
 
 The CLI flag is still `--ai`:
 
@@ -111,6 +184,8 @@ Current AI modes:
 
 Provider-backed AI is configured through `[ai]` or environment variables. OpenAI-compatible, local, and Anthropic provider paths all have targeted verification coverage in this branch.
 
+If you pair `--ai` with `--mode overview`, Mnemosyne skips AI and tells you why: overview mode never builds the object graph the AI path relies on.
+
 Start a bounded leak-focused chat session with:
 
 ```bash
@@ -119,7 +194,7 @@ mnemosyne-cli chat heap.hprof
 
 `chat` analyzes the heap once, prints the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`. It keeps only the running process' recent history in memory and reuses the same `rules` / `stub` / `provider` AI mode plus provider privacy controls as `explain`. The startup shortlist still respects `[analysis]` filters, so chat can also begin in an explicit healthy-heap context when no leaks survive filtering.
 
-## Step 6: Save Reports
+## Step 8: Save Reports
 
 ```bash
 mnemosyne-cli analyze heap.hprof --format html --output-file report.html
@@ -135,7 +210,9 @@ Supported output formats:
 - `html`
 - `json`
 
-## Step 7: Inspect the Effective Config
+`flamegraph` has its own export formats: `svg`, `folded-stack`, and `json`.
+
+## Step 9: Inspect the Effective Config
 
 ```bash
 mnemosyne-cli config
@@ -196,6 +273,7 @@ Config lookup order:
 ```bash
 export MNEMOSYNE_OUTPUT_FORMAT=json
 export MNEMOSYNE_MAX_OBJECTS=500000
+export MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD=4294967296
 export MNEMOSYNE_MIN_SEVERITY=HIGH
 export MNEMOSYNE_PACKAGES="com.example,org.demo"
 export MNEMOSYNE_LEAK_TYPES="CACHE,THREAD"
@@ -212,6 +290,7 @@ Notes:
 
 - `MNEMOSYNE_VERBOSE` is not a real config/env knob
 - `MNEMOSYNE_USE_MMAP` and `MNEMOSYNE_THREADS` are loaded, but they are not currently documented as changing the active CLI execution path in this branch
+- `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` is measured in bytes, defaults to 4 GiB, and affects `mode=auto` for CLI `parse` / `analyze` plus MCP `parse_heap` / `analyze_heap`
 
 ## MCP Setup
 
@@ -240,6 +319,8 @@ Current MCP methods:
 
 There is currently no `apply_fix` MCP method.
 
+`parse_heap` and `analyze_heap` both accept an optional `mode` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
+
 ## Memory Scaling Status
 
 Step 11 is complete.
@@ -249,6 +330,7 @@ The current published memory-scaling story is:
 - default graph-backed `analyze` / `leaks`: about `2.87x-2.90x` RSS:dump on dense synthetic ~500 MB / ~1 GB / ~2 GB tiers
 - investigation-heavy path: about `3.89x-3.92x` on the same tiers
 - `parse`: remains near-constant and very small in RSS because it stays on the streaming summary path
+- overview mode now provides a bounded-memory class-resolved triage path for larger dumps; it stays graph-free and reports approximate shallow sizes only
 
 See `docs/performance/memory-scaling.md` for the measured tables.
 

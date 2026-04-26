@@ -1,0 +1,127 @@
+# Mnemosyne label catalogue.
+#
+# This file is the source of truth for GitHub issue / PR labels.
+# Apply via `gh label` or any label-sync tool. Keep in sync with the
+# labels referenced by ISSUE_TEMPLATE/*.yml and dependabot.yml.
+
+# ── Type ────────────────────────────────────────────────────────────────
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working as documented or expected
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement to existing functionality
+- name: question
+  color: "d876e3"
+  description: Request for information or clarification
+- name: documentation
+  color: "0075ca"
+  description: Documentation-only change
+
+# ── Triage / state ──────────────────────────────────────────────────────
+- name: triage
+  color: "fbca04"
+  description: Awaiting maintainer triage
+- name: needs-repro
+  color: "fef2c0"
+  description: Reporter needs to provide a reproducer
+- name: needs-info
+  color: "fef2c0"
+  description: Waiting on more information from reporter
+- name: blocked
+  color: "b60205"
+  description: Blocked by an external dependency or upstream issue
+- name: duplicate
+  color: "cfd3d7"
+  description: Duplicate of an existing issue or PR
+- name: wontfix
+  color: "ffffff"
+  description: Will not be addressed
+- name: stale
+  color: "e6e6e6"
+  description: No activity for an extended period
+
+# ── Domain ──────────────────────────────────────────────────────────────
+- name: heap-dump
+  color: "5319e7"
+  description: HPROF parsing or heap-specific analysis
+- name: parser
+  color: "5319e7"
+  description: HPROF parser
+- name: graph
+  color: "5319e7"
+  description: Object graph / dominator tree
+- name: leak-detection
+  color: "5319e7"
+  description: Leak detection analysis
+- name: oql
+  color: "5319e7"
+  description: Object Query Language
+- name: mcp
+  color: "0e8a16"
+  description: MCP server / tool surface
+- name: cli
+  color: "0e8a16"
+  description: CLI surface
+- name: report
+  color: "0e8a16"
+  description: HTML / JSON / Markdown reporting
+- name: ai
+  color: "0e8a16"
+  description: AI explanations or LLM integration
+- name: ui
+  color: "1d76db"
+  description: UI / web frontend (`ui/`)
+
+# ── Priority ────────────────────────────────────────────────────────────
+- name: P0
+  color: "b60205"
+  description: Critical — must fix before merge or release
+- name: P1
+  color: "d93f0b"
+  description: Important — fix before next release
+- name: P2
+  color: "fbca04"
+  description: Advisory — track for future cleanup
+
+# ── Risk ────────────────────────────────────────────────────────────────
+- name: breaking-change
+  color: "b60205"
+  description: Breaks CLI / MCP / config / report contracts
+- name: security
+  color: "b60205"
+  description: Security-relevant change or finding
+- name: performance
+  color: "ff9800"
+  description: Performance-relevant (benchmarks, RSS, complexity)
+- name: regression
+  color: "b60205"
+  description: Worked in a prior version, broken now
+
+# ── Dependencies ────────────────────────────────────────────────────────
+- name: dependencies
+  color: "0366d6"
+  description: Dependency update (Dependabot or manual)
+- name: rust
+  color: "dea584"
+  description: Rust crate dependency
+- name: github-actions
+  color: "000000"
+  description: GitHub Actions workflow / action
+- name: docker
+  color: "2496ed"
+  description: Docker / container
+- name: npm
+  color: "cb3837"
+  description: npm / Bun dependency
+
+# ── Lifecycle ───────────────────────────────────────────────────────────
+- name: good-first-issue
+  color: "7057ff"
+  description: Good entry point for new contributors
+- name: help-wanted
+  color: "008672"
+  description: Maintainers welcome external contribution
+- name: roadmap
+  color: "5319e7"
+  description: Tracks a roadmap milestone

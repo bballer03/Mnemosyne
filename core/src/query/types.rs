@@ -13,6 +13,7 @@ pub struct Query {
 pub enum SelectClause {
     All,
     Fields(Vec<FieldRef>),
+    Objects(FieldRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,7 @@ pub enum BuiltInField {
     RetainedSize,
     ObjectAddress,
     ToString,
+    GcRootPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +72,15 @@ pub enum ComparisonOp {
     Lt,
     Ge,
     Le,
+    /// SQL-style string pattern match.
+    ///
+    /// `%` matches any sequence, `_` matches any single character, and all
+    /// other regex metacharacters are treated literally.
     Like,
+    /// Case-sensitive substring match on string values.
+    Contains,
+    IsNull,
+    IsNotNull,
     InstanceOf,
 }
 
@@ -98,6 +108,43 @@ pub enum CellValue {
     Bool(bool),
     Null,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    FeatureUnavailableInOverviewMode { feature: String, hint: String },
+    NotImplemented(String),
+    Unsupported(String),
+}
+
+impl QueryError {
+    pub fn feature_unavailable_in_overview_mode(
+        feature: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self::FeatureUnavailableInOverviewMode {
+            feature: feature.into(),
+            hint: hint.into(),
+        }
+    }
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryError::FeatureUnavailableInOverviewMode { feature, .. } => {
+                write!(f, "'{feature}' is a deep-mode-only OQL feature.")
+            }
+            QueryError::NotImplemented(detail) => {
+                write!(f, "Operation not yet implemented: {detail}")
+            }
+            QueryError::Unsupported(detail) => {
+                write!(f, "Unsupported operation: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryParseError {

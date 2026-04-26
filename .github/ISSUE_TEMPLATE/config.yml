@@ -1,1 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/bballer03/Mnemosyne/security/advisories/new
+    about: Report a security vulnerability privately. Do NOT open a public issue. See SECURITY.md for details.
+  - name: Question or discussion
+    url: https://github.com/bballer03/Mnemosyne/discussions
+    about: Ask a question or start a general discussion (not a bug or feature request).

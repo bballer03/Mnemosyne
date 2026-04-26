@@ -1,0 +1,20 @@
+[package]
+name = "mnemosyne-desktop"
+version = "0.2.0"
+edition = "2021"
+description = "Mnemosyne desktop app - native JVM heap analysis"
+license = "Apache-2.0"
+
+[dependencies]
+mnemosyne-core = { path = "../core" }
+tauri = { version = "2", features = ["devtools"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[[bin]]
+name = "mnemosyne-desktop"
+path = "src/main.rs"

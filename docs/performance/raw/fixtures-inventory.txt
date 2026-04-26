@@ -1,0 +1,4 @@
+fixture	path	size_bytes	sha256
+heap.hprof	resources/test-fixtures/heap.hprof	274640397	460c75be4cfd22a55077112ba82c9d40ff36a433658f12c93398951b8b6e52d3
+synthetic-1gb.hprof	resources/test-fixtures/synthetic-1gb.hprof	1586353485	dd89c7f70a9e7de436a4d3a2fd8e846559c35350e76f2052ea32842eb5df6a91
+synthetic-4gb.hprof	resources/test-fixtures/synthetic-4gb.hprof	6471188323	f7683c803a37094782310ee7b8267b8b9e21e5490c971bc6a37d7d52ee8dd7d4

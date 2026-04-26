@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-26
+
 ### Added
+- M7-5 comparative benchmark publication artifacts: the Linux-first harness under `scripts/bench/`, the reference workstation / fixture / tooling docs under `docs/benchmarks/`, and the published partial WSL report in `docs/benchmarks/comparative-v0.3.0.md`. The current publication covers `mnemo-overview` and `hprof-slurp` on `small`, `medium`, and `large` only; the native-Linux reference-spec rerun for Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending.
+- Targeted OQL expansion across the shared query surfaces: `@retainedSize`, synthetic `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS` one-hop projection, `IS NULL` / `IS NOT NULL`, single-quoted string literals, and structured deep-only query errors
+- `mnemosyne-cli flamegraph <heap.hprof> -o <file>` as a deep-mode-only retained-size flame graph export surface with three rooting strategies (`dominator`, `class-hierarchy`, `gc-root-path`), three output formats (`svg`, `folded-stack`, `json`), a structured JSON envelope, and exit code `5` when the command is run in explicit or auto-resolved overview mode
+- `mnemosyne-cli ci-check <heap.hprof> --policy <file>` as a dedicated CI regression gate with TOML-backed policy evaluation, 10 predicates across overview/deep inputs, the `info|warning|error|critical` severity ladder plus `--fail-on`, four output formats (`text|json|junit|github-actions`), and the supporting GitHub Actions / Jenkins integration docs
+- `AnalysisMode { auto, deep, overview }` across core, CLI, MCP, and report rendering, including the bounded-memory `core::hprof::overview` parser for class-resolved streaming triage on large dumps without building the `ObjectGraph`
+- CLI `parse` / `analyze` `--mode auto|deep|overview`, MCP `parse_heap` / `analyze_heap` `mode`, the `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` env override for the 4 GiB auto-mode cutoff, and overview responses/renderers that label approximate shallow sizes honestly instead of implying retained-size semantics
+- Browser-UI follow-through in the shared frontend: heap explorer panes can now resolve selected objects back to leak IDs for direct cross-navigation into the leak workspace, and the repository now ships the supporting documentation set (`docs/user-guide.md`, `docs/troubleshooting.md`, `docs/benchmarks.md`, `docs/integrations/`) plus reproducible Java example projects under `examples/`
+- An in-repo Tauri desktop scaffold under `tauri/` that bundles the shared `ui/` frontend, injects both host bridges, and exposes native commands for heap loading, query execution, references/referrers, leak explanation, GC-path lookup, source mapping, and fix suggestions
+- `examples/cache-leak`, `examples/thread-leak`, and `examples/string-duplication` as reproducible Java sample apps with walkthroughs for practicing Mnemosyne analysis flows
 - `mnemosyne-cli chat <heap.hprof>` as a CLI-first leak-focused conversation mode that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`
 - `AiMode::Provider` plus provider runtime config fields (`endpoint`, `api_key_env`, `max_tokens`, `timeout_secs`) for real external AI execution
 - `core::llm` with an OpenAI-compatible chat-completions transport used by `AiMode::Provider`
@@ -21,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional integration coverage for zero-leak confirmation and M3 Phase 2 analyze flags, bringing the validated workspace total to 129 tests
 
 ### Changed
+- `core::analysis::engine` now exposes `analyze_heap_with_graph()` for deep-mode callers that need the `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without changing the serialized `analyze_heap()` contract, and `core::report` now includes the dedicated `flamegraph/` subtree backed by `inferno` 0.11 for SVG rendering
+- The browser-first UI now spans the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace, with direct heap-explorer → leak-workspace jumps driven by `resolveObjectToLeak()`
+- Owned project docs now reflect the shipped M6 UI/ecosystem state, including the desktop scaffold story, integration guides, benchmark comparison doc, and contributor/community guidance
 - `core::analysis::ai` now supports chat-turn generation while preserving the existing `AiInsights` / `AiWireExchange` TOON contract, and provider-mode chat reuses the same prompt-template, redaction, hashed audit-logging, and minimal prompt-budget guard path as one-shot explanations
 - `generate_ai_insights()` now returns `CoreResult<AiInsights>`, and async CLI/MCP call sites route provider mode through `spawn_blocking` so blocking provider transport does not panic inside the Tokio runtime
 - AI output now supports `rules` (default), `stub`, and `provider` modes while preserving the existing `AiInsights` / TOON response shape across CLI, MCP, and reports

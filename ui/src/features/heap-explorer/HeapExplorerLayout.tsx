@@ -6,6 +6,7 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { ModeRail } from "./components/ModeRail";
 import { ObjectInspectorPanel } from "./components/ObjectInspectorPanel";
+import { resolveObjectToLeak } from "./resolve-object-to-leak";
 
 const panelStyle = {
   border: "1px solid #1e293b",
@@ -21,6 +22,7 @@ export type HeapExplorerOutletContext = {
     className: string;
     name: string;
   };
+  resolvedLeakId?: string;
   selectedRowIndex?: number;
   setSelectedRowIndex: (rowIndex: number | undefined) => void;
 };
@@ -96,6 +98,7 @@ export function HeapExplorerLayout() {
   const selectedObject = hasUnmatchedSeededObject
     ? undefined
     : (selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined) ?? artifact.graph.dominators[0];
+  const resolvedLeakId = resolveObjectToLeak(selectedObject?.objectId, artifact);
   const showInspectorPane = location.pathname !== "/heap-explorer/object-inspector";
 
   return (
@@ -143,6 +146,7 @@ export function HeapExplorerLayout() {
             context={{
               artifact,
               selectedObject,
+              resolvedLeakId,
               selectedRowIndex,
               setSelectedRowIndex: handleSelectedRowIndexChange,
             } satisfies HeapExplorerOutletContext}

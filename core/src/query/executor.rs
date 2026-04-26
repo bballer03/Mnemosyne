@@ -1,18 +1,36 @@
+use super::synth::synth_to_string;
 use super::types::{
-    BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryResult,
+    BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
     SelectClause, Value,
 };
 use crate::{
-    errors::CoreResult,
-    graph::DominatorTree,
-    hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
+    analysis::string_analysis::extract_string_value,
+    graph::{gc_root_path::shortest_gc_root_path, DominatorTree},
+    hprof::{field_types, read_field, FieldValue, ObjectGraph, ObjectId},
 };
+use regex::Regex;
+
+const GC_ROOT_PATH_MAX_DEPTH: usize = 32;
+const GC_ROOT_PATH_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; @gcRootPath requires deep-mode object graph traversal.";
+const OBJECTS_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; OBJECTS requires deep-mode object field traversal.";
+const NULL_PREDICATE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; IS NULL and IS NOT NULL require deep-mode instance field data.";
+const RETAINED_SIZE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep or use @shallowSize for a per-object approximation.";
+const STRING_PREDICATE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; LIKE and CONTAINS on instance fields require deep-mode field data.";
+const TO_STRING_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; @toString requires deep-mode field data.";
 
 pub fn execute_query(
     query: &Query,
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
-) -> CoreResult<QueryResult> {
+) -> Result<QueryResult, QueryError> {
+    validate_supported_query(query, dominator)?;
+
     let columns = projected_columns(&query.select);
     let mut matched_ids = Vec::new();
 
@@ -25,13 +43,18 @@ pub fn execute_query(
         ) {
             continue;
         }
-        if !matches_filter(query, graph, dominator, object_id) {
+        if !matches_filter(query, graph, dominator, object_id)? {
             continue;
         }
         matched_ids.push(object_id);
     }
 
     matched_ids.sort_unstable();
+
+    if let SelectClause::Objects(field) = &query.select {
+        return execute_objects_projection(query, graph, field, matched_ids, columns);
+    }
+
     let total_before_limit = matched_ids.len();
     if let Some(limit) = query.limit {
         matched_ids.truncate(limit);
@@ -39,7 +62,7 @@ pub fn execute_query(
 
     let mut rows = Vec::with_capacity(matched_ids.len());
     for object_id in matched_ids {
-        rows.push(project_row(&query.select, graph, dominator, object_id)?);
+        rows.push(project_row(&query.select, graph, dominator, object_id));
     }
 
     Ok(QueryResult {
@@ -54,6 +77,7 @@ fn projected_columns(select: &SelectClause) -> Vec<String> {
     match select {
         SelectClause::All => vec!["@objectId".into(), "@className".into()],
         SelectClause::Fields(fields) => fields.iter().map(field_label).collect(),
+        SelectClause::Objects(_) => vec!["@objectId".into(), "@className".into()],
     }
 }
 
@@ -65,8 +89,246 @@ fn field_label(field: &FieldRef) -> String {
         FieldRef::BuiltIn(BuiltInField::RetainedSize) => "@retainedSize".into(),
         FieldRef::BuiltIn(BuiltInField::ObjectAddress) => "@objectAddress".into(),
         FieldRef::BuiltIn(BuiltInField::ToString) => "@toString".into(),
+        FieldRef::BuiltIn(BuiltInField::GcRootPath) => "@gcRootPath".into(),
         FieldRef::InstanceField(name) => name.clone(),
     }
+}
+
+fn validate_supported_query(
+    query: &Query,
+    dominator: Option<&DominatorTree>,
+) -> Result<(), QueryError> {
+    if dominator.is_none() {
+        if query_references_gc_root_path(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@gcRootPath",
+                GC_ROOT_PATH_OVERVIEW_HINT,
+            ));
+        }
+
+        if matches!(query.select, SelectClause::Objects(_)) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "OBJECTS",
+                OBJECTS_OVERVIEW_HINT,
+            ));
+        }
+
+        if query_uses_null_predicates(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "IS NULL / IS NOT NULL",
+                NULL_PREDICATE_OVERVIEW_HINT,
+            ));
+        }
+
+        if query_uses_retained_size(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@retainedSize",
+                RETAINED_SIZE_OVERVIEW_HINT,
+            ));
+        }
+
+        if query_uses_to_string(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@toString",
+                TO_STRING_OVERVIEW_HINT,
+            ));
+        }
+
+        if let Some(feature) = query_uses_instance_string_predicates(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                feature,
+                STRING_PREDICATE_OVERVIEW_HINT,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn query_references_gc_root_path(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::GcRootPath)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::GcRootPath))
+        })
+}
+
+fn query_uses_null_predicates(query: &Query) -> bool {
+    query.filter.as_ref().is_some_and(|filter| {
+        filter
+            .conditions
+            .iter()
+            .any(|condition| matches!(condition.op, ComparisonOp::IsNull | ComparisonOp::IsNotNull))
+    })
+}
+
+fn query_uses_to_string(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::ToString)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::ToString))
+        })
+}
+
+fn query_uses_instance_string_predicates(query: &Query) -> Option<String> {
+    query.filter.as_ref().and_then(|filter| {
+        filter.conditions.iter().find_map(|condition| {
+            if !matches!(condition.op, ComparisonOp::Like | ComparisonOp::Contains) {
+                return None;
+            }
+
+            match &condition.field {
+                FieldRef::InstanceField(name) => Some(name.clone()),
+                _ => None,
+            }
+        })
+    })
+}
+
+fn query_uses_retained_size(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::RetainedSize)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::RetainedSize))
+        })
+}
+
+fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> bool {
+    match select {
+        SelectClause::All => false,
+        SelectClause::Fields(fields) => fields.contains(&FieldRef::BuiltIn(built_in)),
+        SelectClause::Objects(field) => *field == FieldRef::BuiltIn(built_in),
+    }
+}
+
+fn execute_objects_projection(
+    query: &Query,
+    graph: &ObjectGraph,
+    field: &FieldRef,
+    matched_ids: Vec<ObjectId>,
+    columns: Vec<String>,
+) -> Result<QueryResult, QueryError> {
+    let mut rows = Vec::with_capacity(matched_ids.len());
+
+    for object_id in matched_ids {
+        // Match MAT-style OBJECTS behavior: null and dangling refs do not emit a row.
+        let Some(target_id) = resolve_objects_projection_target(field, graph, object_id)? else {
+            continue;
+        };
+
+        rows.push(project_row(&SelectClause::All, graph, None, target_id));
+    }
+
+    let total_before_limit = rows.len();
+    if let Some(limit) = query.limit {
+        rows.truncate(limit);
+    }
+
+    Ok(QueryResult {
+        columns,
+        rows,
+        total_matched: total_before_limit.min(query.limit.unwrap_or(total_before_limit)),
+        truncated: query.limit.is_some_and(|limit| total_before_limit > limit),
+    })
+}
+
+fn resolve_objects_projection_target(
+    field: &FieldRef,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> Result<Option<ObjectId>, QueryError> {
+    let FieldRef::InstanceField(path) = field else {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires an instance field expression".into(),
+        ));
+    };
+
+    let field_name = normalize_objects_field_name(path)?;
+    let Some(object) = graph.get_object(object_id) else {
+        return Ok(None);
+    };
+    let class_name = graph
+        .class_name(object.class_id)
+        .unwrap_or("<unknown>")
+        .replace('/', ".");
+
+    let Some(field_type) = lookup_instance_field_type(graph, object.class_id, field_name) else {
+        return Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' does not exist on class '{class_name}'"
+        )));
+    };
+
+    if field_type != field_types::OBJECT {
+        return Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' on class '{class_name}' is not an object-reference field"
+        )));
+    }
+
+    match read_field(object, &graph.classes, field_name, graph.identifier_size) {
+        Some(FieldValue::ObjectRef(Some(target_id))) if graph.get_object(target_id).is_some() => {
+            Ok(Some(target_id))
+        }
+        Some(FieldValue::ObjectRef(Some(_))) | Some(FieldValue::ObjectRef(None)) => Ok(None),
+        Some(_) => Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' on class '{class_name}' is not an object-reference field"
+        ))),
+        None => Err(QueryError::Unsupported(format!(
+            "OBJECTS field '{field_name}' could not be read from class '{class_name}'"
+        ))),
+    }
+}
+
+fn normalize_objects_field_name(path: &str) -> Result<&str, QueryError> {
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    match segments.as_slice() {
+        [field_name] => Ok(field_name),
+        [_, field_name] => Ok(field_name),
+        _ => Err(QueryError::NotImplemented(format!(
+            "multi-hop OBJECTS not yet supported: '{path}'"
+        ))),
+    }
+}
+
+fn lookup_instance_field_type(
+    graph: &ObjectGraph,
+    class_id: ObjectId,
+    field_name: &str,
+) -> Option<u8> {
+    fn collect_class_ids(graph: &ObjectGraph, class_id: ObjectId, class_ids: &mut Vec<ObjectId>) {
+        if class_id == 0 {
+            return;
+        }
+
+        let Some(class_info) = graph.classes.get(&class_id) else {
+            return;
+        };
+
+        collect_class_ids(graph, class_info.super_class_id, class_ids);
+        class_ids.push(class_id);
+    }
+
+    let mut class_ids = Vec::new();
+    collect_class_ids(graph, class_id, &mut class_ids);
+
+    class_ids.into_iter().find_map(|candidate| {
+        graph.classes.get(&candidate).and_then(|class_info| {
+            class_info
+                .instance_fields
+                .iter()
+                .find(|descriptor| descriptor.name.as_deref() == Some(field_name))
+                .map(|descriptor| descriptor.field_type)
+        })
+    })
 }
 
 fn matches_class_pattern(
@@ -120,20 +382,20 @@ fn matches_filter(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> bool {
+) -> Result<bool, QueryError> {
     let Some(filter) = &query.filter else {
-        return true;
+        return Ok(true);
     };
 
-    let mut result = evaluate_condition(&filter.conditions[0], graph, dominator, object_id);
+    let mut result = evaluate_condition(&filter.conditions[0], graph, dominator, object_id)?;
     for (idx, op) in filter.operators.iter().enumerate() {
-        let next = evaluate_condition(&filter.conditions[idx + 1], graph, dominator, object_id);
+        let next = evaluate_condition(&filter.conditions[idx + 1], graph, dominator, object_id)?;
         result = match op {
             super::types::LogicalOp::And => result && next,
             super::types::LogicalOp::Or => result || next,
         };
     }
-    result
+    Ok(result)
 }
 
 fn evaluate_condition(
@@ -141,13 +403,28 @@ fn evaluate_condition(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> bool {
+) -> Result<bool, QueryError> {
     if condition.op == ComparisonOp::InstanceOf {
-        return matches_instanceof_condition(&condition.field, &condition.value, graph, object_id);
+        return Ok(matches_instanceof_condition(
+            &condition.field,
+            &condition.value,
+            graph,
+            object_id,
+        ));
+    }
+
+    if matches!(condition.op, ComparisonOp::IsNull | ComparisonOp::IsNotNull) {
+        return evaluate_null_condition(
+            &condition.field,
+            condition.op,
+            graph,
+            dominator,
+            object_id,
+        );
     }
 
     let left = resolve_field_value(&condition.field, graph, dominator, object_id);
-    compare_values(left, condition.op, &condition.value)
+    Ok(compare_values(left, condition.op, &condition.value))
 }
 
 fn resolve_field_value(
@@ -180,14 +457,39 @@ fn resolve_field_value(
         FieldRef::BuiltIn(BuiltInField::ObjectAddress) => {
             CellValue::Str(format!("0x{object_id:08X}"))
         }
-        FieldRef::BuiltIn(BuiltInField::ToString) => CellValue::Str(
-            graph
-                .class_name(object.class_id)
-                .unwrap_or("<unknown>")
-                .replace('/', "."),
-        ),
+        FieldRef::BuiltIn(BuiltInField::ToString) => synth_to_string(graph, object_id),
+        FieldRef::BuiltIn(BuiltInField::GcRootPath) => resolve_gc_root_path_value(graph, object_id),
         FieldRef::InstanceField(name) => resolve_instance_field_value(object, name, graph),
     }
+}
+
+fn resolve_gc_root_path_value(graph: &ObjectGraph, object_id: ObjectId) -> CellValue {
+    // TODO(m7-4e-perf): consider per-query caching for repeated @gcRootPath lookups if this
+    // becomes a hot path on large result sets. Keep slice E uncached for now.
+    let Some(path) = shortest_gc_root_path(graph, object_id, GC_ROOT_PATH_MAX_DEPTH) else {
+        return CellValue::Null;
+    };
+
+    let mut frames = Vec::with_capacity(path.frames.len() + 1);
+    frames.push(format!("GcRoot/{:?}", path.root_kind));
+    frames.extend(
+        path.frames
+            .into_iter()
+            .map(|frame_id| gc_root_path_class_name(graph, frame_id)),
+    );
+
+    CellValue::Str(frames.join(" -> "))
+}
+
+fn gc_root_path_class_name(graph: &ObjectGraph, object_id: ObjectId) -> String {
+    let Some(object) = graph.get_object(object_id) else {
+        return format!("<unknown object id={object_id}>");
+    };
+
+    graph
+        .class_name(object.class_id)
+        .unwrap_or("<unknown>")
+        .replace('/', ".")
 }
 
 fn resolve_instance_field_value(
@@ -210,9 +512,75 @@ fn resolve_instance_field_value(
             .unwrap_or(CellValue::Null),
         FieldValue::Float(value) => CellValue::Str(value.to_string()),
         FieldValue::Double(value) => CellValue::Str(value.to_string()),
-        FieldValue::ObjectRef(Some(reference)) => CellValue::Id(reference),
+        FieldValue::ObjectRef(Some(reference)) => extract_string_value(graph, reference)
+            .map(CellValue::Str)
+            .unwrap_or(CellValue::Id(reference)),
         FieldValue::ObjectRef(None) => CellValue::Null,
     }
+}
+
+fn evaluate_null_condition(
+    field: &FieldRef,
+    op: ComparisonOp,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    object_id: ObjectId,
+) -> Result<bool, QueryError> {
+    let matches_null = match field {
+        FieldRef::BuiltIn(_) => matches!(
+            resolve_field_value(field, graph, dominator, object_id),
+            CellValue::Null
+        ),
+        FieldRef::InstanceField(field_name) => {
+            let Some(object) = graph.get_object(object_id) else {
+                return Ok(false);
+            };
+
+            let class_name = graph
+                .class_name(object.class_id)
+                .unwrap_or("<unknown>")
+                .replace('/', ".");
+            let operator = if op == ComparisonOp::IsNotNull {
+                "IS NOT NULL"
+            } else {
+                "IS NULL"
+            };
+
+            let Some(field_type) = lookup_instance_field_type(graph, object.class_id, field_name)
+            else {
+                return Err(QueryError::Unsupported(format!(
+                    "{operator} field '{field_name}' does not exist on class '{class_name}'"
+                )));
+            };
+
+            if field_type != field_types::OBJECT {
+                return Err(QueryError::Unsupported(format!(
+                    "{operator} not applicable to primitive field '{field_name}' on class '{class_name}'"
+                )));
+            }
+
+            match read_field(object, &graph.classes, field_name, graph.identifier_size) {
+                Some(FieldValue::ObjectRef(None)) => true,
+                Some(FieldValue::ObjectRef(Some(_))) => false,
+                Some(_) => {
+                    return Err(QueryError::Unsupported(format!(
+                        "{operator} not applicable to primitive field '{field_name}' on class '{class_name}'"
+                    )));
+                }
+                None => {
+                    return Err(QueryError::Unsupported(format!(
+                        "{operator} field '{field_name}' could not be read from class '{class_name}'"
+                    )));
+                }
+            }
+        }
+    };
+
+    Ok(if op == ComparisonOp::IsNotNull {
+        !matches_null
+    } else {
+        matches_null
+    })
 }
 
 fn matches_instanceof_condition(
@@ -273,7 +641,8 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
         (CellValue::Str(left), Value::Str(right)) => match op {
             ComparisonOp::Eq => left == *right,
             ComparisonOp::Ne => left != *right,
-            ComparisonOp::Like => glob_match(&right.replace('%', "*"), &left),
+            ComparisonOp::Like => like_match(right, &left),
+            ComparisonOp::Contains => left.contains(right),
             _ => false,
         },
         (CellValue::Bool(left), Value::Bool(right)) => match op {
@@ -282,6 +651,9 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
             _ => false,
         },
         (CellValue::Null, Value::Null) => matches!(op, ComparisonOp::Eq),
+        (CellValue::Id(_), Value::Null) | (CellValue::Str(_), Value::Null) => {
+            matches!(op, ComparisonOp::Ne)
+        }
         (CellValue::Id(left), Value::Int(right)) => match op {
             ComparisonOp::Eq => left == *right as u64,
             ComparisonOp::Ne => left != *right as u64,
@@ -295,23 +667,42 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
     }
 }
 
+fn like_match(pattern: &str, value: &str) -> bool {
+    let mut regex_pattern = String::from("(?s)^");
+    for ch in pattern.chars() {
+        match ch {
+            '%' => regex_pattern.push_str(".*"),
+            '_' => regex_pattern.push('.'),
+            _ => regex_pattern.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    regex_pattern.push('$');
+
+    Regex::new(&regex_pattern)
+        .map(|regex| regex.is_match(value))
+        .unwrap_or(false)
+}
+
 fn project_row(
     select: &SelectClause,
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> CoreResult<Vec<CellValue>> {
+) -> Vec<CellValue> {
     let fields: Vec<FieldRef> = match select {
         SelectClause::All => vec![
             FieldRef::BuiltIn(BuiltInField::ObjectId),
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],
         SelectClause::Fields(fields) => fields.clone(),
+        SelectClause::Objects(_) => vec![
+            FieldRef::BuiltIn(BuiltInField::ObjectId),
+            FieldRef::BuiltIn(BuiltInField::ClassName),
+        ],
     };
 
-    let row = fields
+    fields
         .iter()
         .map(|field| resolve_field_value(field, graph, dominator, object_id))
-        .collect();
-    Ok(row)
+        .collect()
 }

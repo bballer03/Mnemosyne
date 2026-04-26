@@ -19,7 +19,7 @@ Use `list_tools` first if your client wants the machine-readable method list and
 ## 3. Parse the Heap
 
 ```json
-{"id":2,"method":"parse_heap","params":{"path":"heap.hprof","max_objects":500000}}
+{"id":2,"method":"parse_heap","params":{"path":"heap.hprof","mode":"overview","max_objects":500000}}
 ```
 
 ## 4. Detect Leaks with Incident Filters
@@ -31,7 +31,7 @@ Use `list_tools` first if your client wants the machine-readable method list and
 ## 5. Run Full Analysis
 
 ```json
-{"id":4,"method":"analyze_heap","params":{"heap_path":"heap.hprof","packages":["com.example"],"histogram_group_by":"package","enable_threads":true,"enable_strings":true,"enable_collections":true,"enable_classloaders":true,"enable_top_instances":true,"top_n":10,"min_collection_capacity":32}}
+{"id":4,"method":"analyze_heap","params":{"heap_path":"heap.hprof","mode":"deep","packages":["com.example"],"histogram_group_by":"package","enable_threads":true,"enable_strings":true,"enable_collections":true,"enable_classloaders":true,"enable_top_instances":true,"top_n":10,"min_collection_capacity":32}}
 ```
 
 ## 6. Create an AI Follow-Up Session
@@ -49,4 +49,6 @@ Use `list_tools` first if your client wants the machine-readable method list and
 ## Notes
 
 - Responses remain single-line JSON over stdio, including the AI-session methods.
+- `parse_heap` and `analyze_heap` both accept optional `mode` values `auto|deep|overview`.
+- When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only, not retained sizes.
 - [`docs/api.md`](../api.md) is the source of truth for the live wire format, params, and result shapes.

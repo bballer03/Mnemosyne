@@ -1,7 +1,7 @@
 use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
     analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
-    inspect_threads, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
+    inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
     TopInstancesReport,
 };
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     },
     hprof::{
         parse_heap, parse_hprof_file_with_options, ClassDelta, ClassLevelDelta, ClassStat,
-        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, ParseOptions,
+        HeapDiff, HeapParseJob, HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -78,10 +78,6 @@ impl Default for AnalyzeRequest {
     }
 }
 
-/// Explicit provenance metadata for synthetic, partial, fallback, or placeholder output.
-///
-/// Attach to any response surface so consumers can distinguish real analysis
-/// results from heuristic / preview / stub data.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProvenanceKind {
@@ -121,6 +117,13 @@ impl ProvenanceMarker {
 /// Response payload returned to callers (CLI, MCP, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzeResponse {
+    #[serde(
+        default = "default_response_mode",
+        skip_serializing_if = "is_deep_response_mode"
+    )]
+    pub mode: AnalysisMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<OverviewSummary>,
     pub summary: HeapSummary,
     pub leaks: Vec<LeakInsight>,
     pub recommendations: Vec<String>,
@@ -144,6 +147,14 @@ pub struct AnalyzeResponse {
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
+}
+
+fn default_response_mode() -> AnalysisMode {
+    AnalysisMode::Deep
+}
+
+fn is_deep_response_mode(mode: &AnalysisMode) -> bool {
+    *mode == AnalysisMode::Deep
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,7 +250,13 @@ impl FromStr for LeakSeverity {
 ///
 /// Attempts graph-backed analysis via HPROF object graph + dominator tree.
 /// Falls back to heuristic leak detection when HPROF parsing fails.
-pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
+struct AnalysisArtifacts {
+    response: AnalyzeResponse,
+    object_graph: Option<ObjectGraph>,
+    dominator_tree: Option<DominatorTree>,
+}
+
+async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
 
@@ -344,10 +361,13 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         None
     };
 
-    Ok(AnalyzeResponse {
+    let has_graph = dominator_result.is_some();
+    let response = AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
         summary,
         leaks,
-        recommendations: if dominator_result.is_some() {
+        recommendations: if has_graph {
             vec![
                 "Graph-backed analysis complete. Retained sizes are computed from dominator tree."
                     .into(),
@@ -369,7 +389,39 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
         string_report,
         top_instances,
         provenance,
+    };
+
+    let (object_graph, dominator_tree) = match dominator_result {
+        Some((graph, dom)) => (Some(graph), Some(dom)),
+        None => (None, None),
+    };
+
+    Ok(AnalysisArtifacts {
+        response,
+        object_graph,
+        dominator_tree,
     })
+}
+
+pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
+    Ok(analyze_heap_internal(request).await?.response)
+}
+
+pub async fn analyze_heap_with_graph(
+    request: AnalyzeRequest,
+) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
+    let AnalysisArtifacts {
+        response,
+        object_graph,
+        dominator_tree,
+    } = analyze_heap_internal(request).await?;
+
+    match (object_graph, dominator_tree) {
+        (Some(graph), Some(dom)) => Ok((response, graph, dom)),
+        _ => Err(CoreError::Unsupported(
+            "analyze_heap_with_graph requires graph-backed deep analysis".into(),
+        )),
+    }
 }
 
 /// Compare two heap snapshots and produce a structured diff of their dominant classes.
@@ -795,7 +847,7 @@ fn build_class_name(package_hint: Option<&str>, leak_kind: LeakKind, ordinal: us
 
 fn ranked_class_stats(summary: &HeapSummary) -> Vec<&ClassStat> {
     let mut classes: Vec<&ClassStat> = summary.classes.iter().collect();
-    classes.sort_by(|a, b| b.total_size_bytes.cmp(&a.total_size_bytes));
+    classes.sort_by_key(|b| std::cmp::Reverse(b.total_size_bytes));
     classes
 }
 
@@ -1146,7 +1198,8 @@ where
 mod tests {
     use super::*;
     use crate::hprof::{ClassInfo, ClassStat, RecordStat};
-    use std::time::SystemTime;
+    use std::io::Write;
+    use std::time::{Duration, SystemTime};
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
         HeapSummary {
@@ -1192,6 +1245,123 @@ mod tests {
             total_size_bytes: bytes,
             percentage,
         }
+    }
+
+    fn sample_analyze_response(
+        mode: AnalysisMode,
+        overview: Option<OverviewSummary>,
+    ) -> AnalyzeResponse {
+        AnalyzeResponse {
+            mode,
+            overview,
+            summary: summary_with_size(0),
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_secs(0),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
+            provenance: Vec::new(),
+        }
+    }
+
+    fn write_graph_fixture_file() -> tempfile::NamedTempFile {
+        let fixture = crate::test_fixtures::build_graph_fixture();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&fixture).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
+    fn request_for_fixture(path: &str) -> AnalyzeRequest {
+        AnalyzeRequest {
+            heap_path: path.into(),
+            ..AnalyzeRequest::default()
+        }
+    }
+
+    fn normalized_analysis_bytes(response: &AnalyzeResponse) -> Vec<u8> {
+        let mut normalized = response.clone();
+        normalized.elapsed = Duration::ZERO;
+        normalized.summary.heap_path = String::from("<fixture>");
+        normalized.summary.generated_at = SystemTime::UNIX_EPOCH;
+        serde_json::to_vec(&normalized).unwrap()
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_with_graph_returns_consistent_response_and_graph() {
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let response = analyze_heap(request.clone()).await.unwrap();
+
+        let (response_with_graph, graph, dom) = analyze_heap_with_graph(request).await.unwrap();
+
+        assert_eq!(
+            normalized_analysis_bytes(&response),
+            normalized_analysis_bytes(&response_with_graph)
+        );
+        assert!(!graph.objects.is_empty());
+        assert!(dom.node_count() > 0);
+        assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_back_compat_byte_identical() {
+        const EXPECTED: &str = r#"{"summary":{"heap_path":"<fixture>","total_objects":6,"total_size_bytes":314,"classes":[],"generated_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"header":{"format":"JAVA PROFILE 1.0.2","identifier_size":4,"timestamp_millis":0},"total_records":6,"record_stats":[{"tag":12,"name":"HEAP_DUMP","count":1,"bytes":142},{"tag":1,"name":"STRING_IN_UTF8","count":3,"bytes":55},{"tag":2,"name":"LOAD_CLASS","count":2,"bytes":32}]},"leaks":[],"recommendations":["Graph-backed analysis complete. Retained sizes are computed from dominator tree."],"elapsed":{"secs":0,"nanos":0},"graph":{"node_count":2,"edge_count":1,"dominators":[{"name":"com/example/BigCache","class_name":"com/example/BigCache","object_id":"0x00001000","dominates":1,"immediate_dominator":null,"retained_size":4,"shallow_size":4},{"name":"java/lang/Object","class_name":"java/lang/Object","object_id":"0x00002000","dominates":0,"immediate_dominator":"com/example/BigCache"}]},"ai":null,"histogram":{"group_by":"class","entries":[{"key":"com/example/BigCache","instance_count":1,"shallow_size":4,"retained_size":4},{"key":"java/lang/Object","instance_count":1,"shallow_size":0,"retained_size":0}],"total_instances":2,"total_shallow_size":4},"unreachable":{"total_count":0,"total_shallow_size":0,"by_class":[]},"provenance":[{"kind":"FALLBACK","detail":"Graph-backed dominator analysis was available but leak filters produced no results; heuristic fallback was used for leak detection."}]}"#;
+
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let response = analyze_heap(request).await.unwrap();
+        let actual = String::from_utf8(normalized_analysis_bytes(&response)).unwrap();
+
+        assert_eq!(actual, EXPECTED);
+    }
+
+    #[test]
+    fn analyze_response_json_back_compat() {
+        let mut value = serde_json::to_value(sample_analyze_response(
+            AnalysisMode::Overview,
+            Some(OverviewSummary::default()),
+        ))
+        .expect("sample response should serialize");
+        let object = value
+            .as_object_mut()
+            .expect("serialized response should be an object");
+        object.remove("mode");
+        object.remove("overview");
+
+        let response: AnalyzeResponse =
+            serde_json::from_value(value).expect("should deserialize old JSON");
+        assert_eq!(
+            response.mode,
+            AnalysisMode::Deep,
+            "missing mode must default to Deep"
+        );
+        assert!(response.overview.is_none(), "missing overview must be None");
+    }
+
+    #[test]
+    fn analyze_response_deep_mode_omits_new_fields() {
+        let value = serde_json::to_value(sample_analyze_response(AnalysisMode::Deep, None))
+            .expect("sample response should serialize");
+        let object = value
+            .as_object()
+            .expect("serialized response should be an object");
+
+        assert!(
+            !object.contains_key("mode"),
+            "deep mode should not add a new serialized field in slice A"
+        );
+        assert!(
+            !object.contains_key("overview"),
+            "missing overview should remain omitted"
+        );
     }
 
     #[test]

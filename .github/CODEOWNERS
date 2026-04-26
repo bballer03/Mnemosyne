@@ -1,0 +1,40 @@
+# Mnemosyne CODEOWNERS
+# https://docs.github.com/articles/about-code-owners
+#
+# Order matters: the LAST matching pattern takes precedence.
+# Each line is a path pattern followed by one or more owners.
+
+# Default owner for everything not matched below
+*                                   @bballer03
+
+# Workspace + release infra
+/Cargo.toml                         @bballer03
+/Cargo.lock                         @bballer03
+/Dockerfile                         @bballer03
+/HomebrewFormula/                   @bballer03
+/.github/workflows/                 @bballer03
+/.github/dependabot.yml             @bballer03
+
+# Agent / skill / prompt definitions (operating model)
+/.github/copilot-instructions.md    @bballer03
+/.github/agents/                    @bballer03
+/.github/skills/                    @bballer03
+/.github/prompts/                   @bballer03
+
+# Issue + PR templates
+/.github/ISSUE_TEMPLATE/             @bballer03
+/.github/PULL_REQUEST_TEMPLATE.md    @bballer03
+
+# Core analysis crates
+/core/                              @bballer03
+/cli/                               @bballer03
+
+# Architecture + design docs
+/ARCHITECTURE.md                    @bballer03
+/STATUS.md                          @bballer03
+/docs/design/                       @bballer03
+/docs/agent-workflow.md             @bballer03
+/docs/roadmap.md                    @bballer03
+
+# Security
+/SECURITY.md                        @bballer03

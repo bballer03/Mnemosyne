@@ -4,7 +4,7 @@ description: Check Mnemosyne changes against the corrected architecture, module 
 argument-hint: Describe the planned or proposed change, affected modules, and whether any contracts or ownership boundaries might shift.
 tools: [search, codebase, changes, usages, fetch]
 agents: []
-model: Claude Opus 4.6 (copilot)
+model: Claude Opus 4.7 (copilot)
 target: vscode
 handoffs:
   - label: Hand Off To Orchestration
