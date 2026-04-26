@@ -1,12 +1,12 @@
 # Milestone 7 — Production Readiness & Scale
 
-> **Status:** ⚠️ In progress — M7-1 ✅ shipped (commits `7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, `c64b4a1`; 268 tests). M7-2 entering design.
+> **Status:** ⚠️ In progress — M7-1 ✅ shipped (commits `7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, `c64b4a1`). M7-2 ✅ shipped (commits `2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`). M7-3 entering design.
 > **Owner (design):** Design Consulting Agent
 > **Owner (implementation):** Implementation Agent (per slice)
 > **Roadmap reference:** [docs/roadmap.md §4](../roadmap.md)
 > **Predecessor analysis:** [docs/roadmap-archive.md §4.5](../roadmap-archive.md)
 > **Related design:** [docs/design/memory-scaling.md](memory-scaling.md)
-> **Slice addenda:** M7-2 → [docs/design/milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md)
+> **Slice addenda:** M7-2 → [docs/design/milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md); M7-3 → [docs/design/milestone-7-3-allocation-site-flame-graphs.md](milestone-7-3-allocation-site-flame-graphs.md)
 > **Last updated:** 2026-04-26
 
 ---
@@ -39,8 +39,8 @@ The strategy is **two-mode parity**:
 | # | Item | Type | Status | Slice doc |
 |---|------|------|--------|-----------|
 | M7-1 | Streaming overview mode | Parity + Differentiation | ✅ shipped (`7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, `c64b4a1`) | this doc, §6 |
-| M7-2 | CI regression policies (`mnemosyne ci-check`) | Differentiation | 🟡 design in progress | [milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md) |
-| M7-3 | Allocation-site flame graphs (`mnemosyne flamegraph`) | Differentiation | 🔲 pending | TBD addendum |
+| M7-2 | CI regression policies (`mnemosyne ci-check`) | Differentiation | ✅ shipped (`2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`) | [milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md) |
+| M7-3 | Allocation-site flame graphs (`mnemosyne flamegraph`) | Differentiation | 🟡 design in progress | [milestone-7-3-allocation-site-flame-graphs.md](milestone-7-3-allocation-site-flame-graphs.md) |
 | M7-4 | OQL targeted expansion (5–6 high-value predicates) | Parity | 🔲 pending | TBD addendum |
 | M7-5 | Comparative benchmarks vs MAT and hprof-slurp | Credibility | 🔲 pending | TBD addendum |
 | M7-6 | v0.3.0 release | Release | 🔲 pending | release-prep prompt |
@@ -572,3 +572,9 @@ After Slice E, M7-1 is complete and ready for benchmark validation in M7-5.
 M7-1 is **complete end-to-end**. All five slices (A–E) shipped via commits `7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, with documentation sync in `c64b4a1`. The workspace test count stands at **268** with `cargo check`, `cargo test --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all -- --check` all clean. Streaming overview mode is now reachable from CLI (`parse|analyze --mode {auto,deep,overview}`), MCP (`parse_heap` / `analyze_heap` `mode` parameter), and core (`core::hprof::overview`), with byte-identical deep-mode JSON preserved by default.
 
 **M7-2 design is now in progress.** The detailed addendum lives at [milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md) and supersedes the framing in §7 of this document for implementation purposes. Once that addendum returns `READY`, the Implementation Agent may begin with **Slice M7-2.A (`core::policy` skeleton + TOML parser)**. M7-3 through M7-6 still require their own addendum design docs before coding begins.
+
+### 14.2 Post-M7-2 update (2026-04-26)
+
+M7-2 is **complete end-to-end**. All five slices (A–E) shipped via commits `2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`. `mnemosyne-cli ci-check` is reachable with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub-Actions renderers. Workspace `cargo {check, test --workspace --all-targets, clippy --workspace --all-targets -- -D warnings, fmt --all -- --check}` are clean and the test count has advanced from 268 to 330. Roadmap and STATUS reflect the shipped scope.
+
+**M7-3 design is now in progress.** The detailed addendum lives at [milestone-7-3-allocation-site-flame-graphs.md](milestone-7-3-allocation-site-flame-graphs.md) and supersedes the framing in §8 of this document for implementation purposes. Once that addendum returns `READY`, the Implementation Agent may begin with **Slice M7-3.A (folded-stack format types + dominator collapser)**. M7-4 through M7-6 still require their own addendum design docs before coding begins.
