@@ -785,6 +785,8 @@ Mnemosyne is built for speed and efficiency:
 
 See [docs/benchmarks.md](docs/benchmarks.md) for the current benchmark-comparison write-up and usage notes.
 
+Partial M7-5 publication: [docs/benchmarks/comparative-v0.3.0.md](docs/benchmarks/comparative-v0.3.0.md) captures a WSL execution of `mnemo-overview` versus `hprof-slurp` on `small`, `medium`, and `large` only. Treat it as a partial benchmark publication; the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending.
+
 **Measured results (Criterion, release profile):**
 
 | Benchmark | Median | Throughput | Notes |
@@ -833,7 +835,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
-- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete, and M7-5 comparative benchmarks is the next active slice
+- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks is now partial with a published WSL report and shipped harness, and the native-Linux reference-spec rerun remains pending before M7-6 release work
 - Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---

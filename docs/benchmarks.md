@@ -2,6 +2,8 @@
 
 > Published benchmark results and comparative notes for Mnemosyne's current parser, graph, and dominator performance.
 
+Current M7-5 state: the repository now includes a published partial comparative report from a WSL execution. See [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) for the current `mnemo-overview` versus `hprof-slurp` data on `small`/`medium`/`large`; the native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture remains pending.
+
 This document separates three kinds of statements:
 
 - **Measured Mnemosyne results** from the repository's Criterion benchmarks and RSS scripts.
@@ -58,9 +60,15 @@ Additional wrappers exist for optional tooling:
 - `scripts/run_hyperfine_bench.sh <heap.hprof>`
 - `scripts/run_heaptrack_profile.sh <heap.hprof>`
 
+### Partial M7-5 comparative publication
+
+- [benchmarks/comparative-v0.3.0.md](benchmarks/comparative-v0.3.0.md) publishes the current partial WSL execution of `mnemo-overview` versus `hprof-slurp` on `small`, `medium`, and `large`.
+- [../scripts/bench/README.md](../scripts/bench/README.md) documents the shipped comparative harness used for slice B and the partial slice C run.
+- [benchmarks/reference-spec.md](benchmarks/reference-spec.md), [benchmarks/fixtures.md](benchmarks/fixtures.md), and [benchmarks/tool-installation.md](benchmarks/tool-installation.md) define the intended native-Linux rerun contract.
+
 ## 2. Competitive Comparison Table
 
-The table below compares Mnemosyne's current published results against external project positioning described in the roadmap. External numbers are not apples-to-apples lab reruns inside this repository, so treat them as published reference points rather than directly normalized measurements.
+The table below compares Mnemosyne's current published results against external project positioning described in the roadmap. The partial WSL report linked above is the current in-repo head-to-head rerun; the broader external numbers below are still partly published reference points rather than a fully normalized native-Linux reference-spec shootout.
 
 | Dimension | Mnemosyne | hprof-slurp | Eclipse MAT |
 |---|---|---|---|
@@ -125,5 +133,5 @@ Without that metadata, external reruns should be treated as directional rather t
 - Mnemosyne's streaming parser and deep-analysis paths solve different problems. Comparing `parse_heap` directly against full graph construction is misleading.
 - hprof-slurp's published numbers reflect a different product goal: very fast triage with limited analysis depth.
 - Eclipse MAT optimizes for rich desktop exploration and indexed re-query behavior, not low-overhead CLI parsing.
-- Mnemosyne's current external comparison section uses published competitor figures from roadmap research, not an in-repo apples-to-apples rerun on identical hardware and fixtures.
-- The honest current claim is: **Mnemosyne already has strong published internal baselines and competitive product differentiation, but it does not yet have a fully normalized external benchmark shootout.**
+- Mnemosyne's current external comparison section still relies partly on published competitor figures from roadmap research. The partial WSL report adds an in-repo rerun for `mnemo-overview` versus `hprof-slurp` on `small`/`medium`/`large`, but the full native-Linux reference-spec rerun with Eclipse MAT, `mnemo-deep`, equivalence, and the `10 GiB` fixture is still pending.
+- The honest current claim is: **Mnemosyne already has strong published internal baselines and a published partial WSL comparative run, but it does not yet have a fully normalized native-Linux reference-spec external shootout.**
