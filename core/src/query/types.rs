@@ -13,6 +13,7 @@ pub struct Query {
 pub enum SelectClause {
     All,
     Fields(Vec<FieldRef>),
+    Objects(FieldRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,7 @@ pub enum BuiltInField {
     RetainedSize,
     ObjectAddress,
     ToString,
+    GcRootPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +73,9 @@ pub enum ComparisonOp {
     Ge,
     Le,
     Like,
+    Contains,
+    IsNull,
+    IsNotNull,
     InstanceOf,
 }
 

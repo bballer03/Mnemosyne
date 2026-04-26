@@ -1,8 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-
 use crate::{
-    graph::DominatorTree,
-    hprof::{GcRootType, ObjectGraph, ObjectId},
+    graph::{gc_root_path::GcRootPathIndex, DominatorTree},
+    hprof::{GcRootKind, ObjectGraph, ObjectId},
     report::flamegraph::{apply_budget, CollapseOptions, FlameRoot, FoldedStack, FoldedStacks},
 };
 
@@ -14,20 +12,19 @@ pub fn collapse_gc_root_path(
     dom: &DominatorTree,
     opts: &CollapseOptions,
 ) -> FoldedStacks {
-    let reverse_edges = build_reverse_edges(graph);
-    let gc_roots = build_gc_root_lookup(graph);
+    let gc_root_paths = GcRootPathIndex::new(graph);
 
     // Slice M7-3.B keeps this collapser local to graph+dom inputs, so the
     // stable seed set is the top retained dominator leaves that are not GC roots.
-    let mut stacks = select_seed_objects(graph, dom, &gc_roots, opts.max_frames)
+    let mut stacks = select_seed_objects(graph, dom, &gc_root_paths, opts.max_frames)
         .into_iter()
         .filter_map(|seed_id| {
-            shortest_gc_root_path(seed_id, &reverse_edges, &gc_roots).map(|(path, root_type)| {
-                FoldedStack {
-                    frames: build_frames(graph, root_type, &path),
+            gc_root_paths
+                .shortest_gc_root_path(seed_id, usize::MAX)
+                .map(|path| FoldedStack {
+                    frames: build_frames(graph, path.root_kind, &path.frames),
                     weight: dom.retained_size(seed_id),
-                }
-            })
+                })
         })
         .collect::<Vec<_>>();
 
@@ -45,7 +42,7 @@ pub fn collapse_gc_root_path(
 fn select_seed_objects(
     graph: &ObjectGraph,
     dom: &DominatorTree,
-    gc_roots: &HashMap<ObjectId, GcRootType>,
+    gc_root_paths: &GcRootPathIndex,
     max_frames: usize,
 ) -> Vec<ObjectId> {
     let seed_limit = std::cmp::max(50, max_frames.div_ceil(MAX_TOTAL_PATH_FRAMES));
@@ -54,90 +51,13 @@ fn select_seed_objects(
         .into_iter()
         .map(|(object_id, _)| object_id)
         .filter(|object_id| dom.dominated_by(*object_id).is_empty())
-        .filter(|object_id| !gc_roots.contains_key(object_id))
+        .filter(|object_id| !gc_root_paths.is_gc_root(*object_id))
         .take(seed_limit)
         .collect()
 }
-
-fn build_reverse_edges(graph: &ObjectGraph) -> HashMap<ObjectId, Vec<ObjectId>> {
-    let mut reverse_edges: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
-
-    for object in graph.objects.values() {
-        for &reference in &object.references {
-            reverse_edges.entry(reference).or_default().push(object.id);
-        }
-    }
-
-    for referrers in reverse_edges.values_mut() {
-        referrers.sort_unstable();
-        referrers.dedup();
-    }
-
-    reverse_edges
-}
-
-fn build_gc_root_lookup(graph: &ObjectGraph) -> HashMap<ObjectId, GcRootType> {
-    let mut lookup = HashMap::new();
-    for root in &graph.gc_roots {
-        lookup
-            .entry(root.object_id)
-            .or_insert_with(|| root.root_type.clone());
-    }
-    lookup
-}
-
-fn shortest_gc_root_path(
-    seed_id: ObjectId,
-    reverse_edges: &HashMap<ObjectId, Vec<ObjectId>>,
-    gc_roots: &HashMap<ObjectId, GcRootType>,
-) -> Option<(Vec<ObjectId>, GcRootType)> {
-    let mut queue = VecDeque::from([seed_id]);
-    let mut visited = HashSet::from([seed_id]);
-    let mut next_toward_seed = HashMap::<ObjectId, ObjectId>::new();
-
-    while let Some(current) = queue.pop_front() {
-        if let Some(root_type) = gc_roots.get(&current) {
-            return Some((
-                reconstruct_path(current, seed_id, &next_toward_seed),
-                root_type.clone(),
-            ));
-        }
-
-        if let Some(referrers) = reverse_edges.get(&current) {
-            for &referrer in referrers {
-                if visited.insert(referrer) {
-                    next_toward_seed.insert(referrer, current);
-                    queue.push_back(referrer);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn reconstruct_path(
-    root_id: ObjectId,
-    seed_id: ObjectId,
-    next_toward_seed: &HashMap<ObjectId, ObjectId>,
-) -> Vec<ObjectId> {
-    let mut path = vec![root_id];
-    let mut current = root_id;
-
-    while current != seed_id {
-        let Some(next) = next_toward_seed.get(&current).copied() else {
-            break;
-        };
-        current = next;
-        path.push(current);
-    }
-
-    path
-}
-
-fn build_frames(graph: &ObjectGraph, root_type: GcRootType, path: &[ObjectId]) -> Vec<String> {
+fn build_frames(graph: &ObjectGraph, root_kind: GcRootKind, path: &[ObjectId]) -> Vec<String> {
     let mut frames = Vec::with_capacity(path.len() + 1);
-    frames.push(format!("<gc-root:{}>", gc_root_type_name(&root_type)));
+    frames.push(format!("<gc-root:{}>", gc_root_kind_name(root_kind)));
 
     let object_frames = path
         .iter()
@@ -179,17 +99,17 @@ fn class_name_for_object(graph: &ObjectGraph, object_id: ObjectId) -> String {
         .unwrap_or_else(|| format!("<unknown class id={}>", object.class_id))
 }
 
-fn gc_root_type_name(root_type: &GcRootType) -> &'static str {
-    match root_type {
-        GcRootType::JniGlobal => "jni_global",
-        GcRootType::JniLocal { .. } => "jni_local",
-        GcRootType::JavaFrame { .. } => "java_frame",
-        GcRootType::NativeStack { .. } => "native_stack",
-        GcRootType::StickyClass => "sticky_class",
-        GcRootType::ThreadBlock { .. } => "thread_block",
-        GcRootType::MonitorUsed => "monitor_used",
-        GcRootType::ThreadObject { .. } => "thread_object",
-        GcRootType::Unknown(_) => "unknown",
+fn gc_root_kind_name(root_kind: GcRootKind) -> &'static str {
+    match root_kind {
+        GcRootKind::JniGlobal => "jni_global",
+        GcRootKind::JniLocal => "jni_local",
+        GcRootKind::JavaFrame => "java_frame",
+        GcRootKind::NativeStack => "native_stack",
+        GcRootKind::StickyClass => "sticky_class",
+        GcRootKind::ThreadBlock => "thread_block",
+        GcRootKind::MonitorUsed => "monitor_used",
+        GcRootKind::ThreadObject => "thread_object",
+        GcRootKind::Unknown => "unknown",
     }
 }
 

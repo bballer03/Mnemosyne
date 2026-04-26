@@ -226,3 +226,41 @@ fn execute_query_supports_instanceof_filters_on_instance_fields() {
     assert_eq!(result.total_matched, 1);
     assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
 }
+
+#[test]
+fn executor_returns_not_yet_implemented_for_objects_select() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT OBJECTS entries FROM "com.example.BigCache""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("slice A should reject OBJECTS execution");
+
+    assert!(error.to_string().contains("slice A"));
+}
+
+#[test]
+fn executor_returns_not_yet_implemented_for_at_retained_size_predicate() {
+    let graph = parse_hprof_with_options(
+        &build_graph_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1"#)
+            .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("slice A should reject retained-size predicates without support");
+
+    assert!(error.to_string().contains("slice A"));
+}

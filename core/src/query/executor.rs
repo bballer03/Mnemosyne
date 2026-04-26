@@ -1,9 +1,10 @@
+use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryResult,
     SelectClause, Value,
 };
 use crate::{
-    errors::CoreResult,
+    errors::{CoreError, CoreResult},
     graph::DominatorTree,
     hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
 };
@@ -13,6 +14,8 @@ pub fn execute_query(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
 ) -> CoreResult<QueryResult> {
+    validate_supported_in_slice_a(query, dominator)?;
+
     let columns = projected_columns(&query.select);
     let mut matched_ids = Vec::new();
 
@@ -54,6 +57,7 @@ fn projected_columns(select: &SelectClause) -> Vec<String> {
     match select {
         SelectClause::All => vec!["@objectId".into(), "@className".into()],
         SelectClause::Fields(fields) => fields.iter().map(field_label).collect(),
+        SelectClause::Objects(_) => vec!["@objectId".into(), "@className".into()],
     }
 }
 
@@ -65,8 +69,79 @@ fn field_label(field: &FieldRef) -> String {
         FieldRef::BuiltIn(BuiltInField::RetainedSize) => "@retainedSize".into(),
         FieldRef::BuiltIn(BuiltInField::ObjectAddress) => "@objectAddress".into(),
         FieldRef::BuiltIn(BuiltInField::ToString) => "@toString".into(),
+        FieldRef::BuiltIn(BuiltInField::GcRootPath) => "@gcRootPath".into(),
         FieldRef::InstanceField(name) => name.clone(),
     }
+}
+
+fn validate_supported_in_slice_a(
+    query: &Query,
+    dominator: Option<&DominatorTree>,
+) -> CoreResult<()> {
+    if matches!(query.select, SelectClause::Objects(_)) {
+        return Err(slice_a_not_implemented("SELECT OBJECTS execution"));
+    }
+
+    if query_references_gc_root_path(query) {
+        return Err(slice_a_not_implemented("@gcRootPath query evaluation"));
+    }
+
+    if query_uses_deferred_predicates(query) {
+        return Err(slice_a_not_implemented(
+            "CONTAINS / IS NULL / IS NOT NULL query evaluation",
+        ));
+    }
+
+    if dominator.is_none() && query_uses_retained_size(query) {
+        return Err(slice_a_not_implemented(
+            "@retainedSize predicates without dominator support",
+        ));
+    }
+
+    Ok(())
+}
+
+fn query_references_gc_root_path(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::GcRootPath)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::GcRootPath))
+        })
+}
+
+fn query_uses_deferred_predicates(query: &Query) -> bool {
+    query.filter.as_ref().is_some_and(|filter| {
+        filter.conditions.iter().any(|condition| {
+            matches!(
+                condition.op,
+                ComparisonOp::Contains | ComparisonOp::IsNull | ComparisonOp::IsNotNull
+            )
+        })
+    })
+}
+
+fn query_uses_retained_size(query: &Query) -> bool {
+    select_references_built_in(&query.select, BuiltInField::RetainedSize)
+        || query.filter.as_ref().is_some_and(|filter| {
+            filter
+                .conditions
+                .iter()
+                .any(|condition| condition.field == FieldRef::BuiltIn(BuiltInField::RetainedSize))
+        })
+}
+
+fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> bool {
+    match select {
+        SelectClause::All => false,
+        SelectClause::Fields(fields) => fields.contains(&FieldRef::BuiltIn(built_in)),
+        SelectClause::Objects(field) => *field == FieldRef::BuiltIn(built_in),
+    }
+}
+
+fn slice_a_not_implemented(feature: &str) -> CoreError {
+    CoreError::NotImplemented(format!("{feature} is not yet implemented in slice A"))
 }
 
 fn matches_class_pattern(
@@ -180,12 +255,8 @@ fn resolve_field_value(
         FieldRef::BuiltIn(BuiltInField::ObjectAddress) => {
             CellValue::Str(format!("0x{object_id:08X}"))
         }
-        FieldRef::BuiltIn(BuiltInField::ToString) => CellValue::Str(
-            graph
-                .class_name(object.class_id)
-                .unwrap_or("<unknown>")
-                .replace('/', "."),
-        ),
+        FieldRef::BuiltIn(BuiltInField::ToString) => synth_to_string(graph, object_id),
+        FieldRef::BuiltIn(BuiltInField::GcRootPath) => CellValue::Null,
         FieldRef::InstanceField(name) => resolve_instance_field_value(object, name, graph),
     }
 }
@@ -307,6 +378,10 @@ fn project_row(
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],
         SelectClause::Fields(fields) => fields.clone(),
+        SelectClause::Objects(_) => vec![
+            FieldRef::BuiltIn(BuiltInField::ObjectId),
+            FieldRef::BuiltIn(BuiltInField::ClassName),
+        ],
     };
 
     let row = fields

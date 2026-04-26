@@ -51,6 +51,9 @@ impl<'a> Parser<'a> {
         if self.consume_char('*') {
             return Ok(SelectClause::All);
         }
+        if self.consume_keyword("OBJECTS") {
+            return Ok(SelectClause::Objects(self.parse_field_ref()?));
+        }
 
         let mut fields = vec![self.parse_field_ref()?];
         loop {
@@ -102,6 +105,19 @@ impl<'a> Parser<'a> {
 
     fn parse_condition(&mut self) -> Result<Condition, QueryParseError> {
         let field = self.parse_field_ref()?;
+        if self.consume_keyword("IS") {
+            let op = if self.consume_keyword("NOT") {
+                ComparisonOp::IsNotNull
+            } else {
+                ComparisonOp::IsNull
+            };
+            self.expect_keyword("NULL")?;
+            return Ok(Condition {
+                field,
+                op,
+                value: Value::Null,
+            });
+        }
         let op = self.parse_comparison_op()?;
         let value = self.parse_value()?;
         Ok(Condition { field, op, value })
@@ -118,6 +134,7 @@ impl<'a> Parser<'a> {
                 "retainedSize" => BuiltInField::RetainedSize,
                 "objectAddress" => BuiltInField::ObjectAddress,
                 "toString" => BuiltInField::ToString,
+                "gcRootPath" => BuiltInField::GcRootPath,
                 _ => return Err(self.error(format!("invalid built-in field '@{ident}'"))),
             };
             Ok(FieldRef::BuiltIn(field))
@@ -142,6 +159,9 @@ impl<'a> Parser<'a> {
         }
         if self.consume_keyword("LIKE") {
             return Ok(ComparisonOp::Like);
+        }
+        if self.consume_keyword("CONTAINS") {
+            return Ok(ComparisonOp::Contains);
         }
         if self.consume_keyword("INSTANCEOF") {
             return Ok(ComparisonOp::InstanceOf);
@@ -302,4 +322,92 @@ impl<'a> Parser<'a> {
 
 fn ch_len(ch: char) -> usize {
     ch.len_utf8()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lexer_recognizes_objects_keyword() {
+        let mut parser = Parser::new("OBJECTS");
+
+        assert!(parser.consume_keyword("OBJECTS"));
+        assert!(parser.is_eof());
+    }
+
+    #[test]
+    fn lexer_recognizes_contains_operator() {
+        let mut parser = Parser::new("CONTAINS");
+
+        assert!(parser.consume_keyword("CONTAINS"));
+        assert!(parser.is_eof());
+    }
+
+    #[test]
+    fn lexer_recognizes_is_null_and_is_not_null_sequence() {
+        let mut is_null = Parser::new("IS NULL");
+        assert!(is_null.consume_keyword("IS"));
+        assert!(is_null.consume_keyword("NULL"));
+        assert!(is_null.is_eof());
+
+        let mut is_not_null = Parser::new("IS NOT NULL");
+        assert!(is_not_null.consume_keyword("IS"));
+        assert!(is_not_null.consume_keyword("NOT"));
+        assert!(is_not_null.consume_keyword("NULL"));
+        assert!(is_not_null.is_eof());
+    }
+
+    #[test]
+    fn lexer_recognizes_at_retained_size_pseudo_attribute() {
+        let field = Parser::new("@retainedSize")
+            .parse_field_ref()
+            .expect("field should parse");
+
+        assert_eq!(field, FieldRef::BuiltIn(BuiltInField::RetainedSize));
+    }
+
+    #[test]
+    fn lexer_recognizes_at_to_string_pseudo_attribute() {
+        let field = Parser::new("@toString")
+            .parse_field_ref()
+            .expect("field should parse");
+
+        assert_eq!(field, FieldRef::BuiltIn(BuiltInField::ToString));
+    }
+
+    #[test]
+    fn lexer_recognizes_at_gc_root_path_pseudo_attribute() {
+        let field = Parser::new("@gcRootPath")
+            .parse_field_ref()
+            .expect("field should parse");
+
+        assert_eq!(format!("{field:?}"), "BuiltIn(GcRootPath)");
+    }
+
+    #[test]
+    fn parser_constructs_objects_select_clause() {
+        let query = parse_query(r#"SELECT OBJECTS entries FROM "com.example.BigCache""#)
+            .expect("query should parse");
+
+        assert!(format!("{:?}", query.select).contains("Objects"));
+        assert!(format!("{:?}", query.select).contains("entries"));
+    }
+
+    #[test]
+    fn parser_constructs_is_null_condition() {
+        let query =
+            parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE entries IS NULL"#)
+                .expect("query should parse");
+
+        assert!(format!("{:?}", query.filter).contains("IsNull"));
+    }
+
+    #[test]
+    fn parser_constructs_pseudo_attribute_field_ref() {
+        let query = parse_query(r#"SELECT @gcRootPath FROM "com.example.BigCache""#)
+            .expect("query should parse");
+
+        assert!(format!("{:?}", query.select).contains("GcRootPath"));
+    }
 }

@@ -1,5 +1,6 @@
 mod executor;
 mod parser;
+mod synth;
 mod types;
 
 pub use executor::execute_query;
