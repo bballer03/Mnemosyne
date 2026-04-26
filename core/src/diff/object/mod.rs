@@ -1,3 +1,4 @@
+pub mod dominator_chain;
 pub mod engine;
 pub mod fingerprint;
 pub mod types;

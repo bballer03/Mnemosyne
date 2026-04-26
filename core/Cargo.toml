@@ -28,6 +28,7 @@ byteorder.workspace = true
 petgraph.workspace = true
 dirs.workspace = true
 toml.workspace = true
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 inferno = { version = "0.12.6", default-features = false, features = ["nameattr"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
