@@ -4,7 +4,7 @@ This directory contains scenario-oriented examples for the shipped Mnemosyne CLI
 
 ## Available Workflows
 
-- [`cli-analysis-workflow.md`](cli-analysis-workflow.md) - parse, leaks, analyze, diff, explain, map, and GC-path in one operator flow
+- [`cli-analysis-workflow.md`](cli-analysis-workflow.md) - parse, leaks, analyze, flamegraph, diff, explain, map, and GC-path in one operator flow
 - [`ci-check-workflow.md`](ci-check-workflow.md) - policy TOML, `ci-check`, JSON/JUnit artifacts, and GitHub Actions annotations for heap regression gates
 - [`mcp-stdio-workflow.md`](mcp-stdio-workflow.md) - stdio MCP requests for discovery, heap analysis, and AI-session follow-up
 

@@ -200,6 +200,35 @@ What to do:
 - rerun with `--mode auto` if you want overview-mode runs to skip deep-only rules instead of failing
 - split the policy into overview-safe and deep-only files if your pipeline has both fast-triage and deep-investigation phases
 
+### "Why does `flamegraph` say my heap is too large?"
+
+Typical message shapes:
+
+```text
+flame graph requires deep mode; current heap size triggers auto-overview; pass --mode deep to override
+flame graph requires deep mode; received --mode overview
+```
+
+What it usually means:
+
+- `flamegraph` shares the same `auto|deep|overview` mode resolution used by other CLI surfaces
+- the heap is at or above the 4 GiB auto-overview cutoff, so `--mode auto` resolved to overview
+- `flamegraph` cannot run in overview mode because it needs the full `ObjectGraph` and `DominatorTree`
+
+What to do:
+
+- rerun with `--mode deep` if you actually need the flame graph and the machine has enough free RAM for a deep graph-backed pass
+- keep using `parse --mode overview` or `analyze --mode overview` if you only need bounded-memory triage
+- adjust `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` only if you intentionally want a different auto-mode cutoff for your environment
+- treat exit code `5` as the dedicated flamegraph mode-mismatch signal
+
+Useful commands:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+mnemosyne-cli analyze heap.hprof --mode overview --format json
+```
+
 ## 2. Performance Issues
 
 ### Large dumps take too long
@@ -208,6 +237,7 @@ What is happening:
 
 - `parse` is the streaming, low-cost path
 - `analyze`, `leaks`, `query`, and `gc-path` may need the graph-backed path
+- `flamegraph` always needs the deep graph-backed path
 - investigation flags such as `--threads`, `--strings`, `--collections`, and `--top-instances` ask Mnemosyne to retain and inspect more data
 
 What to do:
@@ -215,6 +245,7 @@ What to do:
 - start with `parse` first
 - use `--mode overview` for bounded-memory triage on very large dumps; default `auto` will also pick overview once the dump is at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides it
 - use plain `analyze` before enabling every investigation flag
+- do the flamegraph export only after you know the heap is worth a full deep pass
 - turn on deep modules only when you already have a concrete question
 - use `--profile ci-regression` when you want a richer archived analysis artifact, or `ci-check` when you want Mnemosyne itself to own the pass/fail contract
 - do not confuse `--profile overview` with `--mode overview`; the profile stays on the deep path, while the mode changes the parser/analysis path
@@ -239,6 +270,7 @@ mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instanc
 What is happening:
 
 - deep graph-backed analysis is still in-memory
+- `flamegraph` is one of the deep-only graph-backed surfaces
 - overview mode avoids `ObjectGraph` construction and keeps only bounded accumulators
 - the default graph-backed `analyze` and `leaks` path has been validated around roughly `2.87x-2.90x` RSS-to-dump ratio on dense synthetic large-dump tiers
 - investigation-heavy runs have measured around `3.89x-3.92x` on the same tiers
@@ -247,6 +279,7 @@ What to do:
 
 - treat `parse` as your first triage tool when memory headroom is tight
 - force `--mode overview` when you need class-resolved triage without paying for the object graph
+- only force `flamegraph --mode deep` when the visualization is worth the extra memory cost
 - avoid investigation flags in CI unless you need them for the specific regression signal
 - close other large processes before running deep analysis on multi-GB dumps
 - use a machine with comfortable free RAM for graph-backed investigation

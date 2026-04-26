@@ -11,6 +11,7 @@ Mnemosyne is a JVM heap-analysis tool for engineers who need answers from `.hpro
 Today it combines:
 
 - Rust-based parsing for fast summary and graph-backed analysis paths.
+- Retained-size flame-graph exports for dominator, class-hierarchy, and GC-root-path visualization.
 - Real heap investigation features such as retained sizes, dominators, GC-root tracing, string analysis, collection inspection, thread inspection, classloader reporting, and top-instance ranking.
 - Explicit provenance markers so fallback, synthetic, partial, and placeholder output is labeled instead of being presented as authoritative fact.
 - MCP-native integration so the same core analysis surface can be used from editors and automation.
@@ -69,6 +70,7 @@ That guide covers:
 - capturing a heap dump with `jmap`
 - using `parse` for a lightweight first pass
 - using `leaks` and `analyze` for deeper inspection
+- exporting retained-size flame graphs through `flamegraph`
 - saving reports in text, HTML, JSON, or TOON
 - inspecting the effective config with `config`
 - starting the stdio MCP server with `serve`
@@ -93,6 +95,7 @@ Important current runtime truth:
 - there is no global `--no-ai`
 - report rendering lives on `analyze`; there is no standalone `report` subcommand in the current CLI
 - `ci-check` is the separate policy-gate surface; it owns `--format text|json|junit|github-actions`, `--output`, and `--fail-on`
+- `flamegraph` is the separate retained-size visualization surface; it owns `--root`, `--format svg|folded-stack|json`, required `--output`, and exit code `5` for overview-mode mismatch
 
 ### `parse`
 
@@ -287,6 +290,63 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+```
+
+### `flamegraph`
+
+Use `flamegraph` when you want an exportable retained-size visualization from the deep object-graph path.
+
+Usage:
+
+```bash
+mnemosyne-cli flamegraph <HEAP> -o <FILE> [OPTIONS]
+```
+
+Flags:
+
+- `-o, --output <FILE>`
+- `--root dominator|class-hierarchy|gc-root-path`
+- `--format svg|folded-stack|json`
+- `--mode auto|deep|overview`
+- `--min-fraction <FRACTION>`
+- `--title <TEXT>`
+- `--max-frames <N>`
+
+What it does:
+
+- validates the heap file
+- resolves the requested mode at the CLI boundary (`auto` by default)
+- rejects explicit overview mode and `auto` runs that resolve to overview because flame graphs require the full `ObjectGraph` and `DominatorTree`
+- calls the deep-mode `analyze_heap_with_graph()` path so the flamegraph renderer can reuse the same `AnalyzeResponse` plus graph internals without changing the serialized report contract
+- collapses the graph into folded stacks using the selected rooting strategy
+- renders the artifact as SVG, folded-stack text, or a JSON envelope
+
+Rooting strategies:
+
+- `dominator` (default): best for "what holds memory"; the folded stacks follow the dominator chain and reflect retained-size structure
+- `class-hierarchy`: best for class-family aggregation; stacks follow the inheritance chain and weight classes by their aggregate shallow bytes
+- `gc-root-path`: best for "why is this still reachable"; stacks follow shortest GC-root paths for leak suspects and the highest-retained objects
+
+Output formats:
+
+- `svg`: interactive browser-openable flame graph rendered through `inferno`
+- `folded-stack`: plain text compatible with `inferno`, `flamegraph.pl`, and other folded-stack tooling
+- `json`: pretty JSON envelope with `{ tool, subcommand, version, strategy, total_weight, truncated_to_other, frame_count, stacks }`
+
+Mode and exit behavior:
+
+- flame graphs require deep mode
+- explicit `--mode overview` exits `5`
+- `--mode auto` also exits `5` if the heap is at or above the 4 GiB auto-overview cutoff
+- `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides that cutoff if you need a different auto-mode boundary
+- use `--mode deep` only when you have enough RAM for full object-graph analysis; otherwise prefer `parse --mode overview` or `analyze --mode overview` for triage
+
+Examples:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --root gc-root-path
 ```
 
 ### `leaks`
@@ -749,6 +809,29 @@ mnemosyne-cli analyze heap.hprof \
 
 This is a good interactive workflow when you want to correlate retained-size hotspots with thread-local retention, duplicate string waste, oversized collections, and the largest individual objects.
 
+### Flame graphs
+
+Use `flamegraph` when you want a portable visualization artifact instead of a prose or table report.
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame-dominator.svg --mode deep --root dominator
+mnemosyne-cli flamegraph heap.hprof -o flame-class.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame-gc-path.json --mode deep --format json --root gc-root-path
+```
+
+Recommended interpretation:
+
+- use `dominator` for the broad retained-size answer to "what is holding memory"
+- use `class-hierarchy` when you want a class-family rollup instead of object-to-object paths
+- use `gc-root-path` when you want shortest-path reachability context for leak suspects and top retained objects
+
+What you see in the SVG:
+
+- a browser-openable interactive flame graph with colored stacked frames, hover tooltips, click-to-zoom navigation, and search
+- the artifact is more useful as a file you open locally than as a static Markdown image, so the docs intentionally describe it instead of trying to inline a screenshot
+
+If `--mode auto` would switch to overview because the heap is at or above the 4 GiB cutoff, `flamegraph` exits `5`; rerun with `--mode deep` only when you have enough RAM for the full graph-backed path.
+
 ### Leak resolution
 
 Once you have a suspect, tighten the loop around explanation, reachability, and remediation.
@@ -1007,7 +1090,7 @@ Useful MCP methods to know up front:
 
 ## 8. Output Formats
 
-Mnemosyne currently renders five analysis formats through `analyze` and four policy-gate formats through `ci-check`.
+Mnemosyne currently renders five analysis formats through `analyze`, three visualization formats through `flamegraph`, and four policy-gate formats through `ci-check`.
 
 ### Text
 
@@ -1028,6 +1111,14 @@ Best for automation, regression tracking, and downstream tooling. Use it for CI 
 ### TOON
 
 Compact structured text used by Mnemosyne's AI and integration surfaces. It is human-readable enough to inspect, but primarily useful when you want a concise serialized form that is smaller and more regular than prose.
+
+### Flame graph formats
+
+`flamegraph` supports three formats:
+
+- `svg`: interactive browser-openable flame graph rendered via `inferno`
+- `folded-stack`: one folded stack per line, suitable for downstream flamegraph tooling
+- `json`: pretty JSON envelope with strategy metadata, total weight, frame counts, and the full folded-stack payload
 
 ### CI policy formats
 

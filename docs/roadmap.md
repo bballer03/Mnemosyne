@@ -23,7 +23,7 @@ v0.2.0 is not a prototype foundation anymore. The core parser, object-graph anal
 | UI | ✅ Shipped | Browser-first React, artifact/heap/leak explorer flows |
 | Desktop | ⚠️ Scaffold | Tauri shell exists, not yet distributable |
 | Distribution | ✅ Full | 4 end-user channels plus automated release pipeline |
-| Testing | ✅ Solid | 268 Rust tests + 143 UI tests |
+| Testing | ✅ Solid | 377 Rust tests + 143 UI tests |
 | Scale | ⚠️ In progress | Deep mode is validated to ~2 GB dense tiers; M7-1 overview mode now covers 10 GB+ streaming triage, and M7-5 still needs published head-to-head proof |
 
 **Active roadmap rule:** M1-M6 are complete and archived. The only active milestone is M7, followed by the M8+ backlog.
@@ -40,8 +40,6 @@ Mnemosyne is already ahead of MAT on provenance, AI assistance, MCP-native IDE w
 ### Important gaps
 
 - **Object-level heap diff:** Mnemosyne has class-level deltas today, not stable per-object change tracking across snapshots.
-- **CI regression policies:** MAT does not own this workflow; Mnemosyne can. Structured analysis needs a first-class pass/fail policy layer.
-- **Allocation-site flame graphs:** no mainstream heap analyzer provides retained-size flame graphs. This is differentiation, not just parity.
 
 ### Nice-to-have gaps
 
@@ -57,7 +55,7 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 |---|---|---|---|
 | Core analysis depth | Strong and shipped; query/diff still narrower | Best today | Shallow triage only |
 | Large-dump handling | M7-1 overview mode shipped; M7-5 benchmarks still pending | Disk-index capable but heavyweight | Best-in-class streaming / low RSS |
-| Automation / CI | Strong JSON/TOON story; M7 can widen it | Weak | Basic scripting only |
+| Automation / CI | Strong JSON/TOON story plus shipped CI policy gate | Weak | Basic scripting only |
 | IDE / AI integration | MCP + AI + provenance | Eclipse-only, no AI | None |
 | User experience | Modern CLI + browser-first UI | Mature but dated desktop UX | Fast CLI, minimal exploration |
 
@@ -65,11 +63,11 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 
 **Where Mnemosyne still loses:** published large-dump benchmark proof, full OQL depth, and object-level diff.
 
-**Where Mnemosyne can become unique:** CI regression policies and allocation-site flame graphs widen a category neither MAT nor hprof-slurp currently owns.
+**Where Mnemosyne is already becoming unique:** CI regression policies and allocation-site flame graphs widen a category neither MAT nor hprof-slurp currently owns.
 
 ## 4. Milestone 7 — Production Readiness & Scale
 
-**Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) and [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md)  
+**Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md), and [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md)  
 **Status:** ⚠️ In progress
 
 M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
@@ -83,15 +81,15 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 | M7-5 | Comparative benchmarks vs MAT/hprof-slurp | Credibility | P2 | M |
 | M7-6 | v0.3.0 release | Release | P1 | S |
 
-**Status detail:** ✅ M7-1 and M7-2 are complete (2/6 slices). Streaming overview mode shipped against [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), and CI regression policies shipped against [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md). M7-3 through M7-6 remain planned.
+**Status detail:** ✅ M7-1 through M7-3 are complete (3/6 slices). Streaming overview mode shipped against [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), CI regression policies shipped against [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md), and allocation-site flame graphs shipped against [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md). M7-4 through M7-6 remain planned.
 
 ### Phase 1 — Foundation
 
-**M7-1 is complete.** Streaming overview mode is now the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data. The next active slices remain M7-2 and M7-3.
+**M7-1 is complete.** Streaming overview mode is now the enabling layer for large-dump credibility, fair benchmark comparisons, and differentiated workflows on real production-scale data. The next active slices are M7-4 through M7-6.
 
 ### Phase 2 — Differentiation
 
-**M7-2 is complete.** `mnemosyne-cli ci-check` now gives Mnemosyne a one-command CI gate with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub Actions outputs. Deliver **M7-3** next so flame graphs become the next differentiated surface after automation.
+**M7-2 and M7-3 are complete.** `mnemosyne-cli ci-check` gives Mnemosyne a one-command CI gate with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub Actions outputs, and `mnemosyne-cli flamegraph` now exports retained-size SVG/folded-stack/JSON artifacts from deep-mode heap analysis. Deliver **M7-4** next so the roadmap moves from differentiated workflows back to targeted parity work.
 
 ### Phase 3 — Depth
 
@@ -114,7 +112,7 @@ Close with **M7-5** and **M7-6**. Publish comparative evidence, then ship `v0.3.
 
 - All P1 items in M7 are delivered and covered by tests.
 - Comparative benchmark publication exists before the release tag is cut.
-- Test count remains at or above 260 without regressing the existing suite (already at 330 after M7-2).
+- Test count remains at or above 260 without regressing the existing suite (already at 377 after M7-3).
 - Roadmap, STATUS, and release notes align on the shipped M7 scope.
 - M1-M6 remain archive-only and are not reopened through scope creep.
 
@@ -191,6 +189,7 @@ These design documents remain the reference trail for completed milestones and s
 | M6 supporting design | [design/m6-plugin-extension-system.md](design/m6-plugin-extension-system.md) | ✅ |
 | Scaling support design | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
 | M7 supporting design | [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md) | ✅ |
+| M7 supporting design | [design/milestone-7-3-allocation-site-flame-graphs.md](design/milestone-7-3-allocation-site-flame-graphs.md) | ✅ |
 | M7 — Production Readiness & Scale | [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) | ⚠️ In progress |
 
 ---

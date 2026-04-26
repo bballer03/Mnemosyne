@@ -145,7 +145,29 @@ Notes:
 - `--mode auto` may resolve to overview and skip deep-only rules; explicit `--mode overview` with a deep-only policy returns exit `4`
 - the current policy surface supports 10 predicates; the full catalog lives in `docs/design/milestone-7-2-ci-regression-policies.md`
 
-## Step 6: AI Insights
+## Step 6: Generate a Flame Graph
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+```
+
+Useful live options:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep --root dominator
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --root gc-root-path
+```
+
+Notes:
+
+- `flamegraph` requires `-o/--output`; it always writes an artifact instead of stdout-friendly prose
+- rooting strategies are `dominator`, `class-hierarchy`, and `gc-root-path`
+- output formats are `svg`, `folded-stack`, and `json`
+- `flamegraph` requires deep mode and exits `5` if you pass `--mode overview` or if `--mode auto` resolves to overview at the 4 GiB cutoff
+- if you need the visualization on a large dump, rerun with `--mode deep` only when you have enough RAM for full object-graph analysis; otherwise use `analyze --mode overview` for bounded-memory triage
+
+## Step 7: AI Insights
 
 The CLI flag is still `--ai`:
 
@@ -172,7 +194,7 @@ mnemosyne-cli chat heap.hprof
 
 `chat` analyzes the heap once, prints the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`. It keeps only the running process' recent history in memory and reuses the same `rules` / `stub` / `provider` AI mode plus provider privacy controls as `explain`. The startup shortlist still respects `[analysis]` filters, so chat can also begin in an explicit healthy-heap context when no leaks survive filtering.
 
-## Step 7: Save Reports
+## Step 8: Save Reports
 
 ```bash
 mnemosyne-cli analyze heap.hprof --format html --output-file report.html
@@ -188,7 +210,9 @@ Supported output formats:
 - `html`
 - `json`
 
-## Step 8: Inspect the Effective Config
+`flamegraph` has its own export formats: `svg`, `folded-stack`, and `json`.
+
+## Step 9: Inspect the Effective Config
 
 ```bash
 mnemosyne-cli config

@@ -66,6 +66,13 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
 - Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
 
+### 🔥 Retained-Size Flame Graphs
+- `mnemosyne-cli flamegraph <heap.hprof> -o flame.svg` renders post-mortem retained-size flame graphs from the deep object-graph path
+- Rooting strategies: `--root dominator|class-hierarchy|gc-root-path`
+- Output formats: `--format svg|folded-stack|json`
+- Flame graphs are deep-mode-only: explicit `--mode overview` or an `auto` run that resolves to overview exits `5`; pass `--mode deep` to override the 4 GiB auto cutoff when you have enough RAM
+- The SVG renderer is powered by `inferno` 0.11, giving Mnemosyne a browser-openable, searchable flame graph artifact directly from a heap dump
+
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
 - Automatic detection of:
@@ -124,8 +131,8 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
 
 **Layers at a glance:**
-- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
-- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, analysis engine, AI insights, MCP server, report generator
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, AI insights, MCP server, report generator
 - **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
 - **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
 - **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
@@ -480,6 +487,23 @@ The shipped severity ladder is `info < warning < error < critical`; `--fail-on` 
 
 Use `--format text|json|junit|github-actions` and optional `--output <FILE>` to choose the consumer. `--format github-actions` emits workflow commands, `--format junit` emits one testcase per rule, and `--format json` writes a structured envelope containing `{ tool, subcommand, version, result }`. Exit codes are `0` (clean or below threshold), `1` (policy violation), `2` (invalid policy), `3` (unreadable heap or analysis failure), and `4` (explicit `--mode overview` with a deep-only rule). In `auto` mode, deep-only rules are skipped instead when the heap resolves to overview. For the full predicate catalog and schema details, see [docs/design/milestone-7-2-ci-regression-policies.md](docs/design/milestone-7-2-ci-regression-policies.md).
 
+#### Render a retained-size flame graph
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+```
+
+Useful variations:
+
+```bash
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep --root dominator
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
+mnemosyne-cli flamegraph heap.hprof -o flame.json --mode deep --format json --root gc-root-path
+```
+
+`flamegraph` is the export surface for retained-size visualization. `dominator` is the default strategy for "what holds memory", `class-hierarchy` groups by inheritance chain, and `gc-root-path` emphasizes why important objects remain reachable. SVG output opens as a searchable, zoomable flame graph in a browser, while `folded-stack` and `json` are better fits for downstream tooling.
+
+This command requires deep mode. If you pass `--mode overview`, or `--mode auto` resolves to overview because the heap is at or above the 4 GiB cutoff, Mnemosyne exits `5` and tells you to rerun with `--mode deep` if you have enough RAM. If you only need large-dump triage, stay on `parse` or `analyze --mode overview` instead.
+
 #### Output TOON (for CI/CD)
 ```bash
 mnemosyne-cli analyze heap.hprof --format toon > report.toon
@@ -560,6 +584,12 @@ mnemosyne-cli analyze heap.hprof --format json --output-file report.json
 
 # Run a policy gate in CI
 mnemosyne-cli ci-check heap.hprof --policy .mnemosyne/policy.toml --format junit --output heap-policy.xml
+
+# Export a retained-size flame graph
+mnemosyne-cli flamegraph heap.hprof -o flame.svg --mode deep
+
+# Emit folded stacks for external flamegraph tooling
+mnemosyne-cli flamegraph heap.hprof -o flame.folded --mode deep --format folded-stack --root class-hierarchy
 
 # Compare two heap dumps
 mnemosyne-cli diff before.hprof after.hprof
@@ -784,7 +814,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
-- M7 is in progress: M7-1 streaming overview mode and M7-2 `ci-check` are complete, and M7-3 allocation-site flame graphs is the next active slice
+- M7 is in progress: M7-1 streaming overview mode, M7-2 `ci-check`, and M7-3 allocation-site flame graphs are complete, and M7-4 OQL targeted expansion is the next active slice
 - Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---

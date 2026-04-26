@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `mnemosyne-cli flamegraph <heap.hprof> -o <file>` as a deep-mode-only retained-size flame graph export surface with three rooting strategies (`dominator`, `class-hierarchy`, `gc-root-path`), three output formats (`svg`, `folded-stack`, `json`), a structured JSON envelope, and exit code `5` when the command is run in explicit or auto-resolved overview mode
 - `mnemosyne-cli ci-check <heap.hprof> --policy <file>` as a dedicated CI regression gate with TOML-backed policy evaluation, 10 predicates across overview/deep inputs, the `info|warning|error|critical` severity ladder plus `--fail-on`, four output formats (`text|json|junit|github-actions`), and the supporting GitHub Actions / Jenkins integration docs
 - `AnalysisMode { auto, deep, overview }` across core, CLI, MCP, and report rendering, including the bounded-memory `core::hprof::overview` parser for class-resolved streaming triage on large dumps without building the `ObjectGraph`
 - CLI `parse` / `analyze` `--mode auto|deep|overview`, MCP `parse_heap` / `analyze_heap` `mode`, the `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` env override for the 4 GiB auto-mode cutoff, and overview responses/renderers that label approximate shallow sizes honestly instead of implying retained-size semantics
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional integration coverage for zero-leak confirmation and M3 Phase 2 analyze flags, bringing the validated workspace total to 129 tests
 
 ### Changed
+- `core::analysis::engine` now exposes `analyze_heap_with_graph()` for deep-mode callers that need the `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without changing the serialized `analyze_heap()` contract, and `core::report` now includes the dedicated `flamegraph/` subtree backed by `inferno` 0.11 for SVG rendering
 - The browser-first UI now spans the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace, with direct heap-explorer → leak-workspace jumps driven by `resolveObjectToLeak()`
 - Owned project docs now reflect the shipped M6 UI/ecosystem state, including the desktop scaffold story, integration guides, benchmark comparison doc, and contributor/community guidance
 - `core::analysis::ai` now supports chat-turn generation while preserving the existing `AiInsights` / `AiWireExchange` TOON contract, and provider-mode chat reuses the same prompt-template, redaction, hashed audit-logging, and minimal prompt-budget guard path as one-shot explanations
