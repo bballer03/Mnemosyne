@@ -312,6 +312,99 @@ fn build_objects_projection_graph() -> ObjectGraph {
     graph
 }
 
+fn add_owner_object(graph: &mut ObjectGraph, object_id: ObjectId, class_id: ObjectId) {
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+}
+
+fn add_gc_root_target(
+    graph: &mut ObjectGraph,
+    object_id: ObjectId,
+    class_id: ObjectId,
+    owner_id: ObjectId,
+) {
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id,
+            shallow_size: 32,
+            references: vec![owner_id],
+            field_data: object_ref_bytes(owner_id),
+            kind: ObjectKind::Instance,
+        },
+    );
+}
+
+fn build_gc_root_path_query_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        2,
+        1,
+        "com.example.ThreadLocalHolder",
+        Vec::new(),
+    );
+    add_class(&mut graph, 3, 1, "com.example.PathNode", Vec::new());
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Target",
+        vec![FieldDescriptor {
+            name: Some("owner".into()),
+            field_type: field_types::OBJECT,
+        }],
+    );
+    add_class(&mut graph, 5, 1, "com.example.Owner", Vec::new());
+    add_class(&mut graph, 6, 1, "com.example.OtherOwner", Vec::new());
+
+    graph.objects.insert(
+        0x7100,
+        HeapObject {
+            id: 0x7100,
+            class_id: 2,
+            shallow_size: 24,
+            references: vec![0x7200],
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.objects.insert(
+        0x7200,
+        HeapObject {
+            id: 0x7200,
+            class_id: 3,
+            shallow_size: 24,
+            references: vec![0x7300],
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    add_owner_object(&mut graph, 0x7400, 5);
+    add_owner_object(&mut graph, 0x7401, 6);
+    add_gc_root_target(&mut graph, 0x7300, 4, 0x7400);
+    add_gc_root_target(&mut graph, 0x7301, 4, 0x7401);
+
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x7100,
+        root_type: GcRootType::JniGlobal,
+    });
+
+    graph
+}
+
 fn build_graph_fixture() -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
@@ -1316,4 +1409,269 @@ fn field_ne_null_matches_non_null_object_ref() {
     let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
 
     assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
+}
+
+#[test]
+fn where_at_gc_root_path_contains_classname_matches() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Target" WHERE @gcRootPath CONTAINS "ThreadLocal""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x7300)]]);
+}
+
+#[test]
+fn where_at_gc_root_path_contains_no_match_returns_empty() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Target" WHERE @gcRootPath CONTAINS "Nope""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn where_at_gc_root_path_like_with_wildcard_matches() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Target" WHERE @gcRootPath LIKE "GcRoot/JniGlobal -> %PathNode -> com.example.Target""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x7300)]]);
+}
+
+#[test]
+fn where_at_gc_root_path_for_unreachable_object_evaluates_false() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Target" WHERE owner INSTANCEOF "com.example.OtherOwner" AND @gcRootPath CONTAINS "ThreadLocal""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn select_at_gc_root_path_projects_joined_string() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @gcRootPath FROM "com.example.Target" WHERE owner INSTANCEOF "com.example.Owner""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@gcRootPath"]);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Str(
+            "GcRoot/JniGlobal -> com.example.ThreadLocalHolder -> com.example.PathNode -> com.example.Target"
+                .into(),
+        )]],
+    );
+}
+
+#[test]
+fn select_at_gc_root_path_for_unreachable_object_returns_null() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @gcRootPath FROM "com.example.Target" WHERE owner INSTANCEOF "com.example.OtherOwner""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Null]]);
+}
+
+#[test]
+fn at_gc_root_path_in_overview_mode_returns_unavailable_error() {
+    let graph = build_gc_root_path_query_graph();
+    let query =
+        parse_query(r#"SELECT @gcRootPath FROM "com.example.Target""#).expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode @gcRootPath should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "@gcRootPath" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn at_gc_root_path_path_format_uses_arrow_separator() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @gcRootPath FROM "com.example.Target" WHERE owner INSTANCEOF "com.example.Owner""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    let CellValue::Str(path) = &result.rows[0][0] else {
+        panic!("expected gc-root path string");
+    };
+
+    assert!(path.contains(" -> "));
+    assert!(!path.contains(';'));
+}
+
+#[test]
+fn at_gc_root_path_includes_root_kind_as_first_frame() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @gcRootPath FROM "com.example.Target" WHERE owner INSTANCEOF "com.example.Owner""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    let CellValue::Str(path) = &result.rows[0][0] else {
+        panic!("expected gc-root path string");
+    };
+
+    assert!(path.starts_with("GcRoot/JniGlobal -> "));
+}
+
+#[test]
+fn where_field_is_null_matches_objects_with_null_ref() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Node" WHERE payload IS NULL"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![CellValue::Id(0x4300)],
+            vec![CellValue::Id(0x4500)],
+            vec![CellValue::Id(0x4600)],
+            vec![CellValue::Id(0x4700)],
+        ]
+    );
+}
+
+#[test]
+fn where_field_is_not_null_matches_objects_with_resolved_ref() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x4100)], vec![CellValue::Id(0x4400)]],
+    );
+}
+
+#[test]
+fn is_null_on_primitive_field_returns_clear_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Node" WHERE count IS NULL"#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("primitive IS NULL should fail clearly");
+
+    assert!(error.to_string().contains("count"));
+    assert!(error.to_string().contains("primitive"));
+}
+
+#[test]
+fn is_null_on_unknown_field_returns_clear_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Node" WHERE missing IS NULL"#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("unknown IS NULL fields should fail clearly");
+
+    assert!(error.to_string().contains("missing"));
+    assert!(error.to_string().contains("does not exist"));
+}
+
+#[test]
+fn is_null_in_overview_mode_returns_unavailable_error() {
+    let graph = build_objects_projection_graph();
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Node" WHERE payload IS NULL"#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode IS NULL should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { hint, .. } if hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn at_gc_root_path_combined_with_at_retained_size_and_instanceof() {
+    let graph = build_gc_root_path_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Target" WHERE @gcRootPath CONTAINS "ThreadLocal" AND @retainedSize > 40 AND owner INSTANCEOF "com.example.Owner""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x7300)]]);
+}
+
+#[test]
+fn is_null_combined_with_objects_projection() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "@className"]);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2400),
+                CellValue::Str("com.example.OtherParent".into()),
+            ],
+        ]
+    );
 }

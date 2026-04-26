@@ -5,13 +5,18 @@ use super::types::{
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
-    graph::DominatorTree,
+    graph::{gc_root_path::shortest_gc_root_path, DominatorTree},
     hprof::{field_types, read_field, FieldValue, ObjectGraph, ObjectId},
 };
 use regex::Regex;
 
+const GC_ROOT_PATH_MAX_DEPTH: usize = 32;
+const GC_ROOT_PATH_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; @gcRootPath requires deep-mode object graph traversal.";
 const OBJECTS_OVERVIEW_HINT: &str =
     "re-run with --mode deep; OBJECTS requires deep-mode object field traversal.";
+const NULL_PREDICATE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; IS NULL and IS NOT NULL require deep-mode instance field data.";
 const RETAINED_SIZE_OVERVIEW_HINT: &str =
     "re-run with --mode deep or use @shallowSize for a per-object approximation.";
 const STRING_PREDICATE_OVERVIEW_HINT: &str =
@@ -38,7 +43,7 @@ pub fn execute_query(
         ) {
             continue;
         }
-        if !matches_filter(query, graph, dominator, object_id) {
+        if !matches_filter(query, graph, dominator, object_id)? {
             continue;
         }
         matched_ids.push(object_id);
@@ -93,21 +98,25 @@ fn validate_supported_query(
     query: &Query,
     dominator: Option<&DominatorTree>,
 ) -> Result<(), QueryError> {
-    if query_references_gc_root_path(query) {
-        return Err(slice_a_not_implemented("@gcRootPath query evaluation"));
-    }
-
-    if query_uses_deferred_null_predicates(query) {
-        return Err(slice_a_not_implemented(
-            "IS NULL / IS NOT NULL query evaluation",
-        ));
-    }
-
     if dominator.is_none() {
+        if query_references_gc_root_path(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "@gcRootPath",
+                GC_ROOT_PATH_OVERVIEW_HINT,
+            ));
+        }
+
         if matches!(query.select, SelectClause::Objects(_)) {
             return Err(QueryError::feature_unavailable_in_overview_mode(
                 "OBJECTS",
                 OBJECTS_OVERVIEW_HINT,
+            ));
+        }
+
+        if query_uses_null_predicates(query) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "IS NULL / IS NOT NULL",
+                NULL_PREDICATE_OVERVIEW_HINT,
             ));
         }
 
@@ -146,7 +155,7 @@ fn query_references_gc_root_path(query: &Query) -> bool {
         })
 }
 
-fn query_uses_deferred_null_predicates(query: &Query) -> bool {
+fn query_uses_null_predicates(query: &Query) -> bool {
     query.filter.as_ref().is_some_and(|filter| {
         filter
             .conditions
@@ -196,10 +205,6 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
         SelectClause::Fields(fields) => fields.contains(&FieldRef::BuiltIn(built_in)),
         SelectClause::Objects(field) => *field == FieldRef::BuiltIn(built_in),
     }
-}
-
-fn slice_a_not_implemented(feature: &str) -> QueryError {
-    QueryError::NotImplemented(format!("{feature} is not yet implemented in slice A"))
 }
 
 fn execute_objects_projection(
@@ -377,20 +382,20 @@ fn matches_filter(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> bool {
+) -> Result<bool, QueryError> {
     let Some(filter) = &query.filter else {
-        return true;
+        return Ok(true);
     };
 
-    let mut result = evaluate_condition(&filter.conditions[0], graph, dominator, object_id);
+    let mut result = evaluate_condition(&filter.conditions[0], graph, dominator, object_id)?;
     for (idx, op) in filter.operators.iter().enumerate() {
-        let next = evaluate_condition(&filter.conditions[idx + 1], graph, dominator, object_id);
+        let next = evaluate_condition(&filter.conditions[idx + 1], graph, dominator, object_id)?;
         result = match op {
             super::types::LogicalOp::And => result && next,
             super::types::LogicalOp::Or => result || next,
         };
     }
-    result
+    Ok(result)
 }
 
 fn evaluate_condition(
@@ -398,13 +403,28 @@ fn evaluate_condition(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> bool {
+) -> Result<bool, QueryError> {
     if condition.op == ComparisonOp::InstanceOf {
-        return matches_instanceof_condition(&condition.field, &condition.value, graph, object_id);
+        return Ok(matches_instanceof_condition(
+            &condition.field,
+            &condition.value,
+            graph,
+            object_id,
+        ));
+    }
+
+    if matches!(condition.op, ComparisonOp::IsNull | ComparisonOp::IsNotNull) {
+        return evaluate_null_condition(
+            &condition.field,
+            condition.op,
+            graph,
+            dominator,
+            object_id,
+        );
     }
 
     let left = resolve_field_value(&condition.field, graph, dominator, object_id);
-    compare_values(left, condition.op, &condition.value)
+    Ok(compare_values(left, condition.op, &condition.value))
 }
 
 fn resolve_field_value(
@@ -438,9 +458,38 @@ fn resolve_field_value(
             CellValue::Str(format!("0x{object_id:08X}"))
         }
         FieldRef::BuiltIn(BuiltInField::ToString) => synth_to_string(graph, object_id),
-        FieldRef::BuiltIn(BuiltInField::GcRootPath) => CellValue::Null,
+        FieldRef::BuiltIn(BuiltInField::GcRootPath) => resolve_gc_root_path_value(graph, object_id),
         FieldRef::InstanceField(name) => resolve_instance_field_value(object, name, graph),
     }
+}
+
+fn resolve_gc_root_path_value(graph: &ObjectGraph, object_id: ObjectId) -> CellValue {
+    // TODO(m7-4e-perf): consider per-query caching for repeated @gcRootPath lookups if this
+    // becomes a hot path on large result sets. Keep slice E uncached for now.
+    let Some(path) = shortest_gc_root_path(graph, object_id, GC_ROOT_PATH_MAX_DEPTH) else {
+        return CellValue::Null;
+    };
+
+    let mut frames = Vec::with_capacity(path.frames.len() + 1);
+    frames.push(format!("GcRoot/{:?}", path.root_kind));
+    frames.extend(
+        path.frames
+            .into_iter()
+            .map(|frame_id| gc_root_path_class_name(graph, frame_id)),
+    );
+
+    CellValue::Str(frames.join(" -> "))
+}
+
+fn gc_root_path_class_name(graph: &ObjectGraph, object_id: ObjectId) -> String {
+    let Some(object) = graph.get_object(object_id) else {
+        return format!("<unknown object id={object_id}>");
+    };
+
+    graph
+        .class_name(object.class_id)
+        .unwrap_or("<unknown>")
+        .replace('/', ".")
 }
 
 fn resolve_instance_field_value(
@@ -468,6 +517,70 @@ fn resolve_instance_field_value(
             .unwrap_or(CellValue::Id(reference)),
         FieldValue::ObjectRef(None) => CellValue::Null,
     }
+}
+
+fn evaluate_null_condition(
+    field: &FieldRef,
+    op: ComparisonOp,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    object_id: ObjectId,
+) -> Result<bool, QueryError> {
+    let matches_null = match field {
+        FieldRef::BuiltIn(_) => matches!(
+            resolve_field_value(field, graph, dominator, object_id),
+            CellValue::Null
+        ),
+        FieldRef::InstanceField(field_name) => {
+            let Some(object) = graph.get_object(object_id) else {
+                return Ok(false);
+            };
+
+            let class_name = graph
+                .class_name(object.class_id)
+                .unwrap_or("<unknown>")
+                .replace('/', ".");
+            let operator = if op == ComparisonOp::IsNotNull {
+                "IS NOT NULL"
+            } else {
+                "IS NULL"
+            };
+
+            let Some(field_type) = lookup_instance_field_type(graph, object.class_id, field_name)
+            else {
+                return Err(QueryError::Unsupported(format!(
+                    "{operator} field '{field_name}' does not exist on class '{class_name}'"
+                )));
+            };
+
+            if field_type != field_types::OBJECT {
+                return Err(QueryError::Unsupported(format!(
+                    "{operator} not applicable to primitive field '{field_name}' on class '{class_name}'"
+                )));
+            }
+
+            match read_field(object, &graph.classes, field_name, graph.identifier_size) {
+                Some(FieldValue::ObjectRef(None)) => true,
+                Some(FieldValue::ObjectRef(Some(_))) => false,
+                Some(_) => {
+                    return Err(QueryError::Unsupported(format!(
+                        "{operator} not applicable to primitive field '{field_name}' on class '{class_name}'"
+                    )));
+                }
+                None => {
+                    return Err(QueryError::Unsupported(format!(
+                        "{operator} field '{field_name}' could not be read from class '{class_name}'"
+                    )));
+                }
+            }
+        }
+    };
+
+    Ok(if op == ComparisonOp::IsNotNull {
+        !matches_null
+    } else {
+        matches_null
+    })
 }
 
 fn matches_instanceof_condition(
