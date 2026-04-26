@@ -1,0 +1,104 @@
+name: Feature request
+description: Propose a new capability, improvement, or contract change.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are evaluated against the [roadmap](../../docs/roadmap.md). Strong proposals include a concrete user problem, a sketched approach, and a clear "done" criterion.
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and the [roadmap](../../docs/roadmap.md); this is not already proposed or planned.
+          required: true
+        - label: This is a feature request, not a bug. Bugs go in the bug template.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What user pain or workflow gap does this solve? Be concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: users
+    attributes:
+      label: Who benefits?
+      description: Who is the primary user (heap-analyst, on-call SRE, JVM-internals contributor, library author, …) and what scenario hits this?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: User-facing shape — CLI flag, MCP tool, config option, report format, etc. Sketch the UX.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, competing tools (Eclipse MAT, VisualVM, JFR), and why they fall short.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface area touched
+      multiple: true
+      options:
+        - CLI
+        - MCP server
+        - Core analysis (parser/graph/dominator/leak/etc.)
+        - Reporting (HTML/JSON/Markdown)
+        - Config / trust boundaries
+        - AI explanations
+        - Documentation only
+        - New crate / module
+    validations:
+      required: true
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Backward compatibility
+      options:
+        - Additive only (new flag/field, default off)
+        - Backward-compatible behavior change
+        - Breaking change (requires major version)
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is "done"? Concrete, testable conditions.
+      placeholder: |
+        - [ ] CLI flag `--foo` accepted and documented
+        - [ ] Report includes new "foo" section under existing `summary` key
+        - [ ] Integration test covers the happy path on a real fixture dump
+    validations:
+      required: true
+
+  - type: textarea
+    id: prior-art
+    attributes:
+      label: Prior art / references
+      description: Links to specs, papers, blog posts, or other tools that do this well.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context

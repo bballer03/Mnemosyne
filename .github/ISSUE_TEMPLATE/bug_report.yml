@@ -1,0 +1,135 @@
+name: Bug report
+description: Report a bug or unexpected behavior in Mnemosyne (non-heap-dump issues).
+title: "[Bug]: "
+labels: ["bug", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in every section — incomplete reports get closed during triage.
+
+        - Heap-dump-specific bugs (parser failures, leak-detection wrong answers, OQL crashes): use **Heap Dump Bug** template instead.
+        - Security vulnerabilities: do **not** file here — use [private advisory](https://github.com/bballer03/Mnemosyne/security/advisories/new).
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched [open and closed issues](https://github.com/bballer03/Mnemosyne/issues?q=is%3Aissue) and this is not a duplicate.
+          required: true
+        - label: I am running the latest released version, or a recent `main` build.
+          required: true
+        - label: I confirmed this is not a security vulnerability (those go via private advisory).
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One-paragraph summary. What broke, where, and what the impact is.
+      placeholder: "When running `mnemosyne-cli analyze ...`, the CLI panics instead of returning an error..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list. Be exact — paste commands verbatim, including flags.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include exact error message, exit code, and any stack trace.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: mnemo-version
+    attributes:
+      label: Mnemosyne version
+      description: Output of `mnemosyne-cli --version`.
+      placeholder: "mnemosyne-cli 0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust toolchain
+      description: Output of `rustc --version` (only required if building from source).
+      placeholder: "rustc 1.78.0 (9b00956e5 2024-04-29)"
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - cargo install
+        - Homebrew
+        - Docker / GHCR
+        - Prebuilt binary (GitHub Releases)
+        - From source
+        - Other (note in Additional Context)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: Run with `RUST_LOG=debug RUST_BACKTRACE=1` and paste relevant output.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, related issues, workarounds tried, anything else.
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      options:
+        - "No / unsure"
+        - "Yes — worked in a prior version"
+    validations:
+      required: true
+
+  - type: input
+    id: last-good
+    attributes:
+      label: Last known-good version (if regression)
+      placeholder: "0.1.3"
