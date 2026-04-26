@@ -60,6 +60,12 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
+### 🧪 CI Regression Policies
+- `mnemosyne-cli ci-check <heap.hprof> --policy policy.toml` turns heap analysis into a first-class CI gate instead of requiring custom `jq` or Groovy glue
+- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 10 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`
+- The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
+- Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
+
 ### 🧠 AI-Powered Leak Diagnostics
 - Natural-language explanations for memory leaks
 - Automatic detection of:
@@ -118,8 +124,8 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
 
 **Layers at a glance:**
-- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
-- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, analysis engine, AI insights, MCP server, report generator
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, analysis engine, AI insights, MCP server, report generator
 - **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
 - **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
 - **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
@@ -436,12 +442,50 @@ If you pass `--ai` together with `--mode overview`, Mnemosyne prints a notice an
 
 Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
+#### Run CI regression checks
+Create a policy file with one or more rules:
+
+```toml
+[meta]
+name = "checkout-service"
+
+[defaults]
+severity = "error"
+
+[[rule]]
+id = "heap-budget"
+predicate = "total_bytes"
+op = "<="
+value = 2147483648
+
+[[rule]]
+id = "no-critical-leaks"
+predicate = "leak_count"
+op = "=="
+value = 0
+severity = "critical"
+severity_filter = "critical"
+```
+
+Then run the gate:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --fail-on error
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output heap-policy.xml
+```
+
+`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 10 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`.
+
+The shipped severity ladder is `info < warning < error < critical`; `--fail-on` defaults to `error` and changes the process exit status when any violation meets or exceeds that threshold. All renderers still show every violation and skipped rule; `--fail-on` controls the exit code only.
+
+Use `--format text|json|junit|github-actions` and optional `--output <FILE>` to choose the consumer. `--format github-actions` emits workflow commands, `--format junit` emits one testcase per rule, and `--format json` writes a structured envelope containing `{ tool, subcommand, version, result }`. Exit codes are `0` (clean or below threshold), `1` (policy violation), `2` (invalid policy), `3` (unreadable heap or analysis failure), and `4` (explicit `--mode overview` with a deep-only rule). In `auto` mode, deep-only rules are skipped instead when the heap resolves to overview. For the full predicate catalog and schema details, see [docs/design/milestone-7-2-ci-regression-policies.md](docs/design/milestone-7-2-ci-regression-policies.md).
+
 #### Output TOON (for CI/CD)
 ```bash
 mnemosyne-cli analyze heap.hprof --format toon > report.toon
 ```
 
-Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection.
+Prefer a machine-readable JSON artifact? Swap in `--format json --output-file report.json`. The CLI writes every report to stdout by default, but `--output-file` lets you persist HTML/Markdown/TOON/JSON without juggling shell redirection. If you need Mnemosyne itself to own the pass/fail contract, use `mnemosyne-cli ci-check` instead of shell logic around `analyze`.
 
 **Example TOON payload:**
 ```
@@ -511,8 +555,11 @@ mnemosyne-cli analyze heap.hprof --threads --strings --collections --top-instanc
 # Export HTML report
 mnemosyne-cli analyze heap.hprof --format html --output-file report.html
 
-# Emit JSON for CI
+# Emit a JSON analysis artifact for CI
 mnemosyne-cli analyze heap.hprof --format json --output-file report.json
+
+# Run a policy gate in CI
+mnemosyne-cli ci-check heap.hprof --policy .mnemosyne/policy.toml --format junit --output heap-policy.xml
 
 # Compare two heap dumps
 mnemosyne-cli diff before.hprof after.hprof
@@ -552,7 +599,7 @@ Heap diff: before.hprof -> after.hprof
     java.lang.String                    +410  398.00 -> 421.00 MB      +44.00 MB
 ```
 
-The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) to fail builds when heap growth crosses your budget.
+The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) when you want a before/after artifact; use `mnemosyne-cli ci-check` when you want Mnemosyne itself to own the policy gate and exit code.
 
 ---
 
@@ -737,6 +784,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M4 is complete: the browser-first `ui/` frontend ships the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
+- M7 is in progress: M7-1 streaming overview mode and M7-2 `ci-check` are complete, and M7-3 allocation-site flame graphs is the next active slice
 - Remaining follow-on is evidence-driven: richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
 
 ---

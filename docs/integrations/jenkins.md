@@ -7,8 +7,9 @@ For the full CLI surface, see [the user guide](../user-guide.md). For install ch
 ## Before you start
 
 - The current checked-in CLI exposes structured JSON on `mnemosyne-cli analyze --format json`.
-- The current checked-in CLI does not expose `--format` on `leaks` or `diff`, so Jenkins gates should parse `analyze` JSON and treat `leaks` or `diff` output as human-readable artifacts.
-- Mnemosyne returns `0` when analysis completes successfully. If you want Jenkins to fail on findings, add explicit Groovy or shell checks that call `error(...)` or return a non-zero exit code.
+- `mnemosyne-cli ci-check` is the dedicated policy gate when you want Mnemosyne itself to own pass/fail semantics, JUnit XML, or GitHub Actions-style annotations.
+- `leaks` and `diff` remain text-only in the current CLI, so Jenkins gates around those commands still need shell parsing or a companion `analyze` JSON artifact.
+- `analyze` still returns `0` when analysis completes successfully. `ci-check` uses `0`/`1`/`2`/`3`/`4` for clean, policy violation, invalid policy, unreadable heap/analyze failure, and explicit overview-mode mismatch.
 - These examples assume Linux agents.
 
 ## 1. Pipeline Setup
@@ -231,5 +232,6 @@ Exit codes from `mnemosyne-cli ci-check`:
 Notes:
 
 - `junit 'mnemosyne-policy.xml'` makes each policy rule appear as one test case in Jenkins test reporting.
+- The saved `ciStatus` is still the authoritative build gate when you intentionally allow lower-severity violations below `--fail-on`; the JUnit XML records every violation.
 - Keep archiving the JSON output even when Jenkins also ingests JUnit. The JSON file is the easier artifact for later diffing or dashboard ingestion.
 - If you already run `mnemosyne-cli analyze --profile ci-regression`, keep that stage for richer artifacts. `ci-check` is the policy gate, not a replacement for the broader analysis report.

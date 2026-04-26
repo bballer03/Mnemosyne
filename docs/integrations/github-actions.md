@@ -9,8 +9,9 @@ For the full CLI surface, see [the user guide](../user-guide.md). For install ch
 - These examples assume a Linux runner and a sanitized heap dump that is either committed to the repo or generated earlier in the workflow.
 - Do not commit production heap dumps or dumps with customer data, secrets, or other sensitive content.
 - The current checked-in CLI exposes structured JSON on `mnemosyne-cli analyze --format json`.
-- The current checked-in CLI does not expose `--format` on `leaks` or `diff`, so automated CI gates should parse `analyze` JSON and treat `leaks` or `diff` output as human-readable artifacts.
-- Mnemosyne exits with `0` when analysis completes successfully. To fail a build on leak counts or growth thresholds, add your own `jq` checks and `exit 1` logic.
+- `mnemosyne-cli ci-check` is the dedicated policy gate when you want Mnemosyne itself to own pass/fail semantics, JUnit XML, or GitHub Actions workflow commands.
+- `leaks` and `diff` remain text-only in the current CLI, so custom gates around those commands still need shell parsing or a companion `analyze` JSON artifact.
+- `analyze` still exits with `0` when analysis completes successfully. `ci-check` uses `0`/`1`/`2`/`3`/`4` for clean, policy violation, invalid policy, unreadable heap/analyze failure, and explicit overview-mode mismatch.
 
 ## 1. Quick Start
 
@@ -522,4 +523,5 @@ Exit codes from `mnemosyne-cli ci-check`:
 Notes:
 
 - The `github-actions` format intentionally emits `file=` but not `line=` today because policy source spans are not tracked yet.
+- The workflow captures the original `ci_check` status separately because `--fail-on` controls the process exit code while the JUnit report still records every violation.
 - If you also want the richer analysis artifact, add a separate `mnemosyne-cli analyze --profile ci-regression --format json --output-file reports/analysis.json` step. That complements `ci-check`; it does not replace it.

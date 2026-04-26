@@ -104,7 +104,48 @@ Profile presets currently mean:
 
 `--profile overview` is a deep-mode preset. It is not the same thing as `--mode overview`.
 
-## Step 5: AI Insights
+## Step 5: Run CI Regression Checks
+
+Create a small policy file:
+
+```toml
+[meta]
+name = "heap-regression"
+
+[defaults]
+severity = "error"
+
+[[rule]]
+id = "heap-budget"
+predicate = "total_bytes"
+op = "<="
+value = 2147483648
+```
+
+Run the gate:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml
+```
+
+Useful live options:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+```
+
+Notes:
+
+- `ci-check` uses a dedicated TOML policy file; it is separate from `mnemosyne-cli config`
+- severities are `info`, `warning`, `error`, and `critical`; `--fail-on` defaults to `error`
+- all renderers still show every violation and skipped rule; `--fail-on` changes the process exit status only
+- exit codes are `0` clean or below threshold, `1` violation at or above `--fail-on`, `2` invalid policy, `3` unreadable heap or analysis failure, `4` explicit `--mode overview` with a deep-only rule
+- `--mode auto` may resolve to overview and skip deep-only rules; explicit `--mode overview` with a deep-only policy returns exit `4`
+- the current policy surface supports 10 predicates; the full catalog lives in `docs/design/milestone-7-2-ci-regression-policies.md`
+
+## Step 6: AI Insights
 
 The CLI flag is still `--ai`:
 
@@ -131,7 +172,7 @@ mnemosyne-cli chat heap.hprof
 
 `chat` analyzes the heap once, prints the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`. It keeps only the running process' recent history in memory and reuses the same `rules` / `stub` / `provider` AI mode plus provider privacy controls as `explain`. The startup shortlist still respects `[analysis]` filters, so chat can also begin in an explicit healthy-heap context when no leaks survive filtering.
 
-## Step 6: Save Reports
+## Step 7: Save Reports
 
 ```bash
 mnemosyne-cli analyze heap.hprof --format html --output-file report.html
@@ -147,7 +188,7 @@ Supported output formats:
 - `html`
 - `json`
 
-## Step 7: Inspect the Effective Config
+## Step 8: Inspect the Effective Config
 
 ```bash
 mnemosyne-cli config

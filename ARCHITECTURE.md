@@ -51,8 +51,9 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Parser:** `core::hprof::parser` streams HPROF headers/records for record-summary stats, `core::hprof::overview` provides the bounded-memory class-resolved overview path used for large-dump triage, and `core::hprof::binary_parser` parses binary heap records into an object graph for deep graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
-- **CLI:** `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`. `parse` and `analyze` now accept `--mode auto|deep|overview`; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. The `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **CLI:** `parse`, `leaks`, `analyze`, `ci-check`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`, except `ci-check`, which uses `--output` for its policy-gate artifacts. `parse`, `analyze`, and `ci-check` all use `--mode auto|deep|overview` where appropriate; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. `ci-check` adds `--policy`, `--format text|json|junit|github-actions`, and `--fail-on info|warning|error|critical`; the `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
 - **Analysis modes:** `AnalysisMode::{Auto, Deep, Overview}` is now shared across CLI, MCP, the analysis engine, and report rendering. Deep mode keeps the v0.2.0 object-graph pipeline, while overview mode is streaming, bounded-memory, and explicitly limited to approximate shallow-size triage without dominators, retained sizes, or leak suspects.
+- **Policy engine:** `core::policy` is now a top-level sibling of `analysis`, `report`, `query`, `mapper`, `fix`, and `mcp`. It loads dedicated TOML policy files, consumes finalized `AnalyzeResponse` or streaming `OverviewSummary` values through `PolicyInput`, evaluates those rules into `PolicyResult`, and owns its own renderer family under `core::policy::render::{text,json,junit,github_actions}` rather than routing through `core::report`.
 - **MCP:** `parse_heap` and `analyze_heap` now accept optional `mode: "auto"|"deep"|"overview"`; overview responses carry a `"mode": "overview"` discriminator and return the streaming overview summary instead of pretending to be a deep `AnalyzeResponse`.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
@@ -61,7 +62,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **AI insights:** `core::analysis::ai` now supports `rules`, `stub`, and `provider` modes plus chat-turn generation that still returns `AiInsights` / `AiWireExchange` in TOON. `provider` mode uses a small `core::llm` transport for OpenAI-compatible chat-completions endpoints, renders provider instruction sections from `core::prompts` YAML templates (embedded default plus optional override directory), redacts `heap_path` and regex-matched content from the fully rendered outbound prompt via `[ai.privacy]` before external calls, emits opt-in hashed audit metadata for the redacted prompt, applies a minimal `max_tokens` prompt-budget guard, and parses strict TOON responses back into the existing contract, while `rules` remains the default offline-safe path. `core::fix::propose_fix()` preserves the legacy one-argument API, and `core::fix::propose_fix_with_config()` reuses the same provider/privacy path for a one-file, one-snippet AI-backed patch-generation slice with heuristic fallback.
 - **Provenance:** `ProvenanceKind`/`ProvenanceMarker` types label synthetic, partial, fallback, and placeholder data across `AnalyzeResponse`, `LeakInsight`, `GcPathResult`, and `FixResponse`. All report formats and CLI commands surface these markers.
 - **Output hardening:** HTML reports escape user data to prevent XSS; TOON output escapes control characters. The v0.2.0 core crate layout now groups parsing, graph, analysis, and integration code into dedicated module directories without changing the public API re-exports from `lib.rs`.
-- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 228 passing Rust tests plus targeted UI/Tauri validation.
+- **Validation scaffolding + perf tooling:** Synthetic and real-world HPROF fixture builders (including `HEAP_DUMP_SEGMENT` coverage), the `test-fixtures` cargo feature, optional real-heap-dump validation that skips gracefully when absent, Criterion benches for parser/graph/dominator workloads, the enhanced `scripts/measure_rss.sh` for multi-command RSS capture and ratio reporting, and GitHub Actions workflows now provide deterministic parser inputs and automated workspace validation across 330 passing Rust tests plus targeted UI/Tauri validation.
 
 ### M6 closeout delivered
 - **Browser UI follow-through:** The Object Inspector can request live references/referrers through `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__`, heap explorer routes resolve selected objects back to leak IDs for cross-navigation into the leak workspace, and the shared frontend now covers the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace.
@@ -105,6 +106,12 @@ core/
    │   ├── collection.rs   # HashMap/ArrayList/etc. waste inspection
    │   ├── top_instances.rs # Largest-instance ranking
    │   └── ai.rs
+   ├── policy/             # CI regression policy engine
+   │   ├── mod.rs
+   │   ├── eval.rs
+   │   ├── input.rs
+   │   ├── result.rs
+   │   └── render/         # text/json/junit/github-actions outputs
    ├── mapper/             # Source code mapping
    │   ├── mod.rs
    │   └── source.rs       # Was mapper.rs
@@ -170,18 +177,21 @@ flowchart TD
     HD[".hprof Heap Dump"]
 
     subgraph CLI["CLI  (mnemosyne-cli)"]
-        CMDS["parse · leaks · analyze · diff\nmap · gc-path · query · explain\nchat · fix · serve · config"]
+      CMDS["parse · leaks · analyze · ci-check\ndiff · map · gc-path · query\nexplain · chat · fix · serve · config"]
     end
 
     subgraph Core["Core Library  (mnemosyne-core)"]
         PARSER["HPROF Parser\ncore::hprof"]
         GRAPH["Object Graph + Dominators\ncore::graph"]
         ANALYSIS["Analysis Engine\ncore::analysis"]
+      POLICY["Policy Engine\ncore::policy"]
         AI["AI Insights\ncore::analysis::ai"]
         MCP["MCP Server\ncore::mcp"]
         REPORT["Report Generator\ncore::report"]
         PARSER --> GRAPH --> ANALYSIS --> AI
         ANALYSIS --> REPORT
+      PARSER --> POLICY
+      ANALYSIS --> POLICY
         ANALYSIS --> MCP
     end
 
@@ -318,7 +328,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Argument Parsing & Config**: Reading options (e.g. output format selection, AI model settings, filters) – likely using a crate like clap for ergonomic CLI design.
 
-**User Commands**: Handling shipped subcommands for different actions: `parse`, `leaks`, `analyze`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config`.
+**User Commands**: Handling shipped subcommands for different actions: `parse`, `leaks`, `analyze`, `ci-check`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config`.
 
 **Triggering Workflow**: After parsing inputs, the CLI invokes the MCP to perform the requested operation. It essentially hands off control along with user-provided parameters (file path, config flags).
 
@@ -326,7 +336,7 @@ The CLI is the user-facing component: it parses command-line arguments and provi
 
 **Rationale**: Keeping the CLI logic separate means the core analysis can be reused in other contexts (for example, as a library or in a service). The CLI is thin – it mainly delegates to the MCP and then formats output back to the user.
 
-> **Status (Apr 2026):** The clap-based CLI is fully wired with `--output-file` support, `--format` selection (text/markdown/html/toon/json), provenance display for `leaks`/`gc-path`/`fix` output, and a CLI-first `chat` command for bounded leak-focused follow-up. Richer progress UI and non-CLI conversation surfaces remain future work.
+> **Status (Apr 2026):** The clap-based CLI is fully wired with `--output-file` on `analyze`, `--output` on `ci-check`, `--format` selection for both analysis and policy-gating surfaces (`text/markdown/html/toon/json` plus policy `text/json/junit/github-actions`), provenance display for `leaks`/`gc-path`/`fix` output, and a CLI-first `chat` command for bounded leak-focused follow-up. Richer progress UI and non-CLI conversation surfaces remain future work.
 
 ### 2. Master Control Program (Orchestrator - MCP)
 

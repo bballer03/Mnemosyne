@@ -92,6 +92,7 @@ Important current runtime truth:
 - there is no global `--quiet`
 - there is no global `--no-ai`
 - report rendering lives on `analyze`; there is no standalone `report` subcommand in the current CLI
+- `ci-check` is the separate policy-gate surface; it owns `--format text|json|junit|github-actions`, `--output`, and `--fail-on`
 
 ### `parse`
 
@@ -227,6 +228,66 @@ Report (text/plain) written to heap-report.txt
 ```
 
 Overview mode renders a different banner-led report focused on top classes, instance samples, GC roots, and capped thread frames. It explicitly states that retained sizes, the dominator tree, and leak suspects are not available in that mode.
+
+### `ci-check`
+
+Use `ci-check` when you want Mnemosyne itself to decide pass/fail for a heap regression policy in local automation or CI.
+
+Usage:
+
+```bash
+mnemosyne-cli ci-check <HEAP> --policy <FILE> [OPTIONS]
+```
+
+Flags:
+
+- `--policy <FILE>`
+- `--mode auto|deep|overview`
+- `--format text|json|junit|github-actions`
+- `--output <FILE>`
+- `--fail-on info|warning|error|critical`
+
+What it does:
+
+- loads a dedicated TOML policy file from `--policy`
+- resolves the requested mode at the CLI boundary (`auto` by default)
+- in `deep`, runs the full analysis path and evaluates the resulting `AnalyzeResponse`
+- in `overview`, parses the bounded-memory overview summary and evaluates the resulting `OverviewSummary`
+- renders the selected policy report format and exits with a CI-oriented status code
+
+Policy TOML shape:
+
+- optional `[meta]` for display metadata
+- optional `[defaults]` for default rule severity
+- repeated `[[rule]]` blocks for predicate checks
+
+The current policy surface supports 10 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, and `dominator_root_count`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+
+Severity and mode behavior:
+
+- the ladder is `info < warning < error < critical`
+- omitted rule severities fall back to `[defaults].severity`, then to `error`
+- `--fail-on` defaults to `error` and controls the process exit code only
+- all renderers still include every violation and skipped rule, even when a violation is below `--fail-on`
+- if `--mode auto` resolves to overview, deep-only rules are skipped and reported as skipped
+- if `--mode overview` is explicit and the policy needs deep-only predicates, `ci-check` exits `4`
+
+Exit codes:
+
+- `0`: clean, or only violations below `--fail-on`
+- `1`: at least one violation met or exceeded `--fail-on`
+- `2`: invalid policy file or schema error
+- `3`: unreadable heap or analysis failure
+- `4`: explicit `--mode overview` with a deep-only rule
+
+Examples:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+```
 
 ### `leaks`
 
@@ -708,13 +769,14 @@ Recommended practice:
 
 ### CI regression workflow
 
-For CI or artifact comparison, keep the output machine-readable.
+Use `ci-check` when you want Mnemosyne itself to own the policy gate instead of wiring shell logic around `analyze`.
 
 ```bash
 mnemosyne-cli analyze heap.hprof --profile ci-regression --format json --output-file analysis.json
+mnemosyne-cli ci-check heap.hprof --policy .mnemosyne/policy.toml --format junit --output heap-policy.xml
 ```
 
-This keeps the output structured, reproducible, and easy to archive. The `ci-regression` profile enables top-instance reporting with tighter defaults without turning on every investigation module.
+This combination keeps the richer analysis artifact for later inspection while producing a deterministic policy result for CI. Swap `--format github-actions` when you want workflow annotations in GitHub Actions, or `--format json` when you want the structured `PolicyResult` envelope for a custom dashboard or follow-on automation.
 
 ### Heap comparison
 
@@ -945,7 +1007,7 @@ Useful MCP methods to know up front:
 
 ## 8. Output Formats
 
-Mnemosyne currently renders five output formats through `analyze`.
+Mnemosyne currently renders five analysis formats through `analyze` and four policy-gate formats through `ci-check`.
 
 ### Text
 
@@ -966,6 +1028,17 @@ Best for automation, regression tracking, and downstream tooling. Use it for CI 
 ### TOON
 
 Compact structured text used by Mnemosyne's AI and integration surfaces. It is human-readable enough to inspect, but primarily useful when you want a concise serialized form that is smaller and more regular than prose.
+
+### CI policy formats
+
+`ci-check` supports four formats:
+
+- `text`: human-readable policy summary with requested/used mode, skipped rules, grouped violations, and a final `RESULT: PASS|FAIL` footer
+- `json`: pretty JSON envelope with `{ "tool": "mnemosyne", "subcommand": "ci-check", "version": ..., "result": PolicyResult }`
+- `junit`: one testcase per rule so Jenkins and other test reporters can surface heap-policy results alongside tests
+- `github-actions`: workflow commands plus a summary line for GitHub Actions annotations; the current runtime emits `file=` but not `line=` because policy source spans are not tracked yet
+
+All four formats include every violation and skipped rule. `--fail-on` changes the process exit code only.
 
 ### Provenance markers
 

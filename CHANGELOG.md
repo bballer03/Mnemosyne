@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `mnemosyne-cli ci-check <heap.hprof> --policy <file>` as a dedicated CI regression gate with TOML-backed policy evaluation, 10 predicates across overview/deep inputs, the `info|warning|error|critical` severity ladder plus `--fail-on`, four output formats (`text|json|junit|github-actions`), and the supporting GitHub Actions / Jenkins integration docs
 - `AnalysisMode { auto, deep, overview }` across core, CLI, MCP, and report rendering, including the bounded-memory `core::hprof::overview` parser for class-resolved streaming triage on large dumps without building the `ObjectGraph`
 - CLI `parse` / `analyze` `--mode auto|deep|overview`, MCP `parse_heap` / `analyze_heap` `mode`, the `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` env override for the 4 GiB auto-mode cutoff, and overview responses/renderers that label approximate shallow sizes honestly instead of implying retained-size semantics
 - Browser-UI follow-through in the shared frontend: heap explorer panes can now resolve selected objects back to leak IDs for direct cross-navigation into the leak workspace, and the repository now ships the supporting documentation set (`docs/user-guide.md`, `docs/troubleshooting.md`, `docs/benchmarks.md`, `docs/integrations/`) plus reproducible Java example projects under `examples/`

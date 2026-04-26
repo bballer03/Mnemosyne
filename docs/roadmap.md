@@ -69,7 +69,7 @@ Mnemosyne does not need to beat both competitors at their own game. It needs to 
 
 ## 4. Milestone 7 — Production Readiness & Scale
 
-**Design reference:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md)  
+**Design references:** [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) and [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md)  
 **Status:** ⚠️ In progress
 
 M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but to make Mnemosyne credible on the remaining production blockers: scale, focused parity, and differentiated workflows that MAT cannot match.
@@ -83,7 +83,7 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 | M7-5 | Comparative benchmarks vs MAT/hprof-slurp | Credibility | P2 | M |
 | M7-6 | v0.3.0 release | Release | P1 | S |
 
-**Status detail:** ✅ M7-1 is complete and implemented against [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md). M7-2 through M7-6 remain planned.
+**Status detail:** ✅ M7-1 and M7-2 are complete (2/6 slices). Streaming overview mode shipped against [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md), and CI regression policies shipped against [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md). M7-3 through M7-6 remain planned.
 
 ### Phase 1 — Foundation
 
@@ -91,7 +91,7 @@ M7 is the active milestone. Its job is not to reopen the M1-M6 foundation, but t
 
 ### Phase 2 — Differentiation
 
-Deliver **M7-2** and **M7-3** next. CI regression policies and flame graphs are independent enough to run in parallel, and both widen the moat instead of chasing MAT feature-for-feature.
+**M7-2 is complete.** `mnemosyne-cli ci-check` now gives Mnemosyne a one-command CI gate with policy TOML, severity-aware exit codes, and text/JSON/JUnit/GitHub Actions outputs. Deliver **M7-3** next so flame graphs become the next differentiated surface after automation.
 
 ### Phase 3 — Depth
 
@@ -114,7 +114,7 @@ Close with **M7-5** and **M7-6**. Publish comparative evidence, then ship `v0.3.
 
 - All P1 items in M7 are delivered and covered by tests.
 - Comparative benchmark publication exists before the release tag is cut.
-- Test count remains at or above 260 without regressing the existing suite (already at 268 after M7-1).
+- Test count remains at or above 260 without regressing the existing suite (already at 330 after M7-2).
 - Roadmap, STATUS, and release notes align on the shipped M7 scope.
 - M1-M6 remain archive-only and are not reopened through scope creep.
 
@@ -190,6 +190,7 @@ These design documents remain the reference trail for completed milestones and s
 | M6 supporting design | [design/m6-tauri-desktop-packaging.md](design/m6-tauri-desktop-packaging.md) | ✅ |
 | M6 supporting design | [design/m6-plugin-extension-system.md](design/m6-plugin-extension-system.md) | ✅ |
 | Scaling support design | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
+| M7 supporting design | [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md) | ✅ |
 | M7 — Production Readiness & Scale | [design/milestone-7-production-readiness.md](design/milestone-7-production-readiness.md) | ⚠️ In progress |
 
 ---

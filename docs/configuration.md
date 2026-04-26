@@ -316,6 +316,36 @@ Notable non-features:
 - `MNEMOSYNE_VERBOSE` is not supported
 - there is no environment override for `analysis.accumulation_threshold` yet
 
+## Separate Policy Surface For `ci-check`
+
+`mnemosyne-cli ci-check` does not read its rules from the app config file described above. It loads a separate TOML document via `--policy`, and that file does not appear in `mnemosyne-cli config` output.
+
+Minimal shape:
+
+```toml
+[meta]
+name = "checkout-service"
+
+[defaults]
+severity = "error"
+
+[[rule]]
+id = "heap-budget"
+predicate = "total_bytes"
+op = "<="
+value = 2147483648
+```
+
+Current runtime truth:
+
+- supported top-level blocks are `[meta]`, `[defaults]`, and repeated `[[rule]]`
+- the severity ladder is `info < warning < error < critical`
+- omitted rule severities fall back to `[defaults].severity`, then to `error`
+- `--fail-on` is CLI-only and controls the process exit code only; rendered reports still include every violation and skipped rule
+- the current policy surface supports 10 predicates: overview-compatible `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`, plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`
+
+For the full schema and predicate catalog, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+
 ## CLI Overrides
 
 Global CLI options:
@@ -371,6 +401,24 @@ Important truth:
 
 - `analyze` does not currently expose `--min-severity`
 - `--profile overview` is a deep-mode preset and is distinct from `--mode overview`
+
+### `ci-check`
+
+```bash
+mnemosyne-cli ci-check <HEAP> \
+  --policy policy.toml \
+  --mode auto \
+  --format text \
+  --output heap-policy.txt \
+  --fail-on error
+```
+
+Important truth:
+
+- `ci-check` loads a dedicated policy TOML file through `--policy`; it does not read rules from `.mnemosyne.toml`
+- `--output` is the file-writing flag on this subcommand; there is no `--output-file` alias here
+- `--fail-on` defaults to `error`
+- exit codes are `0` clean/below threshold, `1` violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview-mode mismatch
 
 ### `diff`
 

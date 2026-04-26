@@ -128,6 +128,33 @@ mnemosyne-cli config
 mnemosyne-cli --config .mnemosyne.toml config
 ```
 
+### "Invalid policy file" or `ci-check` exits `2`
+
+Typical message shape:
+
+```text
+Error: Configuration error: invalid policy TOML: ...
+```
+
+What it usually means:
+
+- the policy file passed to `--policy` has broken TOML syntax
+- a rule uses an unknown key or invalid enum value
+- the file path is wrong or unreadable
+
+What to do:
+
+- confirm that `[meta]`, `[defaults]`, and each `[[rule]]` block are valid TOML
+- keep severity values to `info`, `warning`, `error`, or `critical`
+- make sure the file path you passed to `--policy` is real and readable
+- compare your rule shape to the policy examples in [configuration.md](configuration.md) or the full schema in [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md)
+
+Useful check:
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml
+```
+
 ### "Unknown leak ID"
 
 Typical message shape:
@@ -154,6 +181,25 @@ What to do:
 - if the table truncated the ID, copy it from the disclosure section that prints full values for truncated rows
 - in chat mode, use `/list` before `/focus <leak-id>`
 
+### "`ci-check` exits `4`"
+
+Typical message shape:
+
+```text
+Error: deep-only predicate `...` cannot run in explicit overview mode
+```
+
+What it usually means:
+
+- you passed `--mode overview`
+- the policy contains a deep-only predicate such as `leak_count`, `retained_size`, or `dominator_root_count`
+
+What to do:
+
+- rerun with `--mode deep` when the policy truly needs graph-backed metrics
+- rerun with `--mode auto` if you want overview-mode runs to skip deep-only rules instead of failing
+- split the policy into overview-safe and deep-only files if your pipeline has both fast-triage and deep-investigation phases
+
 ## 2. Performance Issues
 
 ### Large dumps take too long
@@ -170,7 +216,7 @@ What to do:
 - use `--mode overview` for bounded-memory triage on very large dumps; default `auto` will also pick overview once the dump is at or above 4 GiB unless `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` overrides it
 - use plain `analyze` before enabling every investigation flag
 - turn on deep modules only when you already have a concrete question
-- use `--profile ci-regression` for CI instead of the full investigation set
+- use `--profile ci-regression` when you want a richer archived analysis artifact, or `ci-check` when you want Mnemosyne itself to own the pass/fail contract
 - do not confuse `--profile overview` with `--mode overview`; the profile stays on the deep path, while the mode changes the parser/analysis path
 
 Lean first-pass commands:
