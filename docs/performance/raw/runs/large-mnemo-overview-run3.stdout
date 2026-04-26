@@ -1,0 +1,1343 @@
+{
+  "heap_path": "/mnt/d/Mnemosyne/resources/test-fixtures/synthetic-4gb.hprof",
+  "total_bytes_processed": 6471188323,
+  "total_size_bytes": 6471188323,
+  "total_record_count": 47869,
+  "total_instances": 79097525,
+  "loaded_class_count": 728,
+  "class_stats": {
+    "entries": [
+      {
+        "class_id": 18446744073709551368,
+        "class_name": "<byte[]>",
+        "instance_count": 23731847,
+        "approx_shallow_bytes": 2861538969
+      },
+      {
+        "class_id": 34354498768,
+        "class_name": "java/lang/String",
+        "instance_count": 23731058,
+        "approx_shallow_bytes": 901780204
+      },
+      {
+        "class_id": 27658669232,
+        "class_name": "SyntheticHeapApp$Node",
+        "instance_count": 7898000,
+        "approx_shallow_bytes": 789800000
+      },
+      {
+        "class_id": 34354586344,
+        "class_name": "java/util/HashMap$Node",
+        "instance_count": 7899356,
+        "approx_shallow_bytes": 410766512
+      },
+      {
+        "class_id": 34354576000,
+        "class_name": "java/util/ArrayList$SubList",
+        "instance_count": 7898000,
+        "approx_shallow_bytes": 410696000
+      },
+      {
+        "class_id": 27658669456,
+        "class_name": "SyntheticHeapApp$MiniPayload",
+        "instance_count": 7898000,
+        "approx_shallow_bytes": 379104000
+      },
+      {
+        "class_id": 34354522760,
+        "class_name": "[Ljava/lang/Object;",
+        "instance_count": 2793,
+        "approx_shallow_bytes": 205600056
+      },
+      {
+        "class_id": 34354586232,
+        "class_name": "[Ljava/util/HashMap$Node;",
+        "instance_count": 617,
+        "approx_shallow_bytes": 188281560
+      },
+      {
+        "class_id": 18446744073709551370,
+        "class_name": "<int[]>",
+        "instance_count": 2268,
+        "approx_shallow_bytes": 170660868
+      },
+      {
+        "class_id": 27658669344,
+        "class_name": "[LSyntheticHeapApp$Node;",
+        "instance_count": 359,
+        "approx_shallow_bytes": 63192616
+      },
+      {
+        "class_id": 18446744073709551365,
+        "class_name": "<char[]>",
+        "instance_count": 23318,
+        "approx_shallow_bytes": 7776858
+      },
+      {
+        "class_id": 34354572456,
+        "class_name": "java/util/concurrent/ConcurrentHashMap$Node",
+        "instance_count": 1208,
+        "approx_shallow_bytes": 62816
+      },
+      {
+        "class_id": 34354708744,
+        "class_name": "jdk/internal/org/objectweb/asm/SymbolTable$Entry",
+        "instance_count": 640,
+        "approx_shallow_bytes": 51200
+      },
+      {
+        "class_id": 34354572704,
+        "class_name": "[Ljava/util/concurrent/ConcurrentHashMap$Node;",
+        "instance_count": 22,
+        "approx_shallow_bytes": 46736
+      },
+      {
+        "class_id": 34354537312,
+        "class_name": "java/util/HashMap",
+        "instance_count": 620,
+        "approx_shallow_bytes": 44640
+      },
+      {
+        "class_id": 34354525000,
+        "class_name": "java/util/ArrayList",
+        "instance_count": 1107,
+        "approx_shallow_bytes": 44280
+      },
+      {
+        "class_id": 27662690832,
+        "class_name": "SyntheticHeapApp$Cluster",
+        "instance_count": 359,
+        "approx_shallow_bytes": 38772
+      },
+      {
+        "class_id": 34354708856,
+        "class_name": "[Ljdk/internal/org/objectweb/asm/SymbolTable$Entry;",
+        "instance_count": 28,
+        "approx_shallow_bytes": 36896
+      },
+      {
+        "class_id": 34354519440,
+        "class_name": "java/lang/invoke/MethodType",
+        "instance_count": 391,
+        "approx_shallow_bytes": 28152
+      },
+      {
+        "class_id": 34354638056,
+        "class_name": "[Ljava/lang/ref/SoftReference;",
+        "instance_count": 196,
+        "approx_shallow_bytes": 27440
+      },
+      {
+        "class_id": 34354519696,
+        "class_name": "java/lang/invoke/MemberName",
+        "instance_count": 355,
+        "approx_shallow_bytes": 24140
+      },
+      {
+        "class_id": 34354560416,
+        "class_name": "java/lang/invoke/LambdaForm$Name",
+        "instance_count": 353,
+        "approx_shallow_bytes": 20474
+      },
+      {
+        "class_id": 34354522648,
+        "class_name": "[Ljava/lang/Class;",
+        "instance_count": 425,
+        "approx_shallow_bytes": 20424
+      },
+      {
+        "class_id": 34354547000,
+        "class_name": "java/lang/module/ModuleDescriptor$Exports",
+        "instance_count": 362,
+        "approx_shallow_bytes": 17376
+      },
+      {
+        "class_id": 34354565880,
+        "class_name": "java/lang/invoke/MethodType$ConcurrentWeakInternSet$WeakEntry",
+        "instance_count": 277,
+        "approx_shallow_bytes": 16620
+      },
+      {
+        "class_id": 34354705120,
+        "class_name": "jdk/internal/math/FDBigInteger",
+        "instance_count": 341,
+        "approx_shallow_bytes": 13981
+      },
+      {
+        "class_id": 34354564328,
+        "class_name": "[Ljava/lang/invoke/MethodHandle;",
+        "instance_count": 34,
+        "approx_shallow_bytes": 12992
+      },
+      {
+        "class_id": 34354562632,
+        "class_name": "[Ljava/lang/invoke/LambdaForm$Name;",
+        "instance_count": 139,
+        "approx_shallow_bytes": 11024
+      },
+      {
+        "class_id": 34354579856,
+        "class_name": "java/util/ImmutableCollections$Set12",
+        "instance_count": 249,
+        "approx_shallow_bytes": 9960
+      },
+      {
+        "class_id": 34354554968,
+        "class_name": "java/net/URI",
+        "instance_count": 62,
+        "approx_shallow_bytes": 9424
+      },
+      {
+        "class_id": 34354707800,
+        "class_name": "jdk/internal/org/objectweb/asm/MethodWriter",
+        "instance_count": 26,
+        "approx_shallow_bytes": 9100
+      },
+      {
+        "class_id": 34354502704,
+        "class_name": "java/lang/Long",
+        "instance_count": 257,
+        "approx_shallow_bytes": 8224
+      },
+      {
+        "class_id": 34354605264,
+        "class_name": "java/lang/module/ModuleDescriptor$Requires",
+        "instance_count": 132,
+        "approx_shallow_bytes": 7392
+      },
+      {
+        "class_id": 34354502304,
+        "class_name": "java/lang/Integer",
+        "instance_count": 263,
+        "approx_shallow_bytes": 7364
+      },
+      {
+        "class_id": 34354535520,
+        "class_name": "java/lang/module/ModuleDescriptor",
+        "instance_count": 62,
+        "approx_shallow_bytes": 7316
+      },
+      {
+        "class_id": 34354606688,
+        "class_name": "jdk/internal/module/ModuleReferenceImpl",
+        "instance_count": 62,
+        "approx_shallow_bytes": 6696
+      },
+      {
+        "class_id": 34354502000,
+        "class_name": "java/lang/Short",
+        "instance_count": 256,
+        "approx_shallow_bytes": 6656
+      },
+      {
+        "class_id": 34354501696,
+        "class_name": "java/lang/Byte",
+        "instance_count": 266,
+        "approx_shallow_bytes": 6650
+      },
+      {
+        "class_id": 34354520552,
+        "class_name": "java/lang/invoke/LambdaForm",
+        "instance_count": 85,
+        "approx_shallow_bytes": 6630
+      },
+      {
+        "class_id": 34354560624,
+        "class_name": "java/lang/invoke/LambdaForm$NamedFunction",
+        "instance_count": 134,
+        "approx_shallow_bytes": 6432
+      },
+      {
+        "class_id": 34354536016,
+        "class_name": "java/util/HashSet",
+        "instance_count": 197,
+        "approx_shallow_bytes": 6304
+      },
+      {
+        "class_id": 34354558040,
+        "class_name": "java/lang/invoke/MethodTypeForm",
+        "instance_count": 103,
+        "approx_shallow_bytes": 6180
+      },
+      {
+        "class_id": 34354498464,
+        "class_name": "java/lang/Module",
+        "instance_count": 68,
+        "approx_shallow_bytes": 6052
+      },
+      {
+        "class_id": 34354504176,
+        "class_name": "java/lang/ref/SoftReference",
+        "instance_count": 84,
+        "approx_shallow_bytes": 5376
+      },
+      {
+        "class_id": 34354579992,
+        "class_name": "java/util/ImmutableCollections$SetN",
+        "instance_count": 137,
+        "approx_shallow_bytes": 4932
+      },
+      {
+        "class_id": 34354520048,
+        "class_name": "java/lang/invoke/ResolvedMethodName",
+        "instance_count": 198,
+        "approx_shallow_bytes": 4752
+      },
+      {
+        "class_id": 34354635152,
+        "class_name": "jdk/internal/org/objectweb/asm/Label",
+        "instance_count": 49,
+        "approx_shallow_bytes": 4704
+      },
+      {
+        "class_id": 34354524688,
+        "class_name": "java/util/concurrent/ConcurrentHashMap",
+        "instance_count": 40,
+        "approx_shallow_bytes": 4320
+      },
+      {
+        "class_id": 34354505992,
+        "class_name": "java/lang/StringBuilder",
+        "instance_count": 116,
+        "approx_shallow_bytes": 4292
+      },
+      {
+        "class_id": 34354555616,
+        "class_name": "jdk/internal/org/objectweb/asm/ClassWriter",
+        "instance_count": 17,
+        "approx_shallow_bytes": 4012
+      },
+      {
+        "class_id": 34354576736,
+        "class_name": "java/util/ImmutableCollections$List12",
+        "instance_count": 95,
+        "approx_shallow_bytes": 3800
+      },
+      {
+        "class_id": 34354559104,
+        "class_name": "java/lang/invoke/LambdaForm$Kind",
+        "instance_count": 68,
+        "approx_shallow_bytes": 3536
+      },
+      {
+        "class_id": 34354708024,
+        "class_name": "jdk/internal/org/objectweb/asm/Frame",
+        "instance_count": 44,
+        "approx_shallow_bytes": 3520
+      },
+      {
+        "class_id": 34354570080,
+        "class_name": "jdk/internal/loader/BuiltinClassLoader$LoadedModule",
+        "instance_count": 61,
+        "approx_shallow_bytes": 3416
+      },
+      {
+        "class_id": 34354558616,
+        "class_name": "java/lang/invoke/DirectMethodHandle$Accessor",
+        "instance_count": 47,
+        "approx_shallow_bytes": 3337
+      },
+      {
+        "class_id": 34354500720,
+        "class_name": "java/lang/Character",
+        "instance_count": 128,
+        "approx_shallow_bytes": 3328
+      },
+      {
+        "class_id": 34354707184,
+        "class_name": "jdk/internal/org/objectweb/asm/ByteVector",
+        "instance_count": 89,
+        "approx_shallow_bytes": 3204
+      },
+      {
+        "class_id": 34354499384,
+        "class_name": "java/lang/Thread",
+        "instance_count": 19,
+        "approx_shallow_bytes": 3097
+      },
+      {
+        "class_id": 34354705312,
+        "class_name": "[Ljdk/internal/math/FDBigInteger;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2744
+      },
+      {
+        "class_id": 34354518512,
+        "class_name": "java/lang/invoke/DirectMethodHandle",
+        "instance_count": 44,
+        "approx_shallow_bytes": 2596
+      },
+      {
+        "class_id": 34354707032,
+        "class_name": "jdk/internal/org/objectweb/asm/AnnotationWriter",
+        "instance_count": 33,
+        "approx_shallow_bytes": 2541
+      },
+      {
+        "class_id": 34354554608,
+        "class_name": "java/lang/module/ResolvedModule",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 34354624128,
+        "class_name": "jdk/internal/module/ServicesCatalog$ServiceProvider",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 34354608496,
+        "class_name": "jdk/internal/module/SystemModuleFinders$2",
+        "instance_count": 62,
+        "approx_shallow_bytes": 2480
+      },
+      {
+        "class_id": 18446744073709551371,
+        "class_name": "<long[]>",
+        "instance_count": 10,
+        "approx_shallow_bytes": 2434
+      },
+      {
+        "class_id": 34354605128,
+        "class_name": "java/lang/module/ModuleDescriptor$Provides",
+        "instance_count": 60,
+        "approx_shallow_bytes": 2400
+      },
+      {
+        "class_id": 34354497736,
+        "class_name": "java/lang/Object",
+        "instance_count": 97,
+        "approx_shallow_bytes": 2328
+      },
+      {
+        "class_id": 34354522088,
+        "class_name": "[Ljava/lang/Short;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 34354522200,
+        "class_name": "[Ljava/lang/Byte;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 34354521752,
+        "class_name": "[Ljava/lang/Integer;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 34354521864,
+        "class_name": "[Ljava/lang/Long;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 2072
+      },
+      {
+        "class_id": 34354608608,
+        "class_name": "jdk/internal/module/SystemModuleFinders$3",
+        "instance_count": 60,
+        "approx_shallow_bytes": 1920
+      },
+      {
+        "class_id": 34354634112,
+        "class_name": "jdk/internal/org/objectweb/asm/Type",
+        "instance_count": 41,
+        "approx_shallow_bytes": 1804
+      },
+      {
+        "class_id": 34354531536,
+        "class_name": "java/io/ObjectStreamField",
+        "instance_count": 26,
+        "approx_shallow_bytes": 1794
+      },
+      {
+        "class_id": 34354707320,
+        "class_name": "jdk/internal/org/objectweb/asm/SymbolTable",
+        "instance_count": 17,
+        "approx_shallow_bytes": 1700
+      },
+      {
+        "class_id": 34354506728,
+        "class_name": "java/security/AccessControlContext",
+        "instance_count": 22,
+        "approx_shallow_bytes": 1672
+      },
+      {
+        "class_id": 34354563288,
+        "class_name": "java/lang/invoke/VarHandle$AccessMode",
+        "instance_count": 31,
+        "approx_shallow_bytes": 1612
+      },
+      {
+        "class_id": 34354505288,
+        "class_name": "java/lang/reflect/Field",
+        "instance_count": 13,
+        "approx_shallow_bytes": 1586
+      },
+      {
+        "class_id": 34354635888,
+        "class_name": "java/lang/invoke/LambdaFormEditor$Transform",
+        "instance_count": 19,
+        "approx_shallow_bytes": 1520
+      },
+      {
+        "class_id": 34354561800,
+        "class_name": "[Lsun/invoke/util/Wrapper;",
+        "instance_count": 16,
+        "approx_shallow_bytes": 1440
+      },
+      {
+        "class_id": 34354708384,
+        "class_name": "jdk/internal/org/objectweb/asm/FieldWriter",
+        "instance_count": 13,
+        "approx_shallow_bytes": 1352
+      },
+      {
+        "class_id": 34354522872,
+        "class_name": "[Ljava/lang/String;",
+        "instance_count": 23,
+        "approx_shallow_bytes": 1328
+      },
+      {
+        "class_id": 34354562024,
+        "class_name": "java/lang/invoke/InvokerBytecodeGenerator",
+        "instance_count": 11,
+        "approx_shallow_bytes": 1320
+      },
+      {
+        "class_id": 34354576872,
+        "class_name": "java/util/ImmutableCollections$ListN",
+        "instance_count": 39,
+        "approx_shallow_bytes": 1287
+      },
+      {
+        "class_id": 34354497880,
+        "class_name": "java/lang/Class",
+        "instance_count": 9,
+        "approx_shallow_bytes": 1260
+      },
+      {
+        "class_id": 34354575888,
+        "class_name": "java/util/ArrayList$Itr",
+        "instance_count": 28,
+        "approx_shallow_bytes": 1232
+      },
+      {
+        "class_id": 34354561568,
+        "class_name": "[Ljava/lang/invoke/LambdaForm;",
+        "instance_count": 3,
+        "approx_shallow_bytes": 1224
+      },
+      {
+        "class_id": 34354623936,
+        "class_name": "java/util/concurrent/CopyOnWriteArrayList",
+        "instance_count": 30,
+        "approx_shallow_bytes": 1200
+      },
+      {
+        "class_id": 34354532984,
+        "class_name": "java/lang/invoke/MethodHandles$Lookup",
+        "instance_count": 23,
+        "approx_shallow_bytes": 1196
+      },
+      {
+        "class_id": 34354633152,
+        "class_name": "java/lang/invoke/InnerClassLambdaMetafactory",
+        "instance_count": 6,
+        "approx_shallow_bytes": 1194
+      },
+      {
+        "class_id": 34354671320,
+        "class_name": "sun/util/locale/BaseLocale",
+        "instance_count": 19,
+        "approx_shallow_bytes": 1140
+      },
+      {
+        "class_id": 34354628584,
+        "class_name": "java/lang/invoke/BoundMethodHandle$SpeciesData",
+        "instance_count": 11,
+        "approx_shallow_bytes": 1056
+      },
+      {
+        "class_id": 34354521976,
+        "class_name": "[Ljava/lang/Character;",
+        "instance_count": 1,
+        "approx_shallow_bytes": 1048
+      },
+      {
+        "class_id": 34354528472,
+        "class_name": "java/util/Locale",
+        "instance_count": 19,
+        "approx_shallow_bytes": 988
+      },
+      {
+        "class_id": 34354570800,
+        "class_name": "java/util/jar/Attributes$Name",
+        "instance_count": 26,
+        "approx_shallow_bytes": 936
+      },
+      {
+        "class_id": 34354538424,
+        "class_name": "sun/invoke/util/Wrapper",
+        "instance_count": 10,
+        "approx_shallow_bytes": 900
+      },
+      {
+        "class_id": 18446744073709551364,
+        "class_name": "<boolean[]>",
+        "instance_count": 4,
+        "approx_shallow_bytes": 836
+      },
+      {
+        "class_id": 34354514096,
+        "class_name": "java/lang/OutOfMemoryError",
+        "instance_count": 12,
+        "approx_shallow_bytes": 816
+      },
+      {
+        "class_id": 34354708520,
+        "class_name": "[Ljdk/internal/org/objectweb/asm/Type;",
+        "instance_count": 23,
+        "approx_shallow_bytes": 800
+      },
+      {
+        "class_id": 34354631232,
+        "class_name": "java/lang/invoke/BoundMethodHandle$Species_LL",
+        "instance_count": 11,
+        "approx_shallow_bytes": 726
+      }
+    ],
+    "truncated": true
+  },
+  "top_instances": [
+    {
+      "object_id": 31488737424,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2097009
+    },
+    {
+      "object_id": 34336670224,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2096625
+    },
+    {
+      "object_id": 32069659976,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2085561
+    },
+    {
+      "object_id": 32885453416,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2084249
+    },
+    {
+      "object_id": 32067566760,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2081625
+    },
+    {
+      "object_id": 30951894032,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2069489
+    },
+    {
+      "object_id": 32065488152,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2063081
+    },
+    {
+      "object_id": 32063411768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2042313
+    },
+    {
+      "object_id": 31318925488,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2039633
+    },
+    {
+      "object_id": 32275238424,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2028009
+    },
+    {
+      "object_id": 32061343360,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2013569
+    },
+    {
+      "object_id": 31128120192,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 2004097
+    },
+    {
+      "object_id": 31480462864,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1982961
+    },
+    {
+      "object_id": 31312695392,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1978273
+    },
+    {
+      "object_id": 32883474488,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1966025
+    },
+    {
+      "object_id": 32682157200,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1956721
+    },
+    {
+      "object_id": 31486789304,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1947977
+    },
+    {
+      "object_id": 32273241216,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1928065
+    },
+    {
+      "object_id": 31126130744,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1896393
+    },
+    {
+      "object_id": 32059387072,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1872705
+    },
+    {
+      "object_id": 32879386312,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1859897
+    },
+    {
+      "object_id": 32881494840,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1848521
+    },
+    {
+      "object_id": 31321219144,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1843129
+    },
+    {
+      "object_id": 30765473936,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1843057
+    },
+    {
+      "object_id": 32269147480,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1827497
+    },
+    {
+      "object_id": 30763401568,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1818273
+    },
+    {
+      "object_id": 31658887008,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1816737
+    },
+    {
+      "object_id": 30761309048,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1813641
+    },
+    {
+      "object_id": 31663087904,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1810145
+    },
+    {
+      "object_id": 31661006888,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1794009
+    },
+    {
+      "object_id": 31862335792,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1791697
+    },
+    {
+      "object_id": 32264995984,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1784689
+    },
+    {
+      "object_id": 30950091488,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1774881
+    },
+    {
+      "object_id": 32271308752,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1763377
+    },
+    {
+      "object_id": 31124228976,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1701009
+    },
+    {
+      "object_id": 31136814072,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1698825
+    },
+    {
+      "object_id": 31308811056,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1668305
+    },
+    {
+      "object_id": 32877483416,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1665641
+    },
+    {
+      "object_id": 32680369264,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1647505
+    },
+    {
+      "object_id": 32676181864,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1640601
+    },
+    {
+      "object_id": 32267278736,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1599089
+    },
+    {
+      "object_id": 31134826584,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1589161
+    },
+    {
+      "object_id": 32481205424,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1581905
+    },
+    {
+      "object_id": 32674157504,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1567809
+    },
+    {
+      "object_id": 31120184456,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1551225
+    },
+    {
+      "object_id": 32470759456,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1542113
+    },
+    {
+      "object_id": 32263143576,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1539945
+    },
+    {
+      "object_id": 31860498536,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1531801
+    },
+    {
+      "object_id": 31858407000,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1526185
+    },
+    {
+      "object_id": 31657089504,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1517089
+    },
+    {
+      "object_id": 31655014864,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1494577
+    },
+    {
+      "object_id": 32678429904,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1489713
+    },
+    {
+      "object_id": 31485171216,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1468913
+    },
+    {
+      "object_id": 32458266688,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1451969
+    },
+    {
+      "object_id": 31483093960,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1449017
+    },
+    {
+      "object_id": 32053563504,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1404817
+    },
+    {
+      "object_id": 31118260728,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1377801
+    },
+    {
+      "object_id": 30759654376,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1371161
+    },
+    {
+      "object_id": 32460476464,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1339345
+    },
+    {
+      "object_id": 31854422696,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1316185
+    },
+    {
+      "object_id": 32261275432,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1310937
+    },
+    {
+      "object_id": 32057864408,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1298217
+    },
+    {
+      "object_id": 32452141312,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1285889
+    },
+    {
+      "object_id": 31653156728,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1255561
+    },
+    {
+      "object_id": 30948528240,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1240977
+    },
+    {
+      "object_id": 32456400328,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1221177
+    },
+    {
+      "object_id": 32873736808,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1217945
+    },
+    {
+      "object_id": 32479473096,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1217081
+    },
+    {
+      "object_id": 32875840032,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1211873
+    },
+    {
+      "object_id": 31317689128,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1178841
+    },
+    {
+      "object_id": 31852506248,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1135481
+    },
+    {
+      "object_id": 31472927688,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1129529
+    },
+    {
+      "object_id": 31651187736,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1127401
+    },
+    {
+      "object_id": 30942354024,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1123737
+    },
+    {
+      "object_id": 32051789840,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1081329
+    },
+    {
+      "object_id": 31479269808,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1078865
+    },
+    {
+      "object_id": 30946600352,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1071713
+    },
+    {
+      "object_id": 31305216784,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1068273
+    },
+    {
+      "object_id": 31856785056,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1050977
+    },
+    {
+      "object_id": 30944554488,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1020425
+    },
+    {
+      "object_id": 31133298296,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1020297
+    },
+    {
+      "object_id": 34335656944,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 1012753
+    },
+    {
+      "object_id": 32863502384,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 966609
+    },
+    {
+      "object_id": 32670566048,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 964961
+    },
+    {
+      "object_id": 31307427896,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 954313
+    },
+    {
+      "object_id": 32477643192,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 949833
+    },
+    {
+      "object_id": 32056143240,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 922233
+    },
+    {
+      "object_id": 31468971712,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 891201
+    },
+    {
+      "object_id": 30755954056,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 877177
+    },
+    {
+      "object_id": 31299118832,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 874769
+    },
+    {
+      "object_id": 31315931152,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 839665
+    },
+    {
+      "object_id": 32869920792,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 839657
+    },
+    {
+      "object_id": 31848613688,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 833737
+    },
+    {
+      "object_id": 31301264768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 825985
+    },
+    {
+      "object_id": 30747623320,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 819305
+    },
+    {
+      "object_id": 32872040408,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 817193
+    },
+    {
+      "object_id": 31475346768,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 807601
+    },
+    {
+      "object_id": 32469415888,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 788529
+    },
+    {
+      "object_id": 30753965624,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 768457
+    },
+    {
+      "object_id": 32255532128,
+      "class_id": 18446744073709551370,
+      "class_name": "<int[]>",
+      "approx_retained_bytes": 762785
+    }
+  ],
+  "gc_root_counts": {
+    "JavaFrame": 16,
+    "JniGlobal": 51,
+    "ThreadObject": 7,
+    "StickyClass": 580
+  },
+  "thread_frames": [
+    {
+      "thread_serial": 1,
+      "class_name": "java/lang/Thread",
+      "method_name": "sleep",
+      "source_file": "Thread.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "java/lang/Thread",
+      "method_name": "sleep",
+      "source_file": "Thread.java",
+      "line_number": 344
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "java/util/concurrent/TimeUnit",
+      "method_name": "sleep",
+      "source_file": "TimeUnit.java",
+      "line_number": 446
+    },
+    {
+      "thread_serial": 1,
+      "class_name": "SyntheticHeapApp",
+      "method_name": "main",
+      "source_file": "SyntheticHeapApp.java",
+      "line_number": 30
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference",
+      "method_name": "waitForReferencePendingList",
+      "source_file": "Reference.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference",
+      "method_name": "processPendingReferences",
+      "source_file": "Reference.java",
+      "line_number": 253
+    },
+    {
+      "thread_serial": 2,
+      "class_name": "java/lang/ref/Reference$ReferenceHandler",
+      "method_name": "run",
+      "source_file": "Reference.java",
+      "line_number": 215
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/Object",
+      "method_name": "wait",
+      "source_file": "Object.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 155
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 176
+    },
+    {
+      "thread_serial": 3,
+      "class_name": "java/lang/ref/Finalizer$FinalizerThread",
+      "method_name": "run",
+      "source_file": "Finalizer.java",
+      "line_number": 172
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/Object",
+      "method_name": "wait",
+      "source_file": "Object.java",
+      "line_number": -3
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/ref/ReferenceQueue",
+      "method_name": "remove",
+      "source_file": "ReferenceQueue.java",
+      "line_number": 155
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "jdk/internal/ref/CleanerImpl",
+      "method_name": "run",
+      "source_file": "CleanerImpl.java",
+      "line_number": 140
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "java/lang/Thread",
+      "method_name": "run",
+      "source_file": "Thread.java",
+      "line_number": 840
+    },
+    {
+      "thread_serial": 6,
+      "class_name": "jdk/internal/misc/InnocuousThread",
+      "method_name": "run",
+      "source_file": "InnocuousThread.java",
+      "line_number": 162
+    }
+  ],
+  "truncated": true,
+  "options": {
+    "top_n_classes": 100,
+    "top_n_instances": 100,
+    "max_class_table_size": 200000,
+    "max_thread_frames": 1024
+  },
+  "provenance": []
+}

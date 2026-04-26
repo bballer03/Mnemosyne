@@ -1,0 +1,112 @@
+Processing 1.48GiB binary hprof file in 'JAVA PROFILE 1.0.2' format.
+
+File content summary:
+
+UTF-8 Strings: 40330
+Classes loaded: 720
+Classes unloaded: 0
+Stack traces: 8
+Stack frames: 16
+Start threads: 0
+Allocation sites: 0
+End threads: 0
+Control settings: 0
+CPU samples: 0
+Heap summaries: 0
+1614 heap dumps containing in total 19859539 segments:
+..GC root unknown: 0
+..GC root thread objects: 7
+..GC root JNI global: 51
+..GC root JNI local: 0
+..GC root Java frame: 16
+..GC root native stack: 0
+..GC root sticky class: 580
+..GC root thread block: 0
+..GC root monitor used: 0
+..GC primitive array dump: 5963118
+..GC object array dump: 3158
+..GC class dump: 720
+..GC instance dump: 13891889
+
+Found 4 threads with stacktraces:
+
+Thread 1
+  at java.lang.Thread.sleep (Thread.java:native method)
+  at java.lang.Thread.sleep (Thread.java:344)
+  at java.util.concurrent.TimeUnit.sleep (TimeUnit.java:446)
+  at SyntheticHeapApp.main (SyntheticHeapApp.java:30)
+
+Thread 2
+  at java.lang.ref.Reference.waitForReferencePendingList (Reference.java:native method)
+  at java.lang.ref.Reference.processPendingReferences (Reference.java:253)
+  at java.lang.ref.Reference$ReferenceHandler.run (Reference.java:215)
+
+Thread 3
+  at java.lang.Object.wait (Object.java:native method)
+  at java.lang.ref.ReferenceQueue.remove (ReferenceQueue.java:155)
+  at java.lang.ref.ReferenceQueue.remove (ReferenceQueue.java:176)
+  at java.lang.ref.Finalizer$FinalizerThread.run (Finalizer.java:172)
+
+Thread 4
+  at java.lang.Object.wait (Object.java:native method)
+  at java.lang.ref.ReferenceQueue.remove (ReferenceQueue.java:155)
+  at jdk.internal.ref.CleanerImpl.run (CleanerImpl.java:140)
+  at java.lang.Thread.run (Thread.java:840)
+  at jdk.internal.misc.InnocuousThread.run (InnocuousThread.java:162)
+
+Found a total of 1.40GiB of instances allocated on the heap.
+
+Top 20 allocated classes:
+
++------------+-----------+-------------+---------------------------------------------------------------+
+| Total size | Instances |     Largest | Class name                                                    |
++------------+-----------+-------------+---------------------------------------------------------------+
+|  697.43MiB |   5961785 |    11.45KiB | byte[]                                                        |
+|  181.92MiB |   5961269 |  32.00bytes | java.lang.String                                              |
+|  181.27MiB |   1980000 |  96.00bytes | SyntheticHeapApp$Node                                         |
+|   90.69MiB |   1981087 |  48.00bytes | java.util.HashMap$Node                                        |
+|   90.64MiB |   1980000 |  48.00bytes | java.util.ArrayList$SubList                                   |
+|   75.53MiB |   1980000 |  40.00bytes | SyntheticHeapApp$MiniPayload                                  |
+|   49.28MiB |      1715 |   171.89KiB | java.lang.Object[]                                            |
+|   45.04MiB |       348 |   512.02KiB | java.util.HashMap$Node[]                                      |
+|   15.11MiB |        90 |   171.89KiB | SyntheticHeapApp$Node[]                                       |
+|    8.80MiB |      1209 |   511.48KiB | int[]                                                         |
+|  754.28KiB |        99 |    16.02KiB | char[]                                                        |
+|   75.00KiB |       640 | 120.00bytes | jdk.internal.org.objectweb.asm.SymbolTable$Entry              |
+|   56.62KiB |      1208 |  48.00bytes | java.util.concurrent.ConcurrentHashMap$Node                   |
+|   45.47KiB |        22 |    16.02KiB | java.util.concurrent.ConcurrentHashMap$Node[]                 |
+|   35.81KiB |        28 |     2.02KiB | jdk.internal.org.objectweb.asm.SymbolTable$Entry[]            |
+|   32.46KiB |       277 | 120.00bytes | java.lang.invoke.MethodType$ConcurrentWeakInternSet$WeakEntry |
+|   27.42KiB |       351 |  80.00bytes | java.util.HashMap                                             |
+|   25.27KiB |       196 | 224.00bytes | java.lang.ref.SoftReference[]                                 |
+|   24.44KiB |       391 |  64.00bytes | java.lang.invoke.MethodType                                   |
+|   22.19KiB |       355 |  64.00bytes | java.lang.invoke.MemberName                                   |
++------------+-----------+-------------+---------------------------------------------------------------+
+
+Top 20 largest instances:
+
++-------------+-----------+-------------+------------------------------------------------------+
+|  Total size | Instances |     Largest | Class name                                           |
++-------------+-----------+-------------+------------------------------------------------------+
+|    45.04MiB |       348 |   512.02KiB | java.util.HashMap$Node[]                             |
+|     8.80MiB |      1209 |   511.48KiB | int[]                                                |
+|    49.28MiB |      1715 |   171.89KiB | java.lang.Object[]                                   |
+|    15.11MiB |        90 |   171.89KiB | SyntheticHeapApp$Node[]                              |
+|   754.28KiB |        99 |    16.02KiB | char[]                                               |
+|    45.47KiB |        22 |    16.02KiB | java.util.concurrent.ConcurrentHashMap$Node[]        |
+|   697.43MiB |   5961785 |    11.45KiB | byte[]                                               |
+|     2.67KiB |         1 |     2.67KiB | jdk.internal.math.FDBigInteger[]                     |
+|    35.81KiB |        28 |     2.02KiB | jdk.internal.org.objectweb.asm.SymbolTable$Entry[]   |
+|    12.42KiB |        34 |     2.02KiB | java.lang.invoke.MethodHandle[]                      |
+|     2.02KiB |         1 |     2.02KiB | java.lang.Short[]                                    |
+|     2.02KiB |         1 |     2.02KiB | java.lang.Long[]                                     |
+|     2.02KiB |         1 |     2.02KiB | java.lang.Integer[]                                  |
+|     2.02KiB |         1 |     2.02KiB | java.lang.Byte[]                                     |
+|     1.17KiB |         3 |     1.05KiB | java.lang.invoke.LambdaForm[]                        |
+|     1.02KiB |         1 |     1.02KiB | java.lang.Character[]                                |
+| 576.00bytes |         1 | 576.00bytes | jdk.internal.loader.ClassLoaders$PlatformClassLoader |
+| 576.00bytes |         1 | 576.00bytes | jdk.internal.loader.ClassLoaders$BootClassLoader     |
+| 576.00bytes |         1 | 576.00bytes | jdk.internal.loader.ClassLoaders$AppClassLoader      |
+| 560.00bytes |         1 | 560.00bytes | java.lang.invoke.LambdaForm$Kind[]                   |
++-------------+-----------+-------------+------------------------------------------------------+
+File successfully processed in 12.648081479s
