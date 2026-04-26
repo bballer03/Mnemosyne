@@ -1,10 +1,11 @@
 use std::{
     fs,
+    hint::black_box,
     io::Write,
     path::{Path, PathBuf},
 };
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use mnemosyne_core::hprof::{
     parse_heap, parse_hprof, parse_hprof_file, test_fixtures::build_graph_fixture, HeapParseJob,
 };

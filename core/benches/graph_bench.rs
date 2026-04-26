@@ -1,4 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use mnemosyne_core::hprof::{parse_hprof, test_fixtures::build_graph_fixture};
 
 fn graph_benches(c: &mut Criterion) {
