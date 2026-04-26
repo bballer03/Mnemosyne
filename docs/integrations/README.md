@@ -1,6 +1,6 @@
 # CI Integration Guides
 
-These guides show practical ways to run Mnemosyne in CI with the current v0.2.0 CLI.
+These guides show practical ways to run Mnemosyne in CI with the current v0.3.0 CLI.
 
 Mnemosyne returns exit code `0` when `analyze` succeeds, even if it reports leak suspects or growth. If you want Mnemosyne itself to own the policy gate, use `mnemosyne-cli ci-check` and the dedicated heap-regression sections linked below.
 

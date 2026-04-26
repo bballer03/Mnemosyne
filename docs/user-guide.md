@@ -1,6 +1,6 @@
 # Mnemosyne User Guide
 
-This guide is the practical, end-to-end companion to Mnemosyne's CLI and MCP surfaces. It focuses on how to use the current v0.2.0 runtime effectively without repeating material that already lives in the quickstart, configuration reference, or MCP API reference.
+This guide is the practical, end-to-end companion to Mnemosyne's CLI and MCP surfaces. It focuses on how to use the current v0.3.0 runtime effectively without repeating material that already lives in the quickstart, configuration reference, or MCP API reference.
 
 For a fast first run, start with [QUICKSTART.md](QUICKSTART.md). For the full config surface, see [configuration.md](configuration.md). For the stdio MCP wire contract, see [api.md](api.md). For installation details and release packaging, see [../README.md](../README.md).
 

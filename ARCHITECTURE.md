@@ -1,7 +1,7 @@
 # Architecture
 
 > **Last Updated:** April 26, 2026
-> **Version:** 0.2.0 (alpha)  
+> **Version:** 0.3.0 (alpha)  
 > **[← Back to README](README.md)**
 
 ## 📋 Table of Contents
@@ -77,7 +77,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Post-M5 AI follow-through (narrower scope):** Broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming only if the current request/response transport proves insufficient.
 - **Broader ecosystem follow-through:** docs.rs publication, external community hosting, and apples-to-apples benchmark reruns against external tools remain optional future work rather than hidden incomplete milestone scope.
 
-The sections below describe the intended architecture; status callouts highlight where the current v0.2.0 build diverges so contributors know which pieces still need implementation work.
+The sections below describe the intended architecture; status callouts highlight where the current v0.3.0 build diverges so contributors know which pieces still need implementation work.
 
 ### Project Structure
 
