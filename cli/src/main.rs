@@ -34,7 +34,7 @@ use mnemosyne_core::{
         render_github_actions_report, render_json_envelope, render_junit_report,
         render_text_report, PolicyRenderContext,
     },
-    query::{execute_query, parse_query, CellValue},
+    query::{execute_query, parse_query, CellValue, QueryError},
     report::{
         flamegraph::{
             collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
@@ -1018,7 +1018,10 @@ async fn handle_query(args: QueryArgs) -> Result<()> {
     .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
     let dominator = mnemosyne_core::build_dominator_tree(&graph);
     let query = parse_query(&args.query).map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    let result = execute_query(&query, &graph, Some(&dominator))?;
+    let result = match execute_query(&query, &graph, Some(&dominator)) {
+        Ok(result) => result,
+        Err(err) => exit_query_with_error(err),
+    };
     finish_spinner(&pb, "Query complete.");
 
     println!("{} {}", bold_label("Columns:"), result.columns.join(", "));
@@ -1372,6 +1375,16 @@ fn exit_ci_check_with_error(code: i32, err: anyhow::Error) -> ! {
 fn exit_flamegraph_with_error(message: &str) -> ! {
     eprintln!("{message}");
     process::exit(5);
+}
+
+fn exit_query_with_error(err: QueryError) -> ! {
+    let code = match err {
+        QueryError::FeatureUnavailableInOverviewMode { .. } => 6,
+        QueryError::NotImplemented(_) => 1,
+    };
+    let error = anyhow::Error::new(CoreError::from(err));
+    print_cli_error(&error);
+    process::exit(code);
 }
 
 async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {

@@ -1,20 +1,22 @@
 use super::synth::synth_to_string;
 use super::types::{
-    BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryResult,
+    BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
     SelectClause, Value,
 };
 use crate::{
-    errors::{CoreError, CoreResult},
     graph::DominatorTree,
     hprof::{read_field, FieldValue, ObjectGraph, ObjectId},
 };
+
+const RETAINED_SIZE_OVERVIEW_HINT: &str =
+    "re-run with --mode deep or use @shallowSize for a per-object approximation.";
 
 pub fn execute_query(
     query: &Query,
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
-) -> CoreResult<QueryResult> {
-    validate_supported_in_slice_a(query, dominator)?;
+) -> Result<QueryResult, QueryError> {
+    validate_supported_query(query, dominator)?;
 
     let columns = projected_columns(&query.select);
     let mut matched_ids = Vec::new();
@@ -42,7 +44,7 @@ pub fn execute_query(
 
     let mut rows = Vec::with_capacity(matched_ids.len());
     for object_id in matched_ids {
-        rows.push(project_row(&query.select, graph, dominator, object_id)?);
+        rows.push(project_row(&query.select, graph, dominator, object_id));
     }
 
     Ok(QueryResult {
@@ -74,10 +76,10 @@ fn field_label(field: &FieldRef) -> String {
     }
 }
 
-fn validate_supported_in_slice_a(
+fn validate_supported_query(
     query: &Query,
     dominator: Option<&DominatorTree>,
-) -> CoreResult<()> {
+) -> Result<(), QueryError> {
     if matches!(query.select, SelectClause::Objects(_)) {
         return Err(slice_a_not_implemented("SELECT OBJECTS execution"));
     }
@@ -93,8 +95,9 @@ fn validate_supported_in_slice_a(
     }
 
     if dominator.is_none() && query_uses_retained_size(query) {
-        return Err(slice_a_not_implemented(
-            "@retainedSize predicates without dominator support",
+        return Err(QueryError::feature_unavailable_in_overview_mode(
+            "@retainedSize",
+            RETAINED_SIZE_OVERVIEW_HINT,
         ));
     }
 
@@ -140,8 +143,8 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
     }
 }
 
-fn slice_a_not_implemented(feature: &str) -> CoreError {
-    CoreError::NotImplemented(format!("{feature} is not yet implemented in slice A"))
+fn slice_a_not_implemented(feature: &str) -> QueryError {
+    QueryError::NotImplemented(format!("{feature} is not yet implemented in slice A"))
 }
 
 fn matches_class_pattern(
@@ -371,7 +374,7 @@ fn project_row(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
-) -> CoreResult<Vec<CellValue>> {
+) -> Vec<CellValue> {
     let fields: Vec<FieldRef> = match select {
         SelectClause::All => vec![
             FieldRef::BuiltIn(BuiltInField::ObjectId),
@@ -384,9 +387,8 @@ fn project_row(
         ],
     };
 
-    let row = fields
+    fields
         .iter()
         .map(|field| resolve_field_value(field, graph, dominator, object_id))
-        .collect();
-    Ok(row)
+        .collect()
 }

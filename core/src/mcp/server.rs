@@ -206,6 +206,14 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": detail })),
             },
+            CoreError::FeatureUnavailableInOverviewMode { feature, hint } => Self {
+                code: "feature_unavailable_in_overview_mode",
+                message,
+                details: Some(json!({
+                    "feature": feature,
+                    "hint": hint,
+                })),
+            },
             CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
                 code: "session_version_unsupported",
                 message,
@@ -871,7 +879,8 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let dominator = crate::graph::build_dominator_tree(&graph);
             let query = parse_query(&params.query)
                 .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
-            let result = execute_query(&query, &graph, Some(&dominator))?;
+            let result =
+                execute_query(&query, &graph, Some(&dominator)).map_err(CoreError::from)?;
             Ok(serde_json::to_value(result)?)
         }
         "map_to_code" => {

@@ -1,7 +1,7 @@
 use byteorder::{BigEndian, WriteBytesExt};
 use mnemosyne_core::{
     build_dominator_tree, parse_hprof_with_options,
-    query::{execute_query, parse_query, CellValue},
+    query::{execute_query, parse_query, CellValue, QueryError},
     ParseOptions,
 };
 
@@ -102,6 +102,319 @@ fn build_graph_fixture() -> Vec<u8> {
 
     write_record(&mut bytes, TAG_HEAP_DUMP, &heap);
     bytes
+}
+
+fn build_retained_size_fixture() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+    bytes.write_u32::<BigEndian>(4).unwrap();
+    bytes.write_u64::<BigEndian>(0).unwrap();
+
+    for (id, value) in [
+        (1, "java/lang/Object"),
+        (2, "com/example/BigCache"),
+        (3, "entries"),
+        (4, "com/example/SmallEntry"),
+        (5, "com/example/MediumEntry"),
+        (6, "com/example/LargeEntry"),
+    ] {
+        let mut string_body = Vec::new();
+        string_body.write_u32::<BigEndian>(id).unwrap();
+        string_body.extend_from_slice(value.as_bytes());
+        write_record(&mut bytes, TAG_STRING_IN_UTF8, &string_body);
+    }
+
+    for (serial, class_obj_id, name_string_id) in [
+        (1, 0x100, 1),
+        (2, 0x200, 2),
+        (3, 0x300, 4),
+        (4, 0x400, 5),
+        (5, 0x500, 6),
+    ] {
+        let mut load_class = Vec::new();
+        load_class.write_u32::<BigEndian>(serial).unwrap();
+        load_class.write_u32::<BigEndian>(class_obj_id).unwrap();
+        load_class.write_u32::<BigEndian>(0).unwrap();
+        load_class.write_u32::<BigEndian>(name_string_id).unwrap();
+        write_record(&mut bytes, TAG_LOAD_CLASS, &load_class);
+    }
+
+    let mut heap = Vec::new();
+
+    heap.write_u8(SUB_CLASS_DUMP).unwrap();
+    heap.write_u32::<BigEndian>(0x100).unwrap();
+    heap.write_u32::<BigEndian>(0).unwrap();
+    heap.write_u32::<BigEndian>(0).unwrap();
+    for _ in 0..5 {
+        heap.write_u32::<BigEndian>(0).unwrap();
+    }
+    heap.write_u32::<BigEndian>(0).unwrap();
+    heap.write_u16::<BigEndian>(0).unwrap();
+    heap.write_u16::<BigEndian>(0).unwrap();
+    heap.write_u16::<BigEndian>(0).unwrap();
+
+    heap.write_u8(SUB_CLASS_DUMP).unwrap();
+    heap.write_u32::<BigEndian>(0x200).unwrap();
+    heap.write_u32::<BigEndian>(0).unwrap();
+    heap.write_u32::<BigEndian>(0x100).unwrap();
+    for _ in 0..5 {
+        heap.write_u32::<BigEndian>(0).unwrap();
+    }
+    heap.write_u32::<BigEndian>(4).unwrap();
+    heap.write_u16::<BigEndian>(0).unwrap();
+    heap.write_u16::<BigEndian>(0).unwrap();
+    heap.write_u16::<BigEndian>(1).unwrap();
+    heap.write_u32::<BigEndian>(3).unwrap();
+    heap.write_u8(TYPE_OBJECT).unwrap();
+
+    for (class_id, instance_size) in [(0x300, 500), (0x400, 1000), (0x500, 2000)] {
+        heap.write_u8(SUB_CLASS_DUMP).unwrap();
+        heap.write_u32::<BigEndian>(class_id).unwrap();
+        heap.write_u32::<BigEndian>(0).unwrap();
+        heap.write_u32::<BigEndian>(0x100).unwrap();
+        for _ in 0..5 {
+            heap.write_u32::<BigEndian>(0).unwrap();
+        }
+        heap.write_u32::<BigEndian>(instance_size).unwrap();
+        heap.write_u16::<BigEndian>(0).unwrap();
+        heap.write_u16::<BigEndian>(0).unwrap();
+        heap.write_u16::<BigEndian>(0).unwrap();
+    }
+
+    for object_id in [0x1000_u32, 0x1100, 0x1200, 0x1300] {
+        heap.write_u8(SUB_ROOT_JAVA_FRAME).unwrap();
+        heap.write_u32::<BigEndian>(object_id).unwrap();
+        heap.write_u32::<BigEndian>(1).unwrap();
+        heap.write_u32::<BigEndian>(0).unwrap();
+    }
+
+    for (object_id, entry_id) in [
+        (0x1000_u32, 0x3000_u32),
+        (0x1100, 0x4000),
+        (0x1200, 0x5000),
+        (0x1300, 0),
+    ] {
+        heap.write_u8(SUB_INSTANCE_DUMP).unwrap();
+        heap.write_u32::<BigEndian>(object_id).unwrap();
+        heap.write_u32::<BigEndian>(0).unwrap();
+        heap.write_u32::<BigEndian>(0x200).unwrap();
+        heap.write_u32::<BigEndian>(4).unwrap();
+        heap.write_u32::<BigEndian>(entry_id).unwrap();
+    }
+
+    for (object_id, class_id) in [(0x3000_u32, 0x300_u32), (0x4000, 0x400), (0x5000, 0x500)] {
+        heap.write_u8(SUB_INSTANCE_DUMP).unwrap();
+        heap.write_u32::<BigEndian>(object_id).unwrap();
+        heap.write_u32::<BigEndian>(0).unwrap();
+        heap.write_u32::<BigEndian>(class_id).unwrap();
+        heap.write_u32::<BigEndian>(0).unwrap();
+    }
+
+    write_record(&mut bytes, TAG_HEAP_DUMP, &heap);
+    bytes
+}
+
+#[test]
+fn where_retained_size_in_overview_mode_returns_unavailable_error() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1000"#)
+            .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode retained-size predicates should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "@retainedSize" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn where_retained_size_gt_threshold_filters_correctly() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1000"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x1100)], vec![CellValue::Id(0x1200)]]
+    );
+}
+
+#[test]
+fn where_retained_size_lt_threshold_filters_correctly() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize < 1000"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x1000)], vec![CellValue::Id(0x1300)]]
+    );
+}
+
+#[test]
+fn where_retained_size_eq_threshold_filters_correctly() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize = 1004"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x1100)]]);
+}
+
+#[test]
+fn where_retained_size_no_match_returns_empty_result() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 3000"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn select_retained_size_projects_into_result_column() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId, @retainedSize FROM "com.example.BigCache""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "@retainedSize"]);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![CellValue::Id(0x1000), CellValue::Int(504)],
+            vec![CellValue::Id(0x1100), CellValue::Int(1004)],
+            vec![CellValue::Id(0x1200), CellValue::Int(2004)],
+            vec![CellValue::Id(0x1300), CellValue::Int(4)],
+        ]
+    );
+}
+
+#[test]
+fn select_retained_size_in_overview_mode_returns_unavailable_error() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let query = parse_query(r#"SELECT @retainedSize FROM "com.example.BigCache""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode retained-size projection should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "@retainedSize" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn where_retained_size_combined_with_instanceof_works() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1000 AND entries INSTANCEOF "java.lang.Object""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x1100)], vec![CellValue::Id(0x1200)]]
+    );
+}
+
+#[test]
+fn where_retained_size_combined_with_class_field_eq_works() {
+    let graph = parse_hprof_with_options(
+        &build_retained_size_fixture(),
+        ParseOptions {
+            retain_field_data: true,
+        },
+    )
+    .expect("fixture should parse");
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1000 AND entries = 16384"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x1100)]]);
 }
 
 #[test]
@@ -242,25 +555,6 @@ fn executor_returns_not_yet_implemented_for_objects_select() {
 
     let error = execute_query(&query, &graph, Some(&dominator))
         .expect_err("slice A should reject OBJECTS execution");
-
-    assert!(error.to_string().contains("slice A"));
-}
-
-#[test]
-fn executor_returns_not_yet_implemented_for_at_retained_size_predicate() {
-    let graph = parse_hprof_with_options(
-        &build_graph_fixture(),
-        ParseOptions {
-            retain_field_data: true,
-        },
-    )
-    .expect("fixture should parse");
-    let query =
-        parse_query(r#"SELECT @objectId FROM "com.example.BigCache" WHERE @retainedSize > 1"#)
-            .expect("query should parse");
-
-    let error = execute_query(&query, &graph, None)
-        .expect_err("slice A should reject retained-size predicates without support");
 
     assert!(error.to_string().contains("slice A"));
 }

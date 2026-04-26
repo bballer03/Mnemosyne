@@ -105,6 +105,39 @@ pub enum CellValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    FeatureUnavailableInOverviewMode { feature: String, hint: String },
+    NotImplemented(String),
+}
+
+impl QueryError {
+    pub fn feature_unavailable_in_overview_mode(
+        feature: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
+        Self::FeatureUnavailableInOverviewMode {
+            feature: feature.into(),
+            hint: hint.into(),
+        }
+    }
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryError::FeatureUnavailableInOverviewMode { feature, .. } => {
+                write!(f, "'{feature}' is a deep-mode-only OQL feature.")
+            }
+            QueryError::NotImplemented(detail) => {
+                write!(f, "Operation not yet implemented: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryParseError {
     message: String,
 }

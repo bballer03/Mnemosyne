@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::query::QueryError;
+
 pub type CoreResult<T> = Result<T, CoreError>;
 
 #[derive(Debug, Error)]
@@ -37,6 +39,9 @@ pub enum CoreError {
     #[error("Operation not yet implemented: {0}")]
     NotImplemented(String),
 
+    #[error("'{feature}' is a deep-mode-only OQL feature.")]
+    FeatureUnavailableInOverviewMode { feature: String, hint: String },
+
     #[error("Unsupported operation: {0}")]
     Unsupported(String),
 
@@ -53,7 +58,19 @@ impl CoreError {
         match self {
             CoreError::FileNotFound { suggestion, .. } => suggestion.as_deref(),
             CoreError::ConfigError { suggestion, .. } => suggestion.as_deref(),
+            CoreError::FeatureUnavailableInOverviewMode { hint, .. } => Some(hint.as_str()),
             _ => None,
+        }
+    }
+}
+
+impl From<QueryError> for CoreError {
+    fn from(value: QueryError) -> Self {
+        match value {
+            QueryError::FeatureUnavailableInOverviewMode { feature, hint } => {
+                CoreError::FeatureUnavailableInOverviewMode { feature, hint }
+            }
+            QueryError::NotImplemented(detail) => CoreError::NotImplemented(detail),
         }
     }
 }
