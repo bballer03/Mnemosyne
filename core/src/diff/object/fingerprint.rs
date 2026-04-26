@@ -1,5 +1,5 @@
 use crate::{
-    errors::{CoreError, CoreResult},
+    errors::CoreResult,
     graph::DominatorTree,
     hprof::{ObjectGraph, ObjectId},
 };
@@ -31,9 +31,11 @@ impl ObjectFingerprint {
             IdentityStrategy::ClassDominator => {
                 Ok(Self::build_class_dominator(graph, dom, obj_id, bucket_bits))
             }
-            IdentityStrategy::FullFingerprint => Err(CoreError::Unsupported(
-                "Slice 8-1.B only supports IdentityStrategy::ClassRetained and IdentityStrategy::ClassDominator"
-                    .into(),
+            IdentityStrategy::FullFingerprint => Ok(Self::build_full_fingerprint(
+                graph,
+                dom,
+                obj_id,
+                bucket_bits,
             )),
         }
     }
@@ -65,6 +67,21 @@ impl ObjectFingerprint {
             field_signature: 0,
         }
     }
+
+    pub fn build_full_fingerprint(
+        graph: &ObjectGraph,
+        dom: &DominatorTree,
+        obj_id: ObjectId,
+        bucket_bits: u8,
+    ) -> Self {
+        Self {
+            class_id: stable_class_id_for_object(graph, obj_id),
+            retained_bucket: bucket_for_retained_size(dom.retained_size(obj_id), bucket_bits),
+            dominator_signature: hash_dominator_class_chain(graph, dom, obj_id),
+            field_signature: field_layout_signature_stub(graph, obj_id)
+                ^ outbound_class_set_signature_stub(graph, obj_id),
+        }
+    }
 }
 
 pub fn bucket_for_retained_size(retained_size: u64, bucket_bits: u8) -> u32 {
@@ -94,6 +111,16 @@ fn stable_class_id_for_object(graph: &ObjectGraph, obj_id: ObjectId) -> u32 {
         .and_then(|obj| graph.class_name(obj.class_id))
         .map(stable_class_name_id)
         .unwrap_or_else(|| stable_class_name_id("<unknown>"))
+}
+
+// Slice 8-1.C wires FullFingerprint through the engine, but the field and
+// outbound signatures stay stubbed until Slice 8-1.D fills them in.
+fn field_layout_signature_stub(_graph: &ObjectGraph, _obj_id: ObjectId) -> u64 {
+    0
+}
+
+fn outbound_class_set_signature_stub(_graph: &ObjectGraph, _obj_id: ObjectId) -> u64 {
+    0
 }
 
 #[cfg(test)]

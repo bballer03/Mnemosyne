@@ -205,30 +205,28 @@ fn class_retained_results_unchanged_from_slice_a() {
 
     let report = run_diff(before, after, IdentityStrategy::ClassRetained, 0, 0);
 
-    let expected = ObjectDiffReport {
-        strategy: IdentityStrategy::ClassRetained,
-        retained_bucket_bits: 0,
-        min_retained_bytes: 0,
-        added: vec![mnemosyne_core::ObjectDelta {
-            class_name: "com.example.Cache".into(),
-            fingerprint: ObjectFingerprint {
-                class_id: stable_class_name_id("com.example.Cache"),
-                retained_bucket: 20,
-                dominator_signature: 0,
-                field_signature: 0,
-            },
-            example_object_id: 12,
-            before_count: 0,
-            after_count: 1,
-            before_retained_bytes: 0,
-            after_retained_bytes: 20,
-        }],
-        removed: Vec::new(),
-        retained_changed: Vec::new(),
-    };
+    assert_eq!(report.strategy, IdentityStrategy::ClassRetained);
+    assert_eq!(report.retained_bucket_bits, 0);
+    assert!(report.removed.is_empty());
+    assert!(report.retained_changed.is_empty());
+    assert_eq!(report.added.len(), 1);
+    assert_eq!(report.match_quality.collision_rate, 0.0);
+    assert_eq!(report.totals.matched_pairs, 1);
 
+    let delta = &report.added[0];
+    assert_eq!(delta.class_name, "com.example.Cache");
     assert_eq!(
-        serde_json::to_vec(&report).unwrap(),
-        serde_json::to_vec(&expected).unwrap()
+        delta.fingerprint,
+        ObjectFingerprint {
+            class_id: stable_class_name_id("com.example.Cache"),
+            retained_bucket: 20,
+            dominator_signature: 0,
+            field_signature: 0,
+        }
     );
+    assert_eq!(delta.example_object_id, 12);
+    assert_eq!(delta.before_count, 0);
+    assert_eq!(delta.after_count, 1);
+    assert_eq!(delta.before_retained_bytes, 0);
+    assert_eq!(delta.after_retained_bytes, 20);
 }

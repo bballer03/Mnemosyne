@@ -27,7 +27,10 @@ pub use config::{
     AiConfig, AiMode, AiPromptConfig, AiProvider, AiSessionConfig, AiTaskDefinition, AiTaskKind,
     AnalysisConfig, AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
 };
-pub use diff::{DiffMode, IdentityStrategy, ObjectDelta, ObjectDiffReport, ObjectFingerprint};
+pub use diff::{
+    DiffMode, DiffRequest, IdentityStrategy, MatchQuality, ObjectDelta, ObjectDeltaKind,
+    ObjectDiffReport, ObjectDiffTotals, ObjectFingerprint, Risk,
+};
 pub use errors::{CoreError, CoreResult};
 pub use fix::{
     propose_fix, propose_fix_with_config, FixRequest, FixResponse, FixStyle, FixSuggestion,
