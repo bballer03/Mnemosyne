@@ -5,6 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::dominator_chain::hash_dominator_class_chain;
 use super::types::IdentityStrategy;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -27,8 +28,12 @@ impl ObjectFingerprint {
             IdentityStrategy::ClassRetained => {
                 Ok(Self::build_class_retained(graph, dom, obj_id, bucket_bits))
             }
-            _ => Err(CoreError::Unsupported(
-                "Slice 8-1.A only supports IdentityStrategy::ClassRetained".into(),
+            IdentityStrategy::ClassDominator => {
+                Ok(Self::build_class_dominator(graph, dom, obj_id, bucket_bits))
+            }
+            IdentityStrategy::FullFingerprint => Err(CoreError::Unsupported(
+                "Slice 8-1.B only supports IdentityStrategy::ClassRetained and IdentityStrategy::ClassDominator"
+                    .into(),
             )),
         }
     }
@@ -39,15 +44,24 @@ impl ObjectFingerprint {
         obj_id: ObjectId,
         bucket_bits: u8,
     ) -> Self {
-        let class_name = graph
-            .get_object(obj_id)
-            .and_then(|obj| graph.class_name(obj.class_id))
-            .unwrap_or("<unknown>");
-
         Self {
-            class_id: stable_class_name_id(class_name),
+            class_id: stable_class_id_for_object(graph, obj_id),
             retained_bucket: bucket_for_retained_size(dom.retained_size(obj_id), bucket_bits),
             dominator_signature: 0,
+            field_signature: 0,
+        }
+    }
+
+    pub fn build_class_dominator(
+        graph: &ObjectGraph,
+        dom: &DominatorTree,
+        obj_id: ObjectId,
+        bucket_bits: u8,
+    ) -> Self {
+        Self {
+            class_id: stable_class_id_for_object(graph, obj_id),
+            retained_bucket: bucket_for_retained_size(dom.retained_size(obj_id), bucket_bits),
+            dominator_signature: hash_dominator_class_chain(graph, dom, obj_id),
             field_signature: 0,
         }
     }
@@ -63,7 +77,7 @@ pub fn bucket_for_retained_size(retained_size: u64, bucket_bits: u8) -> u32 {
     bucket.min(u64::from(u32::MAX)) as u32
 }
 
-fn stable_class_name_id(class_name: &str) -> u32 {
+pub(crate) fn stable_class_name_id(class_name: &str) -> u32 {
     let mut hash = 0x811c9dc5_u32;
 
     for byte in class_name.as_bytes() {
@@ -72,6 +86,14 @@ fn stable_class_name_id(class_name: &str) -> u32 {
     }
 
     hash
+}
+
+fn stable_class_id_for_object(graph: &ObjectGraph, obj_id: ObjectId) -> u32 {
+    graph
+        .get_object(obj_id)
+        .and_then(|obj| graph.class_name(obj.class_id))
+        .map(stable_class_name_id)
+        .unwrap_or_else(|| stable_class_name_id("<unknown>"))
 }
 
 #[cfg(test)]

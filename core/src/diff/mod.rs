@@ -44,9 +44,10 @@ pub(crate) async fn run_diff(request: DiffRequest) -> CoreResult<DiffResult> {
                 .await?,
         )),
         DiffMode::Object => {
-            if request.identity_strategy != IdentityStrategy::ClassRetained {
+            if request.identity_strategy == IdentityStrategy::FullFingerprint {
                 return Err(CoreError::Unsupported(
-                    "Slice 8-1.A only supports IdentityStrategy::ClassRetained".into(),
+                    "Slice 8-1.B only supports IdentityStrategy::ClassRetained and IdentityStrategy::ClassDominator"
+                        .into(),
                 ));
             }
 

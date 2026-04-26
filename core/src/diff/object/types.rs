@@ -18,7 +18,8 @@ pub enum IdentityStrategy {
 
 impl Default for IdentityStrategy {
     fn default() -> Self {
-        Self::ClassRetained
+        // Slice 8-1.B: default flipped from ClassRetained.
+        Self::ClassDominator
     }
 }
 
