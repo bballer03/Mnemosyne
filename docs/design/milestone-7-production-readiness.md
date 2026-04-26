@@ -1,6 +1,6 @@
 # Milestone 7 — Production Readiness & Scale
 
-> **Status:** ⚠️ In progress — M7-1 ✅ shipped (commits `7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, `c64b4a1`). M7-2 ✅ shipped (commits `2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`). M7-3 ✅ shipped (commits `4539f1a`, `b2f32c0`, `cfe36f0`, `e6e7458`, `8b15fad`, `adaf46c`). M7-4 ✅ shipped (commits `2311d5c`, `4afd062`, `7be4799`, `ea8421b`, `fd4c787`, `2f029bb`, `bfa4e19`). M7-5 is now partial: slices A and B shipped, slice C partially landed on WSL in `e969f4d`, and slice D is published in this change set; the native-Linux reference-workstation rerun remains pending.
+> **Status:** ⚠️ In progress — M7-1 ✅ shipped (commits `7e27e0e`, `8ceb43b`, `c128131`, `995f92b`, `8534f37`, `09ee9c5`, `c64b4a1`). M7-2 ✅ shipped (commits `2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`). M7-3 ✅ shipped (commits `4539f1a`, `b2f32c0`, `cfe36f0`, `e6e7458`, `8b15fad`, `adaf46c`). M7-4 ✅ shipped (commits `2311d5c`, `4afd062`, `7be4799`, `ea8421b`, `fd4c787`, `2f029bb`, `bfa4e19`). M7-5 🟡 partial (slices A/B/D shipped; slice C partially executed on WSL — native-Linux reference-spec rerun remains user-owned). M7-6 🔲 entering design (this pass).
 > **Owner (design):** Design Consulting Agent
 > **Owner (implementation):** Implementation Agent (per slice)
 > **Roadmap reference:** [docs/roadmap.md §4](../roadmap.md)
@@ -42,8 +42,8 @@ The strategy is **two-mode parity**:
 | M7-2 | CI regression policies (`mnemosyne ci-check`) | Differentiation | ✅ shipped (`2cbd4cc`, `2c9ff65`, `bdc6b5f`, `c6812a5`, `3c81006`, `5b147a0`, `846be08`) | [milestone-7-2-ci-regression-policies.md](milestone-7-2-ci-regression-policies.md) |
 | M7-3 | Allocation-site flame graphs (`mnemosyne flamegraph`) | Differentiation | ✅ shipped (`4539f1a`, `b2f32c0`, `cfe36f0`, `e6e7458`, `8b15fad`, `adaf46c`) | [milestone-7-3-allocation-site-flame-graphs.md](milestone-7-3-allocation-site-flame-graphs.md) |
 | M7-4 | OQL targeted expansion (5–6 high-value predicates) | Parity | ✅ shipped (`2311d5c`, `4afd062`, `7be4799`, `ea8421b`, `fd4c787`, `2f029bb`, `bfa4e19`) | [milestone-7-4-oql-targeted-expansion.md](milestone-7-4-oql-targeted-expansion.md) |
-| M7-5 | Comparative benchmarks vs MAT and hprof-slurp | Credibility | 🟡 partial — slices A/B/D done, slice C partially done on WSL; reference-workstation re-run pending (`8c93e24`, `32b5860`, `9d1b474`, `e969f4d`, this change) | [milestone-7-5-comparative-benchmarks.md](milestone-7-5-comparative-benchmarks.md) |
-| M7-6 | v0.3.0 release | Release | 🔲 pending | release-prep prompt |
+| M7-5 | Comparative benchmarks vs MAT and hprof-slurp | Credibility | 🟡 partial — slices A/B/D done, slice C partially done on WSL; reference-workstation re-run pending (`8c93e24`, `32b5860`, `9d1b474`, `e969f4d`, `cd3b4db`, `b663d04`) | [milestone-7-5-comparative-benchmarks.md](milestone-7-5-comparative-benchmarks.md) |
+| M7-6 | v0.3.0 release | Release | 🔲 design in progress | [milestone-7-6-v0-3-0-release.md](milestone-7-6-v0-3-0-release.md) |
 
 ## 4. Non-scope
 
@@ -594,3 +594,9 @@ M7-4 is **complete end-to-end**. All slices shipped via commits `2311d5c`, `4afd
 ### 14.5 Post-M7-5 update (2026-04-26)
 
 M7-5 is now **partially complete**. Slice A landed in `8c93e24`; slice B landed in `32b5860` and `9d1b474`; slice C partially landed in `e969f4d` with raw WSL-on-NTFS artifacts under `docs/performance/raw/`; and slice D is published in this change set as [comparative-v0.3.0.md](../benchmarks/comparative-v0.3.0.md). The delivered scope is narrower than the full design: the published run covers `mnemo-overview` and `hprof-slurp` only, on locally available `small`, `medium`, and `large` fixtures, with `N=3`, explicit WSL2 `/mnt/d` caveats, a locally generated `small` `heap.hprof`, and no MAT, deep-mode, xlarge, or equivalence rows. The native-Linux reference-workstation rerun remains user-owned and is still required before M7-6 can claim the full comparative benchmark release gate.
+
+### 14.6 Post-M7-5 wrap and M7-6 design start (2026-04-26)
+
+M7-5 is closed out as **🟡 partial — acceptable for v0.3.0**. Slices A/B/D shipped (`8c93e24`, `32b5860`, `9d1b474`, `cd3b4db`, `b663d04`) and slice C partially executed on WSL in `e969f4d`; the native-Linux reference-spec rerun, MAT inclusion, deep-mode rows, the 10 GiB tier, and equivalence comparisons remain documented as future work owned by the user on the reference workstation. The release does not need to wait for that rerun, but release notes must call the partial status out prominently and the comparative report must keep its honesty caveats loud.
+
+**M7-6 design is now in progress.** The detailed addendum lives at [milestone-7-6-v0-3-0-release.md](milestone-7-6-v0-3-0-release.md) and supersedes the framing in §11 of this document for implementation purposes. Once that addendum returns `READY`, the Implementation Agent may begin with **Slice M7-6.A (workspace + crate version bump to `0.3.0`, CHANGELOG curation, STATUS/roadmap final sweep)**. Slices B (release notes), C (final validation, PR merge, tag — irreversible gate), and D (post-release packaging) follow in order. M7-6.C is the only irreversible step in M7 and must be gated on explicit user confirmation before `git push origin v0.3.0`.
