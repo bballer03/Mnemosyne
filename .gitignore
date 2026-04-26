@@ -65,3 +65,6 @@ tmp/
 ui/node_modules/
 ui/dist/
 ui/*.tsbuildinfo
+# Throwaway test runner output (e.g. `bun test > test-results.txt`)
+ui/*-results.txt
+ui/%OUT%
