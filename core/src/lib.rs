@@ -44,7 +44,10 @@ pub use hprof::{
     DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
-pub use policy::{Comparison, ModeRequirement, Policy, PolicyRule, Predicate, Severity};
+pub use policy::{
+    evaluate, Comparison, Evaluation, ModeRequirement, Policy, PolicyInput, PolicyResult,
+    PolicyRule, Predicate, Severity, SkipReason, SkippedRule, Violation,
+};
 pub use report::{ReportArtifact, ReportRequest};
 
 #[cfg(any(test, feature = "test-fixtures"))]

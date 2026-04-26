@@ -3,6 +3,14 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
+mod eval;
+mod input;
+mod result;
+
+pub use eval::evaluate;
+pub use input::PolicyInput;
+pub use result::{Evaluation, PolicyResult, SkipReason, SkippedRule, Violation};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Policy {
     #[serde(default, skip_serializing_if = "Option::is_none")]

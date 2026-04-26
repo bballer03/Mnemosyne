@@ -12,6 +12,7 @@ use super::{
     parser::{parse_hprof_header, skip_bytes},
     tags::*,
 };
+use crate::analysis::ProvenanceMarker;
 use crate::errors::{CoreError, CoreResult};
 use byteorder::{BigEndian, ReadBytesExt};
 use serde::{Deserialize, Serialize};
@@ -27,13 +28,22 @@ pub const DEFAULT_MAX_THREAD_FRAMES: usize = 1024;
 pub struct OverviewSummary {
     pub heap_path: String,
     pub total_bytes_processed: u64,
+    pub total_size_bytes: u64,
     pub total_record_count: u64,
+    /// Count of instance-like heap entries seen in overview mode.
+    ///
+    /// Slice M7-2.B treats this as the inclusive total across regular
+    /// instances, object arrays, and primitive arrays so policy evaluation has
+    /// a single summary field to consume in overview mode.
+    pub total_instances: u64,
+    pub loaded_class_count: u64,
     pub class_stats: OverviewClassStats,
     pub top_instances: Vec<OverviewInstanceStat>,
     pub gc_root_counts: HashMap<GcRootKind, u64>,
     pub thread_frames: Vec<OverviewThreadFrame>,
     pub truncated: bool,
     pub options: OverviewOptions,
+    pub provenance: Vec<ProvenanceMarker>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -47,6 +57,7 @@ impl OverviewSummary {
         let OverviewAccumulators {
             options,
             class_names,
+            total_instances,
             classes,
             top_instances,
             gc_root_counts,
@@ -62,17 +73,22 @@ impl OverviewSummary {
         let gc_root_counts = gc_root_counts.into_counts();
         let (thread_frames, thread_frames_truncated) = thread_frames.into_frames();
         let truncated = class_stats.truncated || thread_frames_truncated;
+        let loaded_class_count = class_names.len() as u64;
 
         Self {
             heap_path: heap_path.into(),
             total_bytes_processed,
+            total_size_bytes: total_bytes_processed,
             total_record_count,
+            total_instances,
+            loaded_class_count,
             class_stats,
             top_instances,
             gc_root_counts,
             thread_frames,
             truncated,
             options,
+            provenance: Vec::new(),
         }
     }
 }
@@ -373,6 +389,7 @@ impl ThreadFrameBuffer {
 pub(crate) struct OverviewAccumulators {
     options: OverviewOptions,
     class_names: HashMap<u64, String>,
+    total_instances: u64,
     classes: ClassAccumulator,
     top_instances: TopNCollector<OverviewInstanceStat>,
     gc_root_counts: GcRootCounter,
@@ -384,6 +401,7 @@ impl OverviewAccumulators {
     pub(crate) fn new(options: OverviewOptions) -> Self {
         Self {
             classes: ClassAccumulator::new(options.max_class_table_size),
+            total_instances: 0,
             top_instances: TopNCollector::new(options.top_n_instances),
             gc_root_counts: GcRootCounter::default(),
             thread_frames: ThreadFrameBuffer::new(options.max_thread_frames),
@@ -397,6 +415,7 @@ impl OverviewAccumulators {
     }
 
     pub(crate) fn add_class_instance(&mut self, class_id: u64, approx_shallow_bytes: u64) {
+        self.total_instances += 1;
         self.classes.add(class_id, approx_shallow_bytes);
     }
 
@@ -1096,6 +1115,28 @@ mod tests {
         assert_eq!(summary.thread_frames[0].method_name, "second");
         assert_eq!(summary.thread_frames[1].method_name, "third");
         assert!(summary.truncated);
+    }
+
+    #[test]
+    fn overview_summary_populates_policy_fields() {
+        let options = OverviewOptions {
+            top_n_classes: 4,
+            top_n_instances: 4,
+            max_class_table_size: 10,
+            max_thread_frames: 4,
+        };
+        let mut accumulators = OverviewAccumulators::new(options);
+        accumulators.record_class_name(0x1, "alpha");
+        accumulators.record_class_name(0x2, "beta");
+        accumulators.add_class_instance(0x1, 64);
+        accumulators.add_class_instance(0x1, 32);
+        accumulators.add_class_instance(0x2, 16);
+
+        let summary = OverviewSummary::from_accumulators("heap.hprof", 2048, 17, accumulators);
+
+        assert_eq!(summary.total_size_bytes, 2048);
+        assert_eq!(summary.loaded_class_count, 2);
+        assert_eq!(summary.total_instances, 3);
     }
 
     #[test]
