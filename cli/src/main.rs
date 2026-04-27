@@ -36,14 +36,15 @@ use mnemosyne_core::{
     },
     query::{execute_query, parse_query, CellValue, QueryError},
     report::{
+        diff::{render as render_diff_report, Format as DiffRenderFormat},
         flamegraph::{
             collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
             FlameFormat, FlameRoot,
         },
         render_overview_report, render_report, ReportArtifact, ReportRequest,
     },
-    CoreError, DiffMode, DiffRequest, IdentityStrategy, ObjectDelta, ObjectDiffReport,
-    ParseOptions, Policy, PolicyInput, Risk, Severity as PolicySeverity,
+    CoreError, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy, PolicyInput,
+    Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -194,6 +195,8 @@ struct FlameGraphArgs {
 struct DiffArgs {
     before: PathBuf,
     after: PathBuf,
+    #[arg(long, value_enum, default_value_t = DiffFormatArg::Text)]
+    format: DiffFormatArg,
     #[arg(long, value_enum, default_value_t = DiffModeArg::Class)]
     mode: DiffModeArg,
     #[arg(long, value_enum, default_value_t = IdentityStrategyArg::ClassDominator)]
@@ -307,6 +310,13 @@ enum OutputFormatArg {
     Json,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DiffFormatArg {
+    Text,
+    Json,
+    Toon,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ModeArg {
     Auto,
@@ -411,6 +421,16 @@ impl From<OutputFormatArg> for OutputFormat {
             OutputFormatArg::Markdown => OutputFormat::Markdown,
             OutputFormatArg::Html => OutputFormat::Html,
             OutputFormatArg::Json => OutputFormat::Json,
+        }
+    }
+}
+
+impl From<DiffFormatArg> for DiffRenderFormat {
+    fn from(value: DiffFormatArg) -> Self {
+        match value {
+            DiffFormatArg::Text => DiffRenderFormat::Text,
+            DiffFormatArg::Json => DiffRenderFormat::Json,
+            DiffFormatArg::Toon => DiffRenderFormat::Toon,
         }
     }
 }
@@ -963,53 +983,8 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
         Err(err) => exit_diff_with_error(err),
     };
 
-    println!(
-        "{} {} -> {}",
-        section_label("Heap diff:"),
-        diff.before,
-        diff.after
-    );
-    println!(
-        "  {} {}",
-        bold_label("Delta size:"),
-        styled_delta_megabytes(diff.delta_bytes)
-    );
-    println!(
-        "  {} {}",
-        bold_label("Delta objects:"),
-        styled_delta_count(diff.delta_objects)
-    );
-
-    if diff.changed_classes.is_empty() {
-        println!("  No dominant class or record shifts detected.");
-    } else {
-        println!("  {}", bold_label("Top changes:"));
-        for entry in &diff.changed_classes {
-            let delta = entry.after_bytes as i64 - entry.before_bytes as i64;
-            let before_mb = entry.before_bytes as f64 / (1024.0 * 1024.0);
-            let after_mb = entry.after_bytes as f64 / (1024.0 * 1024.0);
-            println!(
-                "    - {}: {} (before {:.2} MB -> after {:.2} MB)",
-                entry.name,
-                styled_delta_megabytes(delta),
-                before_mb,
-                after_mb
-            );
-        }
-    }
-
-    if let Some(class_diff) = &diff.class_diff {
-        if !class_diff.is_empty() {
-            println!("  {}", bold_label("Class-level retained deltas:"));
-            println!("{}", build_class_diff_table(class_diff));
-        }
-    }
-
-    if args.mode == DiffModeArg::Object {
-        if let Some(object_diff) = &diff.object_diff {
-            print_object_diff_text(object_diff);
-        }
-    }
+    let rendered = render_diff_report(&diff, args.format.into())?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -2118,33 +2093,6 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     table
 }
 
-fn build_class_diff_table(class_diff: &[mnemosyne_core::ClassLevelDelta]) -> Table {
-    let mut table = base_table();
-    table.set_header(vec![
-        header_cell("Class", CellAlignment::Left),
-        header_cell("Instances", CellAlignment::Right),
-        header_cell("Shallow", CellAlignment::Right),
-        header_cell("Retained Delta", CellAlignment::Right),
-    ]);
-
-    for entry in class_diff.iter().take(10) {
-        let instance_delta = entry.after_instances as i64 - entry.before_instances as i64;
-        let retained_delta = entry.after_retained_bytes as i64 - entry.before_retained_bytes as i64;
-        table.add_row(vec![
-            Cell::new(entry.class_name.as_str()).set_alignment(CellAlignment::Left),
-            right_cell(format_signed_count(instance_delta)),
-            right_cell(format!(
-                "{:.2} -> {:.2} MB",
-                entry.before_shallow_bytes as f64 / (1024.0 * 1024.0),
-                entry.after_shallow_bytes as f64 / (1024.0 * 1024.0)
-            )),
-            right_cell(format_signed_megabytes(retained_delta)),
-        ]);
-    }
-
-    table
-}
-
 fn base_table() -> Table {
     let mut table = Table::new();
     table.load_preset(ASCII_BORDERS_ONLY_CONDENSED);
@@ -2237,149 +2185,5 @@ fn styled_provenance(kind: ProvenanceKind) -> StyledObject<String> {
         ProvenanceKind::Partial => style(text).yellow(),
         ProvenanceKind::Fallback => style(text).yellow(),
         ProvenanceKind::Placeholder => style(text).dim(),
-    }
-}
-
-fn styled_delta_megabytes(delta_bytes: i64) -> StyledObject<String> {
-    let text = format!("{:+.2} MB", delta_bytes as f64 / (1024.0 * 1024.0));
-    match delta_bytes.cmp(&0) {
-        std::cmp::Ordering::Greater => style(text).red(),
-        std::cmp::Ordering::Less => style(text).green(),
-        std::cmp::Ordering::Equal => style(text),
-    }
-}
-
-fn styled_delta_count(delta: i64) -> StyledObject<String> {
-    let text = format!("{delta:+}");
-    match delta.cmp(&0) {
-        std::cmp::Ordering::Greater => style(text).red(),
-        std::cmp::Ordering::Less => style(text).green(),
-        std::cmp::Ordering::Equal => style(text),
-    }
-}
-
-fn format_signed_megabytes(delta_bytes: i64) -> String {
-    format!("{:+.2} MB", delta_bytes as f64 / (1024.0 * 1024.0))
-}
-
-fn format_signed_count(delta: i64) -> String {
-    format!("{delta:+}")
-}
-
-fn print_object_diff_text(report: &ObjectDiffReport) {
-    println!(
-        "object diff (strategy={}, bucket={}, threshold={}):",
-        identity_strategy_label(report.strategy),
-        bucket_label(report.retained_bucket_bits),
-        binary_unit_label(report.retained_change_threshold),
-    );
-
-    println!("  added ({}):", report.added.len());
-    for delta in &report.added {
-        println!("{}", format_object_delta_line(delta));
-    }
-
-    println!("  removed ({}):", report.removed.len());
-    for delta in &report.removed {
-        println!("{}", format_object_delta_line(delta));
-    }
-
-    println!("  retained_changed ({}):", report.retained_changed.len());
-    for delta in &report.retained_changed {
-        println!("{}", format_object_delta_line(delta));
-    }
-
-    println!(
-        "  match quality: collision_rate={:.3}  false_match_risk={}  false_split_risk={}",
-        report.match_quality.collision_rate,
-        risk_label(report.match_quality.estimated_false_match_risk),
-        risk_label(report.match_quality.estimated_false_split_risk),
-    );
-    println!("    notes: \"{}\"", report.match_quality.notes.join("; "));
-}
-
-fn format_object_delta_line(delta: &ObjectDelta) -> String {
-    match delta.kind {
-        mnemosyne_core::ObjectDeltaKind::Added => format!(
-            "    {:<32} {:+} bytes  count={}  dom={}",
-            delta.class_name,
-            delta.after_retained_bytes as i64,
-            delta.after_count,
-            dominator_chain_label(&delta.dominator_chain),
-        ),
-        mnemosyne_core::ObjectDeltaKind::Removed => format!(
-            "    {:<32} {:+} bytes  count={}  dom={}",
-            delta.class_name,
-            -(delta.before_retained_bytes as i64),
-            delta.before_count,
-            dominator_chain_label(&delta.dominator_chain),
-        ),
-        mnemosyne_core::ObjectDeltaKind::RetainedChanged => format!(
-            "    {:<32} {:+} bytes  count={}->{}  dom={}",
-            delta.class_name,
-            delta.after_retained_bytes as i64 - delta.before_retained_bytes as i64,
-            delta.before_count,
-            delta.after_count,
-            dominator_chain_label(&delta.dominator_chain),
-        ),
-    }
-}
-
-fn dominator_chain_label(chain: &[String]) -> String {
-    if chain.is_empty() {
-        return String::from("[]");
-    }
-
-    let joined = chain.join(",");
-    let truncated = chain.len() >= 4
-        && chain
-            .last()
-            .is_some_and(|label| label != "GC Root" && label != "<unknown>");
-    if truncated {
-        format!("[{joined},...]")
-    } else {
-        format!("[{joined}]")
-    }
-}
-
-fn identity_strategy_label(strategy: IdentityStrategy) -> &'static str {
-    match strategy {
-        IdentityStrategy::ClassRetained => "class+retained",
-        IdentityStrategy::ClassDominator => "class+dominator",
-        IdentityStrategy::FullFingerprint => "full-fingerprint",
-    }
-}
-
-fn risk_label(risk: Risk) -> &'static str {
-    match risk {
-        Risk::Low => "Low",
-        Risk::Medium => "Medium",
-        Risk::High => "High",
-    }
-}
-
-fn bucket_label(bucket_bits: u8) -> String {
-    match 1_u64.checked_shl(u32::from(bucket_bits)) {
-        Some(bytes) => binary_unit_label(bytes),
-        None => format!("2^{bucket_bits}B"),
-    }
-}
-
-fn binary_unit_label(bytes: u64) -> String {
-    const KIB: u64 = 1024;
-    const MIB: u64 = 1024 * 1024;
-    const GIB: u64 = 1024 * 1024 * 1024;
-    const TIB: u64 = 1024 * 1024 * 1024 * 1024;
-
-    if bytes >= TIB && bytes % TIB == 0 {
-        format!("{}TB", bytes / TIB)
-    } else if bytes >= GIB && bytes % GIB == 0 {
-        format!("{}GB", bytes / GIB)
-    } else if bytes >= MIB && bytes % MIB == 0 {
-        format!("{}MB", bytes / MIB)
-    } else if bytes >= KIB && bytes % KIB == 0 {
-        format!("{}KB", bytes / KIB)
-    } else {
-        format!("{bytes}B")
     }
 }
