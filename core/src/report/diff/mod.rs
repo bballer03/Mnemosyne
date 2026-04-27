@@ -56,13 +56,13 @@ pub(crate) fn binary_unit_label(bytes: u64) -> String {
     const GIB: u64 = 1024 * 1024 * 1024;
     const TIB: u64 = 1024 * 1024 * 1024 * 1024;
 
-    if bytes >= TIB && bytes % TIB == 0 {
+    if bytes >= TIB && bytes.is_multiple_of(TIB) {
         format!("{}TB", bytes / TIB)
-    } else if bytes >= GIB && bytes % GIB == 0 {
+    } else if bytes >= GIB && bytes.is_multiple_of(GIB) {
         format!("{}GB", bytes / GIB)
-    } else if bytes >= MIB && bytes % MIB == 0 {
+    } else if bytes >= MIB && bytes.is_multiple_of(MIB) {
         format!("{}MB", bytes / MIB)
-    } else if bytes >= KIB && bytes % KIB == 0 {
+    } else if bytes >= KIB && bytes.is_multiple_of(KIB) {
         format!("{}KB", bytes / KIB)
     } else {
         format!("{bytes}B")
