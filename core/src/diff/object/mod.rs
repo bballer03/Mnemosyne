@@ -1,5 +1,6 @@
 pub mod dominator_chain;
 pub mod engine;
+pub mod field_signature;
 pub mod fingerprint;
 pub mod match_quality;
 pub mod reference_chain;

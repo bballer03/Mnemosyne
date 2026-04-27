@@ -18,7 +18,7 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, analyze_heap_with_graph, detect_leaks, diff_heaps, focus_leaks,
+        analyze_heap, analyze_heap_with_graph, detect_leaks, focus_leaks,
         generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AnalysisMode,
         AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
         OVERVIEW_AUTO_THRESHOLD_BYTES,
@@ -36,13 +36,15 @@ use mnemosyne_core::{
     },
     query::{execute_query, parse_query, CellValue, QueryError},
     report::{
+        diff::{render as render_diff_report, Format as DiffRenderFormat},
         flamegraph::{
             collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
             FlameFormat, FlameRoot,
         },
         render_overview_report, render_report, ReportArtifact, ReportRequest,
     },
-    CoreError, ParseOptions, Policy, PolicyInput, Severity as PolicySeverity,
+    CoreError, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy, PolicyInput,
+    Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -193,6 +195,22 @@ struct FlameGraphArgs {
 struct DiffArgs {
     before: PathBuf,
     after: PathBuf,
+    #[arg(long, value_enum, default_value_t = DiffFormatArg::Text)]
+    format: DiffFormatArg,
+    #[arg(long, value_enum, default_value_t = DiffModeArg::Class)]
+    mode: DiffModeArg,
+    #[arg(long, value_enum, default_value_t = IdentityStrategyArg::ClassDominator)]
+    identity_strategy: IdentityStrategyArg,
+    #[arg(long, default_value_t = 10)]
+    retained_bucket_bits: u8,
+    #[arg(long, default_value_t = 1_048_576)]
+    retained_change_threshold: u64,
+    #[arg(long = "top", default_value_t = 50)]
+    top: usize,
+    #[arg(long = "object-diff-min-retained", default_value_t = 4 * 1024, hide_short_help = true)]
+    object_diff_min_retained: u64,
+    #[arg(long)]
+    retain_field_data: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -292,11 +310,34 @@ enum OutputFormatArg {
     Json,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DiffFormatArg {
+    Text,
+    Json,
+    Toon,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ModeArg {
     Auto,
     Deep,
     Overview,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum DiffModeArg {
+    Class,
+    Object,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum IdentityStrategyArg {
+    #[value(name = "class+retained")]
+    ClassRetained,
+    #[value(name = "class+dominator")]
+    ClassDominator,
+    #[value(name = "full-fingerprint")]
+    FullFingerprint,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -384,6 +425,16 @@ impl From<OutputFormatArg> for OutputFormat {
     }
 }
 
+impl From<DiffFormatArg> for DiffRenderFormat {
+    fn from(value: DiffFormatArg) -> Self {
+        match value {
+            DiffFormatArg::Text => DiffRenderFormat::Text,
+            DiffFormatArg::Json => DiffRenderFormat::Json,
+            DiffFormatArg::Toon => DiffRenderFormat::Toon,
+        }
+    }
+}
+
 impl From<ModeArg> for AnalysisMode {
     fn from(value: ModeArg) -> Self {
         match value {
@@ -445,6 +496,25 @@ impl From<GroupByArg> for HistogramGroupBy {
             GroupByArg::Class => HistogramGroupBy::Class,
             GroupByArg::Package => HistogramGroupBy::Package,
             GroupByArg::Classloader => HistogramGroupBy::ClassLoader,
+        }
+    }
+}
+
+impl From<DiffModeArg> for DiffMode {
+    fn from(value: DiffModeArg) -> Self {
+        match value {
+            DiffModeArg::Class => DiffMode::Class,
+            DiffModeArg::Object => DiffMode::Object,
+        }
+    }
+}
+
+impl From<IdentityStrategyArg> for IdentityStrategy {
+    fn from(value: IdentityStrategyArg) -> Self {
+        match value {
+            IdentityStrategyArg::ClassRetained => IdentityStrategy::ClassRetained,
+            IdentityStrategyArg::ClassDominator => IdentityStrategy::ClassDominator,
+            IdentityStrategyArg::FullFingerprint => IdentityStrategy::FullFingerprint,
         }
     }
 }
@@ -870,64 +940,52 @@ async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Res
 }
 
 async fn handle_diff(args: DiffArgs) -> Result<()> {
-    validate_heap_file(&args.before)?;
-    validate_heap_file(&args.after)?;
+    let diff = match async {
+        validate_heap_file(&args.before)?;
+        validate_heap_file(&args.after)?;
 
-    let pb = start_spinner("Diffing heap dumps...");
-    let diff = diff_heaps(
-        args.before.to_string_lossy().as_ref(),
-        args.after.to_string_lossy().as_ref(),
-    )
+        let pb = start_spinner("Diffing heap dumps...");
+        let result = mnemosyne_core::diff::run_diff(DiffRequest {
+            before_path: args.before.to_string_lossy().into_owned(),
+            after_path: args.after.to_string_lossy().into_owned(),
+            mode: args.mode.into(),
+            identity_strategy: args.identity_strategy.into(),
+            retained_bucket_bits: args.retained_bucket_bits,
+            min_retained_bytes: args.object_diff_min_retained,
+            retained_change_threshold: args.retained_change_threshold,
+            top_n: args.top,
+            retain_field_data: args.retain_field_data,
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to diff heap dumps: {} -> {}",
+                args.before.display(),
+                args.after.display()
+            )
+        });
+
+        match result {
+            Ok(diff_result) => {
+                finish_spinner(&pb, "Heap diff complete.");
+                Ok(diff_result)
+            }
+            Err(err) => {
+                finish_spinner(&pb, "Heap diff failed.");
+                Err(err)
+            }
+        }
+    }
     .await
-    .with_context(|| {
-        format!(
-            "Failed to diff heap dumps: {} -> {}",
-            args.before.display(),
-            args.after.display()
-        )
-    })?;
-    finish_spinner(&pb, "Heap diff complete.");
-    println!(
-        "{} {} -> {}",
-        section_label("Heap diff:"),
-        diff.before,
-        diff.after
-    );
-    println!(
-        "  {} {}",
-        bold_label("Delta size:"),
-        styled_delta_megabytes(diff.delta_bytes)
-    );
-    println!(
-        "  {} {}",
-        bold_label("Delta objects:"),
-        styled_delta_count(diff.delta_objects)
-    );
+    {
+        Ok(mnemosyne_core::diff::DiffResult::Class(diff))
+        | Ok(mnemosyne_core::diff::DiffResult::Object(diff)) => diff,
+        Err(err) => exit_diff_with_error(err),
+    };
 
-    if diff.changed_classes.is_empty() {
-        println!("  No dominant class or record shifts detected.");
-    } else {
-        println!("  {}", bold_label("Top changes:"));
-        for entry in &diff.changed_classes {
-            let delta = entry.after_bytes as i64 - entry.before_bytes as i64;
-            let before_mb = entry.before_bytes as f64 / (1024.0 * 1024.0);
-            let after_mb = entry.after_bytes as f64 / (1024.0 * 1024.0);
-            println!(
-                "    - {}: {} (before {:.2} MB -> after {:.2} MB)",
-                entry.name,
-                styled_delta_megabytes(delta),
-                before_mb,
-                after_mb
-            );
-        }
-    }
+    let rendered = render_diff_report(&diff, args.format.into())?;
+    println!("{rendered}");
 
-    if let Some(class_diff) = &diff.class_diff {
-        if !class_diff.is_empty() {
-            println!("  {}", bold_label("Class-level retained deltas:"));
-            println!("{}", build_class_diff_table(class_diff));
-        }
-    }
     Ok(())
 }
 
@@ -1372,9 +1430,38 @@ fn exit_ci_check_with_error(code: i32, err: anyhow::Error) -> ! {
     process::exit(code);
 }
 
+fn exit_diff_with_error(err: anyhow::Error) -> ! {
+    let code = diff_exit_code(&err);
+    print_cli_error(&err);
+    process::exit(code);
+}
+
 fn exit_flamegraph_with_error(message: &str) -> ! {
     eprintln!("{message}");
     process::exit(5);
+}
+
+fn diff_exit_code(err: &anyhow::Error) -> i32 {
+    match err.downcast_ref::<CoreError>() {
+        Some(CoreError::Io(_)) | Some(CoreError::FileNotFound { .. }) => 2,
+        Some(CoreError::NotAnHprof { .. }) | Some(CoreError::HprofParseError { .. }) => 3,
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_in_overview_mode:") =>
+        {
+            5
+        }
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_object_diff_too_large:") =>
+        {
+            6
+        }
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_without_field_data:") =>
+        {
+            7
+        }
+        _ => 1,
+    }
 }
 
 fn exit_query_with_error(err: QueryError) -> ! {
@@ -2006,33 +2093,6 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     table
 }
 
-fn build_class_diff_table(class_diff: &[mnemosyne_core::ClassLevelDelta]) -> Table {
-    let mut table = base_table();
-    table.set_header(vec![
-        header_cell("Class", CellAlignment::Left),
-        header_cell("Instances", CellAlignment::Right),
-        header_cell("Shallow", CellAlignment::Right),
-        header_cell("Retained Delta", CellAlignment::Right),
-    ]);
-
-    for entry in class_diff.iter().take(10) {
-        let instance_delta = entry.after_instances as i64 - entry.before_instances as i64;
-        let retained_delta = entry.after_retained_bytes as i64 - entry.before_retained_bytes as i64;
-        table.add_row(vec![
-            Cell::new(entry.class_name.as_str()).set_alignment(CellAlignment::Left),
-            right_cell(format_signed_count(instance_delta)),
-            right_cell(format!(
-                "{:.2} -> {:.2} MB",
-                entry.before_shallow_bytes as f64 / (1024.0 * 1024.0),
-                entry.after_shallow_bytes as f64 / (1024.0 * 1024.0)
-            )),
-            right_cell(format_signed_megabytes(retained_delta)),
-        ]);
-    }
-
-    table
-}
-
 fn base_table() -> Table {
     let mut table = Table::new();
     table.load_preset(ASCII_BORDERS_ONLY_CONDENSED);
@@ -2126,30 +2186,4 @@ fn styled_provenance(kind: ProvenanceKind) -> StyledObject<String> {
         ProvenanceKind::Fallback => style(text).yellow(),
         ProvenanceKind::Placeholder => style(text).dim(),
     }
-}
-
-fn styled_delta_megabytes(delta_bytes: i64) -> StyledObject<String> {
-    let text = format!("{:+.2} MB", delta_bytes as f64 / (1024.0 * 1024.0));
-    match delta_bytes.cmp(&0) {
-        std::cmp::Ordering::Greater => style(text).red(),
-        std::cmp::Ordering::Less => style(text).green(),
-        std::cmp::Ordering::Equal => style(text),
-    }
-}
-
-fn styled_delta_count(delta: i64) -> StyledObject<String> {
-    let text = format!("{delta:+}");
-    match delta.cmp(&0) {
-        std::cmp::Ordering::Greater => style(text).red(),
-        std::cmp::Ordering::Less => style(text).green(),
-        std::cmp::Ordering::Equal => style(text),
-    }
-}
-
-fn format_signed_megabytes(delta_bytes: i64) -> String {
-    format!("{:+.2} MB", delta_bytes as f64 / (1024.0 * 1024.0))
-}
-
-fn format_signed_count(delta: i64) -> String {
-    format!("{delta:+}")
 }

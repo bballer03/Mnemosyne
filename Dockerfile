@@ -19,7 +19,8 @@ RUN mkdir -p cli/src core/src core/benches \
     && printf 'pub fn docker_build_stub() {}\n' > core/src/lib.rs \
     && printf 'fn main() {}\n' > core/benches/parser_bench.rs \
     && printf 'fn main() {}\n' > core/benches/graph_bench.rs \
-    && printf 'fn main() {}\n' > core/benches/dominator_bench.rs
+    && printf 'fn main() {}\n' > core/benches/dominator_bench.rs \
+    && printf 'fn main() {}\n' > core/benches/diff_object.rs
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \

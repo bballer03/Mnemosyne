@@ -6,6 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 use super::dominator_chain::hash_dominator_class_chain;
+use super::field_signature::{field_shape_signature, outbound_class_set_signature};
 use super::types::IdentityStrategy;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -78,8 +79,8 @@ impl ObjectFingerprint {
             class_id: stable_class_id_for_object(graph, obj_id),
             retained_bucket: bucket_for_retained_size(dom.retained_size(obj_id), bucket_bits),
             dominator_signature: hash_dominator_class_chain(graph, dom, obj_id),
-            field_signature: field_layout_signature_stub(graph, obj_id)
-                ^ outbound_class_set_signature_stub(graph, obj_id),
+            field_signature: field_shape_signature(graph, obj_id)
+                ^ outbound_class_set_signature(graph, obj_id),
         }
     }
 }
@@ -111,16 +112,6 @@ fn stable_class_id_for_object(graph: &ObjectGraph, obj_id: ObjectId) -> u32 {
         .and_then(|obj| graph.class_name(obj.class_id))
         .map(stable_class_name_id)
         .unwrap_or_else(|| stable_class_name_id("<unknown>"))
-}
-
-// Slice 8-1.C wires FullFingerprint through the engine, but the field and
-// outbound signatures stay stubbed until Slice 8-1.D fills them in.
-fn field_layout_signature_stub(_graph: &ObjectGraph, _obj_id: ObjectId) -> u64 {
-    0
-}
-
-fn outbound_class_set_signature_stub(_graph: &ObjectGraph, _obj_id: ObjectId) -> u64 {
-    0
 }
 
 #[cfg(test)]
