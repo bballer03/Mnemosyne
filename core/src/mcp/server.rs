@@ -5,6 +5,7 @@ use crate::{
         LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
+    diff::{DiffRequest, DiffResult},
     errors::{CoreError, CoreResult},
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{find_gc_path, GcPathRequest},
@@ -214,6 +215,21 @@ impl RpcErrorDetails {
                     "hint": hint,
                 })),
             },
+            CoreError::Unsupported(detail)
+                if detail.starts_with("feature_unavailable_in_overview_mode:") =>
+            {
+                diff_feature_error_details("feature_unavailable_in_overview_mode", detail)
+            }
+            CoreError::Unsupported(detail)
+                if detail.starts_with("feature_unavailable_object_diff_too_large:") =>
+            {
+                diff_feature_error_details("feature_unavailable_object_diff_too_large", detail)
+            }
+            CoreError::Unsupported(detail)
+                if detail.starts_with("feature_unavailable_without_field_data:") =>
+            {
+                diff_feature_error_details("feature_unavailable_without_field_data", detail)
+            }
             CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
                 code: "session_version_unsupported",
                 message,
@@ -245,6 +261,66 @@ impl RpcErrorDetails {
             },
         }
     }
+}
+
+fn diff_feature_error_details(code: &'static str, raw_detail: &str) -> RpcErrorDetails {
+    let message_and_details = raw_detail
+        .strip_prefix(code)
+        .and_then(|detail| detail.strip_prefix(':'))
+        .map(str::trim)
+        .unwrap_or(raw_detail);
+    let (message, details) = split_message_and_kv_details(message_and_details);
+
+    let details = if details.is_empty() {
+        Some(json!({ "detail": message }))
+    } else {
+        let mut object = serde_json::Map::new();
+        object.insert("detail".into(), json!(message));
+        for (key, value) in details {
+            object.insert(key, value);
+        }
+        Some(Value::Object(object))
+    };
+
+    RpcErrorDetails {
+        code,
+        message,
+        details,
+    }
+}
+
+fn split_message_and_kv_details(
+    message_and_details: &str,
+) -> (String, serde_json::Map<String, Value>) {
+    if let Some(details_start) = message_and_details.rfind(" (") {
+        if message_and_details.ends_with(')') {
+            let message = message_and_details[..details_start].trim().to_owned();
+            let details_raw =
+                &message_and_details[details_start + 2..message_and_details.len() - 1];
+            return (message, parse_kv_details(details_raw));
+        }
+    }
+
+    (message_and_details.to_owned(), serde_json::Map::new())
+}
+
+fn parse_kv_details(details_raw: &str) -> serde_json::Map<String, Value> {
+    let mut details = serde_json::Map::new();
+
+    for pair in details_raw.split(", ") {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+
+        let value = if let Ok(parsed) = value.parse::<u64>() {
+            json!(parsed)
+        } else {
+            json!(value)
+        };
+        details.insert(key.to_owned(), value);
+    }
+
+    details
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,6 +438,64 @@ struct QueryHeapParams {
     query: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum McpDiffMode {
+    #[default]
+    Class,
+    Object,
+}
+
+impl From<McpDiffMode> for crate::diff::DiffMode {
+    fn from(value: McpDiffMode) -> Self {
+        match value {
+            McpDiffMode::Class => crate::diff::DiffMode::Class,
+            McpDiffMode::Object => crate::diff::DiffMode::Object,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+enum McpIdentityStrategy {
+    #[serde(rename = "class+retained")]
+    ClassRetained,
+    #[default]
+    #[serde(rename = "class+dominator")]
+    ClassDominator,
+    #[serde(rename = "full-fingerprint")]
+    FullFingerprint,
+}
+
+impl From<McpIdentityStrategy> for crate::diff::IdentityStrategy {
+    fn from(value: McpIdentityStrategy) -> Self {
+        match value {
+            McpIdentityStrategy::ClassRetained => crate::diff::IdentityStrategy::ClassRetained,
+            McpIdentityStrategy::ClassDominator => crate::diff::IdentityStrategy::ClassDominator,
+            McpIdentityStrategy::FullFingerprint => crate::diff::IdentityStrategy::FullFingerprint,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DiffHeapsParams {
+    before: String,
+    after: String,
+    #[serde(default)]
+    mode: McpDiffMode,
+    #[serde(default)]
+    identity_strategy: McpIdentityStrategy,
+    #[serde(default = "default_diff_retained_bucket_bits")]
+    retained_bucket_bits: u8,
+    #[serde(default = "default_diff_retained_change_threshold")]
+    retained_change_threshold: u64,
+    #[serde(default = "default_diff_top_n", alias = "top")]
+    top_n: usize,
+    #[serde(default = "default_diff_object_min_retained")]
+    object_diff_min_retained: u64,
+    #[serde(default)]
+    retain_field_data: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProposeFixParams {
     #[serde(default)]
@@ -378,6 +512,22 @@ struct ProposeFixParams {
 
 fn default_fix_style() -> FixStyle {
     FixStyle::Minimal
+}
+
+fn default_diff_retained_bucket_bits() -> u8 {
+    10
+}
+
+fn default_diff_retained_change_threshold() -> u64 {
+    crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD
+}
+
+fn default_diff_top_n() -> usize {
+    crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N
+}
+
+fn default_diff_object_min_retained() -> u64 {
+    crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES
 }
 
 fn session_store(config: &AppConfig) -> McpSessionStore {
@@ -572,6 +722,22 @@ fn tool_catalog() -> Value {
                     { "name": "min_collection_capacity", "type": "number", "required": false, "description": "Minimum collection capacity to report." },
                     { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." }
                 ]
+            },
+            {
+                "name": "diff_heaps",
+                "description": "Compute class-level and (optionally) object-level diff between two HPROF heap dumps.",
+                "params": [
+                    { "name": "before", "type": "string", "required": true, "description": "Path to the BEFORE heap dump." },
+                    { "name": "after", "type": "string", "required": true, "description": "Path to the AFTER heap dump." },
+                    { "name": "mode", "type": "string", "required": false, "default": "class", "enum": ["class", "object"], "description": "'class' (default) or 'object'." },
+                    { "name": "identity_strategy", "type": "string", "required": false, "default": "class+dominator", "enum": ["class+retained", "class+dominator", "full-fingerprint"], "description": "'class+retained' | 'class+dominator' (default) | 'full-fingerprint'. Ignored when mode='class'." },
+                    { "name": "retained_bucket_bits", "type": "number", "required": false, "default": 10, "description": "Power-of-two bucket exponent for retained sizes; default 10 (1 KB)." },
+                    { "name": "retained_change_threshold", "type": "number", "required": false, "default": 1048576, "description": "Minimum |retained delta| in bytes for inclusion in retained_changed; default 1048576." },
+                    { "name": "top_n", "type": "number", "required": false, "default": 50, "description": "Per-section result cap; default 50." },
+                    { "name": "object_diff_min_retained", "type": "number", "required": false, "default": 4096, "description": "Skip objects whose retained size is below this floor; default 4096." },
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "Required when identity_strategy='full-fingerprint'." }
+                ],
+                "output_schema": "HeapDiff (existing) extended with optional object_diff: ObjectDiffReport"
             },
             {
                 "name": "query_heap",
@@ -868,6 +1034,26 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
 
             Ok(serde_json::to_value(analysis)?)
         }
+        "diff_heaps" => {
+            let params: DiffHeapsParams = serde_json::from_value(packet.params)?;
+            let diff = match crate::diff::run_diff(DiffRequest {
+                before_path: params.before,
+                after_path: params.after,
+                mode: params.mode.into(),
+                identity_strategy: params.identity_strategy.into(),
+                retained_bucket_bits: params.retained_bucket_bits,
+                min_retained_bytes: params.object_diff_min_retained,
+                retained_change_threshold: params.retained_change_threshold,
+                top_n: params.top_n,
+                retain_field_data: params.retain_field_data,
+            })
+            .await?
+            {
+                DiffResult::Class(diff) | DiffResult::Object(diff) => diff,
+            };
+
+            Ok(serde_json::to_value(diff)?)
+        }
         "query_heap" => {
             let params: QueryHeapParams = serde_json::from_value(packet.params)?;
             let graph = crate::hprof::parse_hprof_file_with_options(
@@ -1068,6 +1254,64 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    async fn diff_heaps_result(
+        before: &str,
+        after: &str,
+        extra_params: Value,
+    ) -> CoreResult<Value> {
+        let mut params = serde_json::Map::new();
+        params.insert("before".into(), json!(before));
+        params.insert("after".into(), json!(after));
+        if let Some(extra) = extra_params.as_object() {
+            params.extend(extra.clone());
+        }
+
+        handle_request(
+            RpcRequest {
+                id: json!(99),
+                method: "diff_heaps".into(),
+                params: Value::Object(params),
+            },
+            &AppConfig::default(),
+        )
+        .await
+    }
+
+    async fn diff_heaps_response(before: &str, after: &str, extra_params: Value) -> Value {
+        let response = match diff_heaps_result(before, after, extra_params).await {
+            Ok(value) => RpcResponse::success(json!(99), value),
+            Err(err) => RpcResponse::from_core_error(json!(99), &err),
+        };
+
+        serde_json::to_value(response).expect("diff_heaps response should serialize")
+    }
+
+    fn push_u32(buf: &mut Vec<u8>, value: u32) {
+        buf.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn push_u64(buf: &mut Vec<u8>, value: u64) {
+        buf.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn build_overview_only_fixture() -> Vec<u8> {
+        const TAG_STRING_IN_UTF8: u8 = 0x01;
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+        push_u32(&mut bytes, 8);
+        push_u64(&mut bytes, 0);
+
+        let body = b"synthetic-record";
+        bytes.push(TAG_STRING_IN_UTF8);
+        push_u32(&mut bytes, 0);
+        push_u32(&mut bytes, body.len() as u32 + 8);
+        push_u64(&mut bytes, 1);
+        bytes.extend_from_slice(body);
+
+        bytes
     }
 
     struct TempEnvVar {
@@ -2028,5 +2272,225 @@ mod tests {
                 "missing {name}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_tools_includes_diff_heaps() {
+        let result = list_tools_result().await;
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let diff_tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("diff_heaps")))
+            .expect("diff_heaps tool");
+
+        assert_eq!(
+            diff_tool.get("description"),
+            Some(&json!(
+                "Compute class-level and (optionally) object-level diff between two HPROF heap dumps."
+            ))
+        );
+        assert_eq!(
+            diff_tool.get("output_schema"),
+            Some(&json!(
+                "HeapDiff (existing) extended with optional object_diff: ObjectDiffReport"
+            ))
+        );
+        assert_eq!(
+            diff_tool.get("params"),
+            Some(&json!([
+                {
+                    "name": "before",
+                    "type": "string",
+                    "required": true,
+                    "description": "Path to the BEFORE heap dump."
+                },
+                {
+                    "name": "after",
+                    "type": "string",
+                    "required": true,
+                    "description": "Path to the AFTER heap dump."
+                },
+                {
+                    "name": "mode",
+                    "type": "string",
+                    "required": false,
+                    "default": "class",
+                    "enum": ["class", "object"],
+                    "description": "'class' (default) or 'object'."
+                },
+                {
+                    "name": "identity_strategy",
+                    "type": "string",
+                    "required": false,
+                    "default": "class+dominator",
+                    "enum": ["class+retained", "class+dominator", "full-fingerprint"],
+                    "description": "'class+retained' | 'class+dominator' (default) | 'full-fingerprint'. Ignored when mode='class'."
+                },
+                {
+                    "name": "retained_bucket_bits",
+                    "type": "number",
+                    "required": false,
+                    "default": 10,
+                    "description": "Power-of-two bucket exponent for retained sizes; default 10 (1 KB)."
+                },
+                {
+                    "name": "retained_change_threshold",
+                    "type": "number",
+                    "required": false,
+                    "default": 1048576,
+                    "description": "Minimum |retained delta| in bytes for inclusion in retained_changed; default 1048576."
+                },
+                {
+                    "name": "top_n",
+                    "type": "number",
+                    "required": false,
+                    "default": 50,
+                    "description": "Per-section result cap; default 50."
+                },
+                {
+                    "name": "object_diff_min_retained",
+                    "type": "number",
+                    "required": false,
+                    "default": 4096,
+                    "description": "Skip objects whose retained size is below this floor; default 4096."
+                },
+                {
+                    "name": "retain_field_data",
+                    "type": "boolean",
+                    "required": false,
+                    "default": false,
+                    "description": "Required when identity_strategy='full-fingerprint'."
+                }
+            ]))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_class_mode_returns_heap_diff_shape() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(&heap_path, &heap_path, json!({}))
+            .await
+            .expect("diff_heaps class mode should succeed");
+        let expected =
+            match crate::diff::run_diff(crate::diff::DiffRequest::class(&heap_path, &heap_path))
+                .await
+                .expect("direct class diff should succeed")
+            {
+                crate::diff::DiffResult::Class(diff) => serde_json::to_value(diff).unwrap(),
+                crate::diff::DiffResult::Object(_) => panic!("expected class diff"),
+            };
+
+        assert_eq!(result, expected);
+        assert!(result.get("object_diff").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_object_mode_returns_populated_object_diff() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(&heap_path, &heap_path, json!({ "mode": "object" }))
+            .await
+            .expect("diff_heaps object mode should succeed");
+        let expected = match crate::diff::run_diff(crate::diff::DiffRequest {
+            before_path: heap_path.clone(),
+            after_path: heap_path.clone(),
+            mode: crate::diff::DiffMode::Object,
+            identity_strategy: crate::diff::IdentityStrategy::ClassDominator,
+            retained_bucket_bits: 10,
+            min_retained_bytes: crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+            retained_change_threshold:
+                crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+            top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+            retain_field_data: false,
+        })
+        .await
+        .expect("direct object diff should succeed")
+        {
+            crate::diff::DiffResult::Class(_) => panic!("expected object diff"),
+            crate::diff::DiffResult::Object(diff) => serde_json::to_value(diff).unwrap(),
+        };
+
+        assert_eq!(result, expected);
+        assert!(result.get("object_diff").is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_full_fingerprint_without_retain_field_data_returns_error_7() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let response = diff_heaps_response(
+            &heap_path,
+            &heap_path,
+            json!({
+                "mode": "object",
+                "identity_strategy": "full-fingerprint"
+            }),
+        )
+        .await;
+
+        assert_eq!(response.get("success"), Some(&json!(false)));
+        assert_eq!(
+            response
+                .get("error_details")
+                .and_then(|value| value.get("code")),
+            Some(&json!("feature_unavailable_without_field_data"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_budget_exceeded_returns_error_6() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let _guard = TempEnvVar::set("MNEMOSYNE_OBJECT_DIFF_MAX_FINGERPRINTS", "1");
+
+        let response = diff_heaps_response(
+            &heap_path,
+            &heap_path,
+            json!({
+                "mode": "object",
+                "object_diff_min_retained": 0
+            }),
+        )
+        .await;
+
+        assert_eq!(response.get("success"), Some(&json!(false)));
+        assert_eq!(
+            response
+                .get("error_details")
+                .and_then(|value| value.get("code")),
+            Some(&json!("feature_unavailable_object_diff_too_large"))
+        );
+        assert_eq!(
+            response
+                .pointer("/error_details/details/max_fingerprints")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_overview_only_dump_returns_error_5_shape() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), build_overview_only_fixture()).unwrap();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let response =
+            diff_heaps_response(&heap_path, &heap_path, json!({ "mode": "object" })).await;
+
+        assert_eq!(response.get("success"), Some(&json!(false)));
+        assert_eq!(
+            response
+                .get("error_details")
+                .and_then(|value| value.get("code")),
+            Some(&json!("feature_unavailable_in_overview_mode"))
+        );
     }
 }
