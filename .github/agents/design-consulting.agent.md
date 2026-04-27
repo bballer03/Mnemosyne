@@ -2,7 +2,7 @@
 name: Design Consulting
 description: Design consulting and architecture authority agent that creates milestone design docs, owns architecture docs, and links roadmap work to implementation design.
 argument-hint: Describe the planned or proposed change, affected modules, and whether any contracts or ownership boundaries might shift.
-tools: ['changes', 'codebase', 'editFiles', 'search', 'usages']
+tools: ['search/changes', 'search/codebase', 'edit/editFiles', 'search', 'search/usages', 'agent']
 agents:
   - Orchestration
   - Tech PM

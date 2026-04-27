@@ -2,7 +2,7 @@
 name: Observability
 description: Improve Mnemosyne tracing, logging, and operational visibility without changing business semantics.
 argument-hint: Describe the request lifecycle, failure mode, or module where visibility is missing, noisy, or unsafe.
-tools: [search, edit, changes, codebase, problems, usages]
+tools: [search, edit/editFiles, search/changes, search/codebase, read/problems, search/usages]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

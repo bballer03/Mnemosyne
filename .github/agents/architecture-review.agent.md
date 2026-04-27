@@ -2,7 +2,7 @@
 name: Architecture Review
 description: Check Mnemosyne changes against the corrected architecture, module boundaries, and runtime-truth rules.
 argument-hint: Describe the planned or proposed change, affected modules, and whether any contracts or ownership boundaries might shift.
-tools: [search, codebase, changes, usages, fetch]
+tools: [search, search/codebase, search/changes, search/usages, web/fetch]
 agents: []
 model: Claude Opus 4.7 (copilot)
 target: vscode

@@ -2,7 +2,7 @@
 name: API Contract
 description: Keep Mnemosyne CLI, MCP, config, reporting, and documentation contracts aligned with runtime behavior.
 argument-hint: Describe the public surface that changed or is under review, including flags, schema, defaults, reports, or docs.
-tools: [search, edit, changes, codebase, usages]
+tools: [search, edit/editFiles, search/changes, search/codebase, search/usages]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

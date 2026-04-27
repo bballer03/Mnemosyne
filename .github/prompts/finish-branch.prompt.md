@@ -1,14 +1,14 @@
 ---
-mode: agent
 description: "Wrap up a development branch: final verification, summary, and an explicit user choice between merge / open PR / push only / keep local / discard. Nothing remote happens silently."
 agent: "GitHub Ops"
 argument-hint: "Optional: name the branch or batch. Defaults to the current branch."
 tools:
   - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+  - search/codebase
+  - search/changes
+  - search/usages
+  - web/fetch
+
 ---
 
 ## Contract

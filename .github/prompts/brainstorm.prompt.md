@@ -1,14 +1,14 @@
 ---
-mode: agent
 description: "Single-pass Socratic spec for a new feature or milestone. Produces docs/superpowers/specs/YYYY-MM-DD-<feature>.md with no chunked human sign-off. Use this before /write-plan."
 agent: "Design Consulting"
 argument-hint: "Name the feature, milestone, or area to spec. Optionally include rough goals."
 tools:
   - search
-  - codebase
-  - usages
-  - fetch
-  - editFiles
+  - search/codebase
+  - search/usages
+  - web/fetch
+  - edit/editFiles
+
 ---
 
 ## Contract

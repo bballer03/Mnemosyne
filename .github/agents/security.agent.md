@@ -2,7 +2,7 @@
 name: Security
 description: Security review and remediation agent for code, dependencies, secrets, and unsafe configurations.
 argument-hint: Describe the security concern, scope of review, whether this is audit-only or remediation, and any approved findings to fix.
-tools: ['changes', 'codebase', 'editFiles', 'search', 'usages']
+tools: ['search/changes', 'search/codebase', 'edit/editFiles', 'search', 'search/usages']
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

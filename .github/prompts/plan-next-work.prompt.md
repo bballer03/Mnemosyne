@@ -1,14 +1,14 @@
 ---
-mode: agent
 description: "Plan the next engineering work for the Mnemosyne project. Inspects repo state, architecture, roadmap, docs, tests, and code to produce a structured implementation plan with milestones, tasks, risks, and documentation updates."
 agent: "Orchestration"
 argument-hint: "Optional: feature area, milestone name, or roadmap step to focus on. Leave empty for automatic next-milestone detection."
 tools:
   - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+  - search/codebase
+  - search/changes
+  - search/usages
+  - web/fetch
+
 ---
 
 ## Contract

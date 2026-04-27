@@ -4,10 +4,11 @@ agent: "Orchestration"
 argument-hint: "Paste or reference the plan output from /plan-next-work, or say 'use session memory' if a plan was saved there."
 tools:
   - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+  - search/codebase
+  - search/changes
+  - search/usages
+  - web/fetch
+
 ---
 
 You are the execution orchestrator for the Mnemosyne project — a Rust-based JVM heap analysis tool.
