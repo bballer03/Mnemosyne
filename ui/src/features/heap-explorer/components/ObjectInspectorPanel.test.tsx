@@ -53,8 +53,22 @@ const artifact: AnalysisArtifact = {
   provenance: [],
 };
 
+type HeapExplorerGlobal = typeof globalThis & {
+  __MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?: Window["__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__"];
+};
+
+function getHeapExplorerGlobal() {
+  return globalThis as HeapExplorerGlobal;
+}
+
 function clearHeapExplorerBridge() {
-  delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+  delete getHeapExplorerGlobal().__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+  delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+}
+
+function setHeapExplorerBridge(bridge: NonNullable<Window["__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__"]>) {
+  getHeapExplorerGlobal().__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = bridge;
+  globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = bridge;
 }
 
 function renderPanel(selectedRowIndex?: number) {
@@ -106,12 +120,12 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows per-section unavailable messages when the bridge lacks reference methods", () => {
-    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    setHeapExplorerBridge({
       queryHeap: async () => ({
         columns: [],
         rows: [],
       }),
-    };
+    });
 
     const view = renderPanel(0);
 
@@ -127,7 +141,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("renders reference entries as navigable links when the bridge returns data", async () => {
-    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    setHeapExplorerBridge({
       getReferences: async () => ({
         objectId: "0xcafebabe",
         references: [
@@ -149,7 +163,7 @@ describe("ObjectInspectorPanel", () => {
           },
         ],
       }),
-    };
+    });
 
     const view = renderPanel(1);
 
@@ -167,7 +181,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows empty messages when the bridge returns empty relations", async () => {
-    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    setHeapExplorerBridge({
       getReferences: async () => ({
         objectId: "0xdeadbeef",
         references: [],
@@ -176,7 +190,7 @@ describe("ObjectInspectorPanel", () => {
         objectId: "0xdeadbeef",
         referrers: [],
       }),
-    };
+    });
 
     const view = renderPanel(0);
 
@@ -187,7 +201,7 @@ describe("ObjectInspectorPanel", () => {
   });
 
   it("shows an error message when the bridge rejects the references lookup", async () => {
-    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+    setHeapExplorerBridge({
       getReferences: async () => {
         throw new Error("bridge down");
       },
@@ -195,7 +209,7 @@ describe("ObjectInspectorPanel", () => {
         objectId: "0xcafebabe",
         referrers: [],
       }),
-    };
+    });
 
     const view = renderPanel(1);
     const errorMessage = await view.findByText(/bridge down/i);
