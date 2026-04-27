@@ -36,6 +36,8 @@ pub struct HeapDiff {
     pub changed_classes: Vec<ClassDelta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class_diff: Option<Vec<ClassLevelDelta>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_diff: Option<crate::diff::ObjectDiffReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +261,7 @@ impl HeapDiff {
                 after_bytes: 89_000_000,
             }],
             class_diff: None,
+            object_diff: None,
         }
     }
 }

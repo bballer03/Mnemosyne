@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod config;
+pub mod diff;
 pub mod errors;
 pub mod fix;
 pub mod graph;
@@ -25,6 +26,10 @@ pub use analysis::{
 pub use config::{
     AiConfig, AiMode, AiPromptConfig, AiProvider, AiSessionConfig, AiTaskDefinition, AiTaskKind,
     AnalysisConfig, AnalysisProfile, AppConfig, OutputFormat, ParserConfig,
+};
+pub use diff::{
+    DiffMode, DiffRequest, IdentityStrategy, MatchQuality, ObjectDelta, ObjectDeltaKind,
+    ObjectDiffReport, ObjectDiffTotals, ObjectFingerprint, Risk,
 };
 pub use errors::{CoreError, CoreResult};
 pub use fix::{
