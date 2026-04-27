@@ -2,6 +2,7 @@ use std::{io::Write, path::Path};
 
 use assert_cmd::Command;
 use mnemosyne_core::hprof::test_fixtures::{build_graph_fixture, build_simple_fixture};
+use serde_json::Value;
 use tempfile::{tempdir, Builder as TempFileBuilder, NamedTempFile, TempDir};
 
 const TAG_STRING_IN_UTF8: u8 = 0x01;
@@ -607,4 +608,49 @@ fn top_flag_caps_each_section() {
     assert!(stdout.contains("added (2):"), "{stdout}");
     assert!(stdout.contains("removed (2):"), "{stdout}");
     assert!(stdout.contains("retained_changed (2):"), "{stdout}");
+}
+
+#[test]
+fn format_json_emits_valid_json() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let assert = cmd
+        .args([
+            "diff",
+            fixture_path.as_str(),
+            fixture_path.as_str(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(&assert.get_output().stdout);
+    let parsed: Value = serde_json::from_str(&stdout).expect("diff json output should parse");
+    assert_eq!(parsed["before"], fixture_path);
+    assert_eq!(parsed["after"], fixture_path);
+}
+
+#[test]
+fn format_toon_emits_toon() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let assert = cmd
+        .args([
+            "diff",
+            fixture_path.as_str(),
+            fixture_path.as_str(),
+            "--format",
+            "toon",
+        ])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(&assert.get_output().stdout);
+    assert!(stdout.starts_with("TOON v1\n"), "{stdout}");
+    assert!(stdout.contains("section heap_diff"), "{stdout}");
 }
