@@ -2,7 +2,7 @@
 name: Testing
 description: Add and validate unit, integration, contract, and regression coverage for approved Mnemosyne behavior.
 argument-hint: Describe the behavior under test, touched modules, required regressions, and any contract outputs that must be locked in.
-tools: [search, edit, changes, codebase, problems, usages, terminalLastCommand, runInTerminal, githubRepo]
+tools: [search, edit/editFiles, search/changes, search/codebase, read/problems, search/usages, read/terminalLastCommand, execute/runInTerminal, web/githubRepo]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

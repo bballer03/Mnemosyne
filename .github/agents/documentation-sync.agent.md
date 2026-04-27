@@ -2,7 +2,7 @@
 name: Documentation Sync
 description: Impact-driven documentation updater. Automatically determines which docs need updating based on changed files, milestone status, and validation results. No manual file lists required.
 argument-hint: Provide the batch/milestone name, files changed, summary of work completed, validation results, and flags for whether release state, design/architecture, or user-facing behavior changed.
-tools: ['changes', 'codebase', 'editFiles', 'search', 'usages']
+tools: ['search/changes', 'search/codebase', 'edit/editFiles', 'search', 'search/usages']
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

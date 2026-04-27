@@ -2,7 +2,7 @@
 name: GitHub Ops
 description: Own GitHub and CI/CD related tasks — workflow failures, PR/issue state, branch management, and Actions investigation.
 argument-hint: Describe the GitHub Actions failure, workflow issue, PR/branch question, or CI investigation needed.
-tools: [search, changes, codebase, problems, usages, terminalLastCommand, runInTerminal, githubRepo, fetch]
+tools: [search, search/changes, search/codebase, read/problems, search/usages, read/terminalLastCommand, execute/runInTerminal, web/githubRepo, web/fetch]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

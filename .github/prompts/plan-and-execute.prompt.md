@@ -4,10 +4,11 @@ agent: "Orchestration"
 argument-hint: "Optional: name a specific milestone, feature area, or roadmap step to focus on. Leave empty for automatic next-milestone detection."
 tools:
   - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+  - search/codebase
+  - search/changes
+  - search/usages
+  - web/fetch
+
 ---
 
 You are the top-level engineering pipeline controller for the Mnemosyne project — a Rust-based JVM heap analysis tool.

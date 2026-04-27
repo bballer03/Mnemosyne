@@ -1,14 +1,13 @@
 ---
-mode: agent
 description: "Pre-merge quality gate: runs Architecture Review + Static Analysis + Security Audit on a completed milestone. Use this after implementation and testing are done, before merging or releasing."
 agent: "Orchestration"
 argument-hint: "Name the milestone, batch, or scope to review (e.g., 'M3 Phase 2 Batch 1'). Optionally add 'include-security' to also run a security audit pass."
 tools:
-  - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+   - search
+   - search/codebase
+   - search/changes
+   - search/usages
+   - web/fetch
 ---
 
 ## Contract

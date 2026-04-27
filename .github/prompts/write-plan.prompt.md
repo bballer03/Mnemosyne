@@ -1,14 +1,14 @@
 ---
-mode: agent
 description: "Translate a spec from docs/superpowers/specs/ into a bite-sized plan under docs/superpowers/plans/. Each plan task is a 2-5 minute RED → GREEN → REFACTOR cycle. Use this after /brainstorm and before /execute-plan."
 agent: "Orchestration"
 argument-hint: "Name the feature or pass the spec file path. The orchestrator picks the most recent matching spec if no path is given."
 tools:
   - search
-  - codebase
-  - changes
-  - usages
-  - editFiles
+  - search/codebase
+  - search/changes
+  - search/usages
+  - edit/editFiles
+
 ---
 
 ## Contract

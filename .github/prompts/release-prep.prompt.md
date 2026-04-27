@@ -3,11 +3,11 @@ description: "Prepare a release: bump versions, update changelog and release not
 agent: "Orchestration"
 argument-hint: "Provide the target version (e.g., '0.3.0') and release type ('major', 'minor', or 'patch'). Optionally add 'dry-run' to preview changes without applying them."
 tools:
-  - search
-  - codebase
-  - changes
-  - usages
-  - fetch
+        - search
+        - search/codebase
+        - search/changes
+        - search/usages
+        - web/fetch
 ---
 
 You are the release preparation orchestrator for the Mnemosyne project — a Rust-based JVM heap analysis tool.

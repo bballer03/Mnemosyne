@@ -2,7 +2,7 @@
 name: Tech PM
 description: Technical Product Manager agent that reviews the project, proposes features, and generates product roadmaps and milestones.
 argument-hint: Describe the product question, planning horizon, or area of the project to evaluate for roadmap and feature proposals.
-tools: ['changes', 'codebase', 'editFiles', 'search', 'usages']
+tools: ['search/changes', 'search/codebase', 'edit/editFiles', 'search', 'search/usages']
 agents: []
 model: Claude Opus 4.7 (copilot)
 target: vscode

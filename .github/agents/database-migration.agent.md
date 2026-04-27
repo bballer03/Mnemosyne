@@ -2,7 +2,7 @@
 name: Database Migration
 description: Review Mnemosyne for persistence, caching, schema, or migration implications and guardrails.
 argument-hint: Describe the proposed storage or state change, if any, and whether it affects persistence, caching, or on-disk compatibility.
-tools: [search, codebase, changes, usages]
+tools: [search, search/codebase, search/changes, search/usages]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

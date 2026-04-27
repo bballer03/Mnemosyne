@@ -2,7 +2,7 @@
 name: Static Analysis
 description: Review Mnemosyne changes for correctness, safety, security, performance, and maintainability risks.
 argument-hint: Describe the touched area, current findings, and whether this is a pre-implementation review, a post-change risk pass, or a lint-focused task.
-tools: [search, changes, codebase, problems, usages, terminal]
+tools: [search, search/changes, search/codebase, read/problems, search/usages, terminal]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode

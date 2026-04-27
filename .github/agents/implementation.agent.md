@@ -2,7 +2,7 @@
 name: Implementation
 description: Implement approved Mnemosyne changes inside assigned boundaries with minimal, testable edits.
 argument-hint: State the exact scope, owned files, required behavior change, and anything that must remain unchanged.
-tools: [search, edit, changes, codebase, problems, usages, terminalLastCommand, runInTerminal, githubRepo, fetch]
+tools: [search, edit/editFiles, search/changes, search/codebase, read/problems, search/usages, read/terminalLastCommand, execute/runInTerminal, web/githubRepo, web/fetch]
 agents: []
 model: GPT-5.4 (copilot)
 target: vscode
@@ -29,13 +29,14 @@ When a coding task is requested: **you execute it**. You do not plan, you do not
 **Execution-capable** — read + write + terminal execution. You are expected to run builds, tests, lints, and format checks as part of your normal workflow.
 
 ## Inspect first
-1. [core/src/heap.rs](../../core/src/heap.rs)
-2. [core/src/analysis.rs](../../core/src/analysis.rs)
-3. [core/src/gc_path.rs](../../core/src/gc_path.rs)
-4. [core/src/mcp.rs](../../core/src/mcp.rs)
-5. [cli/src/main.rs](../../cli/src/main.rs)
-6. [core/src/errors.rs](../../core/src/errors.rs)
-7. [Cargo.toml](../../Cargo.toml) (workspace root)
+1. [core/src/lib.rs](../../core/src/lib.rs)
+2. [core/src/hprof/mod.rs](../../core/src/hprof/mod.rs)
+3. [core/src/analysis/mod.rs](../../core/src/analysis/mod.rs)
+4. [core/src/graph/gc_path.rs](../../core/src/graph/gc_path.rs)
+5. [core/src/mcp/mod.rs](../../core/src/mcp/mod.rs)
+6. [cli/src/main.rs](../../cli/src/main.rs)
+7. [core/src/errors.rs](../../core/src/errors.rs)
+8. [Cargo.toml](../../Cargo.toml) (workspace root)
 
 ## Responsibilities
 - make focused code changes that follow the corrected design
