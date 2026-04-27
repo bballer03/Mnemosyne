@@ -13,18 +13,13 @@ pub enum DiffMode {
     Object,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum IdentityStrategy {
     ClassRetained,
+    // Slice 8-1.B: default flipped from ClassRetained.
+    #[default]
     ClassDominator,
     FullFingerprint,
-}
-
-impl Default for IdentityStrategy {
-    fn default() -> Self {
-        // Slice 8-1.B: default flipped from ClassRetained.
-        Self::ClassDominator
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
