@@ -18,7 +18,7 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, analyze_heap_with_graph, detect_leaks, diff_heaps, focus_leaks,
+        analyze_heap, analyze_heap_with_graph, detect_leaks, focus_leaks,
         generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AnalysisMode,
         AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
         OVERVIEW_AUTO_THRESHOLD_BYTES,
@@ -42,7 +42,8 @@ use mnemosyne_core::{
         },
         render_overview_report, render_report, ReportArtifact, ReportRequest,
     },
-    CoreError, ParseOptions, Policy, PolicyInput, Severity as PolicySeverity,
+    CoreError, DiffMode, DiffRequest, IdentityStrategy, ObjectDelta, ObjectDiffReport,
+    ParseOptions, Policy, PolicyInput, Risk, Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -193,6 +194,20 @@ struct FlameGraphArgs {
 struct DiffArgs {
     before: PathBuf,
     after: PathBuf,
+    #[arg(long, value_enum, default_value_t = DiffModeArg::Class)]
+    mode: DiffModeArg,
+    #[arg(long, value_enum, default_value_t = IdentityStrategyArg::ClassDominator)]
+    identity_strategy: IdentityStrategyArg,
+    #[arg(long, default_value_t = 10)]
+    retained_bucket_bits: u8,
+    #[arg(long, default_value_t = 1_048_576)]
+    retained_change_threshold: u64,
+    #[arg(long = "top", default_value_t = 50)]
+    top: usize,
+    #[arg(long = "object-diff-min-retained", default_value_t = 4 * 1024, hide_short_help = true)]
+    object_diff_min_retained: u64,
+    #[arg(long)]
+    retain_field_data: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -297,6 +312,22 @@ enum ModeArg {
     Auto,
     Deep,
     Overview,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum DiffModeArg {
+    Class,
+    Object,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum IdentityStrategyArg {
+    #[value(name = "class+retained")]
+    ClassRetained,
+    #[value(name = "class+dominator")]
+    ClassDominator,
+    #[value(name = "full-fingerprint")]
+    FullFingerprint,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -445,6 +476,25 @@ impl From<GroupByArg> for HistogramGroupBy {
             GroupByArg::Class => HistogramGroupBy::Class,
             GroupByArg::Package => HistogramGroupBy::Package,
             GroupByArg::Classloader => HistogramGroupBy::ClassLoader,
+        }
+    }
+}
+
+impl From<DiffModeArg> for DiffMode {
+    fn from(value: DiffModeArg) -> Self {
+        match value {
+            DiffModeArg::Class => DiffMode::Class,
+            DiffModeArg::Object => DiffMode::Object,
+        }
+    }
+}
+
+impl From<IdentityStrategyArg> for IdentityStrategy {
+    fn from(value: IdentityStrategyArg) -> Self {
+        match value {
+            IdentityStrategyArg::ClassRetained => IdentityStrategy::ClassRetained,
+            IdentityStrategyArg::ClassDominator => IdentityStrategy::ClassDominator,
+            IdentityStrategyArg::FullFingerprint => IdentityStrategy::FullFingerprint,
         }
     }
 }
@@ -870,23 +920,49 @@ async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Res
 }
 
 async fn handle_diff(args: DiffArgs) -> Result<()> {
-    validate_heap_file(&args.before)?;
-    validate_heap_file(&args.after)?;
+    let diff = match async {
+        validate_heap_file(&args.before)?;
+        validate_heap_file(&args.after)?;
 
-    let pb = start_spinner("Diffing heap dumps...");
-    let diff = diff_heaps(
-        args.before.to_string_lossy().as_ref(),
-        args.after.to_string_lossy().as_ref(),
-    )
+        let pb = start_spinner("Diffing heap dumps...");
+        let result = mnemosyne_core::diff::run_diff(DiffRequest {
+            before_path: args.before.to_string_lossy().into_owned(),
+            after_path: args.after.to_string_lossy().into_owned(),
+            mode: args.mode.into(),
+            identity_strategy: args.identity_strategy.into(),
+            retained_bucket_bits: args.retained_bucket_bits,
+            min_retained_bytes: args.object_diff_min_retained,
+            retained_change_threshold: args.retained_change_threshold,
+            top_n: args.top,
+            retain_field_data: args.retain_field_data,
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to diff heap dumps: {} -> {}",
+                args.before.display(),
+                args.after.display()
+            )
+        });
+
+        match result {
+            Ok(diff_result) => {
+                finish_spinner(&pb, "Heap diff complete.");
+                Ok(diff_result)
+            }
+            Err(err) => {
+                finish_spinner(&pb, "Heap diff failed.");
+                Err(err)
+            }
+        }
+    }
     .await
-    .with_context(|| {
-        format!(
-            "Failed to diff heap dumps: {} -> {}",
-            args.before.display(),
-            args.after.display()
-        )
-    })?;
-    finish_spinner(&pb, "Heap diff complete.");
+    {
+        Ok(mnemosyne_core::diff::DiffResult::Class(diff))
+        | Ok(mnemosyne_core::diff::DiffResult::Object(diff)) => diff,
+        Err(err) => exit_diff_with_error(err),
+    };
+
     println!(
         "{} {} -> {}",
         section_label("Heap diff:"),
@@ -928,6 +1004,13 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
             println!("{}", build_class_diff_table(class_diff));
         }
     }
+
+    if args.mode == DiffModeArg::Object {
+        if let Some(object_diff) = &diff.object_diff {
+            print_object_diff_text(object_diff);
+        }
+    }
+
     Ok(())
 }
 
@@ -1372,9 +1455,38 @@ fn exit_ci_check_with_error(code: i32, err: anyhow::Error) -> ! {
     process::exit(code);
 }
 
+fn exit_diff_with_error(err: anyhow::Error) -> ! {
+    let code = diff_exit_code(&err);
+    print_cli_error(&err);
+    process::exit(code);
+}
+
 fn exit_flamegraph_with_error(message: &str) -> ! {
     eprintln!("{message}");
     process::exit(5);
+}
+
+fn diff_exit_code(err: &anyhow::Error) -> i32 {
+    match err.downcast_ref::<CoreError>() {
+        Some(CoreError::Io(_)) | Some(CoreError::FileNotFound { .. }) => 2,
+        Some(CoreError::NotAnHprof { .. }) | Some(CoreError::HprofParseError { .. }) => 3,
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_in_overview_mode:") =>
+        {
+            5
+        }
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_object_diff_too_large:") =>
+        {
+            6
+        }
+        Some(CoreError::Unsupported(detail))
+            if detail.starts_with("feature_unavailable_without_field_data:") =>
+        {
+            7
+        }
+        _ => 1,
+    }
 }
 
 fn exit_query_with_error(err: QueryError) -> ! {
@@ -2152,4 +2264,122 @@ fn format_signed_megabytes(delta_bytes: i64) -> String {
 
 fn format_signed_count(delta: i64) -> String {
     format!("{delta:+}")
+}
+
+fn print_object_diff_text(report: &ObjectDiffReport) {
+    println!(
+        "object diff (strategy={}, bucket={}, threshold={}):",
+        identity_strategy_label(report.strategy),
+        bucket_label(report.retained_bucket_bits),
+        binary_unit_label(report.retained_change_threshold),
+    );
+
+    println!("  added ({}):", report.added.len());
+    for delta in &report.added {
+        println!("{}", format_object_delta_line(delta));
+    }
+
+    println!("  removed ({}):", report.removed.len());
+    for delta in &report.removed {
+        println!("{}", format_object_delta_line(delta));
+    }
+
+    println!("  retained_changed ({}):", report.retained_changed.len());
+    for delta in &report.retained_changed {
+        println!("{}", format_object_delta_line(delta));
+    }
+
+    println!(
+        "  match quality: collision_rate={:.3}  false_match_risk={}  false_split_risk={}",
+        report.match_quality.collision_rate,
+        risk_label(report.match_quality.estimated_false_match_risk),
+        risk_label(report.match_quality.estimated_false_split_risk),
+    );
+    println!("    notes: \"{}\"", report.match_quality.notes.join("; "));
+}
+
+fn format_object_delta_line(delta: &ObjectDelta) -> String {
+    match delta.kind {
+        mnemosyne_core::ObjectDeltaKind::Added => format!(
+            "    {:<32} {:+} bytes  count={}  dom={}",
+            delta.class_name,
+            delta.after_retained_bytes as i64,
+            delta.after_count,
+            dominator_chain_label(&delta.dominator_chain),
+        ),
+        mnemosyne_core::ObjectDeltaKind::Removed => format!(
+            "    {:<32} {:+} bytes  count={}  dom={}",
+            delta.class_name,
+            -(delta.before_retained_bytes as i64),
+            delta.before_count,
+            dominator_chain_label(&delta.dominator_chain),
+        ),
+        mnemosyne_core::ObjectDeltaKind::RetainedChanged => format!(
+            "    {:<32} {:+} bytes  count={}->{}  dom={}",
+            delta.class_name,
+            delta.after_retained_bytes as i64 - delta.before_retained_bytes as i64,
+            delta.before_count,
+            delta.after_count,
+            dominator_chain_label(&delta.dominator_chain),
+        ),
+    }
+}
+
+fn dominator_chain_label(chain: &[String]) -> String {
+    if chain.is_empty() {
+        return String::from("[]");
+    }
+
+    let joined = chain.join(",");
+    let truncated = chain.len() >= 4
+        && chain
+            .last()
+            .is_some_and(|label| label != "GC Root" && label != "<unknown>");
+    if truncated {
+        format!("[{joined},...]")
+    } else {
+        format!("[{joined}]")
+    }
+}
+
+fn identity_strategy_label(strategy: IdentityStrategy) -> &'static str {
+    match strategy {
+        IdentityStrategy::ClassRetained => "class+retained",
+        IdentityStrategy::ClassDominator => "class+dominator",
+        IdentityStrategy::FullFingerprint => "full-fingerprint",
+    }
+}
+
+fn risk_label(risk: Risk) -> &'static str {
+    match risk {
+        Risk::Low => "Low",
+        Risk::Medium => "Medium",
+        Risk::High => "High",
+    }
+}
+
+fn bucket_label(bucket_bits: u8) -> String {
+    match 1_u64.checked_shl(u32::from(bucket_bits)) {
+        Some(bytes) => binary_unit_label(bytes),
+        None => format!("2^{bucket_bits}B"),
+    }
+}
+
+fn binary_unit_label(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const TIB: u64 = 1024 * 1024 * 1024 * 1024;
+
+    if bytes >= TIB && bytes % TIB == 0 {
+        format!("{}TB", bytes / TIB)
+    } else if bytes >= GIB && bytes % GIB == 0 {
+        format!("{}GB", bytes / GIB)
+    } else if bytes >= MIB && bytes % MIB == 0 {
+        format!("{}MB", bytes / MIB)
+    } else if bytes >= KIB && bytes % KIB == 0 {
+        format!("{}KB", bytes / KIB)
+    } else {
+        format!("{bytes}B")
+    }
 }
