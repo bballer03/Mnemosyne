@@ -69,7 +69,7 @@ describe("HeapExplorerLayout", () => {
       useArtifactStore.getState().reset();
     });
 
-    Object.defineProperty(window, "innerWidth", {
+    Object.defineProperty(globalThis, "innerWidth", {
       configurable: true,
       writable: true,
       value: originalInnerWidth,
@@ -221,7 +221,7 @@ describe("HeapExplorerLayout", () => {
   });
 
   it("stacks the heap explorer shell into one column on narrow screens", () => {
-    Object.defineProperty(window, "innerWidth", {
+    Object.defineProperty(globalThis, "innerWidth", {
       configurable: true,
       writable: true,
       value: 720,
