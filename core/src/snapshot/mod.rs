@@ -12,11 +12,50 @@
 //! - `schema_version: u32` versioning convention, mirroring
 //!   `PersistedAiSession::session_version`.
 //!
-//! Slice 9.A scope only: [`SnapshotStore::new`], [`SnapshotStore::ensure_root`],
-//! [`SnapshotStore::save`], [`SnapshotStore::load`]. Listing, removal,
-//! cache-key resolution by heap path, and staleness detection (schema
-//! mismatch / stale source hash) are Slice 9.B. CLI/MCP wiring is Slices
-//! 9.C/9.D. See `docs/design/milestone-9-snapshot-persistence.md`.
+//! Slice 9.A shipped [`SnapshotStore::new`], [`SnapshotStore::ensure_root`],
+//! [`SnapshotStore::save`], [`SnapshotStore::load`]. Slice 9.B (this pass)
+//! adds [`SnapshotStore::list`], [`SnapshotStore::remove`], and
+//! [`SnapshotStore::find_fresh_for_heap`] (cache-key resolution by heap path
+//! plus staleness detection). CLI/MCP wiring is Slices 9.C/9.D. See
+//! `docs/design/milestone-9-snapshot-persistence.md`.
+//!
+//! ## Design note: where staleness checking lives (Slice 9.B decision)
+//!
+//! [`SnapshotStore::load`] (Slice 9.A) deliberately does **not** gain a
+//! staleness check in this slice, even though the concept (schema-version /
+//! source-hash mismatch) now exists via [`SnapshotStore::find_fresh_for_heap`].
+//! This is intentional, not an oversight:
+//!
+//! - Per the design doc §7, the *auto-discovery* path (no explicit
+//!   `--snapshot <key>` from the user) must treat every kind of miss --
+//!   "never cached", "schema mismatch", "source hash changed" -- identically
+//!   and silently: fall through to a normal parse. That is exactly what
+//!   [`SnapshotStore::find_fresh_for_heap`] implements: `Ok(None)` for all
+//!   three, never an error.
+//! - The *explicit* path (`--snapshot <key>` / `snapshot load <key>`) is
+//!   supposed to be loud instead: a stale or mismatched explicit key should
+//!   surface `snapshot_schema_mismatch` / `snapshot_stale_source` as
+//!   distinct structured errors (§6.1, §7's exit-code table 11/12), not the
+//!   generic `snapshot_corrupt`/`snapshot_not_found` `load` returns today.
+//!   That behavior is user-facing CLI/MCP plumbing -- it needs the resolved
+//!   `heap_path` the *user* asked to validate against, which only exists at
+//!   the Slice 9.C/9.D call sites (`load(key)` alone has no heap path to
+//!   re-hash against; the key might not even be a hash, per its own
+//!   `key: sha256 hash OR direct file path` contract). Teaching `load`
+//!   itself to loudly detect schema mismatches (it already *can* -- the
+//!   deserialized manifest's `schema_version` is right there) is cheap and
+//!   arguably belongs here, but doing the *source-hash* half of loud
+//!   staleness detection inside `load` would require also threading a heap
+//!   path into a method whose whole point is "load by key, no heap path
+//!   needed." Splitting loud-schema-in-`load` from loud-source-hash-in-9.C
+//!   would leave the two staleness triggers inconsistent about which layer
+//!   owns them. **Decision: keep `load` exactly as Slice 9.A shipped it
+//!   (key -> payload or `snapshot_not_found`/`snapshot_corrupt`), and defer
+//!   both loud staleness errors (`snapshot_schema_mismatch`,
+//!   `snapshot_stale_source`) to Slice 9.C**, where the CLI/MCP call site
+//!   has both the resolved key *and* the user-provided heap path available
+//!   to build the complete, consistent error. Slice 9.B only implements the
+//!   silent auto-discovery half of staleness (`find_fresh_for_heap`).
 
 use std::{fmt::Write as _, fs, path::PathBuf};
 
@@ -139,9 +178,114 @@ impl SnapshotStore {
         Ok(payload)
     }
 
+    /// List the manifests of every snapshot currently in this store.
+    ///
+    /// Scans the store root for `*.json` files and extracts just the
+    /// `manifest` field of each (via `serde_json::Value`, not a full
+    /// `SnapshotPayload` deserialize -- cheaper, and per §6 point 2 of the
+    /// design doc the manifest is specifically meant to be "cheap to read
+    /// without deserializing the full payload"). A file that fails to parse,
+    /// or whose `manifest` field doesn't match [`SnapshotManifest`]'s shape,
+    /// is skipped (with a `tracing::warn`) rather than failing the whole
+    /// listing -- one corrupt entry must not hide every other valid one from
+    /// `snapshot list`.
+    pub fn list(&self) -> CoreResult<Vec<SnapshotManifest>> {
+        self.ensure_root()?;
+
+        let mut manifests = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            match read_manifest_only(&path) {
+                Ok(manifest) => manifests.push(manifest),
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "skipping unreadable snapshot entry during list()"
+                    );
+                }
+            }
+        }
+
+        Ok(manifests)
+    }
+
+    /// Delete the snapshot stored under `key`.
+    ///
+    /// Returns `snapshot_not_found` (not a silent success) if no snapshot
+    /// exists for `key` -- a `remove` of a nonexistent key is a user error
+    /// worth surfacing, not a no-op to swallow.
+    pub fn remove(&self, key: &str) -> CoreResult<()> {
+        let path = self.path_for(key);
+        fs::remove_file(&path).map_err(|err| map_load_error(key, err))?;
+        Ok(())
+    }
+
+    /// Auto-discovery lookup: hash `heap_path`'s current on-disk bytes and
+    /// return the cached snapshot for that hash, if one exists and is
+    /// current.
+    ///
+    /// Returns `Ok(None)` -- never an error -- for every flavor of "no usable
+    /// cache entry": nothing has ever been saved for this heap, the cached
+    /// entry's `schema_version` no longer matches [`SNAPSHOT_SCHEMA_VERSION`],
+    /// its recorded `heap_sha256` doesn't match the hash we just computed
+    /// (re-derived explicitly here rather than assumed, guarding against a
+    /// hand-edited manifest whose `heap_sha256` field was changed without
+    /// renaming the file), or the cached entry is corrupt. Per §7 of the
+    /// design doc, auto-discovery misses -- including staleness -- are the
+    /// expected first-run/cold-cache state, not a failure; only an
+    /// *explicit* `--snapshot <key>` / `snapshot load <key>` (Slice 9.C) is
+    /// supposed to surface loud `snapshot_schema_mismatch` /
+    /// `snapshot_stale_source` errors. A genuine I/O error reading
+    /// `heap_path` itself (e.g. it doesn't exist) still propagates as an
+    /// error -- that's a problem with the caller's input, not a cache-miss.
+    pub fn find_fresh_for_heap(&self, heap_path: &str) -> CoreResult<Option<SnapshotPayload>> {
+        let heap_bytes = fs::read(heap_path)?;
+        let current_sha256 = sha256_hex(&heap_bytes);
+
+        let path = self.path_for(&current_sha256);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(CoreError::Io(err)),
+        };
+
+        let payload: SnapshotPayload = match serde_json::from_slice(&bytes) {
+            Ok(payload) => payload,
+            Err(_) => return Ok(None), // corrupt cache entry: treat as a miss, not an error
+        };
+
+        if payload.manifest.schema_version != SNAPSHOT_SCHEMA_VERSION {
+            return Ok(None);
+        }
+        if payload.manifest.heap_sha256 != current_sha256 {
+            return Ok(None);
+        }
+
+        Ok(Some(payload))
+    }
+
     fn path_for(&self, key: &str) -> PathBuf {
         self.root.join(format!("{key}.json"))
     }
+}
+
+/// Deserialize just the `manifest` field of a snapshot file at `path`,
+/// without paying the cost of deserializing the full `object_graph`/
+/// `dominator_tree` payload alongside it. Used by [`SnapshotStore::list`].
+fn read_manifest_only(path: &std::path::Path) -> CoreResult<SnapshotManifest> {
+    let bytes = fs::read(path)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let manifest_value = value
+        .get("manifest")
+        .ok_or_else(|| CoreError::Unsupported("missing 'manifest' field".to_string()))?;
+    let manifest: SnapshotManifest = serde_json::from_value(manifest_value.clone())?;
+    Ok(manifest)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
