@@ -100,7 +100,14 @@ fn build_gc_root_lookup(graph: &ObjectGraph) -> HashMap<ObjectId, GcRootKind> {
     lookup
 }
 
-fn gc_root_kind(root_type: GcRootType) -> GcRootKind {
+/// Classify a raw [`GcRootType`] into its simplified [`GcRootKind`]
+/// discriminant (drops per-root-record fields like `thread_serial`/`frame`,
+/// keeping only "what kind of root is this"). `pub(crate)` (rather than
+/// private) specifically so `core::workflow::tune_gc`'s `root_kind_breakdown`
+/// step (M11 Slice 11.B) can group `ObjectGraph::gc_roots` by kind using the
+/// exact same classification this module already uses for GC-root-path
+/// lookups, instead of duplicating this match arm a second time.
+pub(crate) fn gc_root_kind(root_type: GcRootType) -> GcRootKind {
     match root_type {
         GcRootType::JniGlobal => GcRootKind::JniGlobal,
         GcRootType::JniLocal { .. } => GcRootKind::JniLocal,

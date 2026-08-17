@@ -166,6 +166,18 @@ impl HeapDumpBuilder {
         self
     }
 
+    /// `ROOT_STICKY_CLASS` (sub-tag `0x05`) — just an object id, no
+    /// thread/frame fields (see `binary_parser::parse_gc_root_subrecord`'s
+    /// `SUB_ROOT_STICKY_CLASS` arm). Added for M11 Slice 11.B's `tune_gc`
+    /// fixture, which needs a second GC-root *kind* distinct from
+    /// `ROOT_THREAD_OBJECT` to exercise `root_kind_breakdown`'s per-kind
+    /// grouping.
+    pub(crate) fn add_gc_root_sticky_class(&mut self, obj_id: u64) -> &mut Self {
+        self.buf.write_u8(SUB_ROOT_STICKY_CLASS).unwrap();
+        HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
+        self
+    }
+
     pub(crate) fn add_class_dump(
         &mut self,
         class_obj_id: u64,
@@ -324,6 +336,53 @@ pub fn build_graph_fixture() -> Vec<u8> {
         .add_gc_root_java_frame(0x1000, 1, 0)
         .add_instance_dump(0x1000, 0x200, &0x2000u32.to_be_bytes())
         .add_instance_dump(0x2000, 0x100, &[]);
+
+    builder.add_heap_dump(heap.build());
+    builder.build()
+}
+
+/// Fixture for M11 Slice 11.B's `tune_gc` workflow tests
+/// (`core/tests/workflow_tune_gc.rs`): a heap with **two distinct GC-root
+/// kinds** so `root_kind_breakdown`'s per-kind grouping has more than one
+/// group to actually group.
+///
+/// - `0x5000` (`java/lang/Thread`) is rooted via `ROOT_THREAD_OBJECT`
+///   (thread_serial 1) and holds one outgoing reference (field `tlv`) to
+///   `0x5500` (`com/example/ThreadLocalValue`) -- gives the `ThreadObject`
+///   root kind a retained subtree bigger than just the thread object
+///   itself, and gives `inspect_threads()` a real thread to report on for
+///   the `thread_local_review` step.
+/// - `0x6000` (`com/example/CacheHolder`) is rooted via `ROOT_STICKY_CLASS`
+///   and holds one outgoing reference (field `entries`) to `0x6500`
+///   (`com/example/Entry`) -- the second, distinct root kind.
+pub fn build_tune_gc_fixture() -> Vec<u8> {
+    let mut builder = HprofBuilder::new(4);
+    builder
+        .add_string(1, "java/lang/Object")
+        .add_string(2, "java/lang/Thread")
+        .add_string(3, "tlv")
+        .add_string(4, "com/example/CacheHolder")
+        .add_string(5, "entries")
+        .add_string(6, "com/example/Entry")
+        .add_string(7, "com/example/ThreadLocalValue")
+        .add_load_class(1, 0x100, 0, 1)
+        .add_load_class(2, 0x200, 0, 2)
+        .add_load_class(3, 0x300, 0, 4)
+        .add_load_class(4, 0x400, 0, 6)
+        .add_load_class(5, 0x500, 0, 7);
+
+    let mut heap = HeapDumpBuilder::new(4);
+    heap.add_class_dump(0x100, 0, 0, &[])
+        .add_class_dump(0x200, 0x100, 4, &[(3, TYPE_OBJECT)])
+        .add_class_dump(0x300, 0x100, 4, &[(5, TYPE_OBJECT)])
+        .add_class_dump(0x400, 0x100, 40, &[])
+        .add_class_dump(0x500, 0x100, 24, &[])
+        .add_gc_root_thread_obj(0x5000, 1, 0)
+        .add_gc_root_sticky_class(0x6000)
+        .add_instance_dump(0x5000, 0x200, &0x5500u32.to_be_bytes())
+        .add_instance_dump(0x5500, 0x500, &[])
+        .add_instance_dump(0x6000, 0x300, &0x6500u32.to_be_bytes())
+        .add_instance_dump(0x6500, 0x400, &[]);
 
     builder.add_heap_dump(heap.build());
     builder.build()
