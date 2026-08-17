@@ -1,10 +1,18 @@
 use crate::graph::DominatorTree;
 use crate::hprof::{read_field, FieldValue, ObjectGraph, ObjectId};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 const LEAK_RETAINED_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
 const LEAK_MAX_CLASS_COUNT: usize = 3;
+
+/// Default bound for `resolve_loader_chain`'s ancestor walk. Real JVM
+/// classloader hierarchies are shallow (2-4 levels: bootstrap -> platform ->
+/// system -> webapp), so this cap is generous headroom rather than a tight
+/// limit -- it exists purely as a termination guard against adversarial or
+/// malformed HPROF data (see R2 in the M13 design doc), not because deep
+/// legitimate chains are expected.
+const MAX_LOADER_CHAIN_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClassLoaderInfo {
@@ -16,6 +24,10 @@ pub struct ClassLoaderInfo {
     pub retained_bytes: Option<u64>,
     pub parent_loader: Option<ObjectId>,
     pub unique_class_count: usize,
+    /// Parent, grandparent, ... up to `MAX_LOADER_CHAIN_DEPTH`, in ascending
+    /// generation order (index 0 is the immediate parent). Does not include
+    /// this loader itself. Empty if this loader has no parent.
+    pub ancestor_chain: Vec<ObjectId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,12 +210,8 @@ fn build_loader_info(
         .and_then(|loader| graph.class_name(loader.class_id))
         .map(normalize_class_name)
         .unwrap_or_else(|| format!("<loader:{loader_id}>"));
-    let parent_loader = loader_object.and_then(|loader| {
-        match read_field(loader, &graph.classes, "parent", graph.identifier_size) {
-            Some(FieldValue::ObjectRef(Some(parent_id))) => Some(parent_id),
-            _ => None,
-        }
-    });
+    let parent_loader = resolve_parent_loader(graph, loader_id);
+    let ancestor_chain = resolve_loader_chain(graph, loader_id, MAX_LOADER_CHAIN_DEPTH);
 
     ClassLoaderInfo {
         object_id: loader_id,
@@ -214,7 +222,56 @@ fn build_loader_info(
         retained_bytes: dominator.map(|dom| dom.retained_size(loader_id)),
         parent_loader,
         unique_class_count,
+        ancestor_chain,
     }
+}
+
+/// Resolves a single loader's `parent` field to its parent classloader's
+/// object ID, if any. This is the single-edge resolution that
+/// `resolve_loader_chain` repeats to walk a full ancestor chain.
+fn resolve_parent_loader(graph: &ObjectGraph, loader_id: ObjectId) -> Option<ObjectId> {
+    let loader_object = graph.objects.get(&loader_id)?;
+    match read_field(
+        loader_object,
+        &graph.classes,
+        "parent",
+        graph.identifier_size,
+    ) {
+        Some(FieldValue::ObjectRef(Some(parent_id))) => Some(parent_id),
+        _ => None,
+    }
+}
+
+/// Walks the `parent`-field resolution repeatedly starting from `loader_id`'s
+/// own parent (not including `loader_id` itself), up to `max_depth` entries.
+/// Stops early when a loader has no parent, or when a cycle is detected (a
+/// previously-visited loader id would be revisited) -- the bounded depth
+/// alone is not the only guard; the visited-set check terminates on a cycle
+/// well before `max_depth` would ever be reached. See M13 design doc R2.
+pub fn resolve_loader_chain(
+    graph: &ObjectGraph,
+    loader_id: ObjectId,
+    max_depth: usize,
+) -> Vec<ObjectId> {
+    let mut chain = Vec::new();
+    let mut visited: HashSet<ObjectId> = HashSet::new();
+    visited.insert(loader_id);
+
+    let mut current = loader_id;
+    while chain.len() < max_depth {
+        let Some(parent_id) = resolve_parent_loader(graph, current) else {
+            break;
+        };
+        if !visited.insert(parent_id) {
+            // Cycle detected: this loader id has already been visited in
+            // this walk. Terminate rather than looping until max_depth.
+            break;
+        }
+        chain.push(parent_id);
+        current = parent_id;
+    }
+
+    chain
 }
 
 fn build_leak_candidate(loader: &ClassLoaderInfo) -> Option<ClassLoaderLeakCandidate> {
@@ -247,7 +304,55 @@ fn normalize_class_name(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::graph::build_dominator_tree;
-    use crate::hprof::{ClassInfo, GcRoot, GcRootType, HeapObject, ObjectKind};
+    use crate::hprof::{
+        field_types, ClassInfo, FieldDescriptor, GcRoot, GcRootType, HeapObject, ObjectKind,
+    };
+
+    /// Registers a loader class with a single `parent` (OBJECT-typed)
+    /// instance field, so loader instances of this class can carry a
+    /// `parent` reference readable via `read_field`/`resolve_parent_loader`.
+    fn add_loader_class(graph: &mut ObjectGraph, class_id: u64, name: &str) {
+        graph.classes.insert(
+            class_id,
+            ClassInfo {
+                class_obj_id: class_id,
+                super_class_id: 0,
+                class_loader_id: 0,
+                instance_size: 8,
+                name: Some(name.into()),
+                instance_fields: vec![FieldDescriptor {
+                    name: Some("parent".into()),
+                    field_type: field_types::OBJECT,
+                }],
+                static_references: Vec::new(),
+            },
+        );
+    }
+
+    /// Adds a loader instance whose `parent` field encodes `parent_id` (0
+    /// meaning no parent, matching HPROF's null-reference convention).
+    fn add_loader_object(graph: &mut ObjectGraph, object_id: u64, class_id: u64, parent_id: u64) {
+        let mut field_data = Vec::new();
+        field_data.extend_from_slice(&parent_id.to_be_bytes());
+
+        let references = if parent_id != 0 {
+            vec![parent_id]
+        } else {
+            Vec::new()
+        };
+
+        graph.objects.insert(
+            object_id,
+            HeapObject {
+                id: object_id,
+                class_id,
+                shallow_size: 16,
+                references,
+                field_data,
+                kind: ObjectKind::Instance,
+            },
+        );
+    }
 
     fn add_class(graph: &mut ObjectGraph, class_id: u64, name: &str, class_loader_id: u64) {
         graph.classes.insert(
@@ -516,5 +621,131 @@ mod tests {
         assert_eq!(duplicates[0].class_name, "com.example.Shared");
         assert_eq!(duplicates[0].loader_count, 2);
         assert_eq!(duplicates[0].loader_object_ids, vec![1, 2]);
+    }
+
+    /// Child (3) -> parent B (2) -> grandparent A (1) -> no parent (bootstrap).
+    /// Each loader also declares one class of its own (class_loader_id set
+    /// to the loader's object id) so it surfaces in `report.loaders` --
+    /// `analyze_classloaders`'s per-loader aggregate is keyed off
+    /// `graph.classes` grouped by `class_loader_id`, same convention as
+    /// every other fixture in this module.
+    fn build_three_level_loader_chain_graph() -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+        add_loader_class(&mut graph, 100, "com.example.LoaderClass");
+
+        add_loader_object(&mut graph, 1, 100, 0); // A: no parent
+        add_loader_object(&mut graph, 2, 100, 1); // B: parent A
+        add_loader_object(&mut graph, 3, 100, 2); // C: parent B
+        add_root(&mut graph, 1);
+        add_root(&mut graph, 2);
+        add_root(&mut graph, 3);
+
+        add_class(&mut graph, 300, "com.example.LoadedByA", 1);
+        add_class(&mut graph, 301, "com.example.LoadedByB", 2);
+        add_class(&mut graph, 302, "com.example.LoadedByC", 3);
+
+        graph
+    }
+
+    #[test]
+    fn three_level_parent_chain_resolves_in_ascending_generation_order() {
+        let graph = build_three_level_loader_chain_graph();
+
+        let chain = resolve_loader_chain(&graph, 3, MAX_LOADER_CHAIN_DEPTH);
+
+        assert_eq!(chain, vec![2, 1]);
+    }
+
+    #[test]
+    fn loader_with_no_parent_has_empty_ancestor_chain() {
+        let graph = build_three_level_loader_chain_graph();
+
+        let chain = resolve_loader_chain(&graph, 1, MAX_LOADER_CHAIN_DEPTH);
+
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn ancestor_chain_is_populated_on_the_report_for_a_three_level_chain() {
+        let graph = build_three_level_loader_chain_graph();
+
+        let report = analyze_classloaders(&graph, None);
+
+        let loader_c = report
+            .loaders
+            .iter()
+            .find(|loader| loader.object_id == 3)
+            .expect("loader C present");
+        assert_eq!(loader_c.ancestor_chain, vec![2, 1]);
+
+        let loader_a = report
+            .loaders
+            .iter()
+            .find(|loader| loader.object_id == 1)
+            .expect("loader A present");
+        assert!(loader_a.ancestor_chain.is_empty());
+    }
+
+    /// A self-referential loader (its own `parent` field points back at
+    /// itself) -- the simplest possible cyclic/adversarial HPROF shape.
+    /// R2 in the M13 design doc: this must terminate, not infinite-loop.
+    #[test]
+    fn self_referential_parent_chain_does_not_hang_and_returns_empty() {
+        let mut graph = ObjectGraph::new(8);
+        add_loader_class(&mut graph, 100, "com.example.SelfLoopLoader");
+        add_loader_object(&mut graph, 1, 100, 1); // parent(1) == 1
+        add_root(&mut graph, 1);
+
+        let chain = resolve_loader_chain(&graph, 1, MAX_LOADER_CHAIN_DEPTH);
+
+        // The starting loader is pre-marked visited, so its own id as a
+        // "parent" is immediately recognized as a cycle and the walk stops
+        // before ever pushing anything onto the chain.
+        assert!(chain.is_empty());
+    }
+
+    /// A longer cycle: X(1) -> Y(2) -> X(1) -> ... . Must stop after
+    /// visiting Y once, not loop until max_depth.
+    #[test]
+    fn two_node_cycle_terminates_after_first_repeat_not_at_max_depth() {
+        let mut graph = ObjectGraph::new(8);
+        add_loader_class(&mut graph, 100, "com.example.CyclicLoader");
+        add_loader_object(&mut graph, 1, 100, 2); // X: parent Y
+        add_loader_object(&mut graph, 2, 100, 1); // Y: parent X
+        add_root(&mut graph, 1);
+        add_root(&mut graph, 2);
+
+        let chain = resolve_loader_chain(&graph, 1, MAX_LOADER_CHAIN_DEPTH);
+
+        // X -> Y, then Y's parent (X) is already visited: stop.
+        assert_eq!(chain, vec![2]);
+        assert!(
+            chain.len() < MAX_LOADER_CHAIN_DEPTH,
+            "cycle guard must terminate well before the depth bound"
+        );
+    }
+
+    /// A 5-level straight (acyclic) chain walked with a max_depth of 3 must
+    /// be truncated, not fully walked -- proves max_depth is an independent,
+    /// respected bound and not just a fallback for the cycle guard.
+    #[test]
+    fn max_depth_truncates_a_longer_acyclic_chain() {
+        let mut graph = ObjectGraph::new(8);
+        add_loader_class(&mut graph, 100, "com.example.DeepLoader");
+        add_loader_object(&mut graph, 1, 100, 0); // gen 0: no parent
+        add_loader_object(&mut graph, 2, 100, 1); // gen 1: parent 1
+        add_loader_object(&mut graph, 3, 100, 2); // gen 2: parent 2
+        add_loader_object(&mut graph, 4, 100, 3); // gen 3: parent 3
+        add_loader_object(&mut graph, 5, 100, 4); // gen 4: parent 4
+        for id in 1..=5 {
+            add_root(&mut graph, id);
+        }
+
+        let full_chain = resolve_loader_chain(&graph, 5, MAX_LOADER_CHAIN_DEPTH);
+        assert_eq!(full_chain, vec![4, 3, 2, 1]);
+
+        let truncated = resolve_loader_chain(&graph, 5, 3);
+        assert_eq!(truncated, vec![4, 3, 2]);
+        assert_eq!(truncated.len(), 3);
     }
 }

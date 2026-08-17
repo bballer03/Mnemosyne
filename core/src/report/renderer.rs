@@ -1326,6 +1326,7 @@ mod tests {
                     retained_bytes: Some(512),
                     parent_loader: Some(42),
                     unique_class_count: 2,
+                    ancestor_chain: vec![42],
                 }],
                 potential_leaks: vec![ClassLoaderLeakCandidate {
                     object_id: 7000,
