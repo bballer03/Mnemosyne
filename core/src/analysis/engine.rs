@@ -263,6 +263,97 @@ struct AnalysisArtifacts {
     dominator_tree: Option<DominatorTree>,
 }
 
+/// Tuple assembled by [`assemble_graph_backed_analysis`]: the graph-backed
+/// half of an [`AnalyzeResponse`], everything except `ai`/`elapsed`/mode
+/// bookkeeping that the caller (parse-based or snapshot-based) owns.
+type GraphBackedAssembly = (
+    GraphMetrics,
+    Vec<LeakInsight>,
+    Option<HistogramResult>,
+    Option<UnreachableSet>,
+    Option<ThreadReport>,
+    Option<ClassLoaderReport>,
+    Option<CollectionReport>,
+    Option<StringReport>,
+    Option<TopInstancesReport>,
+    Option<ReferrerReport>,
+    Vec<ProvenanceMarker>,
+);
+
+/// Build the graph-backed half of an `AnalyzeResponse` from an already
+/// loaded `(ObjectGraph, DominatorTree)` pair.
+///
+/// Pure extraction of `analyze_heap_internal`'s pre-existing graph-backed
+/// branch -- no behavior change for `analyze_heap`/`analyze_heap_with_graph`
+/// callers. Shared with [`analyze_heap_from_graph`] (M9 Slice 9.C), which
+/// receives an already-loaded pair from a snapshot cache instead of calling
+/// [`try_build_dominator`] itself.
+fn assemble_graph_backed_analysis(
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    summary: &HeapSummary,
+    request: &AnalyzeRequest,
+) -> GraphBackedAssembly {
+    let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+    let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+    let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+    let unreachable = Some(find_unreachable_objects(obj_graph));
+    let thread_report = request
+        .enable_threads
+        .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+    let classloader_report = request
+        .enable_classloaders
+        .then(|| analyze_classloaders(obj_graph, Some(dom)));
+    let collection_report = request
+        .enable_collections
+        .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
+    let string_report = request.enable_strings.then(|| {
+        analyze_strings(
+            obj_graph,
+            Some(dom),
+            request.top_n,
+            request.min_duplicate_count,
+        )
+    });
+    let top_instances = request
+        .enable_top_instances
+        .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+    let referrer_report = request
+        .enable_by_referrer
+        .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
+    // If graph-backed produced no leaks (e.g. all filtered), fall back
+    if graph_leaks.is_empty() {
+        let fallback_leaks = synthesize_leaks(summary, &request.leak_options);
+        (
+            graph_metrics,
+            fallback_leaks,
+            histogram,
+            unreachable,
+            thread_report,
+            classloader_report,
+            collection_report,
+            string_report,
+            top_instances,
+            referrer_report,
+            fallback_provenance(),
+        )
+    } else {
+        (
+            graph_metrics,
+            graph_leaks,
+            histogram,
+            unreachable,
+            thread_report,
+            classloader_report,
+            collection_report,
+            string_report,
+            top_instances,
+            referrer_report,
+            Vec::new(),
+        )
+    }
+}
+
 async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
@@ -292,64 +383,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         referrer_report,
         provenance,
     ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
-        let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
-        let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
-        let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
-        let unreachable = Some(find_unreachable_objects(obj_graph));
-        let thread_report = request
-            .enable_threads
-            .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
-        let classloader_report = request
-            .enable_classloaders
-            .then(|| analyze_classloaders(obj_graph, Some(dom)));
-        let collection_report = request
-            .enable_collections
-            .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
-        let string_report = request.enable_strings.then(|| {
-            analyze_strings(
-                obj_graph,
-                Some(dom),
-                request.top_n,
-                request.min_duplicate_count,
-            )
-        });
-        let top_instances = request
-            .enable_top_instances
-            .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
-        let referrer_report = request
-            .enable_by_referrer
-            .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
-        // If graph-backed produced no leaks (e.g. all filtered), fall back
-        if graph_leaks.is_empty() {
-            let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
-            (
-                graph_metrics,
-                fallback_leaks,
-                histogram,
-                unreachable,
-                thread_report,
-                classloader_report,
-                collection_report,
-                string_report,
-                top_instances,
-                referrer_report,
-                fallback_provenance(),
-            )
-        } else {
-            (
-                graph_metrics,
-                graph_leaks,
-                histogram,
-                unreachable,
-                thread_report,
-                classloader_report,
-                collection_report,
-                string_report,
-                top_instances,
-                referrer_report,
-                Vec::new(),
-            )
-        }
+        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request)
     } else {
         let graph = summarize_graph(&summary);
         let leaks = synthesize_leaks(&summary, &request.leak_options);
@@ -422,6 +456,26 @@ pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse
     Ok(analyze_heap_internal(request).await?.response)
 }
 
+/// Like [`analyze_heap`], but also returns the `(ObjectGraph,
+/// DominatorTree)` pair whenever graph-backed analysis succeeded, so
+/// callers (the CLI's write-through snapshot cache, M9 Slice 9.C) can
+/// populate a snapshot cache entry from the same parse pass instead of
+/// paying for a second one. Unlike [`analyze_heap_with_graph`], this never
+/// errors when analysis falls back to the heuristic (summary-only) path --
+/// it simply returns `None` for the graph, since there is nothing to
+/// cache in that case. The returned `AnalyzeResponse` is byte-identical to
+/// what [`analyze_heap`] would return for the same request in both cases.
+pub async fn analyze_heap_capturing_graph(
+    request: AnalyzeRequest,
+) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
+    let AnalysisArtifacts {
+        response,
+        object_graph,
+        dominator_tree,
+    } = analyze_heap_internal(request).await?;
+    Ok((response, object_graph, dominator_tree))
+}
+
 pub async fn analyze_heap_with_graph(
     request: AnalyzeRequest,
 ) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
@@ -437,6 +491,82 @@ pub async fn analyze_heap_with_graph(
             "analyze_heap_with_graph requires graph-backed deep analysis".into(),
         )),
     }
+}
+
+/// Build an `AnalyzeResponse` from an already-loaded `(ObjectGraph,
+/// DominatorTree)` pair instead of parsing `request.heap_path` from
+/// scratch (M9 Slice 9.C: the CLI's `--snapshot`/auto-discovery seam --
+/// see `docs/design/milestone-9-snapshot-persistence.md` §5's architecture
+/// diagram, which shows a snapshot-loaded graph feeding directly into this
+/// analysis layer instead of a fresh binary parse).
+///
+/// Still performs the cheap record-level `HeapSummary` scan (`parse_heap`):
+/// `HeapSummary` (header, record-tag stats) is deliberately not part of a
+/// snapshot payload (§6.2 of the design doc: only `ObjectGraph` /
+/// `DominatorTree` are cached, every analyzer output -- including this
+/// summary -- is re-derived on load). That scan is a streaming byte pass
+/// over the HPROF file's record tags/lengths, not the expensive part this
+/// seam skips -- the full object-graph parse plus dominator
+/// Lengauer-Tarjan computation [`try_build_dominator`] would otherwise
+/// perform on every invocation.
+pub async fn analyze_heap_from_graph(
+    request: AnalyzeRequest,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+) -> CoreResult<AnalyzeResponse> {
+    info!(heap = %request.heap_path, "starting analysis pipeline from cached snapshot graph");
+    let start = Instant::now();
+
+    let parse_job = HeapParseJob {
+        path: request.heap_path.clone(),
+        include_strings: false,
+        max_objects: request.config.parser.max_objects,
+    };
+    let summary = parse_heap(&parse_job)?;
+
+    let (
+        graph,
+        leaks,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        top_instances,
+        referrer_report,
+        provenance,
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request);
+
+    let ai = if request.enable_ai || request.config.ai.enabled {
+        info!(model = %request.config.ai.model, "generating synthetic AI insights (from cached graph)");
+        Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
+    } else {
+        None
+    };
+
+    Ok(AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
+        summary,
+        leaks,
+        recommendations: vec![
+            "Graph-backed analysis complete. Retained sizes are computed from dominator tree."
+                .into(),
+        ],
+        elapsed: start.elapsed(),
+        graph,
+        ai,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        top_instances,
+        referrer_report,
+        provenance,
+    })
 }
 
 /// Compare two heap snapshots and produce a structured diff of their dominant classes.
@@ -518,6 +648,73 @@ pub async fn detect_leaks(
     };
     let summary = parse_heap(&parse_job)?;
     Ok(synthesize_leaks(&summary, &options))
+}
+
+/// Graph-backed leak detection from an already-loaded `(ObjectGraph,
+/// DominatorTree)` pair (M9 Slice 9.C), mirroring [`detect_leaks`]'s
+/// graph-backed-then-heuristic-fallback shape without repeating the
+/// (now-skipped) [`try_build_dominator`] parse.
+pub fn detect_leaks_from_graph(
+    heap_path: &str,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    options: &LeakDetectionOptions,
+) -> CoreResult<Vec<LeakInsight>> {
+    info!(%heap_path, ?options, "detecting leaks from cached snapshot graph");
+
+    let graph_leaks = graph_backed_leaks(dom, obj_graph, options);
+    if !graph_leaks.is_empty() {
+        return Ok(graph_leaks);
+    }
+
+    info!(%heap_path, "graph-backed path (from cached snapshot) returned no leaks after filtering; falling back to heuristic");
+    let parse_job = HeapParseJob {
+        path: heap_path.into(),
+        include_strings: false,
+        max_objects: None,
+    };
+    let summary = parse_heap(&parse_job)?;
+    Ok(synthesize_leaks(&summary, options))
+}
+
+/// Like [`detect_leaks`], but also returns the `(ObjectGraph,
+/// DominatorTree)` pair when graph-backed detection succeeded, so callers
+/// (the CLI's write-through snapshot cache, M9 Slice 9.C) can populate a
+/// snapshot cache entry from the same parse pass instead of re-parsing.
+/// `None` in the second element means detection fell back to the
+/// heuristic (summary-only) path -- nothing to cache. The returned leak
+/// list is byte-identical to what [`detect_leaks`] would return for the
+/// same inputs.
+pub async fn detect_leaks_with_graph(
+    heap_path: &str,
+    options: LeakDetectionOptions,
+) -> CoreResult<(Vec<LeakInsight>, Option<(ObjectGraph, DominatorTree)>)> {
+    info!(%heap_path, ?options, "detecting leaks (graph-capturing)");
+
+    if let Some((obj_graph, dom)) = try_build_dominator(heap_path, false) {
+        info!(%heap_path, "graph-backed leak detection succeeded");
+        let graph_leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        if !graph_leaks.is_empty() {
+            return Ok((graph_leaks, Some((obj_graph, dom))));
+        }
+        info!(%heap_path, "graph-backed path returned no leaks after filtering; falling back to heuristic");
+        let parse_job = HeapParseJob {
+            path: heap_path.into(),
+            include_strings: false,
+            max_objects: None,
+        };
+        let summary = parse_heap(&parse_job)?;
+        return Ok((synthesize_leaks(&summary, &options), Some((obj_graph, dom))));
+    }
+
+    info!(%heap_path, "graph-backed path unavailable; using heuristic leak detection");
+    let parse_job = HeapParseJob {
+        path: heap_path.into(),
+        include_strings: false,
+        max_objects: None,
+    };
+    let summary = parse_heap(&parse_job)?;
+    Ok((synthesize_leaks(&summary, &options), None))
 }
 
 impl From<&AnalysisConfig> for LeakDetectionOptions {

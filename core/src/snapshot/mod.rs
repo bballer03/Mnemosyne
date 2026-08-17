@@ -13,11 +13,14 @@
 //!   `PersistedAiSession::session_version`.
 //!
 //! Slice 9.A shipped [`SnapshotStore::new`], [`SnapshotStore::ensure_root`],
-//! [`SnapshotStore::save`], [`SnapshotStore::load`]. Slice 9.B (this pass)
-//! adds [`SnapshotStore::list`], [`SnapshotStore::remove`], and
+//! [`SnapshotStore::save`], [`SnapshotStore::load`]. Slice 9.B added
+//! [`SnapshotStore::list`], [`SnapshotStore::remove`], and
 //! [`SnapshotStore::find_fresh_for_heap`] (cache-key resolution by heap path
-//! plus staleness detection). CLI/MCP wiring is Slices 9.C/9.D. See
-//! `docs/design/milestone-9-snapshot-persistence.md`.
+//! plus staleness detection). Slice 9.C (this pass) adds
+//! [`SnapshotStore::load_checked`] -- the loud counterpart to
+//! `find_fresh_for_heap` used by CLI `--snapshot <key>` call sites -- and
+//! wires everything into the CLI (`cli/src/main.rs`). MCP wiring remains
+//! Slice 9.D. See `docs/design/milestone-9-snapshot-persistence.md`.
 //!
 //! ## Design note: where staleness checking lives (Slice 9.B decision)
 //!
@@ -56,6 +59,16 @@
 //!   has both the resolved key *and* the user-provided heap path available
 //!   to build the complete, consistent error. Slice 9.B only implements the
 //!   silent auto-discovery half of staleness (`find_fresh_for_heap`).
+//!
+//!   **Resolution (Slice 9.C):** the loud-staleness logic landed as a new
+//!   [`SnapshotStore::load_checked`] method on this same store, not inlined
+//!   separately at each CLI call site. Both loud checks (schema version,
+//!   source hash) need the same two inputs (`key`, `heap_path`) and the
+//!   same `sha256_hex` helper this module already owns privately, so a
+//!   shared method avoids duplicating hashing/error-construction logic
+//!   across five CLI command handlers (`analyze`, `leaks`, `gc-path`,
+//!   `inspect`, `query`) plus `snapshot load`. `load` itself remains
+//!   untouched, preserving Slice 9.A's contract for every existing caller.
 
 use std::{fmt::Write as _, fs, path::PathBuf};
 
@@ -175,6 +188,60 @@ impl SnapshotStore {
         let bytes = fs::read(&path).map_err(|err| map_load_error(key, err))?;
         let payload: SnapshotPayload =
             serde_json::from_slice(&bytes).map_err(|err| snapshot_corrupt(key, err))?;
+        Ok(payload)
+    }
+
+    /// Load a previously saved snapshot by `key`, then loudly validate it
+    /// against `heap_path` (Slice 9.C).
+    ///
+    /// This is the resolution of the open question left by Slice 9.B's
+    /// module-level doc comment above: `load` alone (key -> payload) has no
+    /// heap path to re-hash against, so it can only ever surface
+    /// `snapshot_not_found`/`snapshot_corrupt`. An *explicit*
+    /// `--snapshot <key>` CLI/MCP call site, however, always has both the
+    /// resolved key and the user-provided heap path, so this method lives
+    /// on `SnapshotStore` (not inlined at each call site) to keep the
+    /// staleness rules in one place and reusable across every command that
+    /// wires `--snapshot` (`analyze`, `leaks`, `gc-path`, `inspect`,
+    /// `query`) plus `snapshot load`.
+    ///
+    /// Checks, in order:
+    /// 1. `manifest.schema_version` against [`SNAPSHOT_SCHEMA_VERSION`] --
+    ///    mismatch surfaces `snapshot_schema_mismatch` (never silently
+    ///    proceeds with a payload shape the running binary may not
+    ///    understand).
+    /// 2. `heap_path`'s *current* on-disk SHA-256 against
+    ///    `manifest.heap_sha256` -- mismatch surfaces `snapshot_stale_source`
+    ///    (the heap file changed since the snapshot was taken).
+    ///
+    /// Unlike [`SnapshotStore::find_fresh_for_heap`] (silent, `Ok(None)` on
+    /// any staleness), both checks here are loud, structured errors --
+    /// exactly the distinction the design doc's exit-code table (§7, codes
+    /// 11/12) requires for explicit `--snapshot` usage.
+    pub fn load_checked(&self, key: &str, heap_path: &str) -> CoreResult<SnapshotPayload> {
+        let payload = self.load(key)?;
+
+        if payload.manifest.schema_version != SNAPSHOT_SCHEMA_VERSION {
+            return Err(snapshot_error(
+                "snapshot_schema_mismatch",
+                format!(
+                    "cached snapshot schema_version={}, running binary expects schema_version={SNAPSHOT_SCHEMA_VERSION}",
+                    payload.manifest.schema_version
+                ),
+            ));
+        }
+
+        let heap_bytes = fs::read(heap_path)?;
+        let current_sha256 = sha256_hex(&heap_bytes);
+        if payload.manifest.heap_sha256 != current_sha256 {
+            return Err(snapshot_error(
+                "snapshot_stale_source",
+                format!(
+                    "heap file '{heap_path}' sha256 no longer matches the cached snapshot for key '{key}'"
+                ),
+            ));
+        }
+
         Ok(payload)
     }
 
@@ -408,5 +475,90 @@ mod tests {
         let err = store.load("deadbeef").unwrap_err();
 
         assert!(err.to_string().contains("snapshot_corrupt"));
+    }
+
+    #[test]
+    fn load_checked_returns_payload_when_fresh() {
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::new(store_dir.path().to_path_buf());
+        let heap_file = write_temp_heap(b"pretend hprof bytes");
+        let graph = make_graph();
+        let dominator = build_dominator_tree(&graph);
+
+        let manifest = store
+            .save(heap_file.path().to_str().unwrap(), &graph, &dominator)
+            .unwrap();
+
+        let checked = store
+            .load_checked(&manifest.heap_sha256, heap_file.path().to_str().unwrap())
+            .unwrap();
+        assert_eq!(checked.manifest.heap_sha256, manifest.heap_sha256);
+    }
+
+    #[test]
+    fn load_checked_detects_schema_mismatch() {
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::new(store_dir.path().to_path_buf());
+        let heap_file = write_temp_heap(b"pretend hprof bytes");
+        let graph = make_graph();
+        let dominator = build_dominator_tree(&graph);
+
+        let mut manifest = store
+            .save(heap_file.path().to_str().unwrap(), &graph, &dominator)
+            .unwrap();
+
+        // Hand-edit the persisted manifest's schema_version to simulate a
+        // snapshot saved by an older/newer binary.
+        let payload_path = store_dir
+            .path()
+            .join(format!("{}.json", manifest.heap_sha256));
+        let mut payload: SnapshotPayload =
+            serde_json::from_slice(&fs::read(&payload_path).unwrap()).unwrap();
+        payload.manifest.schema_version = SNAPSHOT_SCHEMA_VERSION + 1;
+        manifest.schema_version = payload.manifest.schema_version;
+        fs::write(&payload_path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+
+        let err = store
+            .load_checked(&manifest.heap_sha256, heap_file.path().to_str().unwrap())
+            .unwrap_err();
+
+        assert!(err.to_string().contains("snapshot_schema_mismatch"));
+    }
+
+    #[test]
+    fn load_checked_detects_stale_source() {
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::new(store_dir.path().to_path_buf());
+        let mut heap_file = write_temp_heap(b"pretend hprof bytes v1");
+        let graph = make_graph();
+        let dominator = build_dominator_tree(&graph);
+
+        let manifest = store
+            .save(heap_file.path().to_str().unwrap(), &graph, &dominator)
+            .unwrap();
+
+        // Mutate the heap file's bytes after the snapshot was saved.
+        heap_file.as_file_mut().set_len(0).unwrap();
+        heap_file.write_all(b"different bytes now").unwrap();
+        heap_file.flush().unwrap();
+
+        let err = store
+            .load_checked(&manifest.heap_sha256, heap_file.path().to_str().unwrap())
+            .unwrap_err();
+
+        assert!(err.to_string().contains("snapshot_stale_source"));
+    }
+
+    #[test]
+    fn load_checked_missing_key_returns_snapshot_not_found() {
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SnapshotStore::new(store_dir.path().to_path_buf());
+        let heap_file = write_temp_heap(b"pretend hprof bytes");
+
+        let err = store
+            .load_checked("does-not-exist", heap_file.path().to_str().unwrap())
+            .unwrap_err();
+
+        assert!(err.to_string().contains("snapshot_not_found"));
     }
 }
