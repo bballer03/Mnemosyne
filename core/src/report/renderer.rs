@@ -1325,6 +1325,7 @@ mod tests {
                     total_shallow_bytes: 448,
                     retained_bytes: Some(512),
                     parent_loader: Some(42),
+                    unique_class_count: 2,
                 }],
                 potential_leaks: vec![ClassLoaderLeakCandidate {
                     object_id: 7000,
@@ -1333,6 +1334,7 @@ mod tests {
                     loaded_class_count: 1,
                     reason: "Retains 10.00 MB but loads only 1 classes".into(),
                 }],
+                duplicate_classes: Vec::new(),
             }),
             collection_report: None,
             string_report: None,
