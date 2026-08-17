@@ -654,6 +654,32 @@ fn render_toon(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(referrers) = &analysis.referrer_report {
+        doc.push_str("section referrers\n");
+        push_kv(
+            &mut doc,
+            2,
+            "total_objects_considered",
+            referrers.total_objects_considered,
+        );
+        for (idx, entry) in referrers.entries.iter().enumerate() {
+            doc.push_str(&format!("  entry#{idx}\n"));
+            push_kv(&mut doc, 4, "object_id", &entry.object_id);
+            push_kv(&mut doc, 4, "class_name", &entry.class_name);
+            push_kv(&mut doc, 4, "referrer_count", entry.referrer_count);
+            if let Some(retained_size) = entry.retained_size {
+                push_kv(&mut doc, 4, "retained_size", retained_size);
+            }
+            let top_classes = entry
+                .top_referrer_classes
+                .iter()
+                .map(|(class_name, count)| format!("{class_name}({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            push_kv(&mut doc, 4, "top_referrer_classes", top_classes);
+        }
+    }
+
     doc.push_str("section dominators\n");
     if analysis.graph.dominators.is_empty() {
         push_kv(&mut doc, 2, "status", "empty");
@@ -811,6 +837,30 @@ fn render_text(analysis: &AnalyzeResponse) -> String {
         }
     }
 
+    if let Some(referrers) = &analysis.referrer_report {
+        body.push_str("\nTop referenced objects (by incoming reference count)\n-----------------------------------------------------\n");
+        body.push_str(&format!(
+            "Objects considered: {}\n",
+            referrers.total_objects_considered
+        ));
+        for entry in &referrers.entries {
+            let retained = entry
+                .retained_size
+                .map(|bytes| bytes.to_string())
+                .unwrap_or_else(|| "n/a".into());
+            let top_classes: String = entry
+                .top_referrer_classes
+                .iter()
+                .map(|(class_name, count)| format!("{class_name}({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            body.push_str(&format!(
+                "{} {} referrers={} retained={}B top=[{}]\n",
+                entry.object_id, entry.class_name, entry.referrer_count, retained, top_classes
+            ));
+        }
+    }
+
     if let Some(ai) = &analysis.ai {
         body.push_str("\nAI Insights\n-----------\n");
         body.push_str(&format!(
@@ -938,6 +988,34 @@ fn render_markdown(analysis: &AnalyzeResponse) -> String {
                 doc.push_str(&format!(
                     "- `{}` [`{}`]: {}\n",
                     leak.class_name, leak.object_id, leak.reason
+                ));
+            }
+        }
+    }
+
+    if let Some(referrers) = &analysis.referrer_report {
+        doc.push_str("\n## Top Referenced Objects (by incoming reference count)\n\n");
+        doc.push_str(&format!(
+            "- **Objects considered:** {}\n\n",
+            referrers.total_objects_considered
+        ));
+        if !referrers.entries.is_empty() {
+            doc.push_str("| Object | Class | Referrers | Retained | Top referrer classes |\n");
+            doc.push_str("|---|---|---|---|---|\n");
+            for entry in &referrers.entries {
+                let retained = entry
+                    .retained_size
+                    .map(|bytes| bytes.to_string())
+                    .unwrap_or_else(|| "n/a".into());
+                let top_classes: String = entry
+                    .top_referrer_classes
+                    .iter()
+                    .map(|(class_name, count)| format!("{class_name}({count})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                doc.push_str(&format!(
+                    "| `{}` | `{}` | {} | {} | {} |\n",
+                    entry.object_id, entry.class_name, entry.referrer_count, retained, top_classes
                 ));
             }
         }
@@ -1138,6 +1216,43 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         })
         .unwrap_or_default();
 
+    let referrer_block = analysis
+        .referrer_report
+        .as_ref()
+        .map(|referrers| {
+            let rows: String = referrers
+                .entries
+                .iter()
+                .map(|entry| {
+                    let retained = entry
+                        .retained_size
+                        .map(|bytes| bytes.to_string())
+                        .unwrap_or_else(|| "n/a".into());
+                    let top_classes: String = entry
+                        .top_referrer_classes
+                        .iter()
+                        .map(|(class_name, count)| {
+                            format!("{}({count})", escape_html(class_name))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "<li><strong>{}</strong> ({}): {} referrers, {} retained bytes — top: {}</li>",
+                        escape_html(&entry.object_id),
+                        escape_html(&entry.class_name),
+                        entry.referrer_count,
+                        retained,
+                        top_classes
+                    )
+                })
+                .collect();
+            format!(
+                "<section><h2>Top Referenced Objects</h2><p><strong>Objects considered:</strong> {}</p><ul>{}</ul></section>",
+                referrers.total_objects_considered, rows
+            )
+        })
+        .unwrap_or_default();
+
     format!(
         r#"<section>
   <h1>Mnemosyne Analysis</h1>
@@ -1150,6 +1265,7 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
             {histogram_block}
             {unreachable_block}
             {classloader_block}
+            {referrer_block}
       {ai_block}
             {provenance_block}
 </section>"#,
@@ -1162,6 +1278,7 @@ fn render_html(analysis: &AnalyzeResponse) -> String {
         histogram_block = histogram_block,
         unreachable_block = unreachable_block,
         classloader_block = classloader_block,
+        referrer_block = referrer_block,
         provenance_block = provenance_block
     )
 }
@@ -1220,6 +1337,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
         }
     }
@@ -1295,6 +1413,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response provenance",
@@ -1362,6 +1481,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response detail",
@@ -1431,6 +1551,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "html response detail",
@@ -1475,5 +1596,90 @@ mod tests {
         assert!(toon.contains("section classloaders"));
         assert!(toon.contains("class_name=com.example.PluginClassLoader"));
         assert!(toon.contains("section classloader_leaks"));
+    }
+
+    fn sample_referrer_response() -> AnalyzeResponse {
+        use crate::analysis::{ProvenanceMarker, ReferrerEntry, ReferrerReport};
+        use crate::graph::GraphMetrics;
+        use crate::hprof::HeapSummary;
+        use std::time::{Duration, SystemTime};
+
+        AnalyzeResponse {
+            mode: crate::analysis::AnalysisMode::Deep,
+            overview: None,
+            summary: HeapSummary {
+                heap_path: "test.hprof".into(),
+                total_objects: 100,
+                total_size_bytes: 1024,
+                classes: Vec::new(),
+                generated_at: SystemTime::now(),
+                header: None,
+                total_records: 0,
+                record_stats: Vec::new(),
+            },
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(42),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: None,
+            collection_report: None,
+            string_report: None,
+            top_instances: None,
+            referrer_report: Some(ReferrerReport {
+                entries: vec![ReferrerEntry {
+                    object_id: "0x00001000".into(),
+                    class_name: "com.example.SharedCache".into(),
+                    retained_size: Some(512 * 1024 * 1024),
+                    referrer_count: 184,
+                    top_referrer_classes: vec![
+                        ("com.example.ConnectionPool".into(), 120),
+                        ("com.example.RequestHandler".into(), 64),
+                    ],
+                }],
+                total_objects_considered: 4200,
+            }),
+            provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
+        }
+    }
+
+    #[test]
+    fn reports_render_referrer_sections() {
+        let response = sample_referrer_response();
+
+        let text = render_text(&response);
+        assert!(text.contains("Top referenced objects"));
+        assert!(text.contains("com.example.SharedCache"));
+        assert!(text.contains("com.example.ConnectionPool(120)"));
+
+        let markdown = render_markdown(&response);
+        assert!(markdown.contains("## Top Referenced Objects"));
+        assert!(markdown.contains("com.example.SharedCache"));
+        assert!(markdown.contains("com.example.ConnectionPool(120)"));
+
+        let html = render_html(&response);
+        assert!(html.contains("<h2>Top Referenced Objects</h2>"));
+        assert!(html.contains("com.example.SharedCache"));
+        assert!(html.contains("184 referrers"));
+
+        let toon = render_toon(&response);
+        assert!(toon.contains("section referrers"));
+        assert!(toon.contains("class_name=com.example.SharedCache"));
+        assert!(toon.contains("referrer_count=184"));
+    }
+
+    #[test]
+    fn analyze_response_json_back_compat_omits_referrer_report_when_none() {
+        let response = sample_classloader_response();
+        assert!(response.referrer_report.is_none());
+
+        let value = serde_json::to_value(&response).expect("response should serialize");
+        assert!(
+            !value.as_object().unwrap().contains_key("referrer_report"),
+            "referrer_report must be omitted from JSON when None (additive-field regression gate)"
+        );
     }
 }

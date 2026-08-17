@@ -1,8 +1,8 @@
 use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
-    analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
-    inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
-    TopInstancesReport,
+    analyze_by_referrer, analyze_classloaders, analyze_strings, find_top_instances,
+    inspect_collections, inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport,
+    ReferrerReport, StringReport, ThreadReport, TopInstancesReport,
 };
 use crate::{
     config::{AnalysisConfig, AppConfig},
@@ -53,6 +53,7 @@ pub struct AnalyzeRequest {
     pub enable_strings: bool,
     pub enable_collections: bool,
     pub enable_top_instances: bool,
+    pub enable_by_referrer: bool,
     pub top_n: usize,
     pub min_collection_capacity: usize,
     pub min_duplicate_count: usize,
@@ -71,6 +72,7 @@ impl Default for AnalyzeRequest {
             enable_strings: false,
             enable_collections: false,
             enable_top_instances: false,
+            enable_by_referrer: false,
             top_n: 10,
             min_collection_capacity: 16,
             min_duplicate_count: 2,
@@ -144,6 +146,11 @@ pub struct AnalyzeResponse {
     pub string_report: Option<StringReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_instances: Option<TopInstancesReport>,
+    /// Group-by-referrer ranking (M8 Slice 8.B). ADDITIVE: only populated
+    /// when `enable_by_referrer` is requested, so today's `analyze` (no
+    /// `--by-referrer`) output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referrer_report: Option<ReferrerReport>,
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
@@ -282,6 +289,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         collection_report,
         string_report,
         top_instances,
+        referrer_report,
         provenance,
     ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
         let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
@@ -308,6 +316,9 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         let top_instances = request
             .enable_top_instances
             .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+        let referrer_report = request
+            .enable_by_referrer
+            .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
         // If graph-backed produced no leaks (e.g. all filtered), fall back
         if graph_leaks.is_empty() {
             let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
@@ -321,6 +332,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
                 collection_report,
                 string_report,
                 top_instances,
+                referrer_report,
                 fallback_provenance(),
             )
         } else {
@@ -334,6 +346,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
                 collection_report,
                 string_report,
                 top_instances,
+                referrer_report,
                 Vec::new(),
             )
         }
@@ -343,6 +356,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         (
             graph,
             leaks,
+            None,
             None,
             None,
             None,
@@ -388,6 +402,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         collection_report,
         string_report,
         top_instances,
+        referrer_report,
         provenance,
     };
 
@@ -1193,6 +1208,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance: Vec::new(),
         }
     }

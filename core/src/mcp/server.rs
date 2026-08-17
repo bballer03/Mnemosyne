@@ -424,6 +424,8 @@ struct AnalyzeHeapParams {
     #[serde(default)]
     enable_top_instances: bool,
     #[serde(default)]
+    by_referrer: bool,
+    #[serde(default)]
     top_n: Option<usize>,
     #[serde(default)]
     min_collection_capacity: Option<usize>,
@@ -733,6 +735,7 @@ fn tool_catalog() -> Value {
                     { "name": "enable_strings", "type": "boolean", "required": false, "description": "Attach string analysis." },
                     { "name": "enable_collections", "type": "boolean", "required": false, "description": "Attach collection analysis." },
                     { "name": "enable_top_instances", "type": "boolean", "required": false, "description": "Attach the top-instances report." },
+                    { "name": "by_referrer", "type": "boolean", "required": false, "description": "Attach the group-by-referrer report (objects ranked by incoming reference count)." },
                     { "name": "top_n", "type": "number", "required": false, "description": "Result count used by top-N analysis sections." },
                     { "name": "min_collection_capacity", "type": "number", "required": false, "description": "Minimum collection capacity to report." },
                     { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." }
@@ -1040,6 +1043,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 enable_strings: params.enable_strings,
                 enable_collections: params.enable_collections,
                 enable_top_instances: params.enable_top_instances,
+                enable_by_referrer: params.by_referrer,
                 top_n: params.top_n.unwrap_or(AnalyzeRequest::default().top_n),
                 min_collection_capacity: params
                     .min_collection_capacity

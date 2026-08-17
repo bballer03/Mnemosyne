@@ -148,6 +148,9 @@ struct AnalyzeArgs {
     /// Show top-N largest instances
     #[arg(long = "top-instances")]
     top_instances: bool,
+    /// Rank objects by incoming reference count ("group by referrer")
+    #[arg(long = "by-referrer")]
+    by_referrer: bool,
     /// Number of results for top-N queries (threads, strings, top-instances)
     #[arg(long = "top-n", default_value_t = 10)]
     top_n: usize,
@@ -685,6 +688,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
     let mut enable_collections = args.collections;
     let mut enable_classloaders = args.classloaders;
     let mut enable_top_instances = args.top_instances;
+    let enable_by_referrer = args.by_referrer;
     let mut top_n = args.top_n;
     let mut min_capacity = args.min_capacity;
 
@@ -760,6 +764,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         enable_strings,
         enable_collections,
         enable_top_instances,
+        enable_by_referrer,
         top_n,
         min_collection_capacity: min_capacity,
         min_duplicate_count: 2,
@@ -787,6 +792,18 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("Top Instances by Size:"));
                 println!("{}", build_top_instances_table(top_instances));
+            }
+
+            if let Some(referrers) = &response.referrer_report {
+                println!();
+                println!(
+                    "{}",
+                    bold_label(&format!(
+                        "Top referenced objects (by incoming reference count, {} considered):",
+                        referrers.total_objects_considered
+                    ))
+                );
+                println!("{}", build_referrer_table(referrers));
             }
 
             if let Some(threads) = &response.thread_report {
@@ -918,6 +935,7 @@ async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Res
         enable_strings: false,
         enable_collections: false,
         enable_top_instances: false,
+        enable_by_referrer: false,
         top_n: 10,
         min_collection_capacity: 16,
         min_duplicate_count: 2,
@@ -1621,6 +1639,7 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 enable_strings: false,
                 enable_collections: false,
                 enable_top_instances: false,
+                enable_by_referrer: false,
                 top_n: 10,
                 min_collection_capacity: 16,
                 min_duplicate_count: 2,
@@ -2070,6 +2089,41 @@ fn build_top_instances_table(report: &mnemosyne_core::analysis::TopInstancesRepo
             right_cell(format_megabytes(
                 instance.retained_size.unwrap_or(instance.shallow_size),
             )),
+        ]);
+    }
+
+    table
+}
+
+fn build_referrer_table(report: &mnemosyne_core::analysis::ReferrerReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Object", CellAlignment::Left),
+        header_cell("Class", CellAlignment::Left),
+        header_cell("Referrers", CellAlignment::Right),
+        header_cell("Retained", CellAlignment::Right),
+        header_cell("Top referrer classes", CellAlignment::Left),
+    ]);
+
+    for entry in &report.entries {
+        let class_cell = truncate_for_table(&entry.class_name, TOP_INSTANCE_CLASS_WIDTH);
+        let top_classes = entry
+            .top_referrer_classes
+            .iter()
+            .map(|(class_name, count)| format!("{class_name}({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        table.add_row(vec![
+            Cell::new(entry.object_id.as_str()).set_alignment(CellAlignment::Left),
+            Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(entry.referrer_count),
+            right_cell(
+                entry
+                    .retained_size
+                    .map(format_megabytes)
+                    .unwrap_or_else(|| "n/a".into()),
+            ),
+            Cell::new(top_classes).set_alignment(CellAlignment::Left),
         ]);
     }
 

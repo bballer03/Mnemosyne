@@ -797,6 +797,7 @@ mod tests {
             collection_report: None,
             string_report: None,
             top_instances: None,
+            referrer_report: None,
             provenance,
         }
     }
