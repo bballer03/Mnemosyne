@@ -18,20 +18,19 @@
 //! Slice 11.A shipped the scaffolding (`WorkflowState` / `WorkflowStore` /
 //! `StepRecord` / `WorkflowDescription`) plus the first fully-working
 //! workflow kind end-to-end: [`WorkflowKind::TriageMemoryLeak`] (see
-//! [`triage_memory_leak`]). Slice 11.B (this pass) adds two more:
-//! [`WorkflowKind::TuneGc`] (see [`tune_gc`]) and
-//! [`WorkflowKind::TraverseObjectGraph`] (see [`traverse_object_graph`]).
-//! [`WorkflowKind::CompareSnapshots`] is declared (so `describe_workflow`/
-//! `start_workflow` have a stable, complete enum to dispatch on) but is not
-//! implemented yet -- [`start`]/[`describe`] return a clear
-//! `workflow_kind_not_implemented` error for it rather than panicking or
-//! silently doing the wrong thing.
+//! [`triage_memory_leak`]). Slice 11.B added two more: [`WorkflowKind::TuneGc`]
+//! (see [`tune_gc`]) and [`WorkflowKind::TraverseObjectGraph`] (see
+//! [`traverse_object_graph`]). Slice 11.C (this pass) adds the fourth and
+//! final kind, [`WorkflowKind::CompareSnapshots`] (see
+//! [`compare_snapshots`]) -- all four `WorkflowKind` variants are now fully
+//! implemented in [`describe`]/[`start`]/[`advance`].
 //!
 //! MCP tool registration (`describe_workflow`/`start_workflow`/`next_step`/
 //! `get_workflow`/`close_workflow` in `core::mcp::server`) is Slice 11.D --
 //! out of scope here. [`start`] and [`advance`] are written to be directly
 //! callable from a future MCP handler (see their doc comments).
 
+pub mod compare_snapshots;
 pub mod traverse_object_graph;
 pub mod triage_memory_leak;
 pub mod tune_gc;
@@ -305,12 +304,12 @@ fn workflow_already_complete(workflow_id: &str) -> CoreError {
     ))
 }
 
-fn workflow_kind_not_implemented(kind: WorkflowKind) -> CoreError {
-    CoreError::NotImplemented(format!(
-        "workflow_kind_not_implemented: '{kind}' is not implemented yet (Slice 11.A only ships '{}')",
-        WorkflowKind::TriageMemoryLeak
-    ))
-}
+// `workflow_kind_not_implemented` (Slices 11.A/11.B's placeholder error for
+// `WorkflowKind::CompareSnapshots`) is removed as of Slice 11.C: all four
+// `WorkflowKind` variants are now implemented, so `describe`/`start`/
+// `advance`'s `match` arms are exhaustive without a fallback arm, and the
+// compiler -- not a runtime error path -- is what now guarantees every kind
+// is handled.
 
 fn new_workflow_id() -> String {
     let nanos = SystemTime::now()
@@ -321,15 +320,14 @@ fn new_workflow_id() -> String {
 }
 
 /// Static, side-effect-free step-sequence lookup for `kind`. No
-/// [`WorkflowState`] is created. [`WorkflowKind::CompareSnapshots`] returns
-/// `workflow_kind_not_implemented` since there is no implemented step
-/// sequence yet to describe (Slice 11.C).
+/// [`WorkflowState`] is created. All four [`WorkflowKind`] variants are
+/// implemented as of Slice 11.C.
 pub fn describe(kind: WorkflowKind) -> CoreResult<WorkflowDescription> {
     match kind {
         WorkflowKind::TriageMemoryLeak => Ok(triage_memory_leak::describe()),
         WorkflowKind::TuneGc => Ok(tune_gc::describe()),
         WorkflowKind::TraverseObjectGraph => Ok(traverse_object_graph::describe()),
-        other => Err(workflow_kind_not_implemented(other)),
+        WorkflowKind::CompareSnapshots => Ok(compare_snapshots::describe()),
     }
 }
 
@@ -342,8 +340,7 @@ pub fn describe(kind: WorkflowKind) -> CoreResult<WorkflowDescription> {
 /// constructed by the handler the same way `session_store(config)` already
 /// builds an `McpSessionStore` for the existing session-lifecycle tools.
 ///
-/// Returns `workflow_kind_not_implemented` (not a panic) for
-/// [`WorkflowKind::CompareSnapshots`] (Slice 11.C, not yet implemented).
+/// All four [`WorkflowKind`] variants are implemented as of Slice 11.C.
 pub async fn start(
     store: &WorkflowStore,
     kind: WorkflowKind,
@@ -381,7 +378,15 @@ pub async fn start(
             traverse_object_graph::run_step(&mut state, initial_params).await?;
             state
         }
-        other @ WorkflowKind::CompareSnapshots => return Err(workflow_kind_not_implemented(other)),
+        WorkflowKind::CompareSnapshots => {
+            // `heap_path` is a caller-supplied placeholder for this kind --
+            // see `compare_snapshots`'s module doc comment ("dual heap
+            // identity" section). It is overwritten by the first step once
+            // both sides are resolved.
+            let mut state = new_state(kind, heap_path, compare_snapshots::STEP_RESOLVE_SNAPSHOTS);
+            compare_snapshots::run_step(&mut state, initial_params).await?;
+            state
+        }
     };
 
     state.updated_at = timestamp_now();
@@ -420,7 +425,9 @@ pub async fn advance(
         WorkflowKind::TraverseObjectGraph => {
             traverse_object_graph::run_step(&mut state, step_input).await?;
         }
-        other @ WorkflowKind::CompareSnapshots => return Err(workflow_kind_not_implemented(other)),
+        WorkflowKind::CompareSnapshots => {
+            compare_snapshots::run_step(&mut state, step_input).await?;
+        }
     }
 
     state.updated_at = timestamp_now();
@@ -492,27 +499,28 @@ mod tests {
         assert!(err.to_string().contains("invalid workflow_id"));
     }
 
-    #[tokio::test]
-    async fn start_rejects_unimplemented_kinds_without_panicking() {
-        // Slice 11.B implements TuneGc/TraverseObjectGraph; only
-        // CompareSnapshots (Slice 11.C) remains unimplemented.
-        let temp = tempfile::tempdir().unwrap();
-        let store = WorkflowStore::new(temp.path().to_path_buf());
-
-        let err = start(
-            &store,
-            WorkflowKind::CompareSnapshots,
-            "heap.hprof".into(),
-            json!({}),
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("workflow_kind_not_implemented"));
-    }
-
     #[test]
-    fn describe_rejects_unimplemented_kinds() {
-        let err = describe(WorkflowKind::CompareSnapshots).unwrap_err();
-        assert!(err.to_string().contains("workflow_kind_not_implemented"));
+    fn describe_succeeds_for_all_four_workflow_kinds() {
+        // As of Slice 11.C, every `WorkflowKind` variant -- including the
+        // last one, `CompareSnapshots` -- has an implemented step sequence.
+        // `start`/`advance`'s equivalent full-run coverage for
+        // `CompareSnapshots` lives in
+        // `core/tests/workflow_compare_snapshots.rs` (it needs a real,
+        // on-disk heap fixture, which this module's own lightweight unit
+        // tests deliberately avoid).
+        for kind in [
+            WorkflowKind::TriageMemoryLeak,
+            WorkflowKind::TuneGc,
+            WorkflowKind::TraverseObjectGraph,
+            WorkflowKind::CompareSnapshots,
+        ] {
+            let description = describe(kind)
+                .unwrap_or_else(|err| panic!("describe({kind}) should succeed, got error: {err}"));
+            assert_eq!(description.kind, kind);
+            assert!(
+                !description.steps.is_empty(),
+                "describe({kind}) should return at least one step"
+            );
+        }
     }
 }
