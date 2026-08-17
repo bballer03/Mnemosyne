@@ -8,7 +8,7 @@ use crate::{
     diff::{DiffRequest, DiffResult},
     errors::{CoreError, CoreResult},
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
-    graph::{find_gc_path, GcPathRequest},
+    graph::{find_all_gc_paths, find_gc_path, AllPathsRequest, GcPathRequest},
     hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::session::{
@@ -358,9 +358,24 @@ struct MapToCodeParams {
 #[derive(Debug, Deserialize)]
 struct FindGcPathParams {
     heap_path: String,
-    object_id: String,
+    #[serde(default)]
+    object_id: Option<String>,
     #[serde(default)]
     max_depth: Option<u32>,
+    /// M8 Slice 8.A: return every enumerated path instead of only the
+    /// shortest. Additive param on the existing `find_gc_path` tool.
+    #[serde(default)]
+    all_paths: bool,
+    /// M8 Slice 8.A: find all-paths for every live instance of this class
+    /// instead of a single `object_id`. Mutually exclusive with
+    /// `object_id`.
+    #[serde(default)]
+    by_class: Option<String>,
+    /// M8 Slice 8.A: shared path-enumeration budget across the whole
+    /// `all_paths`/`by_class` query. Defaults to
+    /// `AllPathsRequest::DEFAULT_MAX_PATHS` (20) when omitted.
+    #[serde(default)]
+    max_paths: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -759,11 +774,14 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "find_gc_path",
-                "description": "Find a path from an object to a GC root.",
+                "description": "Find a path from an object to a GC root. Set all_paths or by_class to enumerate every path (bounded by max_paths) instead of only the shortest.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
-                    { "name": "object_id", "type": "string", "required": true, "description": "Target object identifier, for example 0x1000." },
-                    { "name": "max_depth", "type": "number", "required": false, "description": "Optional traversal depth cap." }
+                    { "name": "object_id", "type": "string", "required": false, "description": "Target object identifier, for example 0x1000. Required unless by_class is set; mutually exclusive with by_class." },
+                    { "name": "max_depth", "type": "number", "required": false, "description": "Optional traversal depth cap." },
+                    { "name": "all_paths", "type": "boolean", "required": false, "description": "Return all paths (bounded by max_paths) instead of only the shortest." },
+                    { "name": "by_class", "type": "string", "required": false, "description": "Find all-paths for every live instance of this class instead of a single object_id." },
+                    { "name": "max_paths", "type": "number", "required": false, "description": "Shared path-enumeration budget across the whole all_paths/by_class query. Default 20." }
                 ]
             },
             {
@@ -1081,12 +1099,30 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "find_gc_path" => {
             let params: FindGcPathParams = serde_json::from_value(packet.params)?;
-            let response = find_gc_path(&GcPathRequest {
-                heap_path: params.heap_path,
-                object_id: params.object_id,
-                max_depth: params.max_depth,
-            })?;
-            Ok(serde_json::to_value(response)?)
+            if params.all_paths || params.by_class.is_some() {
+                let response = find_all_gc_paths(&AllPathsRequest {
+                    heap_path: params.heap_path,
+                    object_id: params.object_id,
+                    by_class: params.by_class,
+                    max_paths: params
+                        .max_paths
+                        .unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS),
+                    max_depth: params.max_depth,
+                })?;
+                Ok(serde_json::to_value(response)?)
+            } else {
+                let object_id = params.object_id.ok_or_else(|| {
+                    CoreError::InvalidInput(
+                        "object_id is required unless all_paths or by_class is set".into(),
+                    )
+                })?;
+                let response = find_gc_path(&GcPathRequest {
+                    heap_path: params.heap_path,
+                    object_id,
+                    max_depth: params.max_depth,
+                })?;
+                Ok(serde_json::to_value(response)?)
+            }
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
@@ -2492,5 +2528,283 @@ mod tests {
                 .and_then(|value| value.get("code")),
             Some(&json!("feature_unavailable_in_overview_mode"))
         );
+    }
+
+    // --- M8 Slice 8.A: `find_gc_path` all_paths / by_class / max_paths ---
+
+    fn obj_ref_bytes(ids: &[u64]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for &id in ids {
+            buf.extend_from_slice(&(id as u32).to_be_bytes());
+        }
+        buf
+    }
+
+    /// Diamond-shaped graph: Root(1) -> BranchA(2), BranchB(3), both of
+    /// which point at the same Target(4). Two distinct shortest paths
+    /// reach Target.
+    fn build_diamond_fixture() -> Vec<u8> {
+        let mut builder = crate::hprof::test_fixtures::HprofBuilder::new(4);
+        builder
+            .add_string(1, "com/example/Root")
+            .add_string(2, "com/example/BranchA")
+            .add_string(3, "com/example/BranchB")
+            .add_string(4, "com/example/Target")
+            .add_string(5, "left")
+            .add_string(6, "right")
+            .add_string(7, "next")
+            .add_load_class(1, 0x100, 0, 1)
+            .add_load_class(2, 0x200, 0, 2)
+            .add_load_class(3, 0x300, 0, 3)
+            .add_load_class(4, 0x400, 0, 4);
+
+        let mut heap = crate::hprof::test_fixtures::HeapDumpBuilder::new(4);
+        heap.add_gc_root_java_frame(1, 1, 0)
+            .add_class_dump(0x100, 0, 8, &[(5, 2), (6, 2)])
+            .add_class_dump(0x200, 0x100, 4, &[(7, 2)])
+            .add_class_dump(0x300, 0x100, 4, &[(7, 2)])
+            .add_class_dump(0x400, 0x100, 0, &[])
+            .add_instance_dump(1, 0x100, &obj_ref_bytes(&[2, 3]))
+            .add_instance_dump(2, 0x200, &obj_ref_bytes(&[4]))
+            .add_instance_dump(3, 0x300, &obj_ref_bytes(&[4]))
+            .add_instance_dump(4, 0x400, &[]);
+
+        builder.add_heap_dump(heap.build());
+        builder.build()
+    }
+
+    /// Root(1) -> Session(10), Session(11), Session(12): three live
+    /// instances of the same class, each reachable via a distinct one-hop
+    /// path from root.
+    fn build_by_class_fixture() -> Vec<u8> {
+        let mut builder = crate::hprof::test_fixtures::HprofBuilder::new(4);
+        builder
+            .add_string(1, "com/example/Root")
+            .add_string(2, "com/example/Session")
+            .add_string(3, "a")
+            .add_string(4, "b")
+            .add_string(5, "c")
+            .add_load_class(1, 0x500, 0, 1)
+            .add_load_class(2, 0x600, 0, 2);
+
+        let mut heap = crate::hprof::test_fixtures::HeapDumpBuilder::new(4);
+        heap.add_gc_root_java_frame(1, 1, 0)
+            .add_class_dump(0x500, 0, 12, &[(3, 2), (4, 2), (5, 2)])
+            .add_class_dump(0x600, 0x500, 0, &[])
+            .add_instance_dump(1, 0x500, &obj_ref_bytes(&[10, 11, 12]))
+            .add_instance_dump(10, 0x600, &[])
+            .add_instance_dump(11, 0x600, &[])
+            .add_instance_dump(12, 0x600, &[]);
+
+        builder.add_heap_dump(heap.build());
+        builder.build()
+    }
+
+    fn write_bytes_fixture(bytes: &[u8]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(bytes).unwrap();
+        file
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_default_shape_is_unchanged() {
+        let file = write_fixture();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.get("path").is_some());
+        assert!(
+            result.get("all_paths").is_none(),
+            "all_paths must be omitted from the default (no new params) response shape"
+        );
+        assert!(
+            result.get("truncated").is_none(),
+            "truncated must be omitted from the default (no new params) response shape"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_all_paths_returns_diamond_paths() {
+        let file = write_bytes_fixture(&build_diamond_fixture());
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x4",
+                    "all_paths": true,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let all_paths = result
+            .get("all_paths")
+            .and_then(Value::as_array)
+            .expect("all_paths array");
+        assert_eq!(all_paths.len(), 2);
+        assert_eq!(result.get("truncated"), None, "not truncated => omitted");
+        assert!(
+            result
+                .get("path")
+                .and_then(Value::as_array)
+                .is_some_and(|path| !path.is_empty()),
+            "legacy `path` field must still be populated with the shortest path"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_by_class_returns_paths_for_all_instances() {
+        let file = write_bytes_fixture(&build_by_class_fixture());
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "by_class": "com.example.Session",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let all_paths = result
+            .get("all_paths")
+            .and_then(Value::as_array)
+            .expect("all_paths array");
+        assert_eq!(all_paths.len(), 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_max_paths_truncates_honestly() {
+        let file = write_bytes_fixture(&build_diamond_fixture());
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x4",
+                    "all_paths": true,
+                    "max_paths": 1,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let all_paths = result
+            .get("all_paths")
+            .and_then(Value::as_array)
+            .expect("all_paths array");
+        assert_eq!(all_paths.len(), 1);
+        assert_eq!(result.get("truncated"), Some(&json!(true)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_object_id_not_found_returns_error() {
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0xdeadbeef",
+                    "all_paths": true,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            CoreError::Unsupported(detail) => {
+                assert!(
+                    detail.starts_with("gc_path_object_id_not_found:"),
+                    "{detail}"
+                );
+            }
+            other => panic!("expected CoreError::Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_by_class_no_instances_returns_error() {
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "by_class": "com.example.DoesNotExist",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            CoreError::Unsupported(detail) => {
+                assert!(
+                    detail.starts_with("gc_path_class_has_no_live_instances:"),
+                    "{detail}"
+                );
+            }
+            other => panic!("expected CoreError::Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_advertises_find_gc_path_new_params() {
+        let result = list_tools_result().await;
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let gc_path_tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("find_gc_path")))
+            .expect("find_gc_path tool");
+        let params = gc_path_tool
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("params array");
+
+        for expected in ["all_paths", "by_class", "max_paths"] {
+            assert!(
+                params
+                    .iter()
+                    .any(|param| param.get("name") == Some(&json!(expected))),
+                "find_gc_path tool should advertise the new '{expected}' param"
+            );
+        }
     }
 }

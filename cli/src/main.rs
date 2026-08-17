@@ -25,7 +25,10 @@ use mnemosyne_core::{
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix_with_config, FixRequest, FixStyle},
-    graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
+    graph::{
+        find_all_gc_paths, find_gc_path, AllPathsRequest, GcPathRequest, GcPathResult,
+        HistogramGroupBy,
+    },
     hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, HeapSummary, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
@@ -228,9 +231,22 @@ struct MapArgs {
 struct GcPathArgs {
     heap: PathBuf,
     #[arg(long = "object-id")]
-    object_id: String,
+    object_id: Option<String>,
     #[arg(long)]
     max_depth: Option<u32>,
+    /// Return every enumerated GC root path (bounded by `--max-paths`)
+    /// instead of only the shortest one.
+    #[arg(long = "all-paths")]
+    all_paths: bool,
+    /// Find all GC root paths for every live instance of this class
+    /// instead of a single `--object-id`. Mutually exclusive with
+    /// `--object-id`.
+    #[arg(long = "by-class", value_name = "CLASS_NAME")]
+    by_class: Option<String>,
+    /// Shared path-enumeration budget across the whole `--all-paths` /
+    /// `--by-class` query (not per-path, not per-instance).
+    #[arg(long = "max-paths", default_value_t = 20)]
+    max_paths: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -1022,10 +1038,46 @@ async fn handle_map(args: MapArgs) -> Result<()> {
 async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
+    if args.all_paths || args.by_class.is_some() {
+        if args.object_id.is_some() && args.by_class.is_some() {
+            anyhow::bail!("--object-id and --by-class are mutually exclusive");
+        }
+        if args.object_id.is_none() && args.by_class.is_none() {
+            anyhow::bail!("--all-paths requires either --object-id or --by-class");
+        }
+
+        let pb = start_spinner("Tracing GC paths...");
+        let request = AllPathsRequest {
+            heap_path: args.heap.to_string_lossy().into(),
+            object_id: args.object_id.clone(),
+            by_class: args.by_class.clone(),
+            max_paths: args.max_paths,
+            max_depth: args.max_depth,
+        };
+
+        match find_all_gc_paths(&request) {
+            Ok(response) => {
+                finish_spinner(&pb, "GC path trace complete.");
+                print_all_gc_paths(&response);
+            }
+            Err(err) => {
+                finish_spinner(&pb, "GC path trace failed.");
+                exit_gc_path_with_error(err);
+            }
+        }
+
+        return Ok(());
+    }
+
+    let object_id = args
+        .object_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--object-id is required"))?;
+
     let pb = start_spinner("Tracing GC path...");
     let response = find_gc_path(&GcPathRequest {
         heap_path: args.heap.to_string_lossy().into(),
-        object_id: args.object_id,
+        object_id,
         max_depth: args.max_depth,
     })
     .with_context(|| {
@@ -1061,6 +1113,62 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_all_gc_paths(response: &GcPathResult) {
+    let paths = response.all_paths.as_deref().unwrap_or_default();
+    let truncated_note = if response.truncated {
+        ", truncated"
+    } else {
+        ""
+    };
+    println!(
+        "{} {} ({} found{truncated_note}):",
+        section_label("GC root paths for"),
+        response.object_id,
+        paths.len()
+    );
+
+    if paths.is_empty() {
+        println!("  (no paths found)");
+        return;
+    }
+
+    for (path_idx, path) in paths.iter().enumerate() {
+        println!("  Path {} (depth {}):", path_idx + 1, path.len());
+        for (idx, node) in path.iter().enumerate() {
+            let marker = if node.is_root {
+                style("ROOT").bold().to_string()
+            } else {
+                format!("#{idx}")
+            };
+            println!(
+                "    {} -> {} [{}] via {}",
+                marker,
+                style(node.class_name.as_str()).cyan(),
+                node.object_id,
+                node.field.clone().unwrap_or_else(|| "<direct>".into())
+            );
+        }
+    }
+}
+
+fn exit_gc_path_with_error(err: CoreError) -> ! {
+    let code = gc_path_exit_code(&err);
+    print_cli_error(&anyhow::Error::new(err));
+    process::exit(code);
+}
+
+fn gc_path_exit_code(err: &CoreError) -> i32 {
+    match err {
+        CoreError::Unsupported(detail) if detail.starts_with("gc_path_object_id_not_found:") => 8,
+        CoreError::Unsupported(detail)
+            if detail.starts_with("gc_path_class_has_no_live_instances:") =>
+        {
+            9
+        }
+        _ => 1,
+    }
 }
 
 async fn handle_query(args: QueryArgs) -> Result<()> {

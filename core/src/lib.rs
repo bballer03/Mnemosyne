@@ -36,7 +36,8 @@ pub use fix::{
     propose_fix, propose_fix_with_config, FixRequest, FixResponse, FixStyle, FixSuggestion,
 };
 pub use graph::{
-    build_dominator_tree, build_histogram, find_gc_path, find_unreachable_objects, DominatorNode,
+    build_dominator_tree, build_histogram, enumerate_gc_paths, find_all_gc_paths, find_gc_path,
+    find_unreachable_objects, resolve_live_instances_by_class, AllPathsRequest, DominatorNode,
     DominatorTree, GcPathNode, GcPathRequest, GcPathResult, GraphMetrics, HistogramEntry,
     HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
