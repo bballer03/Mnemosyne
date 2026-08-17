@@ -334,21 +334,27 @@ async fn advance_with_unknown_workflow_id_returns_workflow_not_found() {
 }
 
 #[tokio::test]
-async fn start_with_unimplemented_kind_returns_clear_error_not_panic() {
-    // M11 Slice 11.B implemented TuneGc and TraverseObjectGraph (see
-    // core/tests/workflow_tune_gc.rs / workflow_traverse_object_graph.rs);
-    // only CompareSnapshots (Slice 11.C) is still unimplemented.
+async fn start_with_unrecognized_leak_severity_is_step_input_mismatch_not_panic() {
+    // M11 Slice 11.B implemented TuneGc and TraverseObjectGraph, and Slice
+    // 11.C implemented CompareSnapshots (see core/tests/workflow_tune_gc.rs
+    // / workflow_traverse_object_graph.rs / workflow_compare_snapshots.rs)
+    // -- all four `WorkflowKind` variants are implemented now, so there is
+    // no longer an "unimplemented kind" negative case to cover here. This
+    // test keeps the same "malformed input on `start` returns a clear
+    // error, not a panic" spirit for `TriageMemoryLeak` specifically: an
+    // invalid `min_severity` value is a step-input shape error, not a valid
+    // `LeakSeverity`.
     let heap_file = write_fixture_heap();
     let store_dir = tempfile::tempdir().unwrap();
     let store = WorkflowStore::new(store_dir.path().to_path_buf());
 
     let err = start(
         &store,
-        WorkflowKind::CompareSnapshots,
+        WorkflowKind::TriageMemoryLeak,
         heap_path(&heap_file),
-        json!({}),
+        json!({ "min_severity": "NOT_A_REAL_SEVERITY" }),
     )
     .await
     .unwrap_err();
-    assert!(err.to_string().contains("workflow_kind_not_implemented"));
+    assert!(err.to_string().contains("workflow_step_input_mismatch"));
 }
