@@ -1,6 +1,6 @@
 use crate::{
     analysis::{
-        analyze_heap, analyze_heap_from_graph, detect_leaks, focus_leaks,
+        analyze_heap, analyze_heap_from_graph, detect_duplicate_classes, detect_leaks, focus_leaks,
         generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AiChatTurn,
         AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
     },
@@ -503,6 +503,15 @@ struct InspectObjectParams {
     /// `heap_path`.
     #[serde(default)]
     snapshot: Option<String>,
+}
+
+/// M13 Slice 13.C: standalone cross-loader duplicate-class detection --
+/// mirrors why `diff_heaps` exists as its own tool rather than folding into
+/// `analyze_heap`: a focused, cheaper single-purpose call for a caller that
+/// already knows it wants exactly this signal.
+#[derive(Debug, Deserialize)]
+struct DetectClassloaderLeaksParams {
+    heap_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1130,6 +1139,14 @@ fn tool_catalog() -> Value {
                 "description": "List the manifests of every snapshot currently in the cache.",
                 "params": [],
                 "output_schema": "Vec<SnapshotManifest>"
+            },
+            {
+                "name": "detect_classloader_leaks",
+                "description": "Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." }
+                ],
+                "output_schema": "Vec<DuplicateClassGroup>"
             }
         ]
     })
@@ -1528,6 +1545,22 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             )
             .ok_or_else(|| inspect_object_id_not_found(&params.object_id, &params.heap_path))?;
             Ok(serde_json::to_value(inspection)?)
+        }
+        "detect_classloader_leaks" => {
+            let params: DetectClassloaderLeaksParams = serde_json::from_value(packet.params)?;
+
+            // Thin handler: parse the heap into a graph and call the
+            // existing M13 Slice 13.A analysis function directly -- no new
+            // analysis logic here, same "focused, cheaper single-purpose
+            // call" rationale as `diff_heaps`.
+            let graph = crate::hprof::parse_hprof_file_with_options(
+                &params.heap_path,
+                ParseOptions {
+                    retain_field_data: false,
+                },
+            )?;
+            let duplicates = detect_duplicate_classes(&graph);
+            Ok(serde_json::to_value(duplicates)?)
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
@@ -3970,5 +4003,282 @@ mod tests {
             value.pointer("/error_details/code"),
             Some(&json!("snapshot_not_found"))
         );
+    }
+
+    // --- M13 Slice 13.C: `detect_classloader_leaks` ---
+    //
+    // `core::hprof::test_fixtures`'s public builders hardcode every class's
+    // `class_loader_id` to the bootstrap loader (0), so a cross-loader
+    // duplicate-class shape can't be built through them. Same "local,
+    // self-contained hand-rolled-HPROF-bytes" convention already used by
+    // `cli/tests/classloader_cli.rs` for the identical problem: a small
+    // builder scoped to this test module rather than extending the shared
+    // production fixture code for one test's sake.
+
+    const M13_TAG_STRING_IN_UTF8: u8 = 0x01;
+    const M13_TAG_LOAD_CLASS: u8 = 0x02;
+    const M13_TAG_HEAP_DUMP: u8 = 0x0C;
+    const M13_SUB_ROOT_STICKY_CLASS: u8 = 0x05;
+    const M13_SUB_CLASS_DUMP: u8 = 0x20;
+    const M13_SUB_INSTANCE_DUMP: u8 = 0x21;
+
+    struct M13HprofBuilder {
+        id_size: u8,
+        buf: Vec<u8>,
+        records: Vec<Vec<u8>>,
+    }
+
+    impl M13HprofBuilder {
+        fn new(id_size: u8) -> Self {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+            push_u32(&mut buf, u32::from(id_size));
+            push_u64(&mut buf, 0);
+            Self {
+                id_size,
+                buf,
+                records: Vec::new(),
+            }
+        }
+
+        fn write_id(buf: &mut Vec<u8>, id: u64, id_size: u8) {
+            match id_size {
+                4 => push_u32(buf, id as u32),
+                8 => push_u64(buf, id),
+                _ => panic!("unsupported id_size: {id_size}"),
+            }
+        }
+
+        fn push_record(&mut self, tag: u8, body: Vec<u8>) {
+            let mut record = Vec::with_capacity(9 + body.len());
+            record.push(tag);
+            push_u32(&mut record, 0);
+            push_u32(&mut record, body.len() as u32);
+            record.extend_from_slice(&body);
+            self.records.push(record);
+        }
+
+        fn add_string(&mut self, id: u64, value: &str) {
+            let mut body = Vec::new();
+            Self::write_id(&mut body, id, self.id_size);
+            body.extend_from_slice(value.as_bytes());
+            self.push_record(M13_TAG_STRING_IN_UTF8, body);
+        }
+
+        fn add_load_class(&mut self, serial: u32, class_obj_id: u64, name_string_id: u64) {
+            let mut body = Vec::new();
+            push_u32(&mut body, serial);
+            Self::write_id(&mut body, class_obj_id, self.id_size);
+            push_u32(&mut body, 0);
+            Self::write_id(&mut body, name_string_id, self.id_size);
+            self.push_record(M13_TAG_LOAD_CLASS, body);
+        }
+
+        fn add_heap_dump(&mut self, sub_records: Vec<u8>) {
+            self.push_record(M13_TAG_HEAP_DUMP, sub_records);
+        }
+
+        fn build(self) -> Vec<u8> {
+            let mut buf = self.buf;
+            for record in self.records {
+                buf.extend_from_slice(&record);
+            }
+            buf
+        }
+    }
+
+    struct M13HeapDumpBuilder {
+        id_size: u8,
+        buf: Vec<u8>,
+    }
+
+    impl M13HeapDumpBuilder {
+        fn new(id_size: u8) -> Self {
+            Self {
+                id_size,
+                buf: Vec::new(),
+            }
+        }
+
+        fn add_gc_root_sticky_class(&mut self, obj_id: u64) {
+            self.buf.push(M13_SUB_ROOT_STICKY_CLASS);
+            M13HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
+        }
+
+        /// Unlike the production `HeapDumpBuilder::add_class_dump`, this
+        /// variant takes an explicit `class_loader_id` rather than
+        /// hardcoding the bootstrap loader (0) -- required to construct a
+        /// cross-loader duplicate-class shape at all.
+        fn add_class_dump(
+            &mut self,
+            class_obj_id: u64,
+            super_class_id: u64,
+            class_loader_id: u64,
+            instance_size: u32,
+        ) {
+            self.buf.push(M13_SUB_CLASS_DUMP);
+            M13HprofBuilder::write_id(&mut self.buf, class_obj_id, self.id_size);
+            push_u32(&mut self.buf, 0);
+            M13HprofBuilder::write_id(&mut self.buf, super_class_id, self.id_size);
+            M13HprofBuilder::write_id(&mut self.buf, class_loader_id, self.id_size);
+            for _ in 0..4 {
+                M13HprofBuilder::write_id(&mut self.buf, 0, self.id_size);
+            }
+            push_u32(&mut self.buf, instance_size);
+            self.buf.extend_from_slice(&0u16.to_be_bytes()); // constant pool count
+            self.buf.extend_from_slice(&0u16.to_be_bytes()); // static field count
+            self.buf.extend_from_slice(&0u16.to_be_bytes()); // instance field count
+        }
+
+        fn add_instance_dump(&mut self, obj_id: u64, class_obj_id: u64) {
+            self.buf.push(M13_SUB_INSTANCE_DUMP);
+            M13HprofBuilder::write_id(&mut self.buf, obj_id, self.id_size);
+            push_u32(&mut self.buf, 0);
+            M13HprofBuilder::write_id(&mut self.buf, class_obj_id, self.id_size);
+            push_u32(&mut self.buf, 0); // no field data
+        }
+
+        fn build(self) -> Vec<u8> {
+            self.buf
+        }
+    }
+
+    /// Two distinct loader objects (0x1000, 0x2000), each declaring their
+    /// own class object for the same class name
+    /// ("com/example/webapp/RequestHandler") -- the classic "redeployed
+    /// webapp" shape: same class loaded twice, once per generation's
+    /// classloader. Mirrors `cli/tests/classloader_cli.rs`'s
+    /// `build_classloader_duplicate_fixture`.
+    fn build_classloader_duplicate_fixture() -> Vec<u8> {
+        const ID_SIZE: u8 = 4;
+        const OBJECT_NAME: u64 = 1;
+        const LOADER_NAME: u64 = 2;
+        const HANDLER_NAME: u64 = 3;
+
+        const OBJECT_CLASS: u64 = 0x100;
+        const LOADER_CLASS: u64 = 0x200;
+        const HANDLER_CLASS_GEN1: u64 = 0x300;
+        const HANDLER_CLASS_GEN2: u64 = 0x301;
+
+        const LOADER_ONE: u64 = 0x1000;
+        const LOADER_TWO: u64 = 0x2000;
+        const HANDLER_INSTANCE_ONE: u64 = 0x3000;
+        const HANDLER_INSTANCE_TWO: u64 = 0x3001;
+
+        let mut builder = M13HprofBuilder::new(ID_SIZE);
+        builder.add_string(OBJECT_NAME, "java/lang/Object");
+        builder.add_string(LOADER_NAME, "com/example/webapp/WebappLoader");
+        builder.add_string(HANDLER_NAME, "com/example/webapp/RequestHandler");
+        builder.add_load_class(1, OBJECT_CLASS, OBJECT_NAME);
+        builder.add_load_class(2, LOADER_CLASS, LOADER_NAME);
+        builder.add_load_class(3, HANDLER_CLASS_GEN1, HANDLER_NAME);
+        builder.add_load_class(4, HANDLER_CLASS_GEN2, HANDLER_NAME);
+
+        let mut heap = M13HeapDumpBuilder::new(ID_SIZE);
+        heap.add_class_dump(OBJECT_CLASS, 0, 0, 0);
+        heap.add_class_dump(LOADER_CLASS, OBJECT_CLASS, 0, 16);
+        heap.add_class_dump(HANDLER_CLASS_GEN1, OBJECT_CLASS, LOADER_ONE, 8);
+        heap.add_class_dump(HANDLER_CLASS_GEN2, OBJECT_CLASS, LOADER_TWO, 8);
+
+        heap.add_instance_dump(LOADER_ONE, LOADER_CLASS);
+        heap.add_instance_dump(LOADER_TWO, LOADER_CLASS);
+        heap.add_instance_dump(HANDLER_INSTANCE_ONE, HANDLER_CLASS_GEN1);
+        heap.add_instance_dump(HANDLER_INSTANCE_TWO, HANDLER_CLASS_GEN2);
+
+        heap.add_gc_root_sticky_class(LOADER_ONE);
+        heap.add_gc_root_sticky_class(LOADER_TWO);
+        heap.add_gc_root_sticky_class(HANDLER_INSTANCE_ONE);
+        heap.add_gc_root_sticky_class(HANDLER_INSTANCE_TWO);
+
+        builder.add_heap_dump(heap.build());
+        builder.build()
+    }
+
+    fn write_classloader_duplicate_fixture() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&build_classloader_duplicate_fixture())
+            .unwrap();
+        file
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_includes_detect_classloader_leaks() {
+        let result = list_tools_result().await;
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("detect_classloader_leaks")))
+            .expect("detect_classloader_leaks tool");
+
+        assert_eq!(
+            tool.get("description"),
+            Some(&json!(
+                "Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern."
+            ))
+        );
+        assert_eq!(
+            tool.get("params"),
+            Some(&json!([
+                { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." }
+            ]))
+        );
+        assert_eq!(
+            tool.get("output_schema"),
+            Some(&json!("Vec<DuplicateClassGroup>"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_detect_classloader_leaks_returns_duplicate_groups() {
+        let file = write_classloader_duplicate_fixture();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "detect_classloader_leaks".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let groups = result.as_array().expect("array of duplicate groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].get("class_name"),
+            Some(&json!("com.example.webapp.RequestHandler"))
+        );
+        assert_eq!(groups[0].get("loader_count"), Some(&json!(2)));
+        assert_eq!(
+            groups[0].get("loader_object_ids"),
+            Some(&json!([0x1000, 0x2000]))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_detect_classloader_leaks_returns_empty_on_non_duplicated_fixture() {
+        let file = write_fixture();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "detect_classloader_leaks".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, json!([]));
     }
 }
