@@ -862,6 +862,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("ClassLoader Report:"));
                 println!("{}", build_classloader_table(classloaders));
+                print_classloader_leak_candidates(classloaders);
             }
 
             if let Some(strings) = &response.string_report {
@@ -2370,6 +2371,22 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     }
 
     table
+}
+
+fn print_classloader_leak_candidates(report: &mnemosyne_core::analysis::ClassLoaderReport) {
+    if report.potential_leaks.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("{}", bold_label("Potential classloader leaks:"));
+    for candidate in &report.potential_leaks {
+        println!(
+            "  {} ({})",
+            style(candidate.class_name.as_str()).cyan(),
+            candidate.reason
+        );
+    }
 }
 
 fn base_table() -> Table {

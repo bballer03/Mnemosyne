@@ -145,3 +145,130 @@ fn build_leak_candidate(loader: &ClassLoaderInfo) -> Option<ClassLoaderLeakCandi
 fn normalize_class_name(name: &str) -> String {
     name.replace('/', ".")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::build_dominator_tree;
+    use crate::hprof::{ClassInfo, GcRoot, GcRootType, HeapObject, ObjectKind};
+
+    fn add_class(graph: &mut ObjectGraph, class_id: u64, name: &str, class_loader_id: u64) {
+        graph.classes.insert(
+            class_id,
+            ClassInfo {
+                class_obj_id: class_id,
+                super_class_id: 0,
+                class_loader_id,
+                instance_size: 16,
+                name: Some(name.into()),
+                instance_fields: Vec::new(),
+                static_references: Vec::new(),
+            },
+        );
+    }
+
+    fn add_object(
+        graph: &mut ObjectGraph,
+        object_id: u64,
+        class_id: u64,
+        shallow_size: u32,
+        references: &[u64],
+    ) {
+        graph.objects.insert(
+            object_id,
+            HeapObject {
+                id: object_id,
+                class_id,
+                shallow_size,
+                references: references.to_vec(),
+                field_data: Vec::new(),
+                kind: ObjectKind::Instance,
+            },
+        );
+    }
+
+    fn add_root(graph: &mut ObjectGraph, object_id: u64) {
+        graph.gc_roots.push(GcRoot {
+            object_id,
+            root_type: GcRootType::StickyClass,
+        });
+    }
+
+    /// GC root -> Loader(1, com.example.Loader, bootstrap) -> BigLeaked(2,
+    /// com.example.BigLeaked, loaded by loader 1, ~9 MB shallow). Loader 1
+    /// declares exactly one class (BigLeaked) -- above the retained-bytes
+    /// threshold and at/under the loaded-class-count ceiling, so it must be
+    /// flagged as a potential leak.
+    fn build_leaky_loader_graph() -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+        add_class(&mut graph, 100, "com.example.Loader", 0);
+        add_class(&mut graph, 200, "com.example.BigLeaked", 1);
+
+        add_object(&mut graph, 1, 100, 16, &[2]);
+        add_object(&mut graph, 2, 200, 9_000_000, &[]);
+        add_root(&mut graph, 1);
+
+        graph
+    }
+
+    #[test]
+    fn loader_with_few_classes_and_high_retained_size_is_flagged() {
+        let graph = build_leaky_loader_graph();
+        let dominator = build_dominator_tree(&graph);
+
+        let report = analyze_classloaders(&graph, Some(&dominator));
+
+        assert_eq!(report.potential_leaks.len(), 1);
+        let leak = &report.potential_leaks[0];
+        assert_eq!(leak.object_id, 1);
+        assert_eq!(leak.class_name, "com.example.Loader");
+        assert_eq!(leak.loaded_class_count, 1);
+        assert!(leak.retained_bytes >= LEAK_RETAINED_THRESHOLD_BYTES);
+        assert!(leak.reason.contains("Retains"));
+    }
+
+    #[test]
+    fn loader_below_retained_threshold_is_not_flagged() {
+        let mut graph = ObjectGraph::new(8);
+        add_class(&mut graph, 100, "com.example.SmallLoader", 0);
+        add_class(&mut graph, 200, "com.example.Small", 1);
+        add_object(&mut graph, 1, 100, 16, &[2]);
+        add_object(&mut graph, 2, 200, 1_024, &[]);
+        add_root(&mut graph, 1);
+
+        let dominator = build_dominator_tree(&graph);
+        let report = analyze_classloaders(&graph, Some(&dominator));
+
+        assert!(report.potential_leaks.is_empty());
+    }
+
+    #[test]
+    fn loader_with_many_classes_above_ceiling_is_not_flagged_even_if_large() {
+        let mut graph = ObjectGraph::new(8);
+        add_class(&mut graph, 100, "com.example.BusyLoader", 0);
+        let mut references = Vec::new();
+        for i in 0..5u64 {
+            let class_id = 200 + i;
+            add_class(&mut graph, class_id, &format!("com.example.Class{i}"), 1);
+            let object_id = 10 + i;
+            add_object(&mut graph, object_id, class_id, 2_000_000, &[]);
+            references.push(object_id);
+        }
+        add_object(&mut graph, 1, 100, 16, &references);
+        add_root(&mut graph, 1);
+
+        let dominator = build_dominator_tree(&graph);
+        let report = analyze_classloaders(&graph, Some(&dominator));
+
+        assert!(report.potential_leaks.is_empty());
+    }
+
+    #[test]
+    fn no_dominator_tree_yields_no_leak_candidates() {
+        let graph = build_leaky_loader_graph();
+
+        let report = analyze_classloaders(&graph, None);
+
+        assert!(report.potential_leaks.is_empty());
+    }
+}
