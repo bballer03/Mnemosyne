@@ -968,6 +968,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("ClassLoader Report:"));
                 println!("{}", build_classloader_table(classloaders));
+                print_classloader_duplicates(classloaders);
                 print_classloader_leak_candidates(classloaders);
             }
 
@@ -2949,6 +2950,7 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     table.set_header(vec![
         header_cell("Loader", CellAlignment::Left),
         header_cell("Classes", CellAlignment::Right),
+        header_cell("Ancestors", CellAlignment::Right),
         header_cell("Instances", CellAlignment::Right),
         header_cell("Shallow", CellAlignment::Right),
         header_cell("Retained", CellAlignment::Right),
@@ -2959,6 +2961,7 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
         table.add_row(vec![
             Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
             right_cell(loader.loaded_class_count),
+            right_cell(loader.ancestor_chain.len()),
             right_cell(loader.instance_count),
             right_cell(format_megabytes(loader.total_shallow_bytes)),
             right_cell(format_megabytes(loader.retained_bytes.unwrap_or(0))),
@@ -2966,6 +2969,35 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     }
 
     table
+}
+
+fn print_classloader_duplicates(report: &mnemosyne_core::analysis::ClassLoaderReport) {
+    if report.duplicate_classes.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "{}",
+        bold_label(&format!(
+            "Duplicate classes across loaders ({}):",
+            report.duplicate_classes.len()
+        ))
+    );
+    for group in &report.duplicate_classes {
+        let loader_ids = group
+            .loader_object_ids
+            .iter()
+            .map(|id| format!("{id:#x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  {} loaded by {} loaders: {}",
+            style(group.class_name.as_str()).cyan(),
+            group.loader_count,
+            loader_ids
+        );
+    }
 }
 
 fn print_classloader_leak_candidates(report: &mnemosyne_core::analysis::ClassLoaderReport) {
