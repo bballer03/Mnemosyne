@@ -134,6 +134,40 @@ pub fn find_gc_path(request: &GcPathRequest) -> CoreResult<GcPathResult> {
     build_synthetic_path(request, &summary, depth_limit)
 }
 
+/// Graph-based single-object lookup (M9 Slice 9.D): traces `object_id` on an
+/// already-loaded `ObjectGraph` (e.g. a snapshot-cached graph) instead of
+/// parsing `heap_path` from disk. Thin public wrapper around the existing
+/// [`trace_on_object_graph`] BFS -- the same traversal [`find_gc_path`]'s
+/// primary (full-`ObjectGraph`) tier already uses -- so results are
+/// identical to a fresh `find_gc_path` call whenever that primary tier
+/// would have succeeded. Unlike [`find_gc_path`], there is no
+/// budget-limited/synthetic fallback here: a snapshot's `ObjectGraph` is
+/// already fully materialized, so those fallback tiers (which exist only to
+/// cope with a parse that is too expensive or fails outright) do not apply.
+///
+/// `heap_path` is used only to build a descriptive error message; it need
+/// not be the path the graph was originally parsed from.
+pub fn find_gc_path_in_graph(
+    graph: &ObjectGraph,
+    heap_path: &str,
+    object_id: &str,
+    max_depth: Option<u32>,
+) -> CoreResult<GcPathResult> {
+    let depth_limit = max_depth.unwrap_or(6).clamp(2, 32) as usize;
+    let target_id = parse_object_id(object_id).filter(|id| graph.objects.contains_key(id));
+    let Some(target_id) = target_id else {
+        return Err(CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{heap_path}'"
+        )));
+    };
+
+    trace_on_object_graph(graph, target_id, depth_limit).ok_or_else(|| {
+        CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{heap_path}'"
+        ))
+    })
+}
+
 /// BFS on the full ObjectGraph from GC roots to the target object.
 fn trace_on_object_graph(
     graph: &ObjectGraph,
@@ -336,22 +370,46 @@ type ParentEdges = HashMap<u64, Vec<(u64, Option<String>)>>;
 /// real graph data, so a heap that fails to parse returns a real error
 /// instead of a best-effort placeholder.
 pub fn find_all_gc_paths(request: &AllPathsRequest) -> CoreResult<GcPathResult> {
+    // Validate before parsing (fail fast without touching the filesystem) --
+    // `find_all_gc_paths_in_graph` repeats this same check so it stays safe
+    // as a standalone entry point too, but doing it here first preserves
+    // this function's original fail-fast-before-I/O behavior exactly.
+    validate_all_paths_request(request)?;
+
+    let graph = parse_hprof_file_with_options(&request.heap_path, ParseOptions::default())?;
+    find_all_gc_paths_in_graph(&graph, request)
+}
+
+fn validate_all_paths_request(request: &AllPathsRequest) -> CoreResult<()> {
     match (&request.object_id, &request.by_class) {
-        (Some(_), Some(_)) => {
-            return Err(CoreError::InvalidInput(
-                "gc-path: --object-id and --by-class are mutually exclusive".into(),
-            ));
-        }
-        (None, None) => {
-            return Err(CoreError::InvalidInput(
-                "gc-path: one of --object-id or --by-class is required".into(),
-            ));
-        }
-        _ => {}
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "gc-path: --object-id and --by-class are mutually exclusive".into(),
+        )),
+        (None, None) => Err(CoreError::InvalidInput(
+            "gc-path: one of --object-id or --by-class is required".into(),
+        )),
+        _ => Ok(()),
     }
+}
+
+/// Graph-based all-paths/by-class enumeration (M9 Slice 9.D): the exact
+/// post-parse logic [`find_all_gc_paths`] runs, extracted so a caller that
+/// already has an `ObjectGraph` in hand (e.g. loaded from a snapshot cache
+/// instead of parsed from `request.heap_path`) can reuse it without paying
+/// for a second parse. [`find_all_gc_paths`] itself now delegates to this
+/// function after its own parse -- behavior is unchanged, this is a pure
+/// extraction.
+///
+/// `request.heap_path` is still read for the mutual-exclusion validation
+/// and descriptive error/class-lookup messages below; it need not be the
+/// path `graph` was originally parsed from.
+pub fn find_all_gc_paths_in_graph(
+    graph: &ObjectGraph,
+    request: &AllPathsRequest,
+) -> CoreResult<GcPathResult> {
+    validate_all_paths_request(request)?;
 
     let depth_limit = request.max_depth.unwrap_or(6).clamp(2, 32) as usize;
-    let graph = parse_hprof_file_with_options(&request.heap_path, ParseOptions::default())?;
     let id_size = graph.identifier_size as usize;
 
     if let Some(object_id) = &request.object_id {
@@ -364,7 +422,7 @@ pub fn find_all_gc_paths(request: &AllPathsRequest) -> CoreResult<GcPathResult> 
         };
 
         let (paths, truncated) =
-            enumerate_gc_paths(&graph, target_id, depth_limit, request.max_paths);
+            enumerate_gc_paths(graph, target_id, depth_limit, request.max_paths);
         let first_path = paths.first().cloned().unwrap_or_default();
 
         return Ok(GcPathResult {
@@ -381,7 +439,7 @@ pub fn find_all_gc_paths(request: &AllPathsRequest) -> CoreResult<GcPathResult> 
         .by_class
         .as_ref()
         .expect("validated above: by_class is Some when object_id is None");
-    let instances = resolve_live_instances_by_class(&graph, class_name);
+    let instances = resolve_live_instances_by_class(graph, class_name);
     if instances.is_empty() {
         return Err(CoreError::Unsupported(format!(
             "gc_path_class_has_no_live_instances: no live instances of class '{class_name}' found in heap dump '{}'",
@@ -398,7 +456,7 @@ pub fn find_all_gc_paths(request: &AllPathsRequest) -> CoreResult<GcPathResult> 
             truncated = true;
             break;
         }
-        let (mut paths, hit_cap) = enumerate_gc_paths(&graph, instance_id, depth_limit, budget);
+        let (mut paths, hit_cap) = enumerate_gc_paths(graph, instance_id, depth_limit, budget);
         if hit_cap {
             truncated = true;
         }
