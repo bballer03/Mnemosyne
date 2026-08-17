@@ -30,12 +30,20 @@ pub struct FieldValueEntry {
     pub value: String,
 }
 
+/// A class-name-resolved object reference. Kept structured (rather than a
+/// baked `"{id} ({class})"` string) so JSON/TOON/MCP consumers — chiefly
+/// AI agents chaining `inspect_object` calls — get a clean `object_id`
+/// they can pass straight back into `inspect`/`gc-path`/`query`, matching
+/// this crate's MCP-first structured-output commitment. The text renderer
+/// is the only place that formats `"{object_id} ({class_name})"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectRef {
+    pub object_id: String,
+    pub class_name: String,
+}
+
 /// A focused, single-object view: identity, size, dominator context, and
-/// refs in/out. `references_out` / `referrers_in` / `dominator_parent`
-/// entries are rendered as `"{object_id} ({class_name})"` so the text
-/// renderer can print class-name-resolved lists without a second graph
-/// lookup; `dominator_children` are plain object-id strings since only
-/// their count is surfaced in text output.
+/// refs in/out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectInspection {
     pub object_id: String,
@@ -48,10 +56,10 @@ pub struct ObjectInspection {
     /// object has non-empty `field_data`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<FieldValueEntry>>,
-    pub references_out: Vec<String>,
-    pub referrers_in: Vec<String>,
-    pub dominator_parent: Option<String>,
-    pub dominator_children: Vec<String>,
+    pub references_out: Vec<ObjectRef>,
+    pub referrers_in: Vec<ObjectRef>,
+    pub dominator_parent: Option<ObjectRef>,
+    pub dominator_children: Vec<ObjectRef>,
 }
 
 /// Inspect a single object: identity/size, refs in/out, dominator context,
@@ -84,14 +92,14 @@ pub fn inspect_object(
     references_out_ids.sort_unstable();
     let references_out = references_out_ids
         .into_iter()
-        .map(|id| format_object_id_with_class(graph, id_size, id))
+        .map(|id| object_ref(graph, id_size, id))
         .collect();
 
     let mut referrers_in_ids = graph.get_referrers(object_id);
     referrers_in_ids.sort_unstable();
     let referrers_in = referrers_in_ids
         .into_iter()
-        .map(|id| format_object_id_with_class(graph, id_size, id))
+        .map(|id| object_ref(graph, id_size, id))
         .collect();
 
     let (dominator_parent, dominator_children, retained_size) = match dominator {
@@ -99,13 +107,13 @@ pub fn inspect_object(
             let parent = dom
                 .immediate_dominator(object_id)
                 .filter(|&parent_id| parent_id != VIRTUAL_ROOT_ID)
-                .map(|parent_id| format_object_id_with_class(graph, id_size, parent_id));
+                .map(|parent_id| object_ref(graph, id_size, parent_id));
 
             let mut children_ids = dom.dominated_by(object_id).to_vec();
             children_ids.sort_unstable();
             let children = children_ids
                 .into_iter()
-                .map(|id| format_object_id(id, id_size))
+                .map(|id| object_ref(graph, id_size, id))
                 .collect();
 
             (parent, children, Some(dom.retained_size(object_id)))
@@ -178,17 +186,18 @@ fn render_field_value(graph: &ObjectGraph, id_size: usize, value: &FieldValue) -
     }
 }
 
-/// Render `id (ClassName)`, resolving the class name by looking the id up
-/// in `graph` — used for `references_out` / `referrers_in` /
-/// `dominator_parent` so the text renderer can print class-name-resolved
-/// lists straight from the stored strings.
-fn format_object_id_with_class(graph: &ObjectGraph, id_size: usize, id: ObjectId) -> String {
+/// Build a structured [`ObjectRef`], resolving the class name by looking
+/// the id up in `graph`.
+fn object_ref(graph: &ObjectGraph, id_size: usize, id: ObjectId) -> ObjectRef {
     let class_name = graph
         .get_object(id)
         .and_then(|obj| graph.class_name(obj.class_id))
         .map(prettify_class_name)
         .unwrap_or_else(|| "<unknown>".to_string());
-    format!("{} ({class_name})", format_object_id(id, id_size))
+    ObjectRef {
+        object_id: format_object_id(id, id_size),
+        class_name,
+    }
 }
 
 /// Render an object id as the same zero-padded hex string convention used
@@ -325,11 +334,17 @@ mod tests {
 
         assert_eq!(
             inspection.references_out,
-            vec!["0x0000000000000003 (com.example.Leaf)".to_string()]
+            vec![ObjectRef {
+                object_id: "0x0000000000000003".to_string(),
+                class_name: "com.example.Leaf".to_string(),
+            }]
         );
         assert_eq!(
             inspection.referrers_in,
-            vec!["0x0000000000000001 (com.example.Root)".to_string()]
+            vec![ObjectRef {
+                object_id: "0x0000000000000001".to_string(),
+                class_name: "com.example.Root".to_string(),
+            }]
         );
     }
 
@@ -342,11 +357,17 @@ mod tests {
 
         assert_eq!(
             inspection.dominator_parent,
-            Some("0x0000000000000001 (com.example.Root)".to_string())
+            Some(ObjectRef {
+                object_id: "0x0000000000000001".to_string(),
+                class_name: "com.example.Root".to_string(),
+            })
         );
         assert_eq!(
             inspection.dominator_children,
-            vec!["0x0000000000000003".to_string()]
+            vec![ObjectRef {
+                object_id: "0x0000000000000003".to_string(),
+                class_name: "com.example.Leaf".to_string(),
+            }]
         );
     }
 

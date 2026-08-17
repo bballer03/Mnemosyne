@@ -7,13 +7,20 @@
 //! / `core/tests/analyze_by_referrer.rs`.
 
 use mnemosyne_core::{
-    analysis::inspect_object,
+    analysis::{inspect_object, ObjectRef},
     build_dominator_tree,
     hprof::test_fixtures::build_graph_fixture,
     parse_hprof_file_with_options,
     report::inspect::{render, Format},
     ParseOptions,
 };
+
+fn obj_ref(object_id: &str, class_name: &str) -> ObjectRef {
+    ObjectRef {
+        object_id: object_id.into(),
+        class_name: class_name.into(),
+    }
+}
 
 /// `build_graph_fixture()` is: GC root 0x1000 (`com.example.BigCache`, one
 /// field `entries` -> 0x2000) -> 0x2000 (`java.lang.Object`, no fields).
@@ -34,13 +41,16 @@ fn inspects_known_object_with_correct_size_refs_and_dominator_context() {
     assert_eq!(inspection.class_name, "com.example.BigCache");
     assert_eq!(
         inspection.references_out,
-        vec!["0x00002000 (java.lang.Object)"]
+        vec![obj_ref("0x00002000", "java.lang.Object")]
     );
-    assert_eq!(inspection.referrers_in, Vec::<String>::new());
+    assert_eq!(inspection.referrers_in, Vec::<ObjectRef>::new());
     // The GC root's immediate dominator is the virtual super-root, which is
     // not a real object.
     assert_eq!(inspection.dominator_parent, None);
-    assert_eq!(inspection.dominator_children, vec!["0x00002000"]);
+    assert_eq!(
+        inspection.dominator_children,
+        vec![obj_ref("0x00002000", "java.lang.Object")]
+    );
     assert!(inspection.retained_size.unwrap() > 0);
 }
 
@@ -57,12 +67,12 @@ fn child_object_reports_parent_as_dominator_and_root_as_referrer() {
     assert_eq!(inspection.class_name, "java.lang.Object");
     assert_eq!(
         inspection.referrers_in,
-        vec!["0x00001000 (com.example.BigCache)"]
+        vec![obj_ref("0x00001000", "com.example.BigCache")]
     );
-    assert_eq!(inspection.references_out, Vec::<String>::new());
+    assert_eq!(inspection.references_out, Vec::<ObjectRef>::new());
     assert_eq!(
         inspection.dominator_parent,
-        Some("0x00001000 (com.example.BigCache)".to_string())
+        Some(obj_ref("0x00001000", "com.example.BigCache"))
     );
     assert!(inspection.dominator_children.is_empty());
 }

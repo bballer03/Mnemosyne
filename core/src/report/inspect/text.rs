@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::analysis::ObjectInspection;
+use crate::analysis::{ObjectInspection, ObjectRef};
 
 pub fn render_text(inspection: &ObjectInspection) -> String {
     let mut out = String::new();
@@ -24,8 +24,9 @@ pub fn render_text(inspection: &ObjectInspection) -> String {
 
     let dominator_parent_label = inspection
         .dominator_parent
-        .as_deref()
-        .unwrap_or("(none - direct GC root)");
+        .as_ref()
+        .map(format_ref)
+        .unwrap_or_else(|| "(none - direct GC root)".to_string());
     let _ = writeln!(out, "  Dominator parent: {dominator_parent_label}");
     let _ = writeln!(
         out,
@@ -60,12 +61,20 @@ pub fn render_text(inspection: &ObjectInspection) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
-fn join_or_none(entries: &[String]) -> String {
+fn join_or_none(entries: &[ObjectRef]) -> String {
     if entries.is_empty() {
         "(none)".to_string()
     } else {
-        entries.join(", ")
+        entries
+            .iter()
+            .map(format_ref)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
+}
+
+fn format_ref(reference: &ObjectRef) -> String {
+    format!("{} ({})", reference.object_id, reference.class_name)
 }
 
 /// Human-readable byte size, matching the `48 B` / `1.20 MB` style used by
@@ -92,6 +101,13 @@ mod tests {
     use super::*;
     use crate::analysis::FieldValueEntry;
 
+    fn obj_ref(object_id: &str, class_name: &str) -> ObjectRef {
+        ObjectRef {
+            object_id: object_id.into(),
+            class_name: class_name.into(),
+        }
+    }
+
     fn sample_inspection() -> ObjectInspection {
         ObjectInspection {
             object_id: "0x00001000".into(),
@@ -103,10 +119,13 @@ mod tests {
                 type_name: "com.example.Key".into(),
                 value: "0x00002000".into(),
             }]),
-            references_out: vec!["0x00003000 (java.lang.String)".into()],
-            referrers_in: vec!["0x00004000 (com.example.Cache)".into()],
-            dominator_parent: Some("0x00004000 (com.example.Cache)".into()),
-            dominator_children: vec!["0x00005000".into(), "0x00005001".into()],
+            references_out: vec![obj_ref("0x00003000", "java.lang.String")],
+            referrers_in: vec![obj_ref("0x00004000", "com.example.Cache")],
+            dominator_parent: Some(obj_ref("0x00004000", "com.example.Cache")),
+            dominator_children: vec![
+                obj_ref("0x00005000", "com.example.Item"),
+                obj_ref("0x00005001", "com.example.Item"),
+            ],
         }
     }
 

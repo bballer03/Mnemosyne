@@ -2918,7 +2918,7 @@ mod tests {
         );
         assert_eq!(
             result.get("references_out"),
-            Some(&json!(["0x00002000 (java.lang.Object)"]))
+            Some(&json!([{"object_id": "0x00002000", "class_name": "java.lang.Object"}]))
         );
         assert!(
             result.get("fields").is_none(),

@@ -8,7 +8,7 @@ pub fn render_json(inspection: &ObjectInspection) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::FieldValueEntry;
+    use crate::analysis::{FieldValueEntry, ObjectRef};
 
     #[test]
     fn round_trips_via_serde() {
@@ -22,7 +22,10 @@ mod tests {
                 type_name: "com.example.Key".into(),
                 value: "0x00002000".into(),
             }]),
-            references_out: vec!["0x00003000 (java.lang.String)".into()],
+            references_out: vec![ObjectRef {
+                object_id: "0x00003000".into(),
+                class_name: "java.lang.String".into(),
+            }],
             referrers_in: Vec::new(),
             dominator_parent: None,
             dominator_children: Vec::new(),
