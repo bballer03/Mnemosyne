@@ -31,7 +31,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted dia
 It brings total clarity to complex Java/Kotlin heap dumps by combining:
 
 - ⚡ High-performance Rust-based heap parsing
-- 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level diffing in the graph-backed analysis path
+- 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level **and object-level** diffing in the graph-backed analysis path
 - 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, graph-backed investigation, and MCP workflows

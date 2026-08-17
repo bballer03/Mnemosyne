@@ -447,7 +447,14 @@ mnemosyne-cli diff before.hprof after.hprof
 
 Flags:
 
-- no diff-specific CLI flags in the current runtime
+- `--mode {class|object}` — default `class` (today's behavior, byte-identical to v0.3.0). `object` additionally runs fingerprint-based per-object identity diffing (requires deep mode on both dumps).
+- `--identity-strategy {class+retained|class+dominator|full-fingerprint}` — default `class+dominator`. Ignored when `--mode class`. `full-fingerprint` requires `--retain-field-data`.
+- `--retained-bucket-bits <u8>` — default `10` (1 KB power-of-two retained-size bucket).
+- `--retained-change-threshold <bytes>` — default `1048576`; minimum absolute retained-size delta for an object to appear in `retained_changed`.
+- `--top <n>` — default `50`; per-section cap for `added` / `removed` / `retained_changed`.
+- `--object-diff-min-retained <bytes>` — default `4096`; objects below this retained-size floor are skipped to keep memory bounded (hidden in `--help`, shown in `--help-long`).
+- `--retain-field-data` — opt in to field-level retention; required for `full-fingerprint`.
+- `--format {text|json|toon}` — default `text`.
 
 What it does:
 
@@ -455,6 +462,7 @@ What it does:
 - prints total delta size and object-count delta
 - prints top changed classes or record categories
 - prints class-level retained deltas when both heaps build graph-backed diff context successfully
+- with `--mode object`: fingerprints objects in both dumps (HPROF ids are never used as identity — they are not stable across dumps), then reports objects present only in `after` (`added`), only in `before` (`removed`), and present in both with a retained-size delta beyond the threshold (`retained_changed`), each with a dominator-class chain and reference chain, plus a `match_quality` block reporting the fingerprint collision rate
 
 Example:
 
@@ -475,7 +483,26 @@ Heap diff: before.hprof -> after.hprof
     com.example.CacheEntry        +12000     10.10 -> 94.30 MB   +90.50 MB
 ```
 
-Current limitation: `diff` is still record-level plus class-level retained deltas. It does not yet provide object-identity or reference-chain diffing.
+Object-level example:
+
+```bash
+mnemosyne-cli diff before.hprof after.hprof --mode object
+```
+
+```text
+object diff (strategy=class+dominator, bucket=1KB, threshold=1MB):
+  added (3):
+    com.example.UserSession    +52428800 bytes  count=1  dom=[Server,Pool,Cache,...]
+  removed (1):
+    com.example.LegacyCache    -67108864 bytes  count=2  dom=…
+  retained_changed (5):
+    com.example.RequestMap    +12582912 bytes  count=1->1  dom=…
+  match quality: collision_rate=0.012  false_match_risk=Low  false_split_risk=Medium
+```
+
+Exit codes: `0` diff produced, `2` I/O error, `3` heap parse error, `5` mode mismatch (e.g. `--mode object` against an overview-only dump), `6` fingerprint budget exceeded (`feature_unavailable_object_diff_too_large` — raise `--object-diff-min-retained` or use a smaller dump), `7` `full-fingerprint` requested without `--retain-field-data`.
+
+Current limitation: object-level diff is a two-snapshot comparison only (no 3+ snapshot trend tracking), and `ci-check` has no object-growth predicate yet — both are tracked as follow-up work in `docs/roadmap.md` (M10-B).
 
 ### `fix`
 

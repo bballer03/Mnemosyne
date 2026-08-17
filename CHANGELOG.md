@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Object-level heap diff (M10): `mnemosyne diff before.hprof after.hprof --mode object [--identity-strategy class+retained|class+dominator|full-fingerprint]` reports fingerprint-matched `added` / `removed` / `retained_changed` objects with dominator + reference chains and a `MatchQuality` collision-rate envelope. New `--format json|toon` for `diff`. MCP `diff_heaps` gains a `mode` parameter. See [docs/design/milestone-8-1-object-level-diff.md](docs/design/milestone-8-1-object-level-diff.md).
+
 ## [0.3.0] - 2026-04-26
 
 ### Added

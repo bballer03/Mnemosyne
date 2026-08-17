@@ -65,7 +65,7 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 | Group by class / classloader / package / superclass | ✅ | 🟡 | Class / package / classloader yes; superclass no | Low (M11) | `--group-by class\|package\|classloader`. Missing `--group-by superclass` (and the related "group by class -> superclass tree"). |
 | **Group by referrer** (incoming references analysis) | ✅ | ❌ | Not shipped | **High (M8)** | MAT's "Show objects by incoming references" / "Group by referrer" is a top-3 MAT investigation workflow. Mnemosyne has `get_referrers()` but no aggregating analyzer or CLI surface. |
 | Reachable / unreachable objects analysis | ✅ | ✅ | None | — | `find_unreachable_objects()` walks from GC roots and reports per-class counts + shallow size. |
-| **Compare two heap dumps** (object-level diff) | ✅ | 🟡 | Class-level diff only | **High (M10)** | `diff_heaps()` ships record-level + class-level deltas with retained-size diffs. Missing: stable per-object identity tracking, growth-suspect ranking, leak-progression detection across snapshots. |
+| **Compare two heap dumps** (object-level diff) | ✅ | 🟡 | `ci-check object_growth_threshold` predicate + leak-progression cross-reference missing | Low (M10-B) | `mnemosyne diff --mode object` ships fingerprint-based per-object identity (`class+retained` / `class+dominator` / `full-fingerprint`), added/removed/retained_changed sections, `MatchQuality`, and MCP `diff_heaps` mode. Missing: `ci-check object_growth_threshold` predicate, leak-progression cross-reference with `detect_leaks()`. |
 | Allocation-site flame graphs | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has no native flame-graph export; users typically pipe to async-profiler. Mnemosyne ships SVG / folded-stack / JSON natively. **Differentiator.** |
 | Custom inspector views / extensions | ✅ | ❌ | Not shipped | Defer | MAT plugins (`org.eclipse.mat.api.IQuery`) are widely used. Mnemosyne has a plugin design doc (M6) but no runtime extension surface. Defer until adoption justifies. |
 | **Index files / persistent snapshot** (parse-once, query-many) | ✅ | ❌ | Not shipped | **High (M9)** | MAT's `.index` artifacts make re-open near-instant. Mnemosyne re-parses on every invocation. This is the single biggest UX gap for repeat triage workflows. |
@@ -160,20 +160,23 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 
 ### M10 — Compare Two Heaps (Object-Level Diff) (Parity-Closing + Differentiator-Extending)
 
+- **Status:** 🟡 **Mostly shipped**, landed out of sequence as design doc [milestone-8-1-object-level-diff.md](design/milestone-8-1-object-level-diff.md) (slices A–G merged via PR #38 and PR #41). The design doc used internal slice ids `8-1.A`–`8-1.H` before this roadmap refresh existed; those slices are this M10 milestone, not a sub-slice of M8. Treat `milestone-8-1-object-level-diff.md` as the M10 design doc going forward.
 - **Theme:** Stable per-object identity tracking + leak-progression detection across snapshots.
 - **Goal:** Replace class-level-only `diff_heaps()` with stable per-object identity heuristics so users can detect "this exact object grew", "this collection accumulated K new entries", and "this leak suspect is now M× larger" across two snapshots.
-- **Scope:**
-  - Object-identity heuristics: GC-root path + class + dominator-chain hash; with explicit `ProvenanceKind::Partial` when the heuristic is uncertain.
-  - `core::analysis::diff_objects()` returning per-object delta records.
-  - `mnemosyne diff --object-level <a.hprof> <b.hprof>` CLI + MCP `diff_objects`.
-  - Growth-suspect ranking: top-N objects by retained-size delta.
-  - Leak-progression: cross-reference object-level diff with `detect_leaks()` outputs.
-  - **Differentiator extension:** `ci-check` `object_growth_threshold` predicate — fail CI when a tracked object grows beyond a per-class limit between two snapshots.
-- **Out of scope:** 3+ snapshot trend analysis (defer to M14). Cross-machine snapshot diff. Time-series database backend.
-- **Why now / strategic rationale:** Closes a top-3 MAT gap **and** opens a category MAT does not own — heap-regression CI gating at object granularity. Pairs naturally with M9 (snapshot persistence is the prerequisite for cheap repeat diffs).
-- **Success criteria:** `diff --object-level` identifies grown objects in a synthetic two-snapshot pair. `ci-check object_growth_threshold` fails on a deliberately leaking pair. False-positive rate documented and bounded with provenance.
-- **Risks / dependencies:** Object identity is fundamentally heuristic without write-barrier instrumentation; honesty contract is critical. Depends on M9 for cheap snapshot re-open. Memory cost of two graphs in RAM (mitigate with overview-mode diff path).
-- **Estimated slice count:** 5–10 slices.
+- **Delivered scope (as shipped, differs from original text below in naming only — see note):**
+  - Object-identity heuristics: `class+retained`, `class+dominator` (default), `full-fingerprint` — class name + log-bucketed retained size + immediate-dominator class chain + optional field-shape/outbound-reference signature. `MatchQuality` (collision rate, false-match/false-split risk) reported per diff instead of `ProvenanceKind::Partial`.
+  - `core::diff::run_diff()` / `core::diff::object::engine` returning `ObjectDiffReport` with `added` / `removed` / `retained_changed` per-object delta records (shipped as `ObjectDelta`, not a bare `diff_objects()` free function).
+  - `mnemosyne diff before.hprof after.hprof --mode object [--identity-strategy ...]` CLI (shipped flag is `--mode object`, not `--object-level`) + MCP tool `diff_heaps` with `mode: "object"` (shipped as a mode on the existing `diff_heaps` tool, not a separate `diff_objects` tool).
+  - Growth-suspect ranking: top-N (`--top`, default 50) objects by retained-size delta, both `added`/`removed`/`retained_changed`.
+  - Text/JSON/TOON renderers under `core::report::diff`.
+- **Not yet shipped (open follow-up, tracked as M10-B):**
+  - **`ci-check object_growth_threshold` predicate** — the differentiator extension into `core::policy` was not part of slices A–G and has no design coverage yet.
+  - Leak-progression cross-reference with `detect_leaks()` output.
+- **Out of scope:** 3+ snapshot trend analysis (defer to M14). Cross-machine snapshot diff. Time-series database backend. Persistent fingerprint indexes (M8-8/M9 territory).
+- **Why now / strategic rationale:** Closes a top-3 MAT gap **and** opens a category MAT does not own — heap-regression CI gating at object granularity. Landed ahead of M9 rather than after; M9 (snapshot persistence) would still make repeat diffs cheaper but was not a hard blocker for this slice of work.
+- **Success criteria:** `diff --mode object` identifies grown/added/removed objects in synthetic two-snapshot fixtures (`pure-add`, `pure-remove`, `retained-grow`, collision fixtures — shipped). `ci-check object_growth_threshold` — **pending, M10-B**. False-positive rate documented via `MatchQuality.collision_rate` (shipped).
+- **Risks / dependencies:** Object identity is fundamentally heuristic without write-barrier instrumentation; honesty contract upheld via `MatchQuality` + structured `feature_unavailable_*` errors rather than silent fallback. Memory cost mitigated with `--object-diff-min-retained` floor + `MAX_OBJECT_DIFF_FINGERPRINTS` hard cap (see design doc §6.2).
+- **Estimated slice count:** 5–10 slices (8 shipped: A–G implementation + validation; H doc-sync landing now).
 
 ### M11 — MCP Workflow Suite (Pure Differentiator)
 
@@ -282,7 +285,7 @@ Updated to reflect the parity matrix in §2.
 | Group by referrer | ❌ | **M8** |
 | Object inspector (CLI/MCP) | 🟡 (UI only) | **M8** |
 | Thread frame-locals | 🟡 | **M8** |
-| Object-level heap diff | 🟡 (class-level only) | **M10** |
+| Object-level heap diff | ✅ (`--mode object`; `ci-check` predicate pending) | **M10** ✅ mostly shipped |
 | Persistent indexes / parse-once-query-many | ❌ | **M9** |
 | Classloader leak detection | 🟡 (per-loader histogram only) | **M13** |
 | Group by superclass | ❌ | B-list |
@@ -332,7 +335,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | Scaling support | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
 | **M8 Reachability & References** | _to be authored by Design Consulting_ | ⏳ Pending |
 | **M9 Snapshot Persistence** | _to be authored by Design Consulting_ | ⏳ Pending |
-| **M10 Object-Level Diff** | _to be authored by Design Consulting_ | ⏳ Pending |
+| **M10 Object-Level Diff** | [design/milestone-8-1-object-level-diff.md](design/milestone-8-1-object-level-diff.md) | 🟡 Mostly shipped (slices A–G; `ci-check` predicate = M10-B) |
 | **M11 MCP Workflow Suite** | _to be authored by Design Consulting_ | ⏳ Pending |
 | **M12 Reference-Workstation Re-run** | reuse [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | ⏳ Pending |
 | **M13 Classloader Explorer** | _to be authored by Design Consulting_ | ⏳ Pending |
