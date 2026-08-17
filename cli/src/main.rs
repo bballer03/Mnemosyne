@@ -2290,6 +2290,13 @@ fn print_thread_stacks(report: &mnemosyne_core::analysis::ThreadReport) {
                     println!("  at {}.{}(Unknown Source)", class_name, frame.method_name);
                 }
             }
+            for local in &frame.locals {
+                let kind = match local.root_kind {
+                    mnemosyne_core::analysis::FrameLocalRootKind::JavaFrame => "local",
+                    mnemosyne_core::analysis::FrameLocalRootKind::JniLocal => "jni-local",
+                };
+                println!("      {kind}: {} ({})", local.object_id, local.class_name);
+            }
         }
     }
 }
