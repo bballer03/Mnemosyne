@@ -18,6 +18,7 @@ pub mod prompts;
 pub mod query;
 pub mod report;
 pub mod snapshot;
+pub mod workflow;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, generate_ai_insights_async, AiInsights, AiWireExchange,
