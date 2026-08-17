@@ -120,7 +120,12 @@ impl SessionFileOps for StdSessionFileOps {
     }
 }
 
-fn replace_session_file(temp: &Path, target: &Path) -> io::Result<()> {
+/// Rename-based atomic swap: `temp` replaces `target`, backing up any
+/// existing `target` first and restoring it if the final rename fails.
+/// `pub(crate)` so other on-disk stores in this crate (e.g.
+/// `crate::snapshot::SnapshotStore`) can reuse the exact same atomic-write
+/// shape instead of reimplementing it.
+pub(crate) fn replace_session_file(temp: &Path, target: &Path) -> io::Result<()> {
     replace_session_file_with_ops(temp, target, &StdSessionFileOps)
 }
 

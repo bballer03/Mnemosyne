@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
+use serde::{Deserialize, Serialize};
 
 use crate::hprof::{ObjectGraph, ObjectId};
 
@@ -13,6 +14,7 @@ pub const VIRTUAL_ROOT_ID: ObjectId = u64::MAX;
 /// Built by [`build_dominator_tree`], which creates a virtual super-root
 /// connected to every GC root present in the objects map, runs
 /// Lengauer–Tarjan, and computes retained sizes in a single post-order pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DominatorTree {
     /// Map from each object ID to its immediate dominator's object ID.
     /// The virtual super-root is represented as [`VIRTUAL_ROOT_ID`].
