@@ -1,14 +1,17 @@
 use crate::{
     analysis::{
-        analyze_heap, detect_leaks, focus_leaks, generate_ai_chat_turn_async,
-        generate_ai_insights_async, validate_leak_id, AiChatTurn, AnalysisMode, AnalyzeRequest,
-        LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, analyze_heap_from_graph, detect_leaks, focus_leaks,
+        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AiChatTurn,
+        AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
     diff::{DiffRequest, DiffResult},
     errors::{CoreError, CoreResult},
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
-    graph::{find_all_gc_paths, find_gc_path, AllPathsRequest, GcPathRequest},
+    graph::{
+        find_all_gc_paths, find_all_gc_paths_in_graph, find_gc_path, find_gc_path_in_graph,
+        AllPathsRequest, GcPathRequest,
+    },
     hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
     mcp::session::{
@@ -16,6 +19,7 @@ use crate::{
         SessionAnalysisSnapshot, SessionConversationSnapshot, MCP_SESSION_VERSION,
     },
     query::{execute_query, parse_query},
+    snapshot::{SnapshotPayload, SnapshotStore},
     HistogramGroupBy, ParseOptions,
 };
 use anyhow::anyhow;
@@ -239,6 +243,38 @@ impl RpcErrorDetails {
                     details: Some(json!({ "detail": detail })),
                 }
             }
+            CoreError::Unsupported(detail) if detail.starts_with("snapshot_not_found:") => {
+                snapshot_error_details(
+                    "snapshot_not_found",
+                    message,
+                    detail,
+                    "run `mnemosyne snapshot save <heap>` first, or `mnemosyne snapshot list`",
+                )
+            }
+            CoreError::Unsupported(detail) if detail.starts_with("snapshot_schema_mismatch:") => {
+                snapshot_error_details(
+                    "snapshot_schema_mismatch",
+                    message,
+                    detail,
+                    "run with --refresh, or `mnemosyne snapshot rm <hash>`",
+                )
+            }
+            CoreError::Unsupported(detail) if detail.starts_with("snapshot_stale_source:") => {
+                snapshot_error_details(
+                    "snapshot_stale_source",
+                    message,
+                    detail,
+                    "run with --refresh to re-parse and update the cache",
+                )
+            }
+            CoreError::Unsupported(detail) if detail.starts_with("snapshot_corrupt:") => {
+                snapshot_error_details(
+                    "snapshot_corrupt",
+                    message,
+                    detail,
+                    "run `mnemosyne snapshot rm <hash>` and re-run without --snapshot",
+                )
+            }
             CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
                 code: "session_version_unsupported",
                 message,
@@ -269,6 +305,32 @@ impl RpcErrorDetails {
                 details: Some(json!({ "detail": source.to_string() })),
             },
         }
+    }
+}
+
+/// M9 Slice 9.D: build the `RpcErrorDetails` envelope for one of
+/// `core::snapshot`'s four structured error codes
+/// (`snapshot_not_found`/`snapshot_schema_mismatch`/`snapshot_stale_source`/
+/// `snapshot_corrupt`, all shaped as `CoreError::Unsupported("<code>:
+/// <detail>")` per that module's established convention -- see
+/// `core::snapshot::snapshot_error`).
+///
+/// The design doc's §6.1 error envelope shows three flat top-level keys
+/// (`error`, `detail`, `hint`). This codebase's actual MCP envelope instead
+/// nests everything but `code`/`message` under `details` (see
+/// `CoreError::FileNotFound`'s `{"path":..,"suggestion":..}` shape above),
+/// so `hint` is carried the same way here rather than introducing a new
+/// top-level shape other error codes don't have.
+fn snapshot_error_details(
+    code: &'static str,
+    message: String,
+    detail: &str,
+    hint: &'static str,
+) -> RpcErrorDetails {
+    RpcErrorDetails {
+        code,
+        message,
+        details: Some(json!({ "detail": detail, "hint": hint })),
     }
 }
 
@@ -372,6 +434,12 @@ struct ParseHeapParams {
     include_strings: bool,
     #[serde(default)]
     max_objects: Option<u64>,
+    /// M9 Slice 9.D: SHA-256 hash or direct snapshot file path. When
+    /// present (and `mode` does not resolve to `overview`, which never
+    /// builds an object graph -- see the module-level snapshot doc note),
+    /// returns a manifest-derived summary instead of parsing `path`.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -416,6 +484,11 @@ struct FindGcPathParams {
     /// `AllPathsRequest::DEFAULT_MAX_PATHS` (20) when omitted.
     #[serde(default)]
     max_paths: Option<usize>,
+    /// M9 Slice 9.D: SHA-256 hash or direct snapshot file path. When
+    /// present, traces against the cached graph instead of parsing
+    /// `heap_path`.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 /// M8 Slice 8.C: params for the `inspect_object` tool.
@@ -425,6 +498,11 @@ struct InspectObjectParams {
     object_id: String,
     #[serde(default)]
     retain_field_data: bool,
+    /// M9 Slice 9.D: SHA-256 hash or direct snapshot file path. When
+    /// present, inspects against the cached graph instead of parsing
+    /// `heap_path`.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -480,6 +558,14 @@ struct AnalyzeHeapParams {
     min_collection_capacity: Option<usize>,
     #[serde(default)]
     min_duplicate_count: Option<usize>,
+    /// M9 Slice 9.D: SHA-256 hash or direct snapshot file path. When
+    /// present (and `mode` does not resolve to `overview`, which never
+    /// builds an object graph -- there is nothing to snapshot in that mode,
+    /// same as CLI's `analyze --snapshot` precedent), analyzes against the
+    /// cached graph via `analyze_heap_from_graph` instead of parsing
+    /// `heap_path`.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -498,10 +584,21 @@ struct SessionIdParams {
     session_id: String,
 }
 
+/// M9 Slice 9.D: params for the `open_snapshot` tool.
+#[derive(Debug, Deserialize)]
+struct OpenSnapshotParams {
+    key: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryHeapParams {
     heap_path: String,
     query: String,
+    /// M9 Slice 9.D: SHA-256 hash or direct snapshot file path. When
+    /// present, queries against the cached graph instead of parsing
+    /// `heap_path`.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
@@ -620,6 +717,47 @@ fn default_session_directory() -> PathBuf {
     fallback
 }
 
+/// `MNEMOSYNE_SNAPSHOT_DIR` overrides the default snapshot cache root (M9
+/// Slice 9.D). Mirrors `cli/src/main.rs`'s Slice 9.C `SNAPSHOT_DIR_ENV`
+/// constant of the same name exactly -- the CLI and MCP surfaces each own
+/// their own directory-resolution glue already (compare
+/// `default_session_directory` below, which has no CLI counterpart at all),
+/// so this is a deliberate mirror, not a shared function, and MUST use the
+/// same env var name/precedence as the CLI so `--snapshot`/`snapshot save`
+/// and the MCP `snapshot` param address the same on-disk cache by default.
+const SNAPSHOT_DIR_ENV: &str = "MNEMOSYNE_SNAPSHOT_DIR";
+
+/// Default snapshot cache root: `dirs::cache_dir()/mnemosyne`, overridable
+/// via `MNEMOSYNE_SNAPSHOT_DIR`. Falls back to a temp-dir-based path on
+/// platforms where `dirs::cache_dir()` returns `None`. Mirrors
+/// `cli/src/main.rs`'s `default_snapshot_dir()` (Slice 9.C) exactly --
+/// there is no `[snapshot]` config-key override in this codebase today (the
+/// design doc's §4 point 7 mentions one, but Slice 9.C shipped only the env
+/// override, so this function follows that as the actual established
+/// pattern rather than the doc's aspirational one).
+fn default_snapshot_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var(SNAPSHOT_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("snapshots");
+    fallback
+}
+
+fn snapshot_store() -> SnapshotStore {
+    SnapshotStore::new(default_snapshot_dir())
+}
+
 fn persist_session(store: &McpSessionStore, session: &PersistedAiSession) -> CoreResult<()> {
     store
         .save(session)
@@ -706,6 +844,21 @@ fn analysis_mode_param() -> Value {
     })
 }
 
+/// M9 Slice 9.D: shared `snapshot` param description for every existing
+/// tool that gained the additive param (`parse_heap`, `analyze_heap`,
+/// `find_gc_path`, `inspect_object`, `query_heap`), mirroring how
+/// `analysis_mode_param()` shares one description across tools.
+const MCP_SNAPSHOT_PARAM_DESCRIPTION: &str = "SHA-256 hash or direct snapshot file path (see `open_snapshot`/`list_snapshots` and `mnemosyne snapshot save`). When set, uses the cached object graph instead of re-parsing heap_path/path -- an invalid, stale, or schema-mismatched key returns a structured snapshot_not_found/snapshot_stale_source/snapshot_schema_mismatch/snapshot_corrupt error rather than silently falling back to a fresh parse.";
+
+fn snapshot_param() -> Value {
+    json!({
+        "name": "snapshot",
+        "type": "string",
+        "required": false,
+        "description": MCP_SNAPSHOT_PARAM_DESCRIPTION,
+    })
+}
+
 fn resolve_heap_mode(heap_path: &str, requested_mode: AnalysisMode) -> CoreResult<AnalysisMode> {
     match requested_mode {
         AnalysisMode::Auto => {
@@ -736,6 +889,58 @@ fn serialize_overview_summary(summary: crate::hprof::OverviewSummary) -> CoreRes
     Ok(value)
 }
 
+/// M9 Slice 9.D: `parse_heap`'s `snapshot` param cannot return a real
+/// `HeapSummary` -- this builds the smaller, clearly-distinguished shape
+/// the design doc's step 4 guidance calls for instead.
+///
+/// `HeapSummary::header`/`total_records`/`record_stats`/`classes` are all
+/// derived from a streaming byte-level scan of the HPROF file's *raw
+/// records* (`core::hprof::parser::scan_hprof_records` +
+/// `summarize_class_stats`) -- a completely different computation path from
+/// the `ObjectGraph`/`DominatorTree` a snapshot caches (§6.2 of the design
+/// doc: only those two are cached, deliberately). Reconstructing the real
+/// `HeapSummary` shape from a snapshot would require either (a) re-reading
+/// the source HPROF file anyway, defeating the entire point of
+/// `--snapshot`, or (b) reimplementing class-stat aggregation against
+/// `ObjectGraph.objects`/`classes` on a different sizing basis (shallow
+/// object size vs. raw record byte length) -- which would silently drift
+/// from `parse_heap`'s real numbers while *looking* like the same trusted
+/// shape. Per this codebase's existing honesty-first pattern
+/// (`ProvenanceMarker`/`ProvenanceKind`, already used to flag synthetic/
+/// partial data elsewhere), the snapshot response is instead a distinctly
+/// shaped object: manifest fields plus a `total_shallow_size_bytes` total
+/// that *is* honestly computed from the loaded `ObjectGraph`, carrying a
+/// `ProvenanceKind::Partial` marker so a caller cannot mistake this for the
+/// real by-file `HeapSummary`.
+fn serialize_snapshot_summary(payload: SnapshotPayload) -> CoreResult<Value> {
+    let total_shallow_size_bytes: u64 = payload
+        .object_graph
+        .objects
+        .values()
+        .map(|obj| u64::from(obj.shallow_size))
+        .sum();
+
+    let provenance = vec![crate::analysis::ProvenanceMarker::new(
+        crate::analysis::ProvenanceKind::Partial,
+        "derived from a cached snapshot's manifest + object graph, not a fresh HPROF \
+         record-tag scan; header/total_records/record_stats/classes are unavailable \
+         without re-parsing the source file",
+    )];
+
+    Ok(json!({
+        "source": "snapshot",
+        "heap_path": payload.manifest.heap_path,
+        "heap_sha256": payload.manifest.heap_sha256,
+        "object_count": payload.manifest.object_count,
+        "total_shallow_size_bytes": total_shallow_size_bytes,
+        "has_field_data": payload.manifest.has_field_data,
+        "schema_version": payload.manifest.schema_version,
+        "created_at": payload.manifest.created_at,
+        "mnemosyne_version": payload.manifest.mnemosyne_version,
+        "provenance": provenance,
+    }))
+}
+
 fn tool_catalog() -> Value {
     json!({
         "tools": [
@@ -753,7 +958,8 @@ fn tool_catalog() -> Value {
                     { "name": "path", "type": "string", "required": true, "description": "Path to the heap dump." },
                     analysis_mode_param(),
                     { "name": "include_strings", "type": "boolean", "required": false, "description": "Accept string extraction in the request, although the summary remains lightweight." },
-                    { "name": "max_objects", "type": "number", "required": false, "description": "Optional object cap that falls back to parser.max_objects." }
+                    { "name": "max_objects", "type": "number", "required": false, "description": "Optional object cap that falls back to parser.max_objects." },
+                    snapshot_param()
                 ]
             },
             {
@@ -787,7 +993,8 @@ fn tool_catalog() -> Value {
                     { "name": "by_referrer", "type": "boolean", "required": false, "description": "Attach the group-by-referrer report (objects ranked by incoming reference count)." },
                     { "name": "top_n", "type": "number", "required": false, "description": "Result count used by top-N analysis sections." },
                     { "name": "min_collection_capacity", "type": "number", "required": false, "description": "Minimum collection capacity to report." },
-                    { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." }
+                    { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." },
+                    snapshot_param()
                 ]
             },
             {
@@ -811,7 +1018,8 @@ fn tool_catalog() -> Value {
                 "description": "Execute an OQL-style query against the heap graph, including built-in fields plus retained instance fields when available.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
-                    { "name": "query", "type": "string", "required": true, "description": "Query text." }
+                    { "name": "query", "type": "string", "required": true, "description": "Query text." },
+                    snapshot_param()
                 ]
             },
             {
@@ -833,7 +1041,8 @@ fn tool_catalog() -> Value {
                     { "name": "max_depth", "type": "number", "required": false, "description": "Optional traversal depth cap." },
                     { "name": "all_paths", "type": "boolean", "required": false, "description": "Return all paths (bounded by max_paths) instead of only the shortest." },
                     { "name": "by_class", "type": "string", "required": false, "description": "Find all-paths for every live instance of this class instead of a single object_id." },
-                    { "name": "max_paths", "type": "number", "required": false, "description": "Shared path-enumeration budget across the whole all_paths/by_class query. Default 20." }
+                    { "name": "max_paths", "type": "number", "required": false, "description": "Shared path-enumeration budget across the whole all_paths/by_class query. Default 20." },
+                    snapshot_param()
                 ]
             },
             {
@@ -842,7 +1051,8 @@ fn tool_catalog() -> Value {
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
                     { "name": "object_id", "type": "string", "required": true, "description": "Target object identifier, for example 0x1000." },
-                    { "name": "retain_field_data", "type": "boolean", "required": false, "description": "Populate the fields section with typed instance field values." }
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "description": "Populate the fields section with typed instance field values." },
+                    snapshot_param()
                 ],
                 "output_schema": "ObjectInspection"
             },
@@ -906,6 +1116,20 @@ fn tool_catalog() -> Value {
                     { "name": "project_root", "type": "string", "required": false, "description": "Optional project directory used for file targeting." },
                     { "name": "style", "type": "string", "required": false, "description": "Patch style: Minimal, Defensive, or Comprehensive." }
                 ]
+            },
+            {
+                "name": "open_snapshot",
+                "description": "Load a previously saved snapshot cache entry and return its manifest (does not itself run any analysis -- pairs with the snapshot param on analyze_heap/parse_heap/find_gc_path/inspect_object/query_heap).",
+                "params": [
+                    { "name": "key", "type": "string", "required": true, "description": "SHA-256 hash or direct snapshot file path." }
+                ],
+                "output_schema": "SnapshotManifest"
+            },
+            {
+                "name": "list_snapshots",
+                "description": "List the manifests of every snapshot currently in the cache.",
+                "params": [],
+                "output_schema": "Vec<SnapshotManifest>"
             }
         ]
     })
@@ -914,12 +1138,29 @@ fn tool_catalog() -> Value {
 async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Value> {
     match packet.method.as_str() {
         "list_tools" => Ok(tool_catalog()),
+        "open_snapshot" => {
+            let params: OpenSnapshotParams = serde_json::from_value(packet.params)?;
+            let store = snapshot_store();
+            let payload = store.load(&params.key)?;
+            Ok(serde_json::to_value(payload.manifest)?)
+        }
+        "list_snapshots" => {
+            let store = snapshot_store();
+            let manifests = store.list()?;
+            Ok(serde_json::to_value(manifests)?)
+        }
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
             let resolved_mode = resolve_heap_mode(&params.path, params.mode)?;
             if resolved_mode == AnalysisMode::Overview {
                 let summary = parse_hprof_overview_file(&params.path, &OverviewOptions::default())?;
                 return serialize_overview_summary(summary);
+            }
+
+            if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &params.path)?;
+                return serialize_snapshot_summary(payload);
             }
 
             let job = HeapParseJob {
@@ -1091,7 +1332,8 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 leak_options.min_severity = sev;
             }
 
-            let analysis = analyze_heap(AnalyzeRequest {
+            let heap_path = params.heap_path.clone();
+            let request = AnalyzeRequest {
                 heap_path: params.heap_path,
                 config: request_config,
                 leak_options,
@@ -1110,8 +1352,21 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 min_duplicate_count: params
                     .min_duplicate_count
                     .unwrap_or(AnalyzeRequest::default().min_duplicate_count),
-            })
-            .await?;
+            };
+
+            // M9 Slice 9.D: mirrors `cli/src/main.rs`'s `resolve_analyze_response`
+            // (Slice 9.C) -- an explicit `snapshot` key loads exactly that
+            // cache entry via `load_checked` (loud on mismatch/staleness/
+            // corruption/missing, never a silent parse fallback) and feeds it
+            // into `analyze_heap_from_graph` instead of a fresh binary parse.
+            let analysis = if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &heap_path)?;
+                analyze_heap_from_graph(request, &payload.object_graph, &payload.dominator_tree)
+                    .await?
+            } else {
+                analyze_heap(request).await?
+            };
 
             Ok(serde_json::to_value(analysis)?)
         }
@@ -1137,13 +1392,24 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "query_heap" => {
             let params: QueryHeapParams = serde_json::from_value(packet.params)?;
-            let graph = crate::hprof::parse_hprof_file_with_options(
-                &params.heap_path,
-                ParseOptions {
-                    retain_field_data: true,
-                },
-            )?;
-            let dominator = crate::graph::build_dominator_tree(&graph);
+
+            // M9 Slice 9.D: same snapshot-backed shape as `inspect_object`
+            // above. Same field-data caveat: a cached snapshot saved without
+            // `retain_field_data` will not retroactively gain field values.
+            let (graph, dominator) = if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &params.heap_path)?;
+                (payload.object_graph, payload.dominator_tree)
+            } else {
+                let graph = crate::hprof::parse_hprof_file_with_options(
+                    &params.heap_path,
+                    ParseOptions {
+                        retain_field_data: true,
+                    },
+                )?;
+                let dominator = crate::graph::build_dominator_tree(&graph);
+                (graph, dominator)
+            };
             let query = parse_query(&params.query)
                 .map_err(|err| CoreError::InvalidInput(err.to_string()))?;
             let result =
@@ -1162,6 +1428,45 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "find_gc_path" => {
             let params: FindGcPathParams = serde_json::from_value(packet.params)?;
+
+            // M9 Slice 9.D: mirrors the other snapshot-backed handlers --
+            // an explicit `snapshot` key loads the cached graph via
+            // `load_checked` and traces against it directly via the
+            // graph-based `find_gc_path_in_graph`/`find_all_gc_paths_in_graph`
+            // (core/src/graph/gc_path.rs) instead of `find_gc_path`/
+            // `find_all_gc_paths`, which always parse `heap_path` from disk.
+            if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &params.heap_path)?;
+
+                if params.all_paths || params.by_class.is_some() {
+                    let request = AllPathsRequest {
+                        heap_path: params.heap_path,
+                        object_id: params.object_id,
+                        by_class: params.by_class,
+                        max_paths: params
+                            .max_paths
+                            .unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS),
+                        max_depth: params.max_depth,
+                    };
+                    let response = find_all_gc_paths_in_graph(&payload.object_graph, &request)?;
+                    return Ok(serde_json::to_value(response)?);
+                }
+
+                let object_id = params.object_id.ok_or_else(|| {
+                    CoreError::InvalidInput(
+                        "object_id is required unless all_paths or by_class is set".into(),
+                    )
+                })?;
+                let response = find_gc_path_in_graph(
+                    &payload.object_graph,
+                    &params.heap_path,
+                    &object_id,
+                    params.max_depth,
+                )?;
+                return Ok(serde_json::to_value(response)?);
+            }
+
             if params.all_paths || params.by_class.is_some() {
                 let response = find_all_gc_paths(&AllPathsRequest {
                     heap_path: params.heap_path,
@@ -1189,13 +1494,30 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
         }
         "inspect_object" => {
             let params: InspectObjectParams = serde_json::from_value(packet.params)?;
-            let graph = crate::hprof::parse_hprof_file_with_options(
-                &params.heap_path,
-                ParseOptions {
-                    retain_field_data: params.retain_field_data,
-                },
-            )?;
-            let dominator = crate::graph::build_dominator_tree(&graph);
+
+            // M9 Slice 9.D: an explicit `snapshot` key loads the cached
+            // `(ObjectGraph, DominatorTree)` pair via `load_checked` instead
+            // of parsing `heap_path`. Note: the cached graph's field data
+            // reflects whatever `retain_field_data` was in effect when the
+            // snapshot was *saved* -- an explicit snapshot key loads exactly
+            // what's there (same "explicit is loud, not silently different"
+            // precedent `SnapshotStore::load_checked`'s doc comment
+            // establishes), it does not force a re-parse just because this
+            // request's `retain_field_data` differs.
+            let (graph, dominator) = if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &params.heap_path)?;
+                (payload.object_graph, payload.dominator_tree)
+            } else {
+                let graph = crate::hprof::parse_hprof_file_with_options(
+                    &params.heap_path,
+                    ParseOptions {
+                        retain_field_data: params.retain_field_data,
+                    },
+                )?;
+                let dominator = crate::graph::build_dominator_tree(&graph);
+                (graph, dominator)
+            };
             let target_id = parse_inspect_object_id(&params.object_id)
                 .ok_or_else(|| inspect_object_id_not_found(&params.object_id, &params.heap_path))?;
             let inspection = crate::analysis::inspect_object(
@@ -1360,6 +1682,47 @@ mod tests {
 
     async fn mode_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
         crate::analysis::mode::test_mode_env_lock().lock().await
+    }
+
+    /// M9 Slice 9.D: serializes `MNEMOSYNE_SNAPSHOT_DIR` mutation across
+    /// snapshot-backed tests within this (multi-threaded by default) test
+    /// binary, mirroring `mode_test_guard`'s existing pattern for
+    /// `AnalysisMode`-env-var tests above.
+    async fn snapshot_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
+
+    /// Pins `MNEMOSYNE_SNAPSHOT_DIR` to `dir` for the duration of the
+    /// returned guard, restoring the previous value on drop. Callers must
+    /// hold `snapshot_env_lock()` for the same duration to avoid cross-test
+    /// races (same shape as the mode tests' `TempEnvVar` usage).
+    fn pin_snapshot_dir(dir: &std::path::Path) -> TempEnvVar {
+        TempEnvVar::set("MNEMOSYNE_SNAPSHOT_DIR", &dir.to_string_lossy())
+    }
+
+    /// Parses `heap_file`, builds its dominator tree, and saves it to a
+    /// snapshot store rooted at `store_dir` -- returns the manifest
+    /// (notably `heap_sha256`, the key every snapshot-backed call below
+    /// uses). `retain_field_data` controls whether the cached graph carries
+    /// instance field values (needed by field-based `query_heap` tests).
+    fn seed_snapshot(
+        store_dir: &std::path::Path,
+        heap_file: &std::path::Path,
+        retain_field_data: bool,
+    ) -> crate::snapshot::SnapshotManifest {
+        let graph = crate::hprof::parse_hprof_file_with_options(
+            &heap_file.to_string_lossy(),
+            ParseOptions { retain_field_data },
+        )
+        .unwrap();
+        let dominator = crate::graph::build_dominator_tree(&graph);
+        let store = SnapshotStore::new(store_dir.to_path_buf());
+        store
+            .save(&heap_file.to_string_lossy(), &graph, &dominator)
+            .unwrap()
     }
 
     async fn list_tools_result() -> Value {
@@ -3036,5 +3399,576 @@ mod tests {
                 "inspect_object tool should advertise the '{expected}' param"
             );
         }
+    }
+
+    // --- M9 Slice 9.D: `open_snapshot` / `list_snapshots` + additive
+    // `snapshot` param on analyze_heap/parse_heap/find_gc_path/
+    // inspect_object/query_heap ---
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_includes_open_snapshot_and_list_snapshots() {
+        let result = list_tools_result().await;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+
+        let open_snapshot = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("open_snapshot")))
+            .expect("open_snapshot tool");
+        assert_eq!(
+            open_snapshot.get("params"),
+            Some(&json!([
+                {
+                    "name": "key",
+                    "type": "string",
+                    "required": true,
+                    "description": "SHA-256 hash or direct snapshot file path."
+                }
+            ]))
+        );
+        assert_eq!(
+            open_snapshot.get("output_schema"),
+            Some(&json!("SnapshotManifest"))
+        );
+
+        let list_snapshots = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("list_snapshots")))
+            .expect("list_snapshots tool");
+        assert_eq!(list_snapshots.get("params"), Some(&json!([])));
+        assert_eq!(
+            list_snapshots.get("output_schema"),
+            Some(&json!("Vec<SnapshotManifest>"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_advertises_snapshot_param_on_existing_tools() {
+        let result = list_tools_result().await;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+
+        for tool_name in [
+            "analyze_heap",
+            "parse_heap",
+            "find_gc_path",
+            "inspect_object",
+            "query_heap",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.get("name") == Some(&json!(tool_name)))
+                .unwrap_or_else(|| panic!("{tool_name} tool"));
+            let params = tool
+                .get("params")
+                .and_then(Value::as_array)
+                .expect("params array");
+            assert!(
+                params
+                    .iter()
+                    .any(|param| param.get("name") == Some(&json!("snapshot"))),
+                "{tool_name} should advertise the additive 'snapshot' param"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_open_snapshot_round_trip_returns_matching_manifest() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "open_snapshot".into(),
+                params: json!({ "key": manifest.heap_sha256 }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result.get("heap_sha256"),
+            Some(&json!(manifest.heap_sha256))
+        );
+        assert_eq!(
+            result.get("object_count"),
+            Some(&json!(manifest.object_count))
+        );
+        assert_eq!(
+            result.get("schema_version"),
+            Some(&json!(manifest.schema_version))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_open_snapshot_missing_key_returns_snapshot_not_found_error_details() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "open_snapshot".into(),
+                params: json!({ "key": "does-not-exist" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/hint"),
+            Some(&json!(
+                "run `mnemosyne snapshot save <heap>` first, or `mnemosyne snapshot list`"
+            ))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_snapshots_returns_all_saved_manifests() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file_a = write_fixture();
+        let file_b = write_bytes_fixture(&build_diamond_fixture());
+        let manifest_a = seed_snapshot(store_dir.path(), file_a.path(), false);
+        let manifest_b = seed_snapshot(store_dir.path(), file_b.path(), false);
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "list_snapshots".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let manifests = result.as_array().expect("list_snapshots returns an array");
+        assert_eq!(manifests.len(), 2);
+        let hashes: Vec<String> = manifests
+            .iter()
+            .map(|m| {
+                m.get("heap_sha256")
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(hashes.contains(&manifest_a.heap_sha256));
+        assert!(hashes.contains(&manifest_b.heap_sha256));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_heap_with_valid_snapshot_matches_normal_parse() {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        let mut baseline = analyze_heap_result(&file.path().to_string_lossy(), json!({})).await;
+        let mut via_snapshot = analyze_heap_result(
+            &file.path().to_string_lossy(),
+            json!({ "snapshot": manifest.heap_sha256 }),
+        )
+        .await;
+
+        normalize_deep_result(&mut baseline);
+        normalize_deep_result(&mut via_snapshot);
+
+        assert_eq!(via_snapshot, baseline);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_heap_with_invalid_snapshot_key_returns_snapshot_not_found_error_details() {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "analyze_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "snapshot": "does-not-exist",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_heap_with_stale_snapshot_source_returns_snapshot_stale_source_error_details(
+    ) {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let mut file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        // Mutate the heap file's bytes after the snapshot was saved (mirrors
+        // core::snapshot::tests::load_checked_detects_stale_source).
+        file.as_file_mut().set_len(0).unwrap();
+        file.write_all(b"different bytes now, definitely not the original hprof fixture")
+            .unwrap();
+        file.flush().unwrap();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "analyze_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "snapshot": manifest.heap_sha256,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_stale_source"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_analyze_heap_with_schema_mismatched_snapshot_returns_snapshot_schema_mismatch_error_details(
+    ) {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        // Hand-edit the persisted manifest's schema_version to simulate a
+        // snapshot saved by an older/newer binary (mirrors
+        // core::snapshot::tests::load_checked_detects_schema_mismatch).
+        let payload_path = store_dir
+            .path()
+            .join(format!("{}.json", manifest.heap_sha256));
+        let mut payload: SnapshotPayload =
+            serde_json::from_slice(&std::fs::read(&payload_path).unwrap()).unwrap();
+        payload.manifest.schema_version = crate::snapshot::SNAPSHOT_SCHEMA_VERSION + 1;
+        std::fs::write(&payload_path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "analyze_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "snapshot": manifest.heap_sha256,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_schema_mismatch"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_with_snapshot_matches_normal_parse() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        let baseline = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let via_snapshot = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                    "snapshot": manifest.heap_sha256,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(via_snapshot, baseline);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_find_gc_path_with_invalid_snapshot_returns_snapshot_not_found_error_details() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "find_gc_path".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                    "snapshot": "does-not-exist",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_inspect_object_with_snapshot_matches_normal_parse() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        let baseline = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let via_snapshot = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                    "snapshot": manifest.heap_sha256,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(via_snapshot, baseline);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_query_heap_with_snapshot_matches_normal_parse() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        // query_heap always parses with retain_field_data: true, so the
+        // seeded snapshot must carry field data too for the field-based
+        // WHERE clause below to match on both paths.
+        let manifest = seed_snapshot(store_dir.path(), file.path(), true);
+
+        let query = r#"SELECT @objectId, entries FROM "com.example.BigCache" WHERE entries = 8192"#;
+
+        let baseline = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "query_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "query": query,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let via_snapshot = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "query_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "query": query,
+                    "snapshot": manifest.heap_sha256,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(via_snapshot, baseline);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_query_heap_with_invalid_snapshot_returns_snapshot_not_found_error_details() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "query_heap".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "query": r#"SELECT @objectId FROM "com.example.BigCache""#,
+                    "snapshot": "does-not-exist",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_parse_heap_with_snapshot_returns_manifest_derived_summary_not_full_heap_summary() {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let manifest = seed_snapshot(store_dir.path(), file.path(), false);
+
+        let result = parse_heap_result(
+            &file.path().to_string_lossy(),
+            json!({ "snapshot": manifest.heap_sha256 }),
+        )
+        .await;
+
+        assert_eq!(result.get("source"), Some(&json!("snapshot")));
+        assert_eq!(
+            result.get("object_count"),
+            Some(&json!(manifest.object_count))
+        );
+        assert!(
+            result.get("header").is_none(),
+            "snapshot summary must not impersonate a full HeapSummary"
+        );
+        assert!(result.get("record_stats").is_none());
+        assert!(result.get("classes").is_none());
+        assert!(result.get("total_shallow_size_bytes").is_some());
+        let provenance = result
+            .get("provenance")
+            .and_then(Value::as_array)
+            .expect("provenance array");
+        assert!(!provenance.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_parse_heap_with_invalid_snapshot_returns_snapshot_not_found_error_details() {
+        let _guard = mode_test_guard().await;
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "parse_heap".into(),
+                params: json!({
+                    "path": file.path().to_string_lossy().into_owned(),
+                    "snapshot": "does-not-exist",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
     }
 }
