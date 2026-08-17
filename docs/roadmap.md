@@ -68,7 +68,7 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 | **Compare two heap dumps** (object-level diff) | ✅ | 🟡 | `ci-check object_growth_threshold` predicate + leak-progression cross-reference missing | Low (M10-B) | `mnemosyne diff --mode object` ships fingerprint-based per-object identity (`class+retained` / `class+dominator` / `full-fingerprint`), added/removed/retained_changed sections, `MatchQuality`, and MCP `diff_heaps` mode. Missing: `ci-check object_growth_threshold` predicate, leak-progression cross-reference with `detect_leaks()`. |
 | Allocation-site flame graphs | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has no native flame-graph export; users typically pipe to async-profiler. Mnemosyne ships SVG / folded-stack / JSON natively. **Differentiator.** |
 | Custom inspector views / extensions | ✅ | ❌ | Not shipped | Defer | MAT plugins (`org.eclipse.mat.api.IQuery`) are widely used. Mnemosyne has a plugin design doc (M6) but no runtime extension surface. Defer until adoption justifies. |
-| **Index files / persistent snapshot** (parse-once, query-many) | ✅ | ❌ | Not shipped | **High (M9)** | MAT's `.index` artifacts make re-open near-instant. Mnemosyne re-parses on every invocation. This is the single biggest UX gap for repeat triage workflows. |
+| **Index files / persistent snapshot** (parse-once, query-many) | ✅ | ✅ | None | — | `mnemosyne snapshot save\|load\|list\|rm` plus additive `--snapshot <hash-or-path>`/`--refresh` on `analyze`/`leaks`/`gc-path`/`inspect`/`query` cache the parsed `ObjectGraph` + `DominatorTree` keyed by heap-file SHA-256 under `dirs::cache_dir()/mnemosyne` (override via `MNEMOSYNE_SNAPSHOT_DIR`); auto-discovery re-opens a fresh matching cache entry with no flags at all. Schema/staleness mismatches on an *explicit* `--snapshot`/`snapshot load` fail loudly with exit codes `10`-`13`; auto-discovery misses fall through to a normal parse, never silently. MCP gets `open_snapshot`/`list_snapshots` plus an additive `snapshot` param on `analyze_heap`/`parse_heap`/`find_gc_path`/`inspect_object`/`query_heap`. Shipped M9 Slices 9.A-9.D (9.E is this doc-sync). |
 | **CI/CD-native automation** | ❌ | ✅ | **Mnemosyne ahead** | — | MAT has no first-class CI gate. `ci-check` + JSON / JUnit / GitHub Actions output is unique. **Differentiator.** |
 | **Streaming bounded-memory mode** | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has `ParseHeapDump.sh` for batch indexing, but no truly streaming bounded-RSS triage on multi-GB dumps. **Differentiator.** |
 | **AI-assisted diagnosis** | ❌ | ✅ | **Mnemosyne ahead** | — | MAT has none. Mnemosyne ships rules / stub / provider modes, prompt redaction, audit log, CLI `chat`, persisted MCP sessions. **Differentiator.** |
@@ -79,7 +79,7 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 ### Parity matrix summary
 
 - **Mnemosyne ≥ MAT:** allocation flame graphs, CI/CD automation, streaming bounded-memory mode, AI-assisted diagnosis, MCP/IDE integration, provenance, distribution.
-- **MAT ≥ Mnemosyne (high priority):** persistent indexes / parse-once-query-many. (All-paths-to-GC-roots / by-class, group-by-referrer, and object-level heap diff closed in M8/M10 — see below.)
+- **MAT ≈ Mnemosyne (parity closed):** persistent indexes / parse-once-query-many, all-paths-to-GC-roots / by-class, group-by-referrer, and object-level heap diff — closed in M9/M8/M10, see below.
 - **MAT ≥ Mnemosyne (medium priority):** full OQL depth, classloader leak detection.
 - **MAT ≥ Mnemosyne (low priority / defer):** duplicate-arrays, group-by-superclass, custom plugin runtime.
 
@@ -143,21 +143,22 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** Path enumeration needs careful budget caps (combinatorial explosion) — mitigated with a shared `max_paths` budget, not per-path. Frame-locals depend on `STACK_TRACE` records being present in the dump. Overview-mode behavior surfaces a structured `feature_unavailable_in_overview_mode` error (deep-mode-only, matching M7-3/M7-4/M10 precedent).
 - **Estimated slice count:** 5–10 slices (5 shipped: 8.A–8.D implementation + 8.E doc-sync).
 
-### M9 — Snapshot Persistence & Parse-Once-Query-Many (Parity-Closing)
+### M9 — Snapshot Persistence & Parse-Once-Query-Many (Parity-Closing) — ✅ Shipped
 
+- **Status:** ✅ **Shipped** — design doc [milestone-9-snapshot-persistence.md](design/milestone-9-snapshot-persistence.md), slices 9.A–9.D (implementation) + 9.E (documentation sync, this pass).
 - **Theme:** Eliminate re-parse latency for repeat triage workflows.
 - **Goal:** Persist a verified, versioned, on-disk snapshot index after the first parse so subsequent commands re-open instantly. Mnemosyne's first answer to MAT's `.index` artifacts.
-- **Scope:**
-  - `core::snapshot` subsystem: serialize `ObjectGraph` (and selected analyzers' precomputed outputs) to disk under `~/.cache/mnemosyne/<heap-sha256>/` with version + schema check.
-  - `mnemosyne snapshot save | load | list | rm` CLI surface.
-  - All commands accept `--snapshot <path>` (or auto-discover by HPROF SHA-256).
-  - MCP `open_snapshot` / `list_snapshots`.
-  - Cache invalidation on schema-version mismatch (loud, with provenance).
-- **Out of scope:** Cross-machine snapshot interchange (defer). Multi-snapshot in a single MCP session beyond explicit `open` (M10 territory).
-- **Why now / strategic rationale:** This is the single biggest UX gap vs MAT for repeat workflows. It is also a force multiplier for M10 (heap diff) and M11 (MCP workflow suite), both of which need cheap snapshot re-open. Should land **after** M8 because the on-disk format must include the new analyzers M8 adds, otherwise we ship a snapshot format we'll have to re-version immediately.
-- **Success criteria:** Re-open of a 1 GiB snapshot completes in <1s vs >10s re-parse. Schema-version mismatch fails loudly with a hint. Round-trip equality test for graph + analyzer outputs. ≥20 new tests.
-- **Risks / dependencies:** Format stability — must version every embedded schema. Disk-quota awareness. Privacy: snapshots may contain string contents — apply same `[ai.privacy]` redaction option. Depends on M8 analyzer surfaces being stable.
-- **Estimated slice count:** 5–10 slices.
+- **Delivered scope (as shipped, differs from the original text below in several particulars — see note):**
+  - New top-level `core::snapshot` module: `SnapshotManifest`, `SnapshotPayload { manifest, object_graph, dominator_tree }`, `SnapshotStore::{new, ensure_root, save, load, load_checked, list, remove, find_fresh_for_heap}`. `DominatorTree` gained `Serialize`/`Deserialize` derives (mechanical, no algorithm change). Cache entries are keyed by heap-file SHA-256 and stored as flat `<sha256>.json` files under the store root (**not** nested under `<heap-sha256>/snapshot.json` as originally speculated below — a flat layout was simpler and equally sufficient). **Only** `ObjectGraph` + `DominatorTree` are cached — M8's analyzer outputs (`ReferrerReport`, `ObjectInspection`, `FrameLocal`s) are deliberately **not** precomputed/stored; they stay cheap on-demand computations over the loaded graph, resolving the open design question the predecessor note below originally flagged (see the design doc's §6.2).
+  - `mnemosyne snapshot save <heap> [--output <dir>] | load <hash-or-path> | list | rm <hash>` CLI surface, plus additive `--snapshot <hash-or-path>` / `--refresh` flags on `analyze`, `leaks`, `gc-path`, `inspect`, and `query` (every command that calls the binary parser). No flags at all auto-discovers a fresh matching cache entry silently; an explicit `--snapshot <key>` loads exactly that entry and fails loudly (never silently re-parses) on a stale, mismatched, corrupt, or missing key. New CLI exit codes `10` (`snapshot_not_found`), `11` (`snapshot_schema_mismatch`), `12` (`snapshot_stale_source`), `13` (`snapshot_corrupt`) — auto-discovery misses are not errors, only explicit `--snapshot`/`snapshot load` usage surfaces them.
+  - MCP `open_snapshot` (key -> manifest) and `list_snapshots`, plus an additive `snapshot: string` param on `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` — same additive-param-not-new-tool pattern M8/M10 used. `parse_heap`'s `snapshot` param cannot reconstruct a real `HeapSummary` (that requires a raw HPROF record-tag scan a cached `ObjectGraph`/`DominatorTree` doesn't retain), so it returns a distinctly-shaped partial response (manifest fields + an honestly-computed `total_shallow_size_bytes`) carrying a `ProvenanceKind::Partial` marker instead — a shape decision the module's own doc comments flag explicitly, not an oversight.
+  - Cache root: `dirs::cache_dir()/mnemosyne`, overridable via `MNEMOSYNE_SNAPSHOT_DIR` only (**no** `[snapshot].directory` config-key override shipped, unlike the two-mechanism override originally speculated below).
+- **Not yet shipped (open follow-up):** the Slice 9.D criterion benchmark comparing cold-parse vs. snapshot-load wall-clock (`core/benches/snapshot_load.rs`) was scoped but not written — the §12 performance budget in the design doc remains directional/unmeasured rather than benchmark-confirmed. Round-trip correctness (including via the MCP path) is fully covered by tests; only the timing claim is unverified.
+- **Out of scope:** Cross-machine snapshot interchange (defer). Multi-snapshot in a single MCP session beyond explicit `open` (M11 territory). No UI/Tauri surfacing.
+- **Why now / strategic rationale:** This is the single biggest UX gap vs MAT for repeat workflows. It is also a force multiplier for M10 (heap diff) and M11 (MCP workflow suite), both of which need cheap snapshot re-open. Landed **after** M8 so the on-disk format could include M8's new analyzer context from day one (moot in practice, since §6.2 resolved that those outputs don't need precomputing at all).
+- **Success criteria (met):** Round-trip fidelity (`get_references`/`get_referrers`/`retained_size`/`immediate_dominator` identical before/after save+load) and all three staleness triggers each produce their distinct structured error, verified in `core/tests/snapshot_round_trip.rs` and `core/tests/snapshot_staleness.rs`. CLI (`cli/tests/snapshot_cli.rs`) and MCP (`core/src/mcp/server.rs` test module) both cover save/load/list/rm and the additive-flag/param paths on every wired command. Every pre-M9 `analyze`/`leaks`/`gc-path`/`inspect`/`query` invocation without `--snapshot` stays byte-identical.
+- **Risks / dependencies:** Format stability — `SNAPSHOT_SCHEMA_VERSION` is the enforced compatibility contract; `mnemosyne_version` is recorded but informational only. Disk-quota / unbounded cache growth is explicitly out of scope this milestone (manual `snapshot rm` only). Privacy: snapshots inherit the same sensitivity as the source HPROF file (documented caveat, not new redaction code) — treat `~/.cache/mnemosyne/` accordingly.
+- **Estimated slice count:** 5 shipped (9.A–9.D implementation + 9.E doc-sync).
 
 ### M10 — Compare Two Heaps (Object-Level Diff) (Parity-Closing + Differentiator-Extending)
 
@@ -287,7 +288,7 @@ Updated to reflect the parity matrix in §2.
 | Object inspector (CLI/MCP) | ✅ (`mnemosyne inspect`, MCP `inspect_object`) | **M8** ✅ shipped |
 | Thread frame-locals | ✅ (`analyze --threads` `local:`/`jni-local:` lines) | **M8** ✅ shipped |
 | Object-level heap diff | ✅ (`--mode object`; `ci-check` predicate pending) | **M10** ✅ mostly shipped |
-| Persistent indexes / parse-once-query-many | ❌ | **M9** |
+| Persistent indexes / parse-once-query-many | ✅ (`snapshot save\|load\|list\|rm`, `--snapshot`/`--refresh`) | **M9** ✅ shipped |
 | Classloader leak detection | 🟡 (per-loader histogram only) | **M13** |
 | Group by superclass | ❌ | B-list |
 | Duplicate primitive arrays | ❌ | B-list |
@@ -335,7 +336,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | M7-6 v0.3.0 release | [design/milestone-7-6-v0-3-0-release.md](design/milestone-7-6-v0-3-0-release.md) | ✅ Shipped |
 | Scaling support | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
 | **M8 Reachability & References** | [design/milestone-8-reachability-references.md](design/milestone-8-reachability-references.md) | ✅ Shipped (slices 8.A–8.D implementation, 8.E doc-sync) |
-| **M9 Snapshot Persistence** | _to be authored by Design Consulting_ | ⏳ Pending |
+| **M9 Snapshot Persistence** | [design/milestone-9-snapshot-persistence.md](design/milestone-9-snapshot-persistence.md) | ✅ Shipped (slices 9.A–9.D implementation, 9.E doc-sync) |
 | **M10 Object-Level Diff** | [design/milestone-8-1-object-level-diff.md](design/milestone-8-1-object-level-diff.md) | 🟡 Mostly shipped (slices A–G; `ci-check` predicate = M10-B) |
 | **M11 MCP Workflow Suite** | _to be authored by Design Consulting_ | ⏳ Pending |
 | **M12 Reference-Workstation Re-run** | reuse [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | ⏳ Pending |

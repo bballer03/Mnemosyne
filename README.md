@@ -59,6 +59,7 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed; `--all-paths [--by-class <class>] [--max-paths <n>]` enumerates every GC root path up to a shared budget instead of just the shortest one
 - `mnemosyne-cli analyze --by-referrer` ranks objects by incoming-reference count ("group by referrer"), and `mnemosyne-cli inspect <heap> --object-id <id> [--retain-field-data]` gives a focused single-object view (fields, refs in/out, dominator context) on the CLI/MCP, not just the UI
 - `analyze --threads` now resolves `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame local-variable listings (`local:` / `jni-local:` lines)
+- `mnemosyne-cli snapshot save|load|list|rm` caches a parsed object graph + dominator tree to disk (keyed by heap SHA-256), and `--snapshot <hash-or-path>` / `--refresh` on `analyze`, `leaks`, `gc-path`, `inspect`, and `query` skip the binary parse entirely on a cache hit — parse-once-query-many for repeat triage, with no flags needed at all for silent auto-discovery
 - Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
@@ -108,11 +109,14 @@ Available MCP methods:
 - list_tools
 - parse_heap
 - analyze_heap
+- diff_heaps
 - query_heap
 - detect_leaks
 - map_to_code
 - find_gc_path
 - inspect_object
+- open_snapshot
+- list_snapshots
 - create_ai_session
 - resume_ai_session
 - get_ai_session
@@ -125,6 +129,8 @@ Call `list_tools` first if your client wants machine-readable method description
 
 `parse_heap` and `analyze_heap` now also accept an optional `mode: "auto"|"deep"|"overview"` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
 
+`open_snapshot` loads a cached snapshot by SHA-256 hash or file path and returns its manifest; `list_snapshots` lists every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param that skips the HPROF parse and deserializes the cached object graph instead — an invalid, stale, or schema-mismatched key returns a structured error rather than silently falling back to a fresh parse.
+
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ---
@@ -134,11 +140,11 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
 
 **Layers at a glance:**
-- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
-- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, AI insights, MCP server, report generator
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `snapshot`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, snapshot cache, AI insights, MCP server, report generator
 - **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
 - **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
-- **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
+- **MCP** — 18 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
 - **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
 ---

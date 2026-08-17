@@ -146,6 +146,71 @@ Choose `parse` first when you want to confirm that a dump is valid, estimate sca
 
 `auto` resolves to overview for dumps at or above 4 GiB by default, or whatever byte threshold `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` supplies. Overview mode is streaming and honest: it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
 
+### `snapshot`
+
+Use `snapshot` when you want to explicitly manage the parse-once-query-many cache instead of relying on implicit auto-caching alone. A snapshot stores an already-parsed `ObjectGraph` + `DominatorTree` pair to disk, keyed by the heap file's SHA-256 hash, so a later `analyze`/`leaks`/`gc-path`/`inspect`/`query` run can deserialize it instead of re-parsing the HPROF binary from scratch.
+
+Usage:
+
+```bash
+mnemosyne-cli snapshot save <HEAP> [--output <DIR>]
+mnemosyne-cli snapshot load <HASH_OR_PATH>
+mnemosyne-cli snapshot list
+mnemosyne-cli snapshot rm <HASH>
+```
+
+Flags:
+
+- `snapshot save`: `--output <DIR>` — override the default cache root for this save only
+- `snapshot load` / `snapshot rm`: positional `<HASH_OR_PATH>` / `<HASH>`
+
+What each subcommand does:
+
+- `save`: parses the heap dump (deep mode only — overview mode never builds an `ObjectGraph`, so there is nothing to snapshot) and atomically writes its object graph + dominator tree to the cache under `<cache-root>/<heap-sha256>.json`, then prints the manifest (hash, object count, `has_field_data`, schema version, created-at)
+- `load`: deserializes a cached snapshot by hash or direct file path and prints its manifest; it does not run any analysis on its own — pair it with `--snapshot` on another command
+- `list`: prints a table of every cached snapshot's hash, heap path, object count, created-at, and schema version
+- `rm`: deletes a cached snapshot by hash; removing a hash that doesn't exist is a loud `snapshot_not_found` error, not a silent no-op
+
+Cache location: `dirs::cache_dir()/mnemosyne` (for example `~/.cache/mnemosyne/` on Linux, `~/Library/Caches/mnemosyne/` on macOS, `%LOCALAPPDATA%\mnemosyne\` on Windows), overridable with the `MNEMOSYNE_SNAPSHOT_DIR` environment variable. Snapshots inherit the same sensitivity as the source HPROF file (they can contain retained string/field contents when `--retain-field-data` was used to build them) — treat the cache directory with the same care as your heap dumps, and `snapshot rm` when you're done with a sensitive dump.
+
+Example:
+
+```bash
+mnemosyne-cli snapshot save heap.hprof
+mnemosyne-cli snapshot list
+mnemosyne-cli analyze heap.hprof --snapshot a1b2c3d4...
+mnemosyne-cli snapshot rm a1b2c3d4...
+```
+
+Expected output pattern:
+
+```text
+Snapshot saved: a1b2c3d4e5f6...
+  Heap path: heap.hprof
+  Object count: 1234567
+  Has field data: false
+  Schema version: 1
+  Created at: 1745766000
+```
+
+`mnemosyne-cli snapshot list` with cached entries:
+
+```text
+Cached snapshots:
+  Hash      Heap Path    Objects   Created At   Schema
+  a1b2c3d4  heap.hprof   1234567   1745766000   1
+```
+
+Beyond explicit `snapshot save|load|list|rm`, every command that currently parses a heap dump directly (`analyze`, `leaks`, `gc-path`, `inspect`, `query`) also accepts additive `--snapshot <HASH_OR_PATH>` and `--refresh` flags:
+
+- no `--snapshot` and no `--refresh`: silently checks the default cache dir for a fresh snapshot matching the heap file's current SHA-256; uses it if present, otherwise parses normally and best-effort writes a new cache entry (a cache-write failure never fails your actual command, it just means no entry got cached)
+- `--snapshot <HASH_OR_PATH>`: loads exactly that cached entry instead of parsing; errors loudly (never silently falls back to a fresh parse) if the entry is missing, corrupt, schema-mismatched, or stale relative to the heap file you passed
+- `--refresh`: always re-parses the heap dump and overwrites its cache entry, even if a fresh cached snapshot already exists
+
+Exit codes (additive on `analyze`/`leaks`/`gc-path`/`inspect`/`query`, and on `snapshot load`/`snapshot rm`): `10` `snapshot_not_found` (explicit `--snapshot <key>` / `snapshot load`/`rm` key doesn't exist), `11` `snapshot_schema_mismatch` (cached snapshot's schema version doesn't match the running binary), `12` `snapshot_stale_source` (the heap file's bytes changed since the snapshot was taken), `13` `snapshot_corrupt` (the cached file failed to deserialize). These four codes only apply to *explicit* `--snapshot`/`snapshot load` usage — a cache miss during silent auto-discovery (no `--snapshot` passed) is never an error, since "nothing cached yet" is the expected first-run state.
+
+Current limitation: the only thing cached is the object graph + dominator tree. M8's analyzer outputs (referrer report, object inspections, thread frame-locals) are *not* precomputed into the snapshot — they're cheap enough to recompute from the loaded graph on every call, so caching them would only add staleness risk and file bloat for no real speed win.
+
 ### `analyze`
 
 `analyze` is the main report-generation command. It runs the graph-backed analysis pipeline when possible, can attach optional investigation reports, and is the only CLI surface that currently owns `--format` and `--output-file`.
@@ -174,12 +239,15 @@ Flags:
 - `--min-capacity <N>`
 - `--package <PKG>[,<PKG>...]`
 - `--leak-kind <KIND>[,<KIND>...]`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - validates the heap file
 - resolves the requested mode at the CLI boundary (`auto` by default)
 - uses the configured analysis filters plus any command-line overrides
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - in `deep`, builds the full analysis response, attempts graph-backed retained-size analysis first, and falls back honestly when needed
 - in `overview`, skips object-graph analysis entirely and renders the streaming partial summary with approximate shallow sizes only
 - renders the result in text, Markdown, HTML, JSON, or TOON
@@ -252,6 +320,8 @@ Report (text/plain) written to heap-report.txt
 ```
 
 Overview mode renders a different banner-led report focused on top classes, instance samples, GC roots, and capped thread frames. It explicitly states that retained sizes, the dominator tree, and leak suspects are not available in that mode.
+
+See [`snapshot`](#snapshot) for the `--snapshot`/`--refresh` cache flags shared with `leaks`, `gc-path`, `inspect`, and `query`. Exit codes `10`-`13` apply only to explicit `--snapshot <key>` usage (see the `snapshot` section for the full table); a silent cache miss during auto-discovery is never an error.
 
 ### `ci-check`
 
@@ -385,11 +455,14 @@ Flags:
 - `--min-severity low|medium|high|critical`
 - `--package <PKG>[,<PKG>...]`
 - `--leak-kind <KIND>[,<KIND>...]`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - loads the configured analysis filters
 - applies command-line overrides for severity, package allow-listing, and leak kinds
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - prints a compact table plus per-leak descriptions and provenance details
 
 Examples:
@@ -419,6 +492,8 @@ If nothing survives the filters, Mnemosyne prints an explicit zero-result messag
 No leak suspects detected.
 ```
 
+See [`snapshot`](#snapshot) for the shared `--snapshot`/`--refresh` cache flags and exit codes `10`-`13` (explicit `--snapshot <key>` only).
+
 ### `gc-path`
 
 Use `gc-path` when you already know a target object ID and want to see how it stays reachable from a GC root.
@@ -437,6 +512,8 @@ Flags:
 - `--all-paths` — return every enumerated GC root path instead of only the shortest one
 - `--by-class <CLASS_NAME>` — find all-paths for every live instance of this class instead of a single `--object-id`; mutually exclusive with `--object-id`
 - `--max-paths <N>` — default `20`; a **shared** budget across the whole `--all-paths`/`--by-class` query, not per-path or per-instance
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
@@ -445,6 +522,7 @@ What it does:
 - falls back to a budget-limited graph and then synthetic output when needed
 - labels fallback output through provenance markers
 - with `--all-paths`/`--by-class`: enumerates every GC root path up to the shared `--max-paths` budget instead of stopping at the first hit; the plain (no new flags) `gc-path` output is unaffected and stays byte-identical
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 
 Example:
 
@@ -482,7 +560,7 @@ GC root paths for 0x00001000 (3 found, not truncated):
 
 When the shared `--max-paths` budget is hit before enumeration finishes, the header instead reads `(20 found, truncated)` — the count found and the truncation state are both reported honestly rather than silently capping.
 
-Exit codes: `0` success, `8` `--object-id` not found in the heap, `9` `--by-class` matches zero live instances.
+Exit codes: `0` success, `8` `--object-id` not found in the heap, `9` `--by-class` matches zero live instances, `10`-`13` explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
 ### `inspect`
 
@@ -499,12 +577,15 @@ Flags:
 - `--object-id <ID>` — required
 - `--retain-field-data` — opt in to typed field values (re-parses the heap with field data retained); without it, the `fields` section is omitted
 - `--format text|json|toon` — default `text`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - resolves the object's shallow/retained size, dominator parent/children, references out, and referrers in via existing `ObjectGraph`/`DominatorTree` accessors — no new graph-walking logic
 - references and dominator context are structured (`object_id` + `class_name`), not baked display strings, so JSON/TOON/MCP consumers can chain the returned ids straight back into another `inspect`/`gc-path`/`query` call
 - with `--retain-field-data`: also reads and renders typed instance field values
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists; when `--retain-field-data` is also passed, a cached snapshot lacking field data is treated as a miss (falls through to a fresh field-data-retaining parse) rather than silently serving fields-less data — but an *explicit* `--snapshot <key>` always loads exactly what's cached, so a field-data-less explicit snapshot yields no `fields` section even with `--retain-field-data`
 
 Example:
 
@@ -523,7 +604,7 @@ Object 0x00001000  (com.example.CacheEntry)
     key: com.example.Key = 0x00002000
 ```
 
-Exit codes: `0` success, `8` `--object-id` not found in the heap.
+Exit codes: `0` success, `8` `--object-id` not found in the heap, `10`-`13` explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
 ### `diff`
 
@@ -653,11 +734,13 @@ mnemosyne-cli query <HEAP> "<QUERY>"
 
 Flags:
 
-- no query-specific flags in the current runtime
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - builds the graph-backed query context
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - parses the query string
 - prints matched column names, match count, rows, and a truncation note when `LIMIT` cuts off the result set
 
@@ -700,7 +783,7 @@ Matched: 1
 0x00001000 | 42
 ```
 
-Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields.
+Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields. Exit codes `10`-`13` apply to explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
 Current limitation: the query surface is real, but it is still smaller than a full MAT-style OQL environment. The targeted expansion now covers the highest-value predicates and projections, but multi-hop traversal, subqueries, broader set algebra, and deeper explorer semantics are still future work.
 
@@ -1235,10 +1318,13 @@ Useful MCP methods to know up front:
 - `parse_heap`
 - `detect_leaks`
 - `analyze_heap`
+- `diff_heaps`
 - `query_heap`
 - `map_to_code`
 - `find_gc_path`
 - `inspect_object`
+- `open_snapshot`
+- `list_snapshots`
 - `create_ai_session`
 - `resume_ai_session`
 - `get_ai_session`
@@ -1249,7 +1335,9 @@ Useful MCP methods to know up front:
 
 `parse_heap` and `analyze_heap` both accept an optional `mode: "auto"|"deep"|"overview"` parameter. When the server resolves to overview, the response carries `"mode": "overview"` and returns the streaming partial summary instead of deep-mode object-graph data.
 
-`find_gc_path` gains optional `all_paths: boolean`, `by_class: string`, and `max_paths: number` params (default `20`) for all-paths / by-class enumeration — additive params on the existing tool, not a new tool. `analyze_heap` gains an optional `by_referrer: boolean` param that populates `referrer_report`. `inspect_object` is a new tool taking `heap_path`, `object_id`, and optional `retain_field_data`, returning an `ObjectInspection` with structured `object_id`/`class_name` refs.
+`find_gc_path` gains optional `all_paths: boolean`, `by_class: string`, and `max_paths: number` params (default `20`) for all-paths / by-class enumeration — additive params on the existing tool, not a new tool. `analyze_heap` gains an optional `by_referrer: boolean` param that populates `referrer_report`. `inspect_object` is a new tool taking `heap_path`, `object_id`, and optional `retain_field_data`, returning an `ObjectInspection` with structured `object_id`/`class_name` refs. `diff_heaps` takes `before`, `after`, and an optional `mode: "class"|"object"` param (plus identity-strategy and budget params) for object-level diffing.
+
+`open_snapshot` (params: `key`) loads a cached snapshot by SHA-256 hash or file path and returns its `SnapshotManifest`; it does not run any analysis on its own. `list_snapshots` (no params) returns every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param: when set, the server deserializes the cached object graph instead of re-parsing `heap_path`/`path`, and an invalid, stale, or schema-mismatched key returns a structured `snapshot_not_found`/`snapshot_stale_source`/`snapshot_schema_mismatch`/`snapshot_corrupt` error rather than silently falling back to a fresh parse. `parse_heap`'s `snapshot` response is a distinctly-shaped partial object (not a real `HeapSummary`) carrying a `ProvenanceKind::Partial` marker, since a cached snapshot has no raw HPROF record-tag data to reconstruct the real summary from.
 
 ## 8. Output Formats
 
