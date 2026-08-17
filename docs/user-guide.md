@@ -313,6 +313,23 @@ Stack: pool-1-thread-3
       jni-local: 0x00002000 (java.nio.ByteBuffer)
 ```
 
+`--classloaders` output ships **two independent leak signals that coexist** (neither replaces the other, see [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) §3.3): the pre-existing single-loader `potential_leaks` heuristic (a loader that retains a lot but declares almost no classes of its own) and the newer cross-loader "Duplicate classes across loaders" signal, MAT's actual "Duplicate Classes" report shape and the defining pattern of the classic Tomcat/Jetty/Spring hot-redeploy leak — the same class name loaded by two or more distinct classloaders that don't know about each other. The per-loader table also gains an `Ancestors` column reporting the length of each loader's resolved parent chain (bounded walk, depth 16, cycle-guarded against adversarial/malformed HPROF data). Both new sections print only when non-empty:
+
+```text
+ClassLoader Report:
+  Loader                     Classes   Ancestors   Instances   Shallow    Retained
+  com.example.WebappLoader   142       1           8213        4.2 MB     61.8 MB
+
+Duplicate classes across loaders (2):
+  com.example.webapp.RequestHandler  loaded by 3 loaders: 0x1000, 0x2400, 0x3800
+  com.example.webapp.SessionCache    loaded by 2 loaders: 0x1000, 0x2400
+
+Potential classloader leaks:
+  com.example.WebappLoader (Retains 61.80 MB but loads only 2 classes)
+```
+
+`unique_class_count` (classes loaded by a given loader and no other, derived from the same grouping pass that builds the duplicate-classes list) is computed and available in JSON/TOON output on each `ClassLoaderInfo` entry, but is not currently rendered as its own text-table column.
+
 When you write to a file, the CLI prints a confirmation instead of dumping the report to stdout:
 
 ```text
@@ -355,7 +372,20 @@ Policy TOML shape:
 - optional `[defaults]` for default rule severity
 - repeated `[[rule]]` blocks for predicate checks
 
-The current policy surface supports 10 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, and `dominator_root_count`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+The current policy surface supports 11 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+
+`classloader_leak_count` (M13) thresholds on the number of `DuplicateClassGroup` entries — the cross-loader "same class name loaded by 2+ distinct classloaders" signal, not the older single-loader `potential_leaks` heuristic (there is no predicate over `potential_leaks`). Like the other deep-only predicates, it is skipped (not errored) on overview-mode input, and also skipped if the policy is evaluated against a deep `AnalyzeResponse` that never had classloader analysis enabled — `ci-check` handles this automatically by turning on `enable_classloaders` whenever the loaded policy declares a `classloader_leak_count` rule, so no extra flag is needed:
+
+```toml
+[[rule]]
+id = "no-classloader-duplicates"
+predicate = "classloader_leak_count"
+op = "<="
+value = 0
+severity = "error"
+```
+
+This example fails the build the moment any class name is loaded by more than one classloader in the analyzed heap — the standard first gate for catching a webapp redeploy leak before it compounds across further redeploys.
 
 Severity and mode behavior:
 
@@ -1325,6 +1355,7 @@ Useful MCP methods to know up front:
 - `inspect_object`
 - `open_snapshot`
 - `list_snapshots`
+- `detect_classloader_leaks`
 - `create_ai_session`
 - `resume_ai_session`
 - `get_ai_session`
@@ -1338,6 +1369,8 @@ Useful MCP methods to know up front:
 `find_gc_path` gains optional `all_paths: boolean`, `by_class: string`, and `max_paths: number` params (default `20`) for all-paths / by-class enumeration — additive params on the existing tool, not a new tool. `analyze_heap` gains an optional `by_referrer: boolean` param that populates `referrer_report`. `inspect_object` is a new tool taking `heap_path`, `object_id`, and optional `retain_field_data`, returning an `ObjectInspection` with structured `object_id`/`class_name` refs. `diff_heaps` takes `before`, `after`, and an optional `mode: "class"|"object"` param (plus identity-strategy and budget params) for object-level diffing.
 
 `open_snapshot` (params: `key`) loads a cached snapshot by SHA-256 hash or file path and returns its `SnapshotManifest`; it does not run any analysis on its own. `list_snapshots` (no params) returns every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param: when set, the server deserializes the cached object graph instead of re-parsing `heap_path`/`path`, and an invalid, stale, or schema-mismatched key returns a structured `snapshot_not_found`/`snapshot_stale_source`/`snapshot_schema_mismatch`/`snapshot_corrupt` error rather than silently falling back to a fresh parse. `parse_heap`'s `snapshot` response is a distinctly-shaped partial object (not a real `HeapSummary`) carrying a `ProvenanceKind::Partial` marker, since a cached snapshot has no raw HPROF record-tag data to reconstruct the real summary from.
+
+`detect_classloader_leaks` (params: `heap_path`, required) runs `core::analysis::classloader::detect_duplicate_classes()` standalone and returns `Vec<DuplicateClassGroup>` — the cross-loader "Duplicate Classes" signal only, without a full `analyze_heap` call. This is a focused, cheaper single-purpose tool by design, the same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own to get the M13 signals: once set, the returned `classloader_report` automatically includes the new `duplicate_classes`, `unique_class_count` (per loader), and `ancestor_chain` (per loader) fields alongside the pre-existing `loaders` and `potential_leaks`.
 
 ## 8. Output Formats
 
