@@ -58,7 +58,7 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 | Leak suspects report (heuristic) | ✅ | ✅ | None | — | `detect_leaks()` ships graph-backed retained-size + accumulation-point ranking with heuristic fallback labeled via `ProvenanceKind::Fallback`. **Differentiator:** structured provenance markers vs MAT's opaque suspect text. |
 | OQL — full operator set | ✅ | 🟡 | M7-4 covers ~30% of MAT OQL surface | Medium (M8 / M9) | Shipped: `@retainedSize`, `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS x.field`, `IS NULL`. Missing: subqueries, `UNION`, multi-hop traversal, full predicate functions, `eval(...)`, regex `=~`, `dominators(...)`, `outbounds`/`inbounds` traversal. |
 | Top consumers report | ✅ | ✅ | None | — | `find_top_instances()` + analyze report top-N largest instances by retained or shallow size. |
-| Class loader explorer (per-loader histogram, unique classes) | ✅ | 🟡 | `analyze --classloaders` exists; no dedicated leak-detection or unique-classes-per-loader explorer view | Medium (M11) | Per-loader retained-size aggregation is shipped. Missing: classloader leak detection (multiple loaders for same class — the classic Tomcat/webapp leak), unique-classes-per-loader histograms, parent-loader tree drill-down. |
+| Class loader explorer (per-loader histogram, unique classes) | ✅ | ✅ | None | — | `analyze --classloaders` ships `ClassLoaderReport { loaders, potential_leaks, duplicate_classes }` — **two independent leak signals that coexist, neither replacing the other**: (1) `potential_leaks`, a single-loader "retains a lot, loads almost nothing else" heuristic (M3 Phase 3, CLI-rendered + tested as of M13's grounding fix), and (2) `duplicate_classes` (new, M13), MAT's actual "Duplicate Classes" cross-loader signal — a class name loaded by ≥2 distinct classloaders, the classic Tomcat/Jetty/Spring hot-redeploy pattern. Each `ClassLoaderInfo` also gains `unique_class_count` (computed, not yet CLI-rendered — see M13 design doc closeout) and `ancestor_chain` (bounded parent-loader walk, rendered as an "Ancestors" column). `ci-check classloader_leak_count` predicate and MCP `detect_classloader_leaks` tool both ship. Shipped M13 Slices 13.A–13.C (13.D is this doc-sync). |
 | Duplicate strings / arrays detection | ✅ | 🟡 | Strings yes; arrays no | Low (M11) | `analyze_strings()` reports duplicate groups + dedup waste. **No** equivalent for primitive arrays or boxed array dedup. MAT has both. |
 | Thread overview + frame-locals + stack | ✅ | ✅ | None | — | `inspect_threads()` now additionally cross-references `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame `FrameLocal { variable_slot, object_id, class_name, root_kind }` entries, printed as `local:`/`jni-local:` lines under each stack frame in `analyze --threads` text output. `variable_slot` honestly reuses the HPROF frame number — HPROF frame-local roots carry no genuine bytecode slot index. Shipped M8 Slice 8.D. |
 | Inspector — object field-level browse, refs in/out | ✅ | ✅ | None | — | `mnemosyne inspect <heap> --object-id <id> [--retain-field-data] [--format text\|json\|toon]` and MCP `inspect_object` ship a focused single-object view: shallow/retained size, dominator parent/children, references out, referrers in (all as structured `ObjectRef { object_id, class_name }`, not baked strings), and opt-in typed field values. Shipped M8 Slice 8.C. |
@@ -79,8 +79,8 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 ### Parity matrix summary
 
 - **Mnemosyne ≥ MAT:** allocation flame graphs, CI/CD automation, streaming bounded-memory mode, AI-assisted diagnosis, MCP/IDE integration, provenance, distribution.
-- **MAT ≈ Mnemosyne (parity closed):** persistent indexes / parse-once-query-many, all-paths-to-GC-roots / by-class, group-by-referrer, and object-level heap diff — closed in M9/M8/M10, see below.
-- **MAT ≥ Mnemosyne (medium priority):** full OQL depth, classloader leak detection.
+- **MAT ≈ Mnemosyne (parity closed):** persistent indexes / parse-once-query-many, all-paths-to-GC-roots / by-class, group-by-referrer, object-level heap diff, and classloader leak detection (both the pre-existing single-loader heuristic and the new cross-loader duplicate-class signal) — closed in M9/M8/M10/M13, see below.
+- **MAT ≥ Mnemosyne (medium priority):** full OQL depth.
 - **MAT ≥ Mnemosyne (low priority / defer):** duplicate-arrays, group-by-superclass, custom plugin runtime.
 
 ---
@@ -210,21 +210,23 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** Requires access to a native-Linux reference workstation with Eclipse MAT installed and the `10 GiB` fixture. Hardware-dependent timing.
 - **Estimated slice count:** 2–5 slices.
 
-### M13 — Classloader Explorer & Leak Detection (Parity-Closing)
+### M13 — Classloader Explorer & Leak Detection (Parity-Closing) — ✅ Shipped
 
+- **Status:** ✅ **Shipped** — design doc [milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md), slices 13.A–13.C (implementation) + 13.D (documentation sync, this pass).
 - **Theme:** First-class classloader-leak detection (the Tomcat / Jetty / Spring webapp leak).
 - **Goal:** Detect the classic "same class loaded by N classloaders" leak pattern and provide drill-down into per-loader uniqueness.
-- **Scope:**
-  - `analysis::classloader::detect_classloader_leaks()` returning duplicate-class signals with retained-size attribution.
-  - `mnemosyne analyze --classloader-leaks` + MCP `detect_classloader_leaks`.
-  - Per-loader unique-classes histogram + parent-loader tree drill-down.
-  - `ci-check` `classloader_leak_count` predicate.
-  - UI: classloader leak panel in the leak workspace.
-- **Out of scope:** Custom plugin runtime. Group-by-superclass histograms (defer).
-- **Why now / strategic rationale:** Closes a real MAT capability that matters specifically for JVM webapp / app-server users — a non-trivial slice of Mnemosyne's target audience. Builds cleanly on the M3 classloader report.
-- **Success criteria:** Detects a deliberately-leaked classloader on a synthetic webapp fixture. Per-loader histograms render in CLI + UI. `ci-check` predicate works.
-- **Risks / dependencies:** Requires representative webapp-leak fixtures (build under `examples/` or `resources/test-fixtures/`).
-- **Estimated slice count:** 2–5 slices.
+- **Grounding correction (found during design, binding for this milestone):** roadmap's original framing ("🟡 per-loader histogram only") understated what M3 Phase 3 already shipped. `analyze_classloaders()` already computed `potential_leaks` — a **single-loader** heuristic ("retains a lot, loads almost nothing else") — before this milestone; that heuristic's CLI rendering and test coverage were closed as a grounding fix immediately ahead of M13's own implementation. M13 does **not** replace `potential_leaks` — it ships a second, independent signal alongside it. Both stay permanently; a loader can trip one, the other, both, or neither.
+- **Delivered scope (as shipped; one naming difference from the original text below — see note):**
+  - `core::analysis::classloader::detect_duplicate_classes(graph) -> Vec<DuplicateClassGroup>` — the actual new logic, MAT's "Duplicate Classes" report shape: groups `graph.classes` by normalized class name and keeps only names declared by ≥2 distinct `class_loader_id` values (the same class loaded twice by the *same* loader is correctly excluded). `ClassLoaderReport` gains `duplicate_classes: Vec<DuplicateClassGroup>` as a new field alongside the untouched `potential_leaks`.
+  - `ClassLoaderInfo` gains two new fields computed from the same single grouping pass (no second scan): `unique_class_count` (classes loaded by this loader and no other) and `ancestor_chain: Vec<ObjectId>` (bounded parent-loader walk via new `resolve_loader_chain()`, default cap 16, cycle-guarded so adversarial/malformed HPROF data cannot hang the walk).
+  - CLI: `mnemosyne analyze --classloaders` (no new flag — additive to the existing flag) gains a "Duplicate classes across loaders" section, printed only when non-empty, same convention as the pre-existing "Potential classloader leaks" section. The per-loader table gains an "Ancestors" column (**not** a "Unique" column as originally speculated below — `unique_class_count` is computed and serialized but not yet CLI-rendered; see the design doc's closeout for this scope-drift note).
+  - `ci-check classloader_leak_count` predicate (threshold on `duplicate_classes.len()`, deep-only, same skip convention as `leak_count`/`retained_size`/`dominator_root_count`) in `core::policy`. A follow-up fix landed in the same slice after code review: `ci-check`'s handler had hardcoded `enable_classloaders: false`, so the predicate's own evaluator logic was correct but never received real data outside its unit tests — now `enable_classloaders` is derived from whether the loaded policy actually declares the rule.
+  - MCP `detect_classloader_leaks` tool (`heap_path` in, `Vec<DuplicateClassGroup>` out) — a focused, cheaper single-purpose call, same rationale as `diff_heaps` existing standalone. `analyze_heap`'s existing `enable_classloaders` param needed no new param; the extended `ClassLoaderReport`'s new fields are additive and appear automatically.
+- **Not shipped (explicit non-goal, per design doc §4/§12):** UI leak-workspace panel (downgraded to documented future work, matching the established M8/M9/M10/M11 backend-before-UI pattern). Group-by-superclass histograms. Live classloader unloading. Custom plugin runtime for user-defined heuristics.
+- **Why now / strategic rationale:** Closes a real MAT capability that matters specifically for JVM webapp / app-server users — a non-trivial slice of Mnemosyne's target audience. Builds cleanly on the M3 classloader report, and — per §3.3 of the design doc — deliberately keeps both leak signals alive rather than treating the new one as a replacement.
+- **Success criteria (met):** A deliberately-duplicated "redeployed webapp" fixture (same class name, two distinct loaders) produces exactly one `DuplicateClassGroup`; a class loaded twice by the *same* loader never appears in any group; a three-loader mixed fixture confirms `unique_class_count` and `duplicate_classes` agree (derived from one grouping pass, not two); a three-level ancestor chain resolves in ascending generation order and a self-referential / two-node-cycle chain terminates without hanging; the `ci-check` predicate fires on a duplicated fixture, stays clean on a non-duplicated one, and skips (not errors) on overview-mode input; the pre-existing `potential_leaks` tests continue passing unchanged, proving the two-signals-coexist claim as a regression gate, not just a design note.
+- **Risks / dependencies:** Parent-loader chain walk on adversarial/cyclic HPROF data — mitigated with a bounded depth (16) plus a visited-set cycle guard that terminates well before the depth bound, same discipline as M8 Slice 8.A's path-enumeration budget caps. False positives on legitimately re-loaded framework classes — mitigated by reporting the raw signal without a baked-in severity judgment, same "give the operator the data" philosophy as `MatchQuality` (M10) and `potential_leaks` itself.
+- **Estimated slice count:** 2–5 slices (4 shipped: 13.A–13.C implementation + 13.D doc-sync).
 
 ### Other backlog items (lower priority — not proposed as standalone M8+)
 
@@ -289,7 +291,7 @@ Updated to reflect the parity matrix in §2.
 | Thread frame-locals | ✅ (`analyze --threads` `local:`/`jni-local:` lines) | **M8** ✅ shipped |
 | Object-level heap diff | ✅ (`--mode object`; `ci-check` predicate pending) | **M10** ✅ mostly shipped |
 | Persistent indexes / parse-once-query-many | ✅ (`snapshot save\|load\|list\|rm`, `--snapshot`/`--refresh`) | **M9** ✅ shipped |
-| Classloader leak detection | 🟡 (per-loader histogram only) | **M13** |
+| Classloader leak detection | ✅ (`potential_leaks` single-loader heuristic + `duplicate_classes` cross-loader signal, both permanent) | **M13** ✅ shipped |
 | Group by superclass | ❌ | B-list |
 | Duplicate primitive arrays | ❌ | B-list |
 | Custom plugin runtime | ❌ | Defer (B9) |
@@ -340,7 +342,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M10 Object-Level Diff** | [design/milestone-8-1-object-level-diff.md](design/milestone-8-1-object-level-diff.md) | 🟡 Mostly shipped (slices A–G; `ci-check` predicate = M10-B) |
 | **M11 MCP Workflow Suite** | _to be authored by Design Consulting_ | ⏳ Pending |
 | **M12 Reference-Workstation Re-run** | reuse [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | ⏳ Pending |
-| **M13 Classloader Explorer** | _to be authored by Design Consulting_ | ⏳ Pending |
+| **M13 Classloader Explorer** | [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) | ✅ Shipped (slices 13.A–13.C implementation, 13.D doc-sync) |
 
 ---
 

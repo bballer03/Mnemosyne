@@ -51,6 +51,7 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `--classloaders` now also detects cross-loader duplicate classes (MAT's "Duplicate Classes" report -- the classic Tomcat/Jetty/Spring hot-redeploy leak: same class name loaded by 2+ distinct classloaders) alongside the existing single-loader `potential_leaks` heuristic, plus a bounded parent-loader ancestor chain per loader
 - `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
@@ -65,7 +66,7 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 
 ### 🧪 CI Regression Policies
 - `mnemosyne-cli ci-check <heap.hprof> --policy policy.toml` turns heap analysis into a first-class CI gate instead of requiring custom `jq` or Groovy glue
-- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 10 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`
+- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 11 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`
 - The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
 - Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
 
@@ -117,6 +118,7 @@ Available MCP methods:
 - inspect_object
 - open_snapshot
 - list_snapshots
+- detect_classloader_leaks
 - create_ai_session
 - resume_ai_session
 - get_ai_session
@@ -130,6 +132,8 @@ Call `list_tools` first if your client wants machine-readable method description
 `parse_heap` and `analyze_heap` now also accept an optional `mode: "auto"|"deep"|"overview"` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
 
 `open_snapshot` loads a cached snapshot by SHA-256 hash or file path and returns its manifest; `list_snapshots` lists every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param that skips the HPROF parse and deserializes the cached object graph instead — an invalid, stale, or schema-mismatched key returns a structured error rather than silently falling back to a fresh parse.
+
+`detect_classloader_leaks` (params: `heap_path`) runs cross-loader duplicate-class detection standalone — a focused, cheaper single-purpose call, same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own; the extended `ClassLoaderReport`'s new `duplicate_classes`/`unique_class_count`/`ancestor_chain` fields are additive and appear automatically.
 
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
@@ -456,7 +460,7 @@ When `--ai` is enabled, the CLI and reports include an **AI Insights** block tha
 
 If you pass `--ai` together with `--mode overview`, Mnemosyne prints a notice and skips AI because overview mode never builds the object graph the AI path depends on.
 
-Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
+Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates and cross-loader duplicate classes, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
 #### Run CI regression checks
 Create a policy file with one or more rules:
@@ -490,7 +494,7 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml --fail-on error
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output heap-policy.xml
 ```
 
-`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 10 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`.
+`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 11 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`.
 
 The shipped severity ladder is `info < warning < error < critical`; `--fail-on` defaults to `error` and changes the process exit status when any violation meets or exceeds that threshold. All renderers still show every violation and skipped rule; `--fail-on` controls the exit code only.
 
@@ -738,6 +742,7 @@ Once configured, you can ask your AI assistant:
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
+| `detect_classloader_leaks` | Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern |
 | `create_ai_session` | Create and persist a heap-bound AI session for later follow-up |
 | `resume_ai_session` | Resume a persisted AI session by ID |
 | `get_ai_session` | Inspect compact metadata for a persisted AI session |
