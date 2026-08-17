@@ -1,6 +1,6 @@
 # Milestone 8 — Reachability & References Deep Dive
 
-> **Status:** 🔲 Pending — design authored 2026-04-27, awaiting Implementation Agent pickup of Slice 8.A.
+> **Status:** ✅ **Shipped** — Slices 8.A–8.D (implementation) and 8.E (this doc-sync pass) all complete. See §16 for the closeout note.
 > **Owner (design):** Design Consulting Agent (this pass, run inline by the orchestrating session per user directive — no human gate)
 > **Owner (implementation):** Implementation Agent (per slice, subagent-driven)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M8, "Recommended Next Milestone" per §6
@@ -403,3 +403,15 @@ All slices end with `cargo {check, test, clippy --workspace --all-targets -- -D 
 ## 15. Implementation readiness verdict
 
 **READY** — this design doc is implementation-depth. The Implementation Agent may proceed with **Slice 8.A (all-paths + by-class GC root path)** as the first task. Slices 8.B–8.D are independent of each other and may run in parallel by different subagents (no shared-file overlap: 8.A touches `graph/gc_path.rs`, 8.B touches `analysis/referrers.rs` + `engine.rs`, 8.C touches `analysis/inspector.rs` + new `report/inspect/`, 8.D touches `analysis/thread.rs` — the only shared file is `cli/src/main.rs` and `core/src/mcp/server.rs`, which must be edited sequentially, one slice at a time, to avoid two writing agents on the same file per the repo's forbidden-parallel-edit rule). Slice 8.E is gated behind 8.A–8.D landing.
+
+## 16. Slice 8.E closeout (documentation sync)
+
+Slices 8.A–8.D landed as: `908805a` (8.A, all-paths + by-class GC root path), `c7f14b3` (8.B, group-by-referrer analyzer), `3ca01b2` + `755dc3b` (8.C, object inspector, with a review follow-up that restructured `ObjectInspection`'s `references_out` / `referrers_in` / `dominator_parent` / `dominator_children` from baked `"{id} ({class})"` strings to a structured `ObjectRef { object_id, class_name }` type), and `0fc8a12` + `346cb93` (8.D, thread frame-locals, with a follow-up fix to surface `locals`/`jni-local` lines in the `analyze --threads` CLI text renderer). Slice 8.E (this pass) updated: `docs/roadmap.md` (M8 rows marked shipped across the MAT parity matrix §2, the M8 milestone entry §5, the scorecard §7, and the design-doc index §9), `STATUS.md` (new M8 snapshot bullet plus capability-checklist rows for GC root path, group-by-referrer, object inspector, and thread frame-locals), `CHANGELOG.md` (`[Unreleased]` entry below the existing M10 entry), `README.md` (Key Features + MCP method list), `ARCHITECTURE.md` (`core::graph::gc_path` extension, new `core::analysis::{referrers,inspector}` modules, new `core::report::inspect` renderer family, `core::analysis::thread` frame-locals extension), and `docs/user-guide.md` (`gc-path --all-paths/--by-class/--max-paths`, `analyze --by-referrer`, new `inspect` subcommand section, frame-locals under `analyze --threads`).
+
+**Scope drift found during doc-sync (roadmap §5 original text vs. what actually shipped):**
+
+- The original roadmap M8 scope bullet described all-paths truncation as carrying "`ProvenanceKind::Partial` truncation markers." What shipped instead is a plain `truncated: bool` field on `GcPathResult` (see §6 of this doc, which had already corrected course from the architecture-diagram sketch in §5 before implementation started) — an honest boolean flag, not a `ProvenanceKind::Partial` marker. Functionally equivalent (both signal "enumeration was capped"), but the roadmap's specific mechanism claim was inaccurate; corrected in the roadmap sync.
+- The original roadmap M8 scope bullet described the referrer surface as shipping "MCP `analyze_by_referrer`" — implying a new, separate MCP tool. What shipped (per this design doc's own §8, decided during design, before Slice 8.B implementation) is a `by_referrer: boolean` param on the existing `analyze_heap` MCP tool, the same additive-param-not-new-tool pattern M10 used for `diff_heaps`. The roadmap sync corrects the tool-surface description; no code changed as a result, since the design doc's own architecture section already specified the correct shape.
+- Everything else (CLI flag names `--all-paths`/`--by-class`/`--max-paths`/`--by-referrer`, exit codes 8/9, the `inspect` subcommand and `inspect_object` MCP tool, the structured `ObjectRef` inspector fields, and the `variable_slot`-reuses-HPROF-frame-number honesty note on `FrameLocal`) shipped exactly as this design doc's §6–§9 specified.
+
+Full-workspace verification at closeout: `cargo check --workspace --all-targets` clean, `cargo test --workspace` 566 passed / 0 failed, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo fmt --all -- --check` clean.

@@ -162,6 +162,7 @@ Flags:
 - `--format text|markdown|html|json|toon`
 - `--profile overview|incident-response|ci-regression`
 - `--group-by class|package|classloader`
+- `--by-referrer` — attach a group-by-referrer report ranking objects by incoming-reference count
 - `-o, --output-file <FILE>`
 - `--ai`
 - `--threads`
@@ -182,6 +183,7 @@ What it does:
 - in `deep`, builds the full analysis response, attempts graph-backed retained-size analysis first, and falls back honestly when needed
 - in `overview`, skips object-graph analysis entirely and renders the streaming partial summary with approximate shallow sizes only
 - renders the result in text, Markdown, HTML, JSON, or TOON
+- with `--by-referrer`: ranks objects by incoming-reference count (tiebreak retained size), listing up to 5 top referrer classes per entry, via the new `core::analysis::referrers` module (`ReferrerReport`, optional field on `AnalyzeResponse`)
 
 Profile behavior:
 
@@ -200,6 +202,7 @@ mnemosyne-cli analyze heap.hprof --group-by package --top-instances
 mnemosyne-cli analyze heap.hprof --profile incident-response --threads --strings --collections
 mnemosyne-cli analyze heap.hprof --format html --output-file heap-report.html
 mnemosyne-cli analyze heap.hprof --format json --profile ci-regression
+mnemosyne-cli analyze heap.hprof --by-referrer --top-n 10
 ```
 
 Expected output pattern in text mode:
@@ -222,6 +225,24 @@ Thread Report (... threads):
 ClassLoader Report:
 String Analysis (... strings, ... unique):
 Collection Report (... collections):
+```
+
+`--by-referrer` output pattern:
+
+```text
+Top referenced objects (by incoming reference count)
+-----------------------------------------------------
+Objects considered: 4213
+0x7f2a3000 com.example.SharedCache referrers=184 retained=536870912B top=[ConnectionPool(120), RequestHandler(64)]
+```
+
+`--threads` output now includes resolved frame-locals under each stack frame when `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` roots are present:
+
+```text
+Stack: pool-1-thread-3
+  at com.example.Worker.run(Worker.java:42)
+      local: 0x00001000 (com.example.Task)
+      jni-local: 0x00002000 (java.nio.ByteBuffer)
 ```
 
 When you write to a file, the CLI prints a confirmation instead of dumping the report to stdout:
@@ -406,12 +427,16 @@ Usage:
 
 ```bash
 mnemosyne-cli gc-path <HEAP> --object-id <ID> [--max-depth <N>]
+mnemosyne-cli gc-path <HEAP> [--object-id <ID> | --by-class <CLASS_NAME>] --all-paths [--max-paths <N>] [--max-depth <N>]
 ```
 
 Flags:
 
-- `--object-id <ID>`
+- `--object-id <ID>` — required unless `--by-class` is used
 - `--max-depth <N>`
+- `--all-paths` — return every enumerated GC root path instead of only the shortest one
+- `--by-class <CLASS_NAME>` — find all-paths for every live instance of this class instead of a single `--object-id`; mutually exclusive with `--object-id`
+- `--max-paths <N>` — default `20`; a **shared** budget across the whole `--all-paths`/`--by-class` query, not per-path or per-instance
 
 What it does:
 
@@ -419,6 +444,7 @@ What it does:
 - prefers a full `ObjectGraph` BFS path
 - falls back to a budget-limited graph and then synthetic output when needed
 - labels fallback output through provenance markers
+- with `--all-paths`/`--by-class`: enumerates every GC root path up to the shared `--max-paths` budget instead of stopping at the first hit; the plain (no new flags) `gc-path` output is unaffected and stays byte-identical
 
 Example:
 
@@ -434,6 +460,70 @@ GC path for 0x00001000:
 #1 -> com.example.RequestCache [0x00000F40] via entries
 ROOT -> java.lang.Thread [0x00000011] via <direct>
 ```
+
+All-paths / by-class example:
+
+```bash
+mnemosyne-cli gc-path heap.hprof --object-id 0x00001000 --all-paths --max-paths 5
+mnemosyne-cli gc-path heap.hprof --by-class com.example.CacheEntry --all-paths --max-paths 20
+```
+
+```text
+GC root paths for 0x00001000 (3 found, not truncated):
+  Path 1 (depth 4):
+    ROOT -> java.lang.Thread [0x00000011] via <direct>
+    #1 -> com.example.RequestCache [0x00000F40] via entries
+    #2 -> com.example.CacheEntry [0x00001000] via owner
+  Path 2 (depth 5):
+    ...
+  Path 3 (depth 6):
+    ...
+```
+
+When the shared `--max-paths` budget is hit before enumeration finishes, the header instead reads `(20 found, truncated)` — the count found and the truncation state are both reported honestly rather than silently capping.
+
+Exit codes: `0` success, `8` `--object-id` not found in the heap, `9` `--by-class` matches zero live instances.
+
+### `inspect`
+
+Use `inspect` when you want a focused, single-object view — fields, refs in/out, dominator context — without running the full `analyze` report. This is the CLI/MCP equivalent of the UI's Object Inspector pane.
+
+Usage:
+
+```bash
+mnemosyne-cli inspect <HEAP> --object-id <ID> [--retain-field-data] [--format text|json|toon]
+```
+
+Flags:
+
+- `--object-id <ID>` — required
+- `--retain-field-data` — opt in to typed field values (re-parses the heap with field data retained); without it, the `fields` section is omitted
+- `--format text|json|toon` — default `text`
+
+What it does:
+
+- resolves the object's shallow/retained size, dominator parent/children, references out, and referrers in via existing `ObjectGraph`/`DominatorTree` accessors — no new graph-walking logic
+- references and dominator context are structured (`object_id` + `class_name`), not baked display strings, so JSON/TOON/MCP consumers can chain the returned ids straight back into another `inspect`/`gc-path`/`query` call
+- with `--retain-field-data`: also reads and renders typed instance field values
+
+Example:
+
+```bash
+mnemosyne-cli inspect heap.hprof --object-id 0x00001000 --retain-field-data
+```
+
+```text
+Object 0x00001000  (com.example.CacheEntry)
+  Shallow: 48 B   Retained: 1.20 MB
+  Dominator parent: 0x00004000 (com.example.Cache)
+  Dominator children: 2
+  References out (1): 0x00003000 (java.lang.String)
+  Referrers in (1): 0x00004000 (com.example.Cache)
+  Fields (--retain-field-data only):
+    key: com.example.Key = 0x00002000
+```
+
+Exit codes: `0` success, `8` `--object-id` not found in the heap.
 
 ### `diff`
 
@@ -860,7 +950,24 @@ mnemosyne-cli analyze heap.hprof \
   --min-capacity 32
 ```
 
-This is a good interactive workflow when you want to correlate retained-size hotspots with thread-local retention, duplicate string waste, oversized collections, and the largest individual objects.
+This is a good interactive workflow when you want to correlate retained-size hotspots with thread-local retention, duplicate string waste, oversized collections, and the largest individual objects. `--threads` output includes resolved `local:`/`jni-local:` lines under each stack frame wherever `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` GC roots are present.
+
+### Reachability & references
+
+Once `leaks` or `--top-instances` names a suspect, use the M8 reachability surfaces to see the full picture instead of just the shortest path.
+
+```bash
+mnemosyne-cli gc-path heap.hprof --object-id 0x00001000 --all-paths --max-paths 10
+mnemosyne-cli gc-path heap.hprof --by-class com.example.CacheEntry --all-paths --max-paths 20
+mnemosyne-cli analyze heap.hprof --by-referrer --top-n 10
+mnemosyne-cli inspect heap.hprof --object-id 0x00001000 --retain-field-data
+```
+
+Recommended practice:
+
+- use `gc-path --all-paths` when the shortest path alone doesn't explain retention, or `--by-class` when you want every reachable instance of a class merged into one query
+- use `analyze --by-referrer` to find the objects other things point at the most — a strong signal for shared caches, registries, and listener lists
+- use `inspect` for a one-shot, scriptable field-level view of a single object instead of paging through the full `analyze` report
 
 ### Flame graphs
 
@@ -1131,6 +1238,7 @@ Useful MCP methods to know up front:
 - `query_heap`
 - `map_to_code`
 - `find_gc_path`
+- `inspect_object`
 - `create_ai_session`
 - `resume_ai_session`
 - `get_ai_session`
@@ -1140,6 +1248,8 @@ Useful MCP methods to know up front:
 - `propose_fix`
 
 `parse_heap` and `analyze_heap` both accept an optional `mode: "auto"|"deep"|"overview"` parameter. When the server resolves to overview, the response carries `"mode": "overview"` and returns the streaming partial summary instead of deep-mode object-graph data.
+
+`find_gc_path` gains optional `all_paths: boolean`, `by_class: string`, and `max_paths: number` params (default `20`) for all-paths / by-class enumeration — additive params on the existing tool, not a new tool. `analyze_heap` gains an optional `by_referrer: boolean` param that populates `referrer_report`. `inspect_object` is a new tool taking `heap_path`, `object_id`, and optional `retain_field_data`, returning an `ObjectInspection` with structured `object_id`/`class_name` refs.
 
 ## 8. Output Formats
 

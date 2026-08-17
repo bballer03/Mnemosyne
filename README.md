@@ -56,7 +56,9 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
-- Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
+- Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed; `--all-paths [--by-class <class>] [--max-paths <n>]` enumerates every GC root path up to a shared budget instead of just the shortest one
+- `mnemosyne-cli analyze --by-referrer` ranks objects by incoming-reference count ("group by referrer"), and `mnemosyne-cli inspect <heap> --object-id <id> [--retain-field-data]` gives a focused single-object view (fields, refs in/out, dominator context) on the CLI/MCP, not just the UI
+- `analyze --threads` now resolves `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame local-variable listings (`local:` / `jni-local:` lines)
 - Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
@@ -110,6 +112,7 @@ Available MCP methods:
 - detect_leaks
 - map_to_code
 - find_gc_path
+- inspect_object
 - create_ai_session
 - resume_ai_session
 - get_ai_session

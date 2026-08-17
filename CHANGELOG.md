@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Object-level heap diff (M10): `mnemosyne diff before.hprof after.hprof --mode object [--identity-strategy class+retained|class+dominator|full-fingerprint]` reports fingerprint-matched `added` / `removed` / `retained_changed` objects with dominator + reference chains and a `MatchQuality` collision-rate envelope. New `--format json|toon` for `diff`. MCP `diff_heaps` gains a `mode` parameter. See [docs/design/milestone-8-1-object-level-diff.md](docs/design/milestone-8-1-object-level-diff.md).
+- Reachability & references deep dive (M8): `mnemosyne gc-path --all-paths [--by-class <class>] [--max-paths <n>]` enumerates every GC root path up to a shared budget (default 20), with new exit codes `8`/`9`. `mnemosyne analyze --by-referrer` (new `core::analysis::referrers`) ranks objects by incoming-reference count; MCP `analyze_heap` gains a matching `by_referrer` param. New `mnemosyne inspect <heap> --object-id <id> [--retain-field-data] [--format text|json|toon]` subcommand and MCP tool `inspect_object` (new `core::analysis::inspector` + `core::report::inspect`) return shallow/retained size, dominator context, and refs in/out as structured `ObjectRef { object_id, class_name }`. `analyze --threads` now resolves `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` roots into per-frame `local:`/`jni-local:` lines. See [docs/design/milestone-8-reachability-references.md](docs/design/milestone-8-reachability-references.md).
 
 ## [0.3.0] - 2026-04-26
 
