@@ -335,18 +335,20 @@ async fn advance_with_unknown_workflow_id_returns_workflow_not_found() {
 
 #[tokio::test]
 async fn start_with_unimplemented_kind_returns_clear_error_not_panic() {
+    // M11 Slice 11.B implemented TuneGc and TraverseObjectGraph (see
+    // core/tests/workflow_tune_gc.rs / workflow_traverse_object_graph.rs);
+    // only CompareSnapshots (Slice 11.C) is still unimplemented.
     let heap_file = write_fixture_heap();
     let store_dir = tempfile::tempdir().unwrap();
     let store = WorkflowStore::new(store_dir.path().to_path_buf());
 
-    for kind in [
-        WorkflowKind::TuneGc,
-        WorkflowKind::TraverseObjectGraph,
+    let err = start(
+        &store,
         WorkflowKind::CompareSnapshots,
-    ] {
-        let err = start(&store, kind, heap_path(&heap_file), json!({}))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("workflow_kind_not_implemented"));
-    }
+        heap_path(&heap_file),
+        json!({}),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("workflow_kind_not_implemented"));
 }

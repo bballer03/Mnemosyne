@@ -15,14 +15,16 @@
 //! rather than reinventing the on-disk persistence shape a third time. See
 //! the design doc §3.1/§6.
 //!
-//! Slice 11.A (this pass) ships the scaffolding (`WorkflowState` /
-//! `WorkflowStore` / `StepRecord` / `WorkflowDescription`) plus exactly one
-//! fully-working workflow kind end-to-end: [`WorkflowKind::TriageMemoryLeak`]
-//! (see [`triage_memory_leak`]). The other three kinds named in
-//! [`WorkflowKind`] are declared now (so `describe_workflow`/`start_workflow`
-//! have a stable, complete enum to dispatch on across future slices) but are
-//! not implemented yet: [`start`] returns a clear
-//! `workflow_kind_not_implemented` error for them rather than panicking or
+//! Slice 11.A shipped the scaffolding (`WorkflowState` / `WorkflowStore` /
+//! `StepRecord` / `WorkflowDescription`) plus the first fully-working
+//! workflow kind end-to-end: [`WorkflowKind::TriageMemoryLeak`] (see
+//! [`triage_memory_leak`]). Slice 11.B (this pass) adds two more:
+//! [`WorkflowKind::TuneGc`] (see [`tune_gc`]) and
+//! [`WorkflowKind::TraverseObjectGraph`] (see [`traverse_object_graph`]).
+//! [`WorkflowKind::CompareSnapshots`] is declared (so `describe_workflow`/
+//! `start_workflow` have a stable, complete enum to dispatch on) but is not
+//! implemented yet -- [`start`]/[`describe`] return a clear
+//! `workflow_kind_not_implemented` error for it rather than panicking or
 //! silently doing the wrong thing.
 //!
 //! MCP tool registration (`describe_workflow`/`start_workflow`/`next_step`/
@@ -30,7 +32,9 @@
 //! out of scope here. [`start`] and [`advance`] are written to be directly
 //! callable from a future MCP handler (see their doc comments).
 
+pub mod traverse_object_graph;
 pub mod triage_memory_leak;
+pub mod tune_gc;
 
 use std::{fs, path::PathBuf};
 
@@ -47,6 +51,16 @@ use crate::{
 /// serialized shape changes in a wire-incompatible way, mirroring
 /// `MCP_SESSION_VERSION` / `SNAPSHOT_SCHEMA_VERSION`.
 pub const WORKFLOW_SCHEMA_VERSION: u32 = 1;
+
+/// The literal `current_step`/`StepRecord::step_name` value every workflow
+/// kind uses to mean "done" -- each kind module also defines its own local
+/// `STEP_COMPLETE` constant with this same value (see
+/// `triage_memory_leak::STEP_COMPLETE`, `tune_gc::STEP_COMPLETE`,
+/// `traverse_object_graph::STEP_COMPLETE`) for use within that module's own
+/// step-sequence logic; this one exists so the kind-agnostic checks in
+/// [`advance`] don't need to reach into one specific kind's module for a
+/// value that is, by convention, identical across all of them.
+const STEP_COMPLETE: &str = "complete";
 
 /// The four named workflow kinds from the design doc §2/§4. Only
 /// [`WorkflowKind::TriageMemoryLeak`] is implemented in Slice 11.A; the
@@ -307,13 +321,14 @@ fn new_workflow_id() -> String {
 }
 
 /// Static, side-effect-free step-sequence lookup for `kind`. No
-/// [`WorkflowState`] is created. Only [`WorkflowKind::TriageMemoryLeak`] has
-/// a description in Slice 11.A; other kinds return
+/// [`WorkflowState`] is created. [`WorkflowKind::CompareSnapshots`] returns
 /// `workflow_kind_not_implemented` since there is no implemented step
-/// sequence yet to describe.
+/// sequence yet to describe (Slice 11.C).
 pub fn describe(kind: WorkflowKind) -> CoreResult<WorkflowDescription> {
     match kind {
         WorkflowKind::TriageMemoryLeak => Ok(triage_memory_leak::describe()),
+        WorkflowKind::TuneGc => Ok(tune_gc::describe()),
+        WorkflowKind::TraverseObjectGraph => Ok(traverse_object_graph::describe()),
         other => Err(workflow_kind_not_implemented(other)),
     }
 }
@@ -327,32 +342,48 @@ pub fn describe(kind: WorkflowKind) -> CoreResult<WorkflowDescription> {
 /// constructed by the handler the same way `session_store(config)` already
 /// builds an `McpSessionStore` for the existing session-lifecycle tools.
 ///
-/// Returns `workflow_kind_not_implemented` (not a panic) for any kind other
-/// than [`WorkflowKind::TriageMemoryLeak`] in this slice.
+/// Returns `workflow_kind_not_implemented` (not a panic) for
+/// [`WorkflowKind::CompareSnapshots`] (Slice 11.C, not yet implemented).
 pub async fn start(
     store: &WorkflowStore,
     kind: WorkflowKind,
     heap_path: String,
     initial_params: Value,
 ) -> CoreResult<WorkflowState> {
-    if kind != WorkflowKind::TriageMemoryLeak {
-        return Err(workflow_kind_not_implemented(kind));
+    fn new_state(kind: WorkflowKind, heap_path: String, first_step: &str) -> WorkflowState {
+        let now = timestamp_now();
+        WorkflowState {
+            schema_version: WORKFLOW_SCHEMA_VERSION,
+            workflow_id: new_workflow_id(),
+            kind,
+            created_at: now.clone(),
+            updated_at: now,
+            heap_path,
+            current_step: first_step.to_string(),
+            step_history: Vec::new(),
+            context: json!({}),
+        }
     }
 
-    let now = timestamp_now();
-    let mut state = WorkflowState {
-        schema_version: WORKFLOW_SCHEMA_VERSION,
-        workflow_id: new_workflow_id(),
-        kind,
-        created_at: now.clone(),
-        updated_at: now,
-        heap_path,
-        current_step: triage_memory_leak::STEP_DETECT.to_string(),
-        step_history: Vec::new(),
-        context: json!({}),
+    let mut state = match kind {
+        WorkflowKind::TriageMemoryLeak => {
+            let mut state = new_state(kind, heap_path, triage_memory_leak::STEP_DETECT);
+            triage_memory_leak::run_step(&mut state, initial_params).await?;
+            state
+        }
+        WorkflowKind::TuneGc => {
+            let mut state = new_state(kind, heap_path, tune_gc::STEP_ROOT_KIND_BREAKDOWN);
+            tune_gc::run_step(&mut state, initial_params).await?;
+            state
+        }
+        WorkflowKind::TraverseObjectGraph => {
+            let mut state = new_state(kind, heap_path, traverse_object_graph::STEP_INSPECT);
+            traverse_object_graph::run_step(&mut state, initial_params).await?;
+            state
+        }
+        other @ WorkflowKind::CompareSnapshots => return Err(workflow_kind_not_implemented(other)),
     };
 
-    triage_memory_leak::run_step(&mut state, initial_params).await?;
     state.updated_at = timestamp_now();
     store.save(&state)?;
     Ok(state)
@@ -375,7 +406,7 @@ pub async fn advance(
     step_input: Value,
 ) -> CoreResult<WorkflowState> {
     let mut state = store.load(workflow_id)?;
-    if state.current_step == triage_memory_leak::STEP_COMPLETE {
+    if state.current_step == STEP_COMPLETE {
         return Err(workflow_already_complete(workflow_id));
     }
 
@@ -383,7 +414,13 @@ pub async fn advance(
         WorkflowKind::TriageMemoryLeak => {
             triage_memory_leak::run_step(&mut state, step_input).await?;
         }
-        other => return Err(workflow_kind_not_implemented(other)),
+        WorkflowKind::TuneGc => {
+            tune_gc::run_step(&mut state, step_input).await?;
+        }
+        WorkflowKind::TraverseObjectGraph => {
+            traverse_object_graph::run_step(&mut state, step_input).await?;
+        }
+        other @ WorkflowKind::CompareSnapshots => return Err(workflow_kind_not_implemented(other)),
     }
 
     state.updated_at = timestamp_now();
@@ -457,30 +494,25 @@ mod tests {
 
     #[tokio::test]
     async fn start_rejects_unimplemented_kinds_without_panicking() {
+        // Slice 11.B implements TuneGc/TraverseObjectGraph; only
+        // CompareSnapshots (Slice 11.C) remains unimplemented.
         let temp = tempfile::tempdir().unwrap();
         let store = WorkflowStore::new(temp.path().to_path_buf());
 
-        for kind in [
-            WorkflowKind::TuneGc,
-            WorkflowKind::TraverseObjectGraph,
+        let err = start(
+            &store,
             WorkflowKind::CompareSnapshots,
-        ] {
-            let err = start(&store, kind, "heap.hprof".into(), json!({}))
-                .await
-                .unwrap_err();
-            assert!(err.to_string().contains("workflow_kind_not_implemented"));
-        }
+            "heap.hprof".into(),
+            json!({}),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("workflow_kind_not_implemented"));
     }
 
     #[test]
     fn describe_rejects_unimplemented_kinds() {
-        for kind in [
-            WorkflowKind::TuneGc,
-            WorkflowKind::TraverseObjectGraph,
-            WorkflowKind::CompareSnapshots,
-        ] {
-            let err = describe(kind).unwrap_err();
-            assert!(err.to_string().contains("workflow_kind_not_implemented"));
-        }
+        let err = describe(WorkflowKind::CompareSnapshots).unwrap_err();
+        assert!(err.to_string().contains("workflow_kind_not_implemented"));
     }
 }
