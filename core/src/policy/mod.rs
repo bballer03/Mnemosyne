@@ -124,6 +124,7 @@ pub enum Predicate {
     LeakCount,
     RetainedSize,
     DominatorRootCount,
+    ClassloaderLeakCount,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +343,7 @@ mod tests {
             "leak_count",
             "retained_size",
             "dominator_root_count",
+            "classloader_leak_count",
         ];
 
         let mut toml = String::new();
@@ -381,6 +383,7 @@ mod tests {
                 Predicate::LeakCount,
                 Predicate::RetainedSize,
                 Predicate::DominatorRootCount,
+                Predicate::ClassloaderLeakCount,
             ]
         );
     }

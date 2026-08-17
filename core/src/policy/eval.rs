@@ -230,6 +230,24 @@ fn evaluate_rule(rule: &super::PolicyRule, input: &PolicyInput<'_>) -> Option<Ru
                 .count() as u64;
             Some(evaluate_numeric(rule, actual))
         }
+        Predicate::ClassloaderLeakCount => {
+            let PolicyInput::Deep(response) = input else {
+                return None;
+            };
+
+            // Deep-only, and further requires `classloader_report` to have
+            // actually been computed (i.e. the underlying `analyze_heap`
+            // call ran with classloaders enabled). Absent that, this falls
+            // through to the same generic "unsupported in this mode" skip
+            // every other Option-returning predicate uses -- no separate
+            // signal needed, same convention as the rest of this match.
+            let actual = response
+                .classloader_report
+                .as_ref()?
+                .duplicate_classes
+                .len() as u64;
+            Some(evaluate_numeric(rule, actual))
+        }
     }
 }
 
@@ -314,6 +332,7 @@ fn predicate_name(predicate: Predicate) -> &'static str {
         Predicate::LeakCount => "leak_count",
         Predicate::RetainedSize => "retained_size",
         Predicate::DominatorRootCount => "dominator_root_count",
+        Predicate::ClassloaderLeakCount => "classloader_leak_count",
     }
 }
 
@@ -321,7 +340,10 @@ fn rule_requires_deep(rule: &super::PolicyRule) -> bool {
     matches!(rule.mode_requirement, ModeRequirement::DeepOnly)
         || matches!(
             rule.predicate,
-            Predicate::LeakCount | Predicate::RetainedSize | Predicate::DominatorRootCount
+            Predicate::LeakCount
+                | Predicate::RetainedSize
+                | Predicate::DominatorRootCount
+                | Predicate::ClassloaderLeakCount
         )
 }
 
@@ -632,7 +654,9 @@ fn has_provenance_kind(markers: &[crate::ProvenanceMarker], kind: ProvenanceKind
 mod tests {
     use super::super::PolicyDefaults;
     use super::*;
-    use crate::analysis::{LeakInsight, LeakKind, LeakSeverity};
+    use crate::analysis::{
+        ClassLoaderReport, DuplicateClassGroup, LeakInsight, LeakKind, LeakSeverity,
+    };
     use crate::hprof::{ClassStat, RecordStat};
     use crate::{
         AnalyzeResponse, Comparison, DominatorNode, GcRootKind, GraphMetrics, HeapSummary,
@@ -846,6 +870,26 @@ mod tests {
             retained_size: 0,
             shallow_size: 0,
         }
+    }
+
+    fn duplicate_class_group(class_name: &str, loader_object_ids: Vec<u64>) -> DuplicateClassGroup {
+        DuplicateClassGroup {
+            class_name: class_name.to_string(),
+            loader_count: loader_object_ids.len(),
+            loader_object_ids,
+        }
+    }
+
+    fn deep_response_with_classloader_report(
+        duplicate_classes: Vec<DuplicateClassGroup>,
+    ) -> AnalyzeResponse {
+        let mut response = deep_response(4096, 128, Vec::new(), Vec::new());
+        response.classloader_report = Some(ClassLoaderReport {
+            loaders: Vec::new(),
+            potential_leaks: Vec::new(),
+            duplicate_classes,
+        });
+        response
     }
 
     fn policy_from_toml(toml: &str) -> Policy {
@@ -1482,6 +1526,103 @@ leak_id = "leak-2"
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(2_u64));
+    }
+
+    #[test]
+    fn evaluate_classloader_leak_count_fires_on_duplicated_fixture() {
+        let response = deep_response_with_classloader_report(vec![
+            duplicate_class_group("com.example.webapp.RequestHandler", vec![1, 2]),
+            duplicate_class_group("com.example.webapp.SessionCache", vec![1, 2, 3]),
+        ]);
+        let mut rule = numeric_rule(
+            "no-classloader-leaks",
+            Predicate::ClassloaderLeakCount,
+            Comparison::Eq,
+            0,
+        );
+        rule.mode_requirement = ModeRequirement::DeepOnly;
+        let policy = policy_with_rule(rule);
+
+        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].predicate, "classloader_leak_count");
+        assert_eq!(result.violations[0].actual, json!(2_u64));
+        assert!(result.skipped.is_empty());
+    }
+
+    #[test]
+    fn evaluate_classloader_leak_count_stays_clean_on_non_duplicated_fixture() {
+        let response = deep_response_with_classloader_report(Vec::new());
+        let mut rule = numeric_rule(
+            "no-classloader-leaks",
+            Predicate::ClassloaderLeakCount,
+            Comparison::Eq,
+            0,
+        );
+        rule.mode_requirement = ModeRequirement::DeepOnly;
+        let policy = policy_with_rule(rule);
+
+        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+
+        assert!(result.violations.is_empty());
+        assert!(result.skipped.is_empty());
+        assert_eq!(result.evaluations[0].actual, json!(0_u64));
+    }
+
+    #[test]
+    fn evaluate_classloader_leak_count_skipped_when_report_absent_on_deep_input() {
+        // Deep input, but classloader_report is None -- e.g. `analyze_heap`
+        // ran without `enable_classloaders`. Must be skipped, not errored,
+        // via the same generic Option-return skip every other predicate
+        // uses when its required data isn't present.
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        assert!(response.classloader_report.is_none());
+        let mut rule = numeric_rule(
+            "no-classloader-leaks",
+            Predicate::ClassloaderLeakCount,
+            Comparison::Eq,
+            0,
+        );
+        rule.mode_requirement = ModeRequirement::DeepOnly;
+        let policy = policy_with_rule(rule);
+
+        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].rule_id, "no-classloader-leaks");
+        assert_eq!(
+            result.skipped[0].reason,
+            super::super::SkipReason::UnsupportedInThisMode
+        );
+    }
+
+    #[test]
+    fn evaluate_classloader_leak_count_skipped_on_overview_mode_input() {
+        let overview = overview_summary(4096, 16, 12, Vec::new());
+        let mut rule = numeric_rule(
+            "no-classloader-leaks",
+            Predicate::ClassloaderLeakCount,
+            Comparison::Eq,
+            0,
+        );
+        rule.mode_requirement = ModeRequirement::DeepOnly;
+        let policy = policy_with_rule(rule);
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Overview(&overview),
+            AnalysisMode::Auto,
+        );
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].rule_id, "no-classloader-leaks");
+        assert_eq!(
+            result.skipped[0].reason,
+            super::super::SkipReason::DeepOnlyInOverviewMode
+        );
     }
 
     #[test]
