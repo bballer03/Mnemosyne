@@ -53,7 +53,7 @@ use mnemosyne_core::{
     },
     snapshot::{SnapshotManifest, SnapshotPayload, SnapshotStore, SNAPSHOT_SCHEMA_VERSION},
     CoreError, CoreResult, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy,
-    PolicyInput, Severity as PolicySeverity,
+    PolicyInput, Predicate, Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -2333,13 +2333,17 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
             mnemosyne_core::evaluate(&policy, &PolicyInput::Overview(&summary), requested_mode)
         }
         AnalysisMode::Deep => {
+            let enable_classloaders = policy
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.predicate, Predicate::ClassloaderLeakCount));
             let response = match analyze_heap(AnalyzeRequest {
                 heap_path: args.heap.to_string_lossy().into(),
                 config: cfg.clone(),
                 leak_options: LeakDetectionOptions::from(&cfg.analysis),
                 enable_ai: false,
                 histogram_group_by: HistogramGroupBy::Class,
-                enable_classloaders: false,
+                enable_classloaders,
                 enable_threads: false,
                 enable_strings: false,
                 enable_collections: false,

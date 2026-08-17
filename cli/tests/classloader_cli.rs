@@ -314,3 +314,76 @@ fn analyze_classloaders_omits_duplicate_classes_section_when_absent() {
     assert!(stdout.contains("ClassLoader Report:"));
     assert!(!stdout.contains("Duplicate classes across loaders"));
 }
+
+/// End-to-end check that `ci-check` actually enables classloader analysis
+/// when the policy declares a `classloader_leak_count` rule: without this,
+/// `AnalyzeRequest.enable_classloaders` stayed hardcoded `false` in
+/// `handle_ci_check`, so `ClassLoaderReport` (and therefore
+/// `duplicate_classes`) was never populated and the rule silently skipped
+/// on every real invocation, even though the predicate's own evaluator
+/// logic (tested directly in `core::policy`) was correct.
+#[test]
+fn ci_check_classloader_leak_count_rule_fires_on_duplicate_fixture() {
+    let fixture = write_fixture(&build_classloader_duplicate_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = sandbox.path().join("policy.toml");
+    std::fs::write(
+        &policy_path,
+        "[[rule]]\nid = \"no-classloader-duplicates\"\npredicate = \"classloader_leak_count\"\nop = \"<=\"\nvalue = 0\nseverity = \"error\"\n",
+    )
+    .unwrap();
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected a policy violation (exit 1); stdout: {}",
+        stdout_string(&output.stdout)
+    );
+    let stdout = stdout_string(&output.stdout);
+    assert!(stdout.contains("RESULT: FAIL"), "{stdout}");
+}
+
+/// Companion regression: a heap with no cross-loader duplicates must not
+/// trip the same rule.
+#[test]
+fn ci_check_classloader_leak_count_rule_passes_on_clean_fixture() {
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = sandbox.path().join("policy.toml");
+    std::fs::write(
+        &policy_path,
+        "[[rule]]\nid = \"no-classloader-duplicates\"\npredicate = \"classloader_leak_count\"\nop = \"<=\"\nvalue = 0\nseverity = \"error\"\n",
+    )
+    .unwrap();
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected a clean pass (exit 0); stdout: {}",
+        stdout_string(&output.stdout)
+    );
+}
