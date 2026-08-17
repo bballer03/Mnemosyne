@@ -1,7 +1,7 @@
 use crate::graph::DominatorTree;
 use crate::hprof::{read_field, FieldValue, ObjectGraph, ObjectId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 const LEAK_RETAINED_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
 const LEAK_MAX_CLASS_COUNT: usize = 3;
@@ -15,6 +15,7 @@ pub struct ClassLoaderInfo {
     pub total_shallow_bytes: u64,
     pub retained_bytes: Option<u64>,
     pub parent_loader: Option<ObjectId>,
+    pub unique_class_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,10 +27,22 @@ pub struct ClassLoaderLeakCandidate {
     pub reason: String,
 }
 
+/// A class name loaded by two or more distinct classloaders -- MAT's
+/// "Duplicate Classes" signal, and the actual defining pattern of the
+/// classic Tomcat/Jetty/Spring hot-redeploy classloader leak.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateClassGroup {
+    pub class_name: String,
+    /// Sorted ascending for determinism.
+    pub loader_object_ids: Vec<ObjectId>,
+    pub loader_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ClassLoaderReport {
     pub loaders: Vec<ClassLoaderInfo>,
     pub potential_leaks: Vec<ClassLoaderLeakCandidate>,
+    pub duplicate_classes: Vec<DuplicateClassGroup>,
 }
 
 #[derive(Default)]
@@ -69,9 +82,20 @@ pub fn analyze_classloaders(
         aggregate.total_shallow_bytes += u64::from(object.shallow_size);
     }
 
+    // Single pass over graph.classes, grouped by normalized class name to
+    // its distinct set of class_loader_id values. Both duplicate_classes and
+    // every loader's unique_class_count are derived from this one grouping
+    // rather than scanning graph.classes twice for two different purposes.
+    let name_to_loaders = group_classes_by_normalized_name(graph);
+    let unique_class_counts = compute_unique_class_counts(&name_to_loaders);
+    let duplicate_classes = build_duplicate_groups(name_to_loaders);
+
     let mut loaders: Vec<ClassLoaderInfo> = by_loader
         .into_iter()
-        .map(|(loader_id, aggregate)| build_loader_info(graph, dominator, loader_id, aggregate))
+        .map(|(loader_id, aggregate)| {
+            let unique_class_count = unique_class_counts.get(&loader_id).copied().unwrap_or(0);
+            build_loader_info(graph, dominator, loader_id, aggregate, unique_class_count)
+        })
         .collect();
 
     loaders.sort_by(|left, right| {
@@ -88,7 +112,78 @@ pub fn analyze_classloaders(
     ClassLoaderReport {
         loaders,
         potential_leaks,
+        duplicate_classes,
     }
+}
+
+/// Cross-loader duplicate-class detection, standalone. Groups `graph.classes`
+/// by normalized class name and keeps only groups where the set of distinct
+/// `class_loader_id` values has size >= 2 -- a class loaded twice by the
+/// exact same loader id is not a duplicate in this sense.
+pub fn detect_duplicate_classes(graph: &ObjectGraph) -> Vec<DuplicateClassGroup> {
+    build_duplicate_groups(group_classes_by_normalized_name(graph))
+}
+
+/// Groups `graph.classes` by normalized class name, collecting the distinct
+/// `class_loader_id` values (sorted ascending) that declare a class object
+/// under that name.
+fn group_classes_by_normalized_name(graph: &ObjectGraph) -> HashMap<String, Vec<ObjectId>> {
+    let mut grouping: HashMap<String, BTreeSet<ObjectId>> = HashMap::new();
+
+    for class_info in graph.classes.values() {
+        let Some(name) = class_info.name.as_deref() else {
+            continue;
+        };
+        let normalized = normalize_class_name(name);
+        grouping
+            .entry(normalized)
+            .or_default()
+            .insert(class_info.class_loader_id);
+    }
+
+    grouping
+        .into_iter()
+        .map(|(name, loader_ids)| (name, loader_ids.into_iter().collect()))
+        .collect()
+}
+
+/// For every class name owned by exactly one distinct loader, credit that
+/// loader with one unique class.
+fn compute_unique_class_counts(
+    name_to_loaders: &HashMap<String, Vec<ObjectId>>,
+) -> HashMap<ObjectId, usize> {
+    let mut counts: HashMap<ObjectId, usize> = HashMap::new();
+
+    for loader_ids in name_to_loaders.values() {
+        if let [only_loader] = loader_ids.as_slice() {
+            *counts.entry(*only_loader).or_insert(0) += 1;
+        }
+    }
+
+    counts
+}
+
+fn build_duplicate_groups(
+    name_to_loaders: HashMap<String, Vec<ObjectId>>,
+) -> Vec<DuplicateClassGroup> {
+    let mut groups: Vec<DuplicateClassGroup> = name_to_loaders
+        .into_iter()
+        .filter(|(_, loader_ids)| loader_ids.len() >= 2)
+        .map(|(class_name, loader_object_ids)| DuplicateClassGroup {
+            class_name,
+            loader_count: loader_object_ids.len(),
+            loader_object_ids,
+        })
+        .collect();
+
+    groups.sort_by(|left, right| {
+        right
+            .loader_count
+            .cmp(&left.loader_count)
+            .then_with(|| left.class_name.cmp(&right.class_name))
+    });
+
+    groups
 }
 
 fn build_loader_info(
@@ -96,6 +191,7 @@ fn build_loader_info(
     dominator: Option<&DominatorTree>,
     loader_id: ObjectId,
     aggregate: LoaderAggregate,
+    unique_class_count: usize,
 ) -> ClassLoaderInfo {
     let loader_object = graph.objects.get(&loader_id);
     let class_name = loader_object
@@ -117,6 +213,7 @@ fn build_loader_info(
         total_shallow_bytes: aggregate.total_shallow_bytes,
         retained_bytes: dominator.map(|dom| dom.retained_size(loader_id)),
         parent_loader,
+        unique_class_count,
     }
 }
 
@@ -270,5 +367,154 @@ mod tests {
         let report = analyze_classloaders(&graph, None);
 
         assert!(report.potential_leaks.is_empty());
+    }
+
+    /// Two distinct loader objects (1 and 2), each with their own class
+    /// object for "com.example.webapp.RequestHandler" -- the classic
+    /// "redeployed webapp" shape: same class name, two different
+    /// classloaders, neither aware of the other's existence.
+    fn build_redeployed_webapp_graph() -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+        // Loader classes (declared by the bootstrap loader, id 0).
+        add_class(&mut graph, 100, "com.example.webapp.WebappLoader", 0);
+        add_class(&mut graph, 101, "com.example.webapp.WebappLoader", 0);
+
+        // First generation: loader 1 loads RequestHandler (class obj 200).
+        add_class(&mut graph, 200, "com/example/webapp/RequestHandler", 1);
+        // Second generation: loader 2 loads its own RequestHandler (class obj 201).
+        add_class(&mut graph, 201, "com/example/webapp/RequestHandler", 2);
+
+        add_object(&mut graph, 1, 100, 16, &[10]);
+        add_object(&mut graph, 2, 101, 16, &[11]);
+        add_object(&mut graph, 10, 200, 64, &[]);
+        add_object(&mut graph, 11, 201, 64, &[]);
+        add_root(&mut graph, 1);
+        add_root(&mut graph, 2);
+
+        graph
+    }
+
+    #[test]
+    fn class_loaded_by_two_distinct_loaders_is_one_duplicate_group() {
+        let graph = build_redeployed_webapp_graph();
+
+        let duplicates = detect_duplicate_classes(&graph);
+
+        assert_eq!(duplicates.len(), 1);
+        let group = &duplicates[0];
+        assert_eq!(group.class_name, "com.example.webapp.RequestHandler");
+        assert_eq!(group.loader_count, 2);
+        assert_eq!(group.loader_object_ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn class_loaded_twice_by_same_loader_is_not_a_duplicate_group() {
+        let mut graph = ObjectGraph::new(8);
+        add_class(&mut graph, 100, "com.example.SoloLoader", 0);
+        // Two class objects, same normalized name, but declared by the SAME
+        // loader (id 1) -- must not be treated as a cross-loader duplicate.
+        add_class(&mut graph, 200, "com/example/Widget", 1);
+        add_class(&mut graph, 201, "com/example/Widget", 1);
+
+        add_object(&mut graph, 1, 100, 16, &[10, 11]);
+        add_object(&mut graph, 10, 200, 32, &[]);
+        add_object(&mut graph, 11, 201, 32, &[]);
+        add_root(&mut graph, 1);
+
+        let duplicates = detect_duplicate_classes(&graph);
+
+        assert!(duplicates.is_empty());
+    }
+
+    #[test]
+    fn build_leaky_loader_graph_fixture_has_no_duplicate_classes() {
+        let graph = build_leaky_loader_graph();
+        let dominator = build_dominator_tree(&graph);
+
+        let report = analyze_classloaders(&graph, Some(&dominator));
+
+        assert_eq!(report.potential_leaks.len(), 1);
+        assert!(report.duplicate_classes.is_empty());
+    }
+
+    #[test]
+    fn class_loaded_by_exactly_one_loader_never_appears_in_duplicate_classes() {
+        let graph = build_redeployed_webapp_graph();
+
+        let duplicates = detect_duplicate_classes(&graph);
+
+        // WebappLoader itself (loaded once by the bootstrap loader, id 0)
+        // must not appear anywhere in the duplicate groups.
+        assert!(!duplicates
+            .iter()
+            .any(|group| group.class_name == "com.example.webapp.WebappLoader"));
+    }
+
+    /// Three loaders: loader 1 and loader 2 both load `Shared`, while loader
+    /// 1 also loads `OnlyInOne` and loader 2 also loads `OnlyInTwo`. Loader 3
+    /// loads only `OnlyInThree`, shared with nobody.
+    fn build_three_loader_mixed_graph() -> ObjectGraph {
+        let mut graph = ObjectGraph::new(8);
+        add_class(&mut graph, 100, "com.example.LoaderOne", 0);
+        add_class(&mut graph, 101, "com.example.LoaderTwo", 0);
+        add_class(&mut graph, 102, "com.example.LoaderThree", 0);
+
+        add_class(&mut graph, 200, "com/example/Shared", 1);
+        add_class(&mut graph, 201, "com/example/OnlyInOne", 1);
+        add_class(&mut graph, 202, "com/example/Shared", 2);
+        add_class(&mut graph, 203, "com/example/OnlyInTwo", 2);
+        add_class(&mut graph, 204, "com/example/OnlyInThree", 3);
+
+        add_object(&mut graph, 1, 100, 16, &[20, 21]);
+        add_object(&mut graph, 2, 101, 16, &[22, 23]);
+        add_object(&mut graph, 3, 102, 16, &[24]);
+        add_object(&mut graph, 20, 200, 32, &[]);
+        add_object(&mut graph, 21, 201, 32, &[]);
+        add_object(&mut graph, 22, 202, 32, &[]);
+        add_object(&mut graph, 23, 203, 32, &[]);
+        add_object(&mut graph, 24, 204, 32, &[]);
+        add_root(&mut graph, 1);
+        add_root(&mut graph, 2);
+        add_root(&mut graph, 3);
+
+        graph
+    }
+
+    #[test]
+    fn unique_class_count_excludes_shared_classes_on_three_loader_fixture() {
+        let graph = build_three_loader_mixed_graph();
+
+        let report = analyze_classloaders(&graph, None);
+
+        let loader_one = report
+            .loaders
+            .iter()
+            .find(|loader| loader.object_id == 1)
+            .expect("loader 1 present");
+        let loader_two = report
+            .loaders
+            .iter()
+            .find(|loader| loader.object_id == 2)
+            .expect("loader 2 present");
+        let loader_three = report
+            .loaders
+            .iter()
+            .find(|loader| loader.object_id == 3)
+            .expect("loader 3 present");
+
+        assert_eq!(loader_one.loaded_class_count, 2);
+        assert_eq!(loader_one.unique_class_count, 1); // OnlyInOne, not Shared
+
+        assert_eq!(loader_two.loaded_class_count, 2);
+        assert_eq!(loader_two.unique_class_count, 1); // OnlyInTwo, not Shared
+
+        assert_eq!(loader_three.loaded_class_count, 1);
+        assert_eq!(loader_three.unique_class_count, 1); // OnlyInThree
+
+        let duplicates = report.duplicate_classes;
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].class_name, "com.example.Shared");
+        assert_eq!(duplicates[0].loader_count, 2);
+        assert_eq!(duplicates[0].loader_object_ids, vec![1, 2]);
     }
 }
