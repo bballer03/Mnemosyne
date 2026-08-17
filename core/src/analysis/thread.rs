@@ -21,6 +21,49 @@ pub struct StackFrameInfo {
     pub class_name: String,
     pub source_file: Option<String>,
     pub line_number: i32,
+    /// Local variables (and JNI locals) resolved from `ROOT_JAVA_FRAME` /
+    /// `ROOT_JNI_LOCAL` GC roots that correlate to this exact frame (M8
+    /// Slice 8.D). Empty when the heap dump carries no frame-local roots
+    /// for this frame — never `None`, matching the Vec-typed convention
+    /// already used elsewhere in this report (`ThreadReport::threads`,
+    /// `top_retainers`, etc.).
+    #[serde(default)]
+    pub locals: Vec<FrameLocal>,
+}
+
+/// A local variable (or JNI local reference) held by a single stack frame,
+/// resolved from a `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC root whose
+/// thread-serial and frame-number correlate to this frame's position in the
+/// owning thread's stack trace.
+///
+/// ## On `variable_slot`
+///
+/// Despite the name, this is **not** a genuine JVM bytecode local-variable
+/// slot index. The raw HPROF `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL`
+/// sub-records carry only an object id, a thread serial, and a frame
+/// number (the local's position within the thread's stack trace) — HPROF
+/// does not embed a `LocalVariableTable`, so no true slot index is
+/// recoverable from the dump alone. Rather than fabricate one, this field
+/// reuses the HPROF frame number as an honest, stable stand-in for
+/// ordering/dedup purposes: every `FrameLocal` attached to the same frame
+/// necessarily shares the same `variable_slot` value (it is, in effect,
+/// "which frame position produced this root", not "which variable slot").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameLocal {
+    pub variable_slot: u32,
+    pub object_id: String,
+    pub class_name: String,
+    pub root_kind: FrameLocalRootKind,
+}
+
+/// Which raw HPROF GC-root sub-record a [`FrameLocal`] was resolved from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrameLocalRootKind {
+    /// `ROOT_JAVA_FRAME` — a local variable in an interpreted/compiled Java
+    /// frame.
+    JavaFrame,
+    /// `ROOT_JNI_LOCAL` — a local reference held by native (JNI) code.
+    JniLocal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +80,7 @@ pub fn inspect_threads(
     top_n: usize,
 ) -> ThreadReport {
     let thread_roots = map_thread_roots(graph);
+    let frame_locals = map_frame_locals(graph);
     let mut threads = Vec::new();
 
     for object in graph.objects.values() {
@@ -62,8 +106,9 @@ pub fn inspect_threads(
         let (thread_local_count, thread_local_bytes) = dominator
             .map(|dom| dominated_descendants(dom, graph, object.id))
             .unwrap_or((0, 0));
-        let stack_trace = thread_root
-            .and_then(|(_, stack_trace_serial)| resolve_stack_trace(graph, stack_trace_serial));
+        let stack_trace = thread_root.and_then(|(thread_serial, stack_trace_serial)| {
+            resolve_stack_trace(graph, stack_trace_serial, thread_serial, &frame_locals)
+        });
 
         threads.push(ThreadInfo {
             object_id: object.id,
@@ -110,6 +155,63 @@ fn map_thread_roots(graph: &ObjectGraph) -> HashMap<ObjectId, (u32, u32)> {
         .collect()
 }
 
+/// Groups `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots by thread serial, so
+/// `resolve_stack_trace` can look up "which locals belong to this thread"
+/// in O(1) instead of rescanning `graph.gc_roots` per frame.
+///
+/// Each entry is `(frame_number, local_object_id, root_kind)`; `frame_number`
+/// is the HPROF frame position within the thread's stack trace (see
+/// [`FrameLocal::variable_slot`] doc comment for why it stands in for a
+/// slot index). Preserves `graph.gc_roots`' parse order, which is itself
+/// deterministic for a given heap dump.
+fn map_frame_locals(graph: &ObjectGraph) -> HashMap<u32, Vec<(u32, ObjectId, FrameLocalRootKind)>> {
+    let mut map: HashMap<u32, Vec<(u32, ObjectId, FrameLocalRootKind)>> = HashMap::new();
+    for root in &graph.gc_roots {
+        let entry = match root.root_type {
+            GcRootType::JavaFrame {
+                thread_serial,
+                frame,
+            } => Some((thread_serial, frame, FrameLocalRootKind::JavaFrame)),
+            GcRootType::JniLocal {
+                thread_serial,
+                frame,
+            } => Some((thread_serial, frame, FrameLocalRootKind::JniLocal)),
+            _ => None,
+        };
+        if let Some((thread_serial, frame, root_kind)) = entry {
+            map.entry(thread_serial)
+                .or_default()
+                .push((frame, root.object_id, root_kind));
+        }
+    }
+    map
+}
+
+/// Resolve a [`FrameLocal`] for a local-root `object_id`, rendering its
+/// class name the same way the rest of this module resolves thread/frame
+/// metadata (best-effort, `"<unknown>"` when the class can't be resolved).
+fn build_frame_local(
+    graph: &ObjectGraph,
+    frame_number: u32,
+    object_id: ObjectId,
+    root_kind: FrameLocalRootKind,
+) -> FrameLocal {
+    let id_size = graph.identifier_size as usize;
+    let class_name = graph
+        .objects
+        .get(&object_id)
+        .and_then(|object| graph.class_name(object.class_id))
+        .map(|name| name.replace('/', "."))
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    FrameLocal {
+        variable_slot: frame_number,
+        object_id: format!("0x{object_id:0width$X}", width = id_size * 2),
+        class_name,
+        root_kind,
+    }
+}
+
 fn is_thread_object(graph: &ObjectGraph, mut class_id: ObjectId) -> bool {
     while class_id != 0 {
         let Some(class_info) = graph.classes.get(&class_id) else {
@@ -140,17 +242,34 @@ fn resolve_thread_name(graph: &ObjectGraph, object_id: ObjectId) -> Option<Strin
 fn resolve_stack_trace(
     graph: &ObjectGraph,
     stack_trace_serial: u32,
+    thread_serial: u32,
+    frame_locals: &HashMap<u32, Vec<(u32, ObjectId, FrameLocalRootKind)>>,
 ) -> Option<Vec<StackFrameInfo>> {
     let stack_trace = graph.stack_traces.get(&stack_trace_serial)?;
+    let thread_locals = frame_locals.get(&thread_serial);
     let frames: Vec<StackFrameInfo> = stack_trace
         .frame_ids
         .iter()
-        .filter_map(|frame_id| graph.stack_frames.get(frame_id))
-        .map(|frame| StackFrameInfo {
-            method_name: frame.method_name.clone(),
-            class_name: frame.class_name.clone(),
-            source_file: frame.source_file.clone(),
-            line_number: frame.line_number,
+        .enumerate()
+        .filter_map(|(frame_index, frame_id)| {
+            let frame = graph.stack_frames.get(frame_id)?;
+            let mut locals: Vec<FrameLocal> = thread_locals
+                .into_iter()
+                .flatten()
+                .filter(|(frame_number, ..)| *frame_number == frame_index as u32)
+                .map(|&(frame_number, object_id, root_kind)| {
+                    build_frame_local(graph, frame_number, object_id, root_kind)
+                })
+                .collect();
+            locals.sort_by(|left, right| left.object_id.cmp(&right.object_id));
+
+            Some(StackFrameInfo {
+                method_name: frame.method_name.clone(),
+                class_name: frame.class_name.clone(),
+                source_file: frame.source_file.clone(),
+                line_number: frame.line_number,
+                locals,
+            })
         })
         .collect();
 
@@ -378,6 +497,78 @@ mod tests {
         assert_eq!(stack_trace[0].method_name, "run");
         assert_eq!(stack_trace[1].line_number, -1);
         assert_eq!(report.total_thread_retained, 84);
+
+        // Regression gate: no ROOT_JAVA_FRAME/ROOT_JNI_LOCAL roots in this
+        // fixture means every frame's `locals` must be an empty Vec, not an
+        // error and not omitted.
+        assert!(stack_trace[0].locals.is_empty());
+        assert!(stack_trace[1].locals.is_empty());
+    }
+
+    #[test]
+    fn inspect_threads_resolves_frame_locals_from_java_frame_and_jni_local_roots() {
+        let mut graph = make_graph();
+
+        // Frame 0 ("run", frame_id 1000) holds object 30 as a Java-frame
+        // local; frame 1 ("mainLoop", frame_id 1001) holds object 31 as a
+        // JNI local. Both roots correlate via thread_serial=7 (the same
+        // serial ThreadObject uses) and frame = index into the stack
+        // trace's frame_ids.
+        graph.gc_roots.push(GcRoot {
+            object_id: 30,
+            root_type: GcRootType::JavaFrame {
+                thread_serial: 7,
+                frame: 0,
+            },
+        });
+        graph.gc_roots.push(GcRoot {
+            object_id: 31,
+            root_type: GcRootType::JniLocal {
+                thread_serial: 7,
+                frame: 1,
+            },
+        });
+
+        let report = inspect_threads(&graph, None, 1);
+        let thread = &report.threads[0];
+        let stack_trace = thread.stack_trace.as_ref().expect("stack trace");
+
+        let frame0_locals = &stack_trace[0].locals;
+        assert_eq!(frame0_locals.len(), 1);
+        assert_eq!(frame0_locals[0].variable_slot, 0);
+        assert_eq!(frame0_locals[0].object_id, "0x000000000000001E"); // 30
+        assert_eq!(frame0_locals[0].class_name, "com.example.LocalPayload");
+        assert_eq!(frame0_locals[0].root_kind, FrameLocalRootKind::JavaFrame);
+
+        let frame1_locals = &stack_trace[1].locals;
+        assert_eq!(frame1_locals.len(), 1);
+        assert_eq!(frame1_locals[0].variable_slot, 1);
+        assert_eq!(frame1_locals[0].object_id, "0x000000000000001F"); // 31
+        assert_eq!(frame1_locals[0].class_name, "com.example.LocalPayload");
+        assert_eq!(frame1_locals[0].root_kind, FrameLocalRootKind::JniLocal);
+    }
+
+    #[test]
+    fn frame_locals_from_other_threads_do_not_leak_into_this_threads_frames() {
+        let mut graph = make_graph();
+
+        // A JavaFrame root for a *different* thread serial must never
+        // attach to this thread's frames, even if the frame number
+        // coincidentally matches.
+        graph.gc_roots.push(GcRoot {
+            object_id: 30,
+            root_type: GcRootType::JavaFrame {
+                thread_serial: 999,
+                frame: 0,
+            },
+        });
+
+        let report = inspect_threads(&graph, None, 1);
+        let thread = &report.threads[0];
+        let stack_trace = thread.stack_trace.as_ref().expect("stack trace");
+
+        assert!(stack_trace[0].locals.is_empty());
+        assert!(stack_trace[1].locals.is_empty());
     }
 
     #[test]
