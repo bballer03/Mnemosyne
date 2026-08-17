@@ -54,16 +54,16 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 | Histogram (per class, instances + shallow + retained) | ✅ | ✅ | None | — | `analyze_heap()` ships per-class histograms with retained sizes when graph-backed; overview mode emits class-resolved shallow approximations with honest provenance labels. |
 | Dominator tree (full + partial, sorted by retained) | ✅ | ✅ | None | — | `core::graph::dominator` (Lengauer-Tarjan) is the source of retained sizes. Available via `analyze_heap()`, `flamegraph`, and the new public `analyze_heap_with_graph()` entry point. |
 | Path to GC roots — shortest path | ✅ | ✅ | None | — | `mnemosyne gc-path` uses `ObjectGraph` BFS first, then `GcGraph` budget fallback, then synthetic. |
-| Path to GC roots — **all paths** / by class | ✅ | ❌ | Only shortest path is exposed | **High (M8)** | MAT supports "merge shortest paths to GC roots from class X". Mnemosyne has the graph primitives but no all-paths or by-class projection. |
+| Path to GC roots — **all paths** / by class | ✅ | ✅ | None | — | `mnemosyne gc-path --all-paths [--by-class <name>] [--max-paths <n>]` enumerates every GC root path up to a shared `max_paths` budget (default 20), with an honest `truncated: bool` flag when the budget caps enumeration. Exit codes `8` (`--object-id` not found) / `9` (`--by-class` matches zero live instances). Shipped M8 Slice 8.A. |
 | Leak suspects report (heuristic) | ✅ | ✅ | None | — | `detect_leaks()` ships graph-backed retained-size + accumulation-point ranking with heuristic fallback labeled via `ProvenanceKind::Fallback`. **Differentiator:** structured provenance markers vs MAT's opaque suspect text. |
 | OQL — full operator set | ✅ | 🟡 | M7-4 covers ~30% of MAT OQL surface | Medium (M8 / M9) | Shipped: `@retainedSize`, `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS x.field`, `IS NULL`. Missing: subqueries, `UNION`, multi-hop traversal, full predicate functions, `eval(...)`, regex `=~`, `dominators(...)`, `outbounds`/`inbounds` traversal. |
 | Top consumers report | ✅ | ✅ | None | — | `find_top_instances()` + analyze report top-N largest instances by retained or shallow size. |
 | Class loader explorer (per-loader histogram, unique classes) | ✅ | 🟡 | `analyze --classloaders` exists; no dedicated leak-detection or unique-classes-per-loader explorer view | Medium (M11) | Per-loader retained-size aggregation is shipped. Missing: classloader leak detection (multiple loaders for same class — the classic Tomcat/webapp leak), unique-classes-per-loader histograms, parent-loader tree drill-down. |
 | Duplicate strings / arrays detection | ✅ | 🟡 | Strings yes; arrays no | Low (M11) | `analyze_strings()` reports duplicate groups + dedup waste. **No** equivalent for primitive arrays or boxed array dedup. MAT has both. |
-| Thread overview + frame-locals + stack | ✅ | 🟡 | Stacks + thread-local counts shipped; no per-frame local-variable detail | Medium (M8) | `inspect_threads()` parses `STACK_TRACE` / `STACK_FRAME`, correlates `ROOT_THREAD_OBJECT`, and reports retained bytes. Missing: per-frame **local variable values** (MAT's "frame-as-pseudo-object" feature requires `ROOT_JNI_LOCAL` / `ROOT_JAVA_FRAME` cross-referencing). |
-| Inspector — object field-level browse, refs in/out | ✅ | 🟡 | API + UI shipped; no dedicated CLI surface | Low | `ObjectGraph::get_object/get_references/get_referrers` and the React Object Inspector cover this. Missing: a focused `mnemosyne inspect <object-id>` CLI + MCP method. |
+| Thread overview + frame-locals + stack | ✅ | ✅ | None | — | `inspect_threads()` now additionally cross-references `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame `FrameLocal { variable_slot, object_id, class_name, root_kind }` entries, printed as `local:`/`jni-local:` lines under each stack frame in `analyze --threads` text output. `variable_slot` honestly reuses the HPROF frame number — HPROF frame-local roots carry no genuine bytecode slot index. Shipped M8 Slice 8.D. |
+| Inspector — object field-level browse, refs in/out | ✅ | ✅ | None | — | `mnemosyne inspect <heap> --object-id <id> [--retain-field-data] [--format text\|json\|toon]` and MCP `inspect_object` ship a focused single-object view: shallow/retained size, dominator parent/children, references out, referrers in (all as structured `ObjectRef { object_id, class_name }`, not baked strings), and opt-in typed field values. Shipped M8 Slice 8.C. |
 | Group by class / classloader / package / superclass | ✅ | 🟡 | Class / package / classloader yes; superclass no | Low (M11) | `--group-by class\|package\|classloader`. Missing `--group-by superclass` (and the related "group by class -> superclass tree"). |
-| **Group by referrer** (incoming references analysis) | ✅ | ❌ | Not shipped | **High (M8)** | MAT's "Show objects by incoming references" / "Group by referrer" is a top-3 MAT investigation workflow. Mnemosyne has `get_referrers()` but no aggregating analyzer or CLI surface. |
+| **Group by referrer** (incoming references analysis) | ✅ | ✅ | None | — | `mnemosyne analyze --by-referrer` and MCP `analyze_heap` `by_referrer: boolean` param rank objects by incoming-reference count (tiebreak retained size), with top referrer classes per entry. Shipped as a `ReferrerReport` optional field on `AnalyzeResponse` / an additive param on the existing `analyze_heap` tool — not a separate `analyze_by_referrer` tool (roadmap text below in §5 originally speculated otherwise). Shipped M8 Slice 8.B. |
 | Reachable / unreachable objects analysis | ✅ | ✅ | None | — | `find_unreachable_objects()` walks from GC roots and reports per-class counts + shallow size. |
 | **Compare two heap dumps** (object-level diff) | ✅ | 🟡 | `ci-check object_growth_threshold` predicate + leak-progression cross-reference missing | Low (M10-B) | `mnemosyne diff --mode object` ships fingerprint-based per-object identity (`class+retained` / `class+dominator` / `full-fingerprint`), added/removed/retained_changed sections, `MatchQuality`, and MCP `diff_heaps` mode. Missing: `ci-check object_growth_threshold` predicate, leak-progression cross-reference with `detect_leaks()`. |
 | Allocation-site flame graphs | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has no native flame-graph export; users typically pipe to async-profiler. Mnemosyne ships SVG / folded-stack / JSON natively. **Differentiator.** |
@@ -79,9 +79,9 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 ### Parity matrix summary
 
 - **Mnemosyne ≥ MAT:** allocation flame graphs, CI/CD automation, streaming bounded-memory mode, AI-assisted diagnosis, MCP/IDE integration, provenance, distribution.
-- **MAT ≥ Mnemosyne (high priority):** all-paths-to-GC-roots / by-class, group-by-referrer, object-level heap diff, persistent indexes / parse-once-query-many.
-- **MAT ≥ Mnemosyne (medium priority):** full OQL depth, classloader leak detection, frame-locals on threads.
-- **MAT ≥ Mnemosyne (low priority / defer):** duplicate-arrays, group-by-superclass, custom plugin runtime, dedicated CLI inspector.
+- **MAT ≥ Mnemosyne (high priority):** persistent indexes / parse-once-query-many. (All-paths-to-GC-roots / by-class, group-by-referrer, and object-level heap diff closed in M8/M10 — see below.)
+- **MAT ≥ Mnemosyne (medium priority):** full OQL depth, classloader leak detection.
+- **MAT ≥ Mnemosyne (low priority / defer):** duplicate-arrays, group-by-superclass, custom plugin runtime.
 
 ---
 
@@ -127,20 +127,21 @@ The M7-5 reference-workstation rerun is **preserved** as a credibility follow-up
 
 These are **candidates** for orchestration to schedule. Each closes a parity gap from §2 or extends a differentiator from §3 (or both). The recommended immediate next milestone is identified in §6.
 
-### M8 — Reachability & References Deep Dive (Parity-Closing + Differentiator-Extending)
+### M8 — Reachability & References Deep Dive (Parity-Closing + Differentiator-Extending) — ✅ Shipped
 
+- **Status:** ✅ **Shipped** — design doc [milestone-8-reachability-references.md](design/milestone-8-reachability-references.md), slices 8.A–8.D (implementation) + 8.E (documentation sync, this pass). All four target workflows landed.
 - **Theme:** Close the highest-value MAT investigation gaps that the existing graph already supports.
 - **Goal:** Ship the three top MAT-only investigation workflows — all-paths-to-GC-roots / by-class, group-by-referrer (incoming references), and a focused object inspector surface — using the existing `ObjectGraph` + dominator infrastructure with provenance and overview-aware fallbacks.
-- **Scope:**
-  - `mnemosyne gc-path --all-paths` and `--by-class <class>` (path enumeration with budget caps and `ProvenanceKind::Partial` truncation markers).
-  - New `analysis::referrers` analyzer + `mnemosyne analyze --by-referrer` and MCP `analyze_by_referrer` (incoming-reference aggregation, ranked by retained size).
-  - `mnemosyne inspect <object-id>` CLI surface + MCP `inspect_object` (field values, refs in/out, dominator parent/children).
-  - Thread frame-locals: cross-reference `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` into `inspect_threads()` output.
+- **Delivered scope (as shipped, two naming/mechanism differences from the original text below — see note):**
+  - `mnemosyne gc-path --all-paths [--by-class <class>] [--max-paths <n>, default 20]`: path enumeration bounded by a **shared** `max_paths` budget across the whole request, surfaced via a plain `truncated: bool` flag on `GcPathResult` (**not** `ProvenanceKind::Partial` markers as originally speculated below — the design doc's own §6 had already corrected this before implementation). New optional `all_paths: Option<Vec<Vec<GcPathNode>>>` field; the existing `path` field is untouched, so today's `gc-path` (no new flags) stays byte-identical. New CLI exit codes `8` (object id not found) / `9` (`--by-class` matches zero live instances).
+  - New `core::analysis::referrers` module (`ReferrerEntry`, `ReferrerReport`, `analyze_by_referrer()`) + `mnemosyne analyze --by-referrer` + MCP `by_referrer: boolean` param **on the existing `analyze_heap` tool** (**not** a separate `analyze_by_referrer` tool as originally speculated below — same additive-param-not-new-tool pattern M10 used for `diff_heaps`). Ranks objects by incoming-reference count, tiebreak retained size, with up to 5 top referrer classes per entry.
+  - `mnemosyne inspect <heap> --object-id <id> [--retain-field-data] [--format text|json|toon]` + new MCP tool `inspect_object`, backed by new `core::analysis::inspector` (`ObjectInspection`, `inspect_object()`) and a new `core::report::inspect` renderer family (mirrors `core::report::diff` placement). `ObjectInspection`'s `references_out` / `referrers_in` / `dominator_parent` / `dominator_children` ship as structured `ObjectRef { object_id, class_name }`, not baked `"{id} ({class})"` strings — changed during Slice 8.C review specifically so MCP/AI-agent consumers can chain calls without string-parsing.
+  - Thread frame-locals: `core::analysis::thread` cross-references `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into `FrameLocal { variable_slot, object_id, class_name, root_kind }` entries on each stack frame, printed as `local:` / `jni-local:` lines under each frame in `analyze --threads` text output. `variable_slot` honestly reuses the raw HPROF frame number rather than pretending to be a real bytecode local-variable slot index (HPROF frame-local roots carry no such index).
 - **Out of scope:** Full MAT OQL `inbounds` / `outbounds` traversal (defer to M9-2). Custom IQuery plugin runtime. UI surfaces beyond what the existing leak workspace already covers.
 - **Why now / strategic rationale:** These are top-3 MAT investigation workflows that Mnemosyne currently lacks despite having the graph primitives. They reuse M1 / M3 graph infrastructure with no new architectural risk. They directly improve leak-triage credibility, which is the project's core mission.
-- **Success criteria:** `gc-path --all-paths` enumerates ≥10 paths under budget for the real-world fixture. `analyze --by-referrer` ranks the top-N retained-size referrers and survives golden-output regression tests. `inspect <id>` exposes field values + refs in/out for any reachable object. Frame-locals appear on at least the synthetic thread fixture. ≥30 new tests; clippy + fmt clean.
-- **Risks / dependencies:** Path enumeration needs careful budget caps (combinatorial explosion). Frame-locals depend on `STACK_TRACE` records being present in the dump. Overview-mode behavior must surface a structured `feature_unavailable_in_overview_mode` error.
-- **Estimated slice count:** 5–10 slices.
+- **Success criteria (met):** `gc-path --all-paths` enumerates all paths under budget with honest truncation. `analyze --by-referrer` ranks referrers with regression coverage. `inspect <id>` exposes field values + refs in/out for any reachable object, with structured refs. Frame-locals appear on synthetic thread fixtures and are regression-gated against pre-M8 `analyze --threads` output. Slices 8.A–8.D landed with full-workspace `cargo {check,test,clippy,fmt}` clean at each gate; 566 tests passing at Slice 8.E closeout.
+- **Risks / dependencies:** Path enumeration needs careful budget caps (combinatorial explosion) — mitigated with a shared `max_paths` budget, not per-path. Frame-locals depend on `STACK_TRACE` records being present in the dump. Overview-mode behavior surfaces a structured `feature_unavailable_in_overview_mode` error (deep-mode-only, matching M7-3/M7-4/M10 precedent).
+- **Estimated slice count:** 5–10 slices (5 shipped: 8.A–8.D implementation + 8.E doc-sync).
 
 ### M9 — Snapshot Persistence & Parse-Once-Query-Many (Parity-Closing)
 
@@ -281,10 +282,10 @@ Updated to reflect the parity matrix in §2.
 | Reachable / unreachable analysis | ✅ | — |
 | Top consumers | ✅ | — |
 | OQL — targeted subset | 🟡 ~30% | M7-4 ✅ → B1 (incremental) |
-| GC root paths — all paths / by class | ❌ | **M8** |
-| Group by referrer | ❌ | **M8** |
-| Object inspector (CLI/MCP) | 🟡 (UI only) | **M8** |
-| Thread frame-locals | 🟡 | **M8** |
+| GC root paths — all paths / by class | ✅ (`gc-path --all-paths`/`--by-class`) | **M8** ✅ shipped |
+| Group by referrer | ✅ (`analyze --by-referrer`) | **M8** ✅ shipped |
+| Object inspector (CLI/MCP) | ✅ (`mnemosyne inspect`, MCP `inspect_object`) | **M8** ✅ shipped |
+| Thread frame-locals | ✅ (`analyze --threads` `local:`/`jni-local:` lines) | **M8** ✅ shipped |
 | Object-level heap diff | ✅ (`--mode object`; `ci-check` predicate pending) | **M10** ✅ mostly shipped |
 | Persistent indexes / parse-once-query-many | ❌ | **M9** |
 | Classloader leak detection | 🟡 (per-loader histogram only) | **M13** |
@@ -333,7 +334,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | M7-5 comparative benchmarks | [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | 🟡 partial |
 | M7-6 v0.3.0 release | [design/milestone-7-6-v0-3-0-release.md](design/milestone-7-6-v0-3-0-release.md) | ✅ Shipped |
 | Scaling support | [design/memory-scaling.md](design/memory-scaling.md) | ✅ |
-| **M8 Reachability & References** | _to be authored by Design Consulting_ | ⏳ Pending |
+| **M8 Reachability & References** | [design/milestone-8-reachability-references.md](design/milestone-8-reachability-references.md) | ✅ Shipped (slices 8.A–8.D implementation, 8.E doc-sync) |
 | **M9 Snapshot Persistence** | _to be authored by Design Consulting_ | ⏳ Pending |
 | **M10 Object-Level Diff** | [design/milestone-8-1-object-level-diff.md](design/milestone-8-1-object-level-diff.md) | 🟡 Mostly shipped (slices A–G; `ci-check` predicate = M10-B) |
 | **M11 MCP Workflow Suite** | _to be authored by Design Consulting_ | ⏳ Pending |

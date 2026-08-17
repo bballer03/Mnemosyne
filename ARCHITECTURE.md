@@ -59,6 +59,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **MCP:** `parse_heap` and `analyze_heap` now accept optional `mode: "auto"|"deep"|"overview"`; overview responses carry a `"mode": "overview"` discriminator and return the streaming overview summary instead of pretending to be a deep `AnalyzeResponse`. Failures keep the legacy string `error` field and also attach machine-readable `error_details`, including structured `feature_unavailable_in_overview_mode` details when deep-only query features are evaluated without a deep graph.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
+- **Reachability & references deep dive (M8):** `core::graph::gc_path` gained `AllPathsRequest` / `find_all_gc_paths()`, reusing the existing BFS/fallback machinery but enumerating a bounded frontier (shared `max_paths` budget, default 20) instead of stopping at the first hit; the existing `path` field on `GcPathResult` is untouched, with results landing in a new optional `all_paths` field, so default `gc-path` output stays byte-identical. New sibling analyzers `core::analysis::referrers` (`analyze_by_referrer()`, ranks objects by incoming-reference count) and `core::analysis::inspector` (`inspect_object()`, a thin composition over existing `ObjectGraph`/`DominatorTree` accessors plus the typed field reader) back `mnemosyne analyze --by-referrer` and the new `mnemosyne inspect` subcommand / MCP `inspect_object` tool respectively; the inspector's ref fields are structured `ObjectRef { object_id, class_name }` rather than baked strings. `core::report::inspect` is a new small renderer family (text/json/toon) alongside `core::report::diff`. `core::analysis::thread` now cross-references `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` GC roots into per-frame `FrameLocal` entries, surfaced as `local:`/`jni-local:` lines under `analyze --threads`. See [docs/design/milestone-8-reachability-references.md](docs/design/milestone-8-reachability-references.md).
 - **Object-level heap diff (M10):** `core::diff` is now the single home for heap-diff logic. `core::diff::run_diff()` dispatches on `DiffMode::{Class, Object}`; class mode delegates to the lifted, behavior-identical `core::diff::class`, while object mode builds `(ObjectGraph, DominatorTree)` pairs for both dumps and fingerprints instances via `core::diff::object::fingerprint` under one of three `IdentityStrategy` values (`class+retained`, `class+dominator` default, `full-fingerprint`). The engine pairs fingerprints across snapshots into `added` / `removed` / `retained_changed` `ObjectDelta` sections, reports a `MatchQuality` collision-rate envelope, and is bounded by `MAX_OBJECT_DIFF_FINGERPRINTS` plus an `--object-diff-min-retained` floor to keep peak RSS within budget on multi-GB dumps. `mnemosyne-cli diff --mode object` and MCP `diff_heaps` (`mode: "object"`) both reuse this path; `--mode class` (the default) remains byte-identical to v0.3.0. Renderers live under `core::report::diff::{text,json,toon}`. See [docs/design/milestone-8-1-object-level-diff.md](docs/design/milestone-8-1-object-level-diff.md).
 - **Flame graph reporting:** `core::analysis::analyze_heap_with_graph()` now gives deep-mode callers a stable way to retrieve `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without widening the serialized `AnalyzeResponse` contract. `core::report::flamegraph` then collapses those graph internals into dominator, class-hierarchy, or GC-root-path folded stacks and renders SVG through `inferno` 0.11.x (CDDL-1.0), plus folded-stack text and a JSON envelope.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
@@ -100,15 +101,17 @@ core/
    ├── graph/              # Object graph analysis domain
    │   ├── mod.rs
    │   ├── dominator.rs
-   │   ├── gc_path.rs
+   │   ├── gc_path.rs      # M8: extended with AllPathsRequest / find_all_gc_paths()
    │   └── metrics.rs      # Graph metrics / summaries (was graph.rs)
    ├── analysis/           # Leak detection + AI orchestration
    │   ├── mod.rs
    │   ├── engine.rs       # Analysis engine + analyze_heap_with_graph()
-   │   ├── thread.rs       # Thread inspection + stack trace correlation
+   │   ├── thread.rs       # Thread inspection + stack trace correlation; M8: FrameLocal cross-reference
    │   ├── string_analysis.rs # Duplicate strings + top strings by size
    │   ├── collection.rs   # HashMap/ArrayList/etc. waste inspection
    │   ├── top_instances.rs # Largest-instance ranking
+   │   ├── referrers.rs    # M8: group-by-referrer analyzer
+   │   ├── inspector.rs    # M8: single-object inspection (ObjectInspection)
    │   └── ai.rs
    ├── diff/               # Heap diff (class-level + M10 object-level)
    │   ├── mod.rs          # DiffMode, DiffRequest, run_diff()
@@ -128,6 +131,8 @@ core/
    ├── report/             # Report rendering
    │   ├── mod.rs
    │   ├── renderer.rs     # Analyze-report rendering (was report.rs)
+   │   ├── inspect/         # M8: mnemosyne inspect renderer family
+   │   │   ├── mod.rs, text.rs, json.rs, toon.rs
    │   └── flamegraph/     # Flame graph rendering + folded-stack projection
    │      ├── mod.rs
    │      ├── types.rs
