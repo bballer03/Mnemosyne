@@ -19,8 +19,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
         analyze_heap, analyze_heap_with_graph, detect_leaks, focus_leaks,
-        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AnalysisMode,
-        AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
+        generate_ai_chat_turn_async, generate_ai_insights_async, inspect_object, validate_leak_id,
+        AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
         OVERVIEW_AUTO_THRESHOLD_BYTES,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
@@ -44,6 +44,7 @@ use mnemosyne_core::{
             collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
             FlameFormat, FlameRoot,
         },
+        inspect::{render as render_inspect_report, Format as InspectRenderFormat},
         render_overview_report, render_report, ReportArtifact, ReportRequest,
     },
     CoreError, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy, PolicyInput,
@@ -86,6 +87,8 @@ enum Commands {
     Map(MapArgs),
     /// Find a path from an object to its GC root.
     GcPath(GcPathArgs),
+    /// Inspect a single object: fields, refs in/out, dominator context.
+    Inspect(InspectArgs),
     /// Execute an OQL-style query against the heap graph, including retained instance fields on query paths.
     Query(QueryArgs),
     /// Generate AI explanations for a leak candidate.
@@ -253,6 +256,19 @@ struct GcPathArgs {
 }
 
 #[derive(Debug, Parser)]
+struct InspectArgs {
+    heap: PathBuf,
+    #[arg(long = "object-id")]
+    object_id: String,
+    /// Populate the fields section with typed instance field values
+    /// (requires re-parsing the heap with field data retained).
+    #[arg(long)]
+    retain_field_data: bool,
+    #[arg(long, value_enum, default_value_t = InspectFormatArg::Text)]
+    format: InspectFormatArg,
+}
+
+#[derive(Debug, Parser)]
 struct QueryArgs {
     heap: PathBuf,
     query: String,
@@ -331,6 +347,13 @@ enum OutputFormatArg {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum DiffFormatArg {
+    Text,
+    Json,
+    Toon,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum InspectFormatArg {
     Text,
     Json,
     Toon,
@@ -454,6 +477,16 @@ impl From<DiffFormatArg> for DiffRenderFormat {
     }
 }
 
+impl From<InspectFormatArg> for InspectRenderFormat {
+    fn from(value: InspectFormatArg) -> Self {
+        match value {
+            InspectFormatArg::Text => InspectRenderFormat::Text,
+            InspectFormatArg::Json => InspectRenderFormat::Json,
+            InspectFormatArg::Toon => InspectRenderFormat::Toon,
+        }
+    }
+}
+
 impl From<ModeArg> for AnalysisMode {
     fn from(value: ModeArg) -> Self {
         match value {
@@ -572,6 +605,7 @@ async fn run() -> Result<()> {
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
+        Commands::Inspect(args) => handle_inspect(args).await?,
         Commands::Query(args) => handle_query(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
         Commands::Chat(args) => handle_chat(args, &loaded_config.data).await?,
@@ -1168,6 +1202,82 @@ fn print_all_gc_paths(response: &GcPathResult) {
                 node.field.clone().unwrap_or_else(|| "<direct>".into())
             );
         }
+    }
+}
+
+async fn handle_inspect(args: InspectArgs) -> Result<()> {
+    validate_heap_file(&args.heap)?;
+
+    let pb = start_spinner("Inspecting object...");
+    let graph = match parse_hprof_file_with_options(
+        args.heap.to_string_lossy().as_ref(),
+        ParseOptions {
+            retain_field_data: args.retain_field_data,
+        },
+    ) {
+        Ok(graph) => graph,
+        Err(err) => {
+            finish_spinner(&pb, "Object inspection failed.");
+            return Err(err)
+                .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()));
+        }
+    };
+
+    let dominator = mnemosyne_core::build_dominator_tree(&graph);
+    let target_id =
+        parse_inspect_object_id(&args.object_id).filter(|id| graph.objects.contains_key(id));
+
+    let inspection = target_id
+        .and_then(|id| inspect_object(&graph, Some(&dominator), id, args.retain_field_data));
+
+    let Some(inspection) = inspection else {
+        finish_spinner(&pb, "Object inspection failed.");
+        exit_inspect_with_error(inspect_object_id_not_found(&args.object_id, &args.heap));
+    };
+    finish_spinner(&pb, "Object inspection complete.");
+
+    let rendered = render_inspect_report(&inspection, args.format.into())?;
+    println!("{rendered}");
+
+    Ok(())
+}
+
+fn inspect_object_id_not_found(object_id: &str, heap: &Path) -> CoreError {
+    CoreError::Unsupported(format!(
+        "inspect_object_id_not_found: object id '{object_id}' was not found in heap dump '{}'",
+        heap.display()
+    ))
+}
+
+/// Parse a CLI-supplied object id (`0x...` hex or bare decimal), mirroring
+/// the parsing convention `core::graph::gc_path` uses internally.
+fn parse_inspect_object_id(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+    if trimmed.chars().any(|c| matches!(c, 'A'..='F' | 'a'..='f')) {
+        return u64::from_str_radix(trimmed, 16).ok();
+    }
+    trimmed.parse::<u64>().ok()
+}
+
+fn exit_inspect_with_error(err: CoreError) -> ! {
+    let code = inspect_exit_code(&err);
+    print_cli_error(&anyhow::Error::new(err));
+    process::exit(code);
+}
+
+fn inspect_exit_code(err: &CoreError) -> i32 {
+    match err {
+        CoreError::Unsupported(detail) if detail.starts_with("inspect_object_id_not_found:") => 8,
+        _ => 1,
     }
 }
 

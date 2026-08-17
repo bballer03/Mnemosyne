@@ -230,6 +230,15 @@ impl RpcErrorDetails {
             {
                 diff_feature_error_details("feature_unavailable_without_field_data", detail)
             }
+            CoreError::Unsupported(detail)
+                if detail.starts_with("inspect_object_id_not_found:") =>
+            {
+                Self {
+                    code: "object_id_not_found",
+                    message,
+                    details: Some(json!({ "detail": detail })),
+                }
+            }
             CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
                 code: "session_version_unsupported",
                 message,
@@ -261,6 +270,37 @@ impl RpcErrorDetails {
             },
         }
     }
+}
+
+/// M8 Slice 8.C: build the `inspect_object_id_not_found` error, reused for
+/// both an unparseable `object_id` and an `object_id` that parses but is
+/// not present in the graph — same "object id not found" semantic
+/// `gc-path --object-id` already established, distinguished by a separate
+/// MCP error code (`object_id_not_found`) per the design doc's §8 error
+/// envelope table.
+fn inspect_object_id_not_found(object_id: &str, heap_path: &str) -> CoreError {
+    CoreError::Unsupported(format!(
+        "inspect_object_id_not_found: object id '{object_id}' was not found in heap dump '{heap_path}'"
+    ))
+}
+
+/// Parse an MCP-supplied object id (`0x...` hex or bare decimal), mirroring
+/// the parsing convention `core::graph::gc_path` uses internally.
+fn parse_inspect_object_id(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+    if trimmed.chars().any(|c| matches!(c, 'A'..='F' | 'a'..='f')) {
+        return u64::from_str_radix(trimmed, 16).ok();
+    }
+    trimmed.parse::<u64>().ok()
 }
 
 fn diff_feature_error_details(code: &'static str, raw_detail: &str) -> RpcErrorDetails {
@@ -376,6 +416,15 @@ struct FindGcPathParams {
     /// `AllPathsRequest::DEFAULT_MAX_PATHS` (20) when omitted.
     #[serde(default)]
     max_paths: Option<usize>,
+}
+
+/// M8 Slice 8.C: params for the `inspect_object` tool.
+#[derive(Debug, Deserialize)]
+struct InspectObjectParams {
+    heap_path: String,
+    object_id: String,
+    #[serde(default)]
+    retain_field_data: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -788,6 +837,16 @@ fn tool_catalog() -> Value {
                 ]
             },
             {
+                "name": "inspect_object",
+                "description": "Field-level inspection of a single heap object: values, refs in/out, dominator context.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." },
+                    { "name": "object_id", "type": "string", "required": true, "description": "Target object identifier, for example 0x1000." },
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "description": "Populate the fields section with typed instance field values." }
+                ],
+                "output_schema": "ObjectInspection"
+            },
+            {
                 "name": "create_ai_session",
                 "description": "Analyze a heap once and persist an AI follow-up session.",
                 "params": [
@@ -1127,6 +1186,26 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 })?;
                 Ok(serde_json::to_value(response)?)
             }
+        }
+        "inspect_object" => {
+            let params: InspectObjectParams = serde_json::from_value(packet.params)?;
+            let graph = crate::hprof::parse_hprof_file_with_options(
+                &params.heap_path,
+                ParseOptions {
+                    retain_field_data: params.retain_field_data,
+                },
+            )?;
+            let dominator = crate::graph::build_dominator_tree(&graph);
+            let target_id = parse_inspect_object_id(&params.object_id)
+                .ok_or_else(|| inspect_object_id_not_found(&params.object_id, &params.heap_path))?;
+            let inspection = crate::analysis::inspect_object(
+                &graph,
+                Some(&dominator),
+                target_id,
+                params.retain_field_data,
+            )
+            .ok_or_else(|| inspect_object_id_not_found(&params.object_id, &params.heap_path))?;
+            Ok(serde_json::to_value(inspection)?)
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
@@ -2808,6 +2887,153 @@ mod tests {
                     .iter()
                     .any(|param| param.get("name") == Some(&json!(expected))),
                 "find_gc_path tool should advertise the new '{expected}' param"
+            );
+        }
+    }
+
+    // --- M8 Slice 8.C: `inspect_object` ---
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_inspect_object_returns_correct_shape_without_fields() {
+        let file = write_fixture();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("object_id"), Some(&json!("0x00001000")));
+        assert_eq!(
+            result.get("class_name"),
+            Some(&json!("com.example.BigCache"))
+        );
+        assert_eq!(
+            result.get("references_out"),
+            Some(&json!(["0x00002000 (java.lang.Object)"]))
+        );
+        assert!(
+            result.get("fields").is_none(),
+            "fields must be omitted when retain_field_data is not set"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_inspect_object_retain_field_data_populates_fields() {
+        let file = write_fixture();
+
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0x1000",
+                    "retain_field_data": true,
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let fields = result
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("fields array");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].get("name"), Some(&json!("entries")));
+        assert_eq!(fields[0].get("type_name"), Some(&json!("java.lang.Object")));
+        assert_eq!(fields[0].get("value"), Some(&json!("0x00002000")));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_inspect_object_id_not_found_returns_error() {
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0xdeadbeef",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            CoreError::Unsupported(detail) => {
+                assert!(
+                    detail.starts_with("inspect_object_id_not_found:"),
+                    "{detail}"
+                );
+            }
+            other => panic!("expected CoreError::Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_inspect_object_id_not_found_error_details_code() {
+        let file = write_fixture();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "inspect_object".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy().into_owned(),
+                    "object_id": "0xdeadbeef",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("object_id_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_advertises_inspect_object() {
+        let result = list_tools_result().await;
+
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let inspect_tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("inspect_object")))
+            .expect("inspect_object tool");
+        let params = inspect_tool
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("params array");
+
+        for expected in ["heap_path", "object_id", "retain_field_data"] {
+            assert!(
+                params
+                    .iter()
+                    .any(|param| param.get("name") == Some(&json!(expected))),
+                "inspect_object tool should advertise the '{expected}' param"
             );
         }
     }
