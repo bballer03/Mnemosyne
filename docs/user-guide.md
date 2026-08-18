@@ -1356,6 +1356,11 @@ Useful MCP methods to know up front:
 - `open_snapshot`
 - `list_snapshots`
 - `detect_classloader_leaks`
+- `describe_workflow`
+- `start_workflow`
+- `next_step`
+- `get_workflow`
+- `close_workflow`
 - `create_ai_session`
 - `resume_ai_session`
 - `get_ai_session`
@@ -1371,6 +1376,21 @@ Useful MCP methods to know up front:
 `open_snapshot` (params: `key`) loads a cached snapshot by SHA-256 hash or file path and returns its `SnapshotManifest`; it does not run any analysis on its own. `list_snapshots` (no params) returns every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param: when set, the server deserializes the cached object graph instead of re-parsing `heap_path`/`path`, and an invalid, stale, or schema-mismatched key returns a structured `snapshot_not_found`/`snapshot_stale_source`/`snapshot_schema_mismatch`/`snapshot_corrupt` error rather than silently falling back to a fresh parse. `parse_heap`'s `snapshot` response is a distinctly-shaped partial object (not a real `HeapSummary`) carrying a `ProvenanceKind::Partial` marker, since a cached snapshot has no raw HPROF record-tag data to reconstruct the real summary from.
 
 `detect_classloader_leaks` (params: `heap_path`, required) runs `core::analysis::classloader::detect_duplicate_classes()` standalone and returns `Vec<DuplicateClassGroup>` — the cross-loader "Duplicate Classes" signal only, without a full `analyze_heap` call. This is a focused, cheaper single-purpose tool by design, the same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own to get the M13 signals: once set, the returned `classloader_report` automatically includes the new `duplicate_classes`, `unique_class_count` (per loader), and `ancestor_chain` (per loader) fields alongside the pre-existing `loaders` and `potential_leaks`.
+
+### 7.1 MCP workflow suite
+
+The tools above are independent, one-shot primitives. The five workflow tools — `describe_workflow`, `start_workflow`, `next_step`, `get_workflow`, `close_workflow` — add a stateful layer on top: a **workflow** is a small, named, server-persisted state machine that chains several of those same primitives into a fixed, documented sequence, so a client doesn't have to know the right call order itself. No new heap-analysis logic is introduced by this layer — every workflow step wraps an existing, already-tested primitive.
+
+Four workflow kinds ship:
+
+- **`triage_memory_leak`** — `detect` → `investigate_suspect` → `explain` → `propose_fix` → `complete`. End-to-end leak triage: find candidates, drill into the top suspect's GC-root path and referrer profile, get an AI explanation, optionally get a fix suggestion.
+- **`tune_gc`** — `root_kind_breakdown` → `thread_local_review` → `top_retainers` → `complete`. A GC-root retention review (which root kinds retain the most, which threads carry the largest thread-local footprint, where the dominator tree's top retainers sit). **Diagnostic data only** — Mnemosyne never touches a live JVM or applies a GC flag; the workflow informs a human's own manual tuning decisions.
+- **`traverse_object_graph`** — `inspect` ⇄ `choose_direction` → `complete`. A structured walk starting from one object: inspect it, list refs in/out, pick a direction to step into next, repeat. The one workflow kind with a real branch point — `choose_direction` must name an id the prior `inspect` step actually returned.
+- **`compare_snapshots`** — `resolve_snapshots` → `diff` → `complete`. Resolve two heaps (by path, or by an existing M9 snapshot key via `before_snapshot_key`/`after_snapshot_key`), run an M10 object-level diff between them, and surface the ranked suspects.
+
+Typical call shape: `describe_workflow({ kind })` to introspect a kind's step sequence with no side effects, then `start_workflow({ kind, heap_path, ... })` to create an instance and run its first step, then `next_step({ workflow_id, step_input })` repeatedly until `current_step` comes back `"complete"`. `start_workflow`/`next_step` both return `{ workflow_id, current_step, step_result, next_expected_input }`, so a client always knows what to send next without hardcoding the sequence. `get_workflow({ workflow_id })` dumps the full persisted state and step history; `close_workflow({ workflow_id })` deletes it — workflow state is **not** evicted automatically, so a long-lived client should close workflows it no longer needs. Four structured error codes cover the failure modes: `workflow_not_found`, `workflow_corrupt`, `workflow_step_input_mismatch` (the `step_input` doesn't match what the current step expects), and `workflow_already_complete`.
+
+See [docs/mcp-workflows.md](mcp-workflows.md) for one full, real, captured request/response transcript per workflow kind — this guide deliberately doesn't duplicate them here.
 
 ## 8. Output Formats
 

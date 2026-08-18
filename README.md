@@ -106,6 +106,8 @@ Compatible with MCP-capable clients such as:
 - JetBrains (via MCP plugin)
 - ChatGPT Desktop
 
+- MCP workflow suite (M11): five new MCP tools (`describe_workflow`, `start_workflow`, `next_step`, `get_workflow`, `close_workflow`) drive four named, stateful triage workflows -- `triage_memory_leak`, `tune_gc` (diagnostic-only GC-root retention review), `traverse_object_graph`, and `compare_snapshots` -- so an AI agent can complete an entire investigation session without knowing the right tool-call order itself. See [docs/mcp-workflows.md](docs/mcp-workflows.md) for worked transcripts.
+
 Available MCP methods:
 - list_tools
 - parse_heap
@@ -119,6 +121,11 @@ Available MCP methods:
 - open_snapshot
 - list_snapshots
 - detect_classloader_leaks
+- describe_workflow
+- start_workflow
+- next_step
+- get_workflow
+- close_workflow
 - create_ai_session
 - resume_ai_session
 - get_ai_session
@@ -135,6 +142,8 @@ Call `list_tools` first if your client wants machine-readable method description
 
 `detect_classloader_leaks` (params: `heap_path`) runs cross-loader duplicate-class detection standalone — a focused, cheaper single-purpose call, same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own; the extended `ClassLoaderReport`'s new `duplicate_classes`/`unique_class_count`/`ancestor_chain` fields are additive and appear automatically.
 
+`describe_workflow` (params: `kind`), `start_workflow` (params: `kind`, `heap_path`, plus kind-specific fields), `next_step` (params: `workflow_id`, `step_input`), `get_workflow` (params: `workflow_id`), and `close_workflow` (params: `workflow_id`) drive the four named workflow kinds — `triage_memory_leak`, `tune_gc`, `traverse_object_graph`, `compare_snapshots` — as small, persisted state machines over the existing tool primitives above. `describe_workflow` is read-only introspection with no side effects; `start_workflow`/`next_step` return `{ workflow_id, current_step, step_result, next_expected_input }` so a client always knows what to call next without hardcoding the sequence itself. See [docs/mcp-workflows.md](docs/mcp-workflows.md) for one full worked transcript per kind.
+
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ---
@@ -148,7 +157,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 - **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, snapshot cache, AI insights, MCP server, report generator
 - **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
 - **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
-- **MCP** — 18 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
+- **MCP** — 24 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop), including the five-tool M11 workflow-lifecycle surface (`describe_workflow`/`start_workflow`/`next_step`/`get_workflow`/`close_workflow`)
 - **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
 ---
