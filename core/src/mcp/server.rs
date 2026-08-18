@@ -2009,14 +2009,14 @@ mod tests {
     }
 
     /// M9 Slice 9.D: serializes `MNEMOSYNE_SNAPSHOT_DIR` mutation across
-    /// snapshot-backed tests within this (multi-threaded by default) test
-    /// binary, mirroring `mode_test_guard`'s existing pattern for
-    /// `AnalysisMode`-env-var tests above.
+    /// snapshot-backed tests. Delegates to `crate::snapshot::test_snapshot_env_lock`
+    /// (crate-shared, not a private-to-this-file static) since this crate's
+    /// unified `mnemosyne_core` lib test binary also runs
+    /// `core::workflow::compare_snapshots`'s tests, which mutate the same
+    /// env var -- a private per-file lock here would not serialize against
+    /// those, which is exactly the race that used to slip through.
     async fn snapshot_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await
+        crate::snapshot::test_snapshot_env_lock().lock().await
     }
 
     /// Pins `MNEMOSYNE_SNAPSHOT_DIR` to `dir` for the duration of the

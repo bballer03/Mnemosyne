@@ -407,12 +407,16 @@ mod tests {
         assert_eq!(next_step_name("bogus"), STEP_COMPLETE);
     }
 
-    #[test]
-    fn default_snapshot_store_root_honors_env_override() {
-        // SAFETY-equivalent: single-threaded test-local env var mutation,
-        // restored before returning, matching the pattern already used by
-        // other env-driven default-root tests in this crate (e.g.
-        // `core::mcp::server`'s session-directory tests).
+    #[tokio::test]
+    async fn default_snapshot_store_root_honors_env_override() {
+        // This crate's unified `mnemosyne_core` lib test binary also runs
+        // `core::mcp::server`'s snapshot-backed tests, which mutate this
+        // same `MNEMOSYNE_SNAPSHOT_DIR` env var -- a plain, unlocked mutation
+        // here raced against those (reproduced intermittently). Holding the
+        // crate-shared `crate::snapshot::test_snapshot_env_lock()` for the
+        // duration serializes against every other test touching this var,
+        // not just tests in this file.
+        let _env_lock = crate::snapshot::test_snapshot_env_lock().lock().await;
         let previous = std::env::var(SNAPSHOT_DIR_ENV).ok();
         std::env::set_var(SNAPSHOT_DIR_ENV, "C:/tmp/mnemosyne-test-snapshots");
         let root = default_snapshot_store_root();

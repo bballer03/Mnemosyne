@@ -355,6 +355,22 @@ fn read_manifest_only(path: &std::path::Path) -> CoreResult<SnapshotManifest> {
     Ok(manifest)
 }
 
+/// Crate-shared lock serializing `MNEMOSYNE_SNAPSHOT_DIR` mutation across
+/// every test in this crate's unified `mnemosyne_core` lib test binary --
+/// `core::mcp::server` and `core::workflow::compare_snapshots` each used to
+/// carry their own *private, per-file* lock for this same env var, which
+/// only serialized each file's tests against themselves, not against each
+/// other (they still share one process/env space in the same test binary).
+/// That gap produced a real, intermittently-reproducing race
+/// (`default_snapshot_store_root_honors_env_override`). Mirrors
+/// `crate::analysis::mode::test_mode_env_lock`'s existing crate-shared
+/// pattern for the same class of problem with `AnalysisMode` env vars.
+#[cfg(test)]
+pub(crate) fn test_snapshot_env_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(digest.len() * 2);
