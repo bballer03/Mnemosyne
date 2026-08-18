@@ -20,6 +20,7 @@ use crate::{
     },
     query::{execute_query, parse_query},
     snapshot::{SnapshotPayload, SnapshotStore},
+    workflow::{WorkflowKind, WorkflowState, WorkflowStore},
     HistogramGroupBy, ParseOptions,
 };
 use anyhow::anyhow;
@@ -275,6 +276,45 @@ impl RpcErrorDetails {
                     "run `mnemosyne snapshot rm <hash>` and re-run without --snapshot",
                 )
             }
+            // M11 Slice 11.D: `core::workflow`'s four structured error codes
+            // (`workflow_not_found`/`workflow_corrupt`/
+            // `workflow_step_input_mismatch`/`workflow_already_complete`, all
+            // shaped as `CoreError::Unsupported("<code>: <detail>")` per this
+            // module's established convention -- see
+            // `core::workflow::workflow_not_found` and neighbors). There is
+            // no `workflow_kind_not_implemented` arm: that placeholder error
+            // was removed from `core::workflow` as of Slice 11.C once all
+            // four `WorkflowKind` variants shipped (see that module's own
+            // comment), so it can no longer be produced -- were it ever
+            // reintroduced, it would still fall through to the generic
+            // `CoreError::Unsupported => "unsupported"` arm below rather than
+            // panicking.
+            CoreError::Unsupported(detail) if detail.starts_with("workflow_not_found:") => Self {
+                code: "workflow_not_found",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::Unsupported(detail) if detail.starts_with("workflow_corrupt:") => Self {
+                code: "workflow_corrupt",
+                message,
+                details: Some(json!({ "detail": detail })),
+            },
+            CoreError::Unsupported(detail)
+                if detail.starts_with("workflow_step_input_mismatch:") =>
+            {
+                Self {
+                    code: "workflow_step_input_mismatch",
+                    message,
+                    details: Some(json!({ "detail": detail })),
+                }
+            }
+            CoreError::Unsupported(detail) if detail.starts_with("workflow_already_complete:") => {
+                Self {
+                    code: "workflow_already_complete",
+                    message,
+                    details: Some(json!({ "detail": detail })),
+                }
+            }
             CoreError::Unsupported(detail) if detail.contains("session_version") => Self {
                 code: "session_version_unsupported",
                 message,
@@ -512,6 +552,51 @@ struct InspectObjectParams {
 #[derive(Debug, Deserialize)]
 struct DetectClassloaderLeaksParams {
     heap_path: String,
+}
+
+/// M11 Slice 11.D: params for the `describe_workflow` tool.
+#[derive(Debug, Deserialize)]
+struct DescribeWorkflowParams {
+    kind: String,
+}
+
+/// M11 Slice 11.D: params for the `start_workflow` tool. Every field beyond
+/// `kind` is optional at the wire level -- which ones are actually required
+/// depends on `kind` (design doc §7): `heap_path` for
+/// triage_memory_leak/tune_gc/traverse_object_graph, `object_id`
+/// additionally for traverse_object_graph, and the four before_*/after_*
+/// fields exclusively for compare_snapshots (whose own `heap_path` argument
+/// to `crate::workflow::start` is a caller-invisible placeholder -- see
+/// `core::workflow::compare_snapshots`'s module doc comment).
+#[derive(Debug, Deserialize)]
+struct StartWorkflowParams {
+    kind: String,
+    #[serde(default)]
+    heap_path: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
+    #[serde(default)]
+    before_heap_path: Option<String>,
+    #[serde(default)]
+    after_heap_path: Option<String>,
+    #[serde(default)]
+    before_snapshot_key: Option<String>,
+    #[serde(default)]
+    after_snapshot_key: Option<String>,
+}
+
+/// M11 Slice 11.D: params for the `next_step` tool.
+#[derive(Debug, Deserialize)]
+struct NextStepParams {
+    workflow_id: String,
+    #[serde(default)]
+    step_input: Value,
+}
+
+/// M11 Slice 11.D: params shared by `get_workflow` and `close_workflow`.
+#[derive(Debug, Deserialize)]
+struct WorkflowIdParams {
+    workflow_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,6 +850,100 @@ fn default_snapshot_dir() -> std::path::PathBuf {
 
 fn snapshot_store() -> SnapshotStore {
     SnapshotStore::new(default_snapshot_dir())
+}
+
+/// `MNEMOSYNE_WORKFLOW_DIR` overrides the default on-disk root for persisted
+/// `WorkflowState` (M11 Slice 11.D). Mirrors `SNAPSHOT_DIR_ENV`/
+/// `default_snapshot_dir()` above exactly -- same env-var-then-
+/// `dirs::cache_dir()`-then-temp-dir fallback shape. The design doc's §4
+/// point 3 mentions a speculative `[workflow].directory` config-key override,
+/// but per that same doc's own note, Slice 9.C/9.D shipped only the env-var
+/// pattern for snapshots (no config key ever landed), so this follows the
+/// actually-established precedent rather than the doc's aspirational one. A
+/// dedicated `workflows` subdirectory (on both the `cache_dir()` and
+/// temp-dir fallback branches) keeps persisted workflow state out of the
+/// snapshot cache's own root, which `default_snapshot_dir()` above claims
+/// directly.
+const WORKFLOW_DIR_ENV: &str = "MNEMOSYNE_WORKFLOW_DIR";
+
+fn default_workflow_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var(WORKFLOW_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        dir.push("workflows");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("workflows");
+    fallback
+}
+
+fn workflow_store() -> WorkflowStore {
+    WorkflowStore::new(default_workflow_dir())
+}
+
+/// Parses the lowercase snake_case wire form of a workflow kind (design doc
+/// §7 -- "One of: triage_memory_leak, tune_gc, traverse_object_graph,
+/// compare_snapshots"), i.e. `WorkflowKind::as_str()`'s own convention.
+/// Deliberately NOT `WorkflowKind`'s own `Deserialize` impl, which uses
+/// `SCREAMING_SNAKE_CASE` for `WorkflowState`'s on-disk persistence format
+/// (`#[serde(rename_all = "SCREAMING_SNAKE_CASE")]`, `core/src/workflow/mod.rs`)
+/// -- the two casings serve different contracts (wire input vs. persisted
+/// state) and are not interchangeable.
+fn parse_workflow_kind(kind: &str) -> CoreResult<WorkflowKind> {
+    match kind {
+        "triage_memory_leak" => Ok(WorkflowKind::TriageMemoryLeak),
+        "tune_gc" => Ok(WorkflowKind::TuneGc),
+        "traverse_object_graph" => Ok(WorkflowKind::TraverseObjectGraph),
+        "compare_snapshots" => Ok(WorkflowKind::CompareSnapshots),
+        other => Err(CoreError::InvalidInput(format!(
+            "unknown workflow kind '{other}': expected one of triage_memory_leak, tune_gc, \
+             traverse_object_graph, compare_snapshots"
+        ))),
+    }
+}
+
+/// Builds the `{ workflow_id, current_step, step_result, next_expected_input
+/// }` envelope design doc §7 specifies for both `start_workflow` and
+/// `next_step`'s responses. `step_result` is the step that was just executed
+/// -- the most recently appended `WorkflowState::step_history` entry's own
+/// output. `next_expected_input` looks up the *next* step's
+/// `expected_input` schema via `core::workflow::describe`, or `[]` once
+/// `current_step` has reached `"complete"`.
+fn workflow_step_response(state: &WorkflowState) -> CoreResult<Value> {
+    let step_result = state
+        .step_history
+        .last()
+        .map(|record| record.output_summary.clone())
+        .unwrap_or(Value::Null);
+
+    let next_expected_input = if state.current_step == "complete" {
+        json!([])
+    } else {
+        let description = crate::workflow::describe(state.kind)?;
+        description
+            .steps
+            .iter()
+            .find(|step| step.name == state.current_step)
+            .map(|step| serde_json::to_value(&step.expected_input))
+            .transpose()?
+            .unwrap_or_else(|| json!([]))
+    };
+
+    Ok(json!({
+        "workflow_id": state.workflow_id,
+        "current_step": state.current_step,
+        "step_result": step_result,
+        "next_expected_input": next_expected_input,
+    }))
 }
 
 fn persist_session(store: &McpSessionStore, session: &PersistedAiSession) -> CoreResult<()> {
@@ -1147,6 +1326,53 @@ fn tool_catalog() -> Value {
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." }
                 ],
                 "output_schema": "Vec<DuplicateClassGroup>"
+            },
+            {
+                "name": "describe_workflow",
+                "description": "Introspect a workflow kind's fixed step sequence and each step's expected input/underlying primitives, without creating any workflow state.",
+                "params": [
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." }
+                ],
+                "output_schema": "WorkflowDescription"
+            },
+            {
+                "name": "start_workflow",
+                "description": "Create a new workflow instance of the given kind, run its first step, and persist the resulting state.",
+                "params": [
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." },
+                    { "name": "heap_path", "type": "string", "required": false, "description": "Required for triage_memory_leak/tune_gc/traverse_object_graph. Not used by compare_snapshots (see params below)." },
+                    { "name": "object_id", "type": "string", "required": false, "description": "traverse_object_graph only: the starting object." },
+                    { "name": "before_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
+                    { "name": "after_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
+                    { "name": "before_snapshot_key", "type": "string", "required": false, "description": "compare_snapshots only, alternative to before_heap_path." },
+                    { "name": "after_snapshot_key", "type": "string", "required": false, "description": "compare_snapshots only, alternative to after_heap_path." }
+                ],
+                "output_schema": "{ workflow_id: string, current_step: string, step_result: object, next_expected_input: object }"
+            },
+            {
+                "name": "next_step",
+                "description": "Advance an in-flight workflow by executing whatever step current_step names, using step_input as that step's parameters.",
+                "params": [
+                    { "name": "workflow_id", "type": "string", "required": true, "description": "Workflow instance identifier returned by start_workflow." },
+                    { "name": "step_input", "type": "object", "required": false, "description": "Shape depends on the current step -- see describe_workflow." }
+                ],
+                "output_schema": "same shape as start_workflow's output, or { current_step: \"complete\", ... } when done"
+            },
+            {
+                "name": "get_workflow",
+                "description": "Read-only dump of a workflow instance's full persisted state and step history.",
+                "params": [
+                    { "name": "workflow_id", "type": "string", "required": true, "description": "Workflow instance identifier returned by start_workflow." }
+                ],
+                "output_schema": "WorkflowState"
+            },
+            {
+                "name": "close_workflow",
+                "description": "Delete a persisted workflow instance's state.",
+                "params": [
+                    { "name": "workflow_id", "type": "string", "required": true, "description": "Workflow instance identifier returned by start_workflow." }
+                ],
+                "output_schema": "{ closed: true }"
             }
         ]
     })
@@ -1652,6 +1878,71 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                     Ok(serde_json::to_value(response)?)
                 }
             }
+        }
+        "describe_workflow" => {
+            let params: DescribeWorkflowParams = serde_json::from_value(packet.params)?;
+            let kind = parse_workflow_kind(&params.kind)?;
+            let description = crate::workflow::describe(kind)?;
+            Ok(serde_json::to_value(description)?)
+        }
+        "start_workflow" => {
+            let params: StartWorkflowParams = serde_json::from_value(packet.params)?;
+            let kind = parse_workflow_kind(&params.kind)?;
+
+            let (heap_path, initial_params) = match kind {
+                WorkflowKind::TriageMemoryLeak
+                | WorkflowKind::TuneGc
+                | WorkflowKind::TraverseObjectGraph => {
+                    let heap_path = params.heap_path.clone().ok_or_else(|| {
+                        CoreError::InvalidInput(format!(
+                            "heap_path is required for start_workflow(kind: \"{}\")",
+                            kind.as_str()
+                        ))
+                    })?;
+                    let initial_params = if kind == WorkflowKind::TraverseObjectGraph {
+                        json!({ "object_id": params.object_id })
+                    } else {
+                        Value::Null
+                    };
+                    (heap_path, initial_params)
+                }
+                WorkflowKind::CompareSnapshots => (
+                    // Caller-invisible placeholder -- see
+                    // `core::workflow::compare_snapshots`'s module doc
+                    // comment ("dual heap identity" section). Overwritten by
+                    // the workflow's first step once both sides resolve.
+                    String::new(),
+                    json!({
+                        "before_heap_path": params.before_heap_path,
+                        "after_heap_path": params.after_heap_path,
+                        "before_snapshot_key": params.before_snapshot_key,
+                        "after_snapshot_key": params.after_snapshot_key,
+                    }),
+                ),
+            };
+
+            let store = workflow_store();
+            let state = crate::workflow::start(&store, kind, heap_path, initial_params).await?;
+            workflow_step_response(&state)
+        }
+        "next_step" => {
+            let params: NextStepParams = serde_json::from_value(packet.params)?;
+            let store = workflow_store();
+            let state =
+                crate::workflow::advance(&store, &params.workflow_id, params.step_input).await?;
+            workflow_step_response(&state)
+        }
+        "get_workflow" => {
+            let params: WorkflowIdParams = serde_json::from_value(packet.params)?;
+            let store = workflow_store();
+            let state = store.load(&params.workflow_id)?;
+            Ok(serde_json::to_value(state)?)
+        }
+        "close_workflow" => {
+            let params: WorkflowIdParams = serde_json::from_value(packet.params)?;
+            let store = workflow_store();
+            store.remove(&params.workflow_id)?;
+            Ok(json!({ "workflow_id": params.workflow_id, "closed": true }))
         }
         other => Err(CoreError::InvalidInput(format!(
             "unsupported MCP method: {other}"
@@ -4280,5 +4571,422 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, json!([]));
+    }
+
+    // --- M11 Slice 11.D: workflow tool registration ---
+
+    /// Serializes `MNEMOSYNE_WORKFLOW_DIR` mutation across workflow-backed
+    /// tests within this (multi-threaded by default) test binary, mirroring
+    /// `snapshot_env_lock`'s existing pattern.
+    async fn workflow_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await
+    }
+
+    /// Pins `MNEMOSYNE_WORKFLOW_DIR` to `dir` for the duration of the
+    /// returned guard, restoring the previous value on drop. Callers must
+    /// hold `workflow_env_lock()` for the same duration, mirroring
+    /// `pin_snapshot_dir`'s existing contract.
+    fn pin_workflow_dir(dir: &std::path::Path) -> TempEnvVar {
+        TempEnvVar::set("MNEMOSYNE_WORKFLOW_DIR", &dir.to_string_lossy())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_includes_workflow_tools() {
+        let result = list_tools_result().await;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        for expected in [
+            "describe_workflow",
+            "start_workflow",
+            "next_step",
+            "get_workflow",
+            "close_workflow",
+        ] {
+            assert!(names.contains(&expected), "list_tools missing {expected}");
+        }
+
+        let start_workflow = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("start_workflow")))
+            .expect("start_workflow tool");
+        let params = start_workflow
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("start_workflow params array");
+        let param_names: Vec<&str> = params
+            .iter()
+            .filter_map(|param| param.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            param_names,
+            vec![
+                "kind",
+                "heap_path",
+                "object_id",
+                "before_heap_path",
+                "after_heap_path",
+                "before_snapshot_key",
+                "after_snapshot_key",
+            ]
+        );
+
+        let next_step = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("next_step")))
+            .expect("next_step tool");
+        assert_eq!(
+            next_step.pointer("/params/0/name"),
+            Some(&json!("workflow_id"))
+        );
+        assert_eq!(
+            next_step.pointer("/params/1/name"),
+            Some(&json!("step_input"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_describe_workflow_returns_step_sequence_for_triage_memory_leak() {
+        let result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "describe_workflow".into(),
+                params: json!({ "kind": "triage_memory_leak" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let steps = result
+            .get("steps")
+            .and_then(Value::as_array)
+            .expect("steps array");
+        let names: Vec<&str> = steps
+            .iter()
+            .filter_map(|step| step.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            names,
+            vec!["detect", "investigate_suspect", "explain", "propose_fix"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_describe_workflow_rejects_unknown_kind() {
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "describe_workflow".into(),
+                params: json!({ "kind": "not_a_real_kind" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown workflow kind"));
+    }
+
+    /// Full `start_workflow` -> `next_step`* -> `complete` round trip for
+    /// `triage_memory_leak` via the MCP layer. The `detect` and
+    /// `investigate_suspect` steps' `step_result`s are cross-checked against
+    /// calling `core::workflow::start`/`advance` directly against the same
+    /// fixture heap with the same inputs -- proving the MCP handlers are a
+    /// thin, faithful wrapper rather than reshaping the underlying data.
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_workflow_round_trip_matches_direct_core_workflow_for_triage_memory_leak() {
+        let _env_lock = workflow_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_workflow_dir(store_dir.path());
+
+        let heap_file = write_fixture();
+        let heap_path = heap_file.path().to_string_lossy().into_owned();
+
+        let start_result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "start_workflow".into(),
+                params: json!({ "kind": "triage_memory_leak", "heap_path": heap_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let workflow_id = start_result
+            .get("workflow_id")
+            .and_then(Value::as_str)
+            .expect("workflow_id")
+            .to_string();
+        assert_eq!(
+            start_result.get("current_step"),
+            Some(&json!("investigate_suspect"))
+        );
+        let leaks = start_result
+            .pointer("/step_result/leaks")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("detect step should return leaks");
+        assert!(
+            !leaks.is_empty(),
+            "fixture heap should surface at least one leak"
+        );
+        let leak_id = leaks[0]
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("leak id")
+            .to_string();
+
+        // Cross-check against a direct core::workflow::start call against
+        // the same heap, sharing the same on-disk store root.
+        let direct_store = WorkflowStore::new(store_dir.path().to_path_buf());
+        let direct_start = crate::workflow::start(
+            &direct_store,
+            WorkflowKind::TriageMemoryLeak,
+            heap_path.clone(),
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        let direct_detect_output = direct_start
+            .step_history
+            .last()
+            .unwrap()
+            .output_summary
+            .clone();
+        assert_eq!(start_result.get("step_result"), Some(&direct_detect_output));
+
+        let step2 = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "next_step".into(),
+                params: json!({
+                    "workflow_id": workflow_id,
+                    "step_input": { "leak_id": leak_id },
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(step2.get("current_step"), Some(&json!("explain")));
+
+        let direct_step2 = crate::workflow::advance(
+            &direct_store,
+            &direct_start.workflow_id,
+            json!({ "leak_id": leak_id }),
+        )
+        .await
+        .unwrap();
+        let direct_investigate_output = direct_step2
+            .step_history
+            .last()
+            .unwrap()
+            .output_summary
+            .clone();
+        assert_eq!(step2.get("step_result"), Some(&direct_investigate_output));
+
+        let step3 = handle_request(
+            RpcRequest {
+                id: json!(3),
+                method: "next_step".into(),
+                params: json!({ "workflow_id": workflow_id, "step_input": Value::Null }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(step3.get("current_step"), Some(&json!("propose_fix")));
+
+        let step4 = handle_request(
+            RpcRequest {
+                id: json!(4),
+                method: "next_step".into(),
+                params: json!({
+                    "workflow_id": workflow_id,
+                    "step_input": { "skip": true },
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(step4.get("current_step"), Some(&json!("complete")));
+        assert_eq!(step4.pointer("/step_result/skipped"), Some(&json!(true)));
+        assert_eq!(step4.get("next_expected_input"), Some(&json!([])));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_get_workflow_and_close_workflow_round_trip() {
+        let _env_lock = workflow_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_workflow_dir(store_dir.path());
+
+        let heap_file = write_fixture();
+        let heap_path = heap_file.path().to_string_lossy().into_owned();
+
+        let start_result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "start_workflow".into(),
+                params: json!({ "kind": "tune_gc", "heap_path": heap_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        let workflow_id = start_result
+            .get("workflow_id")
+            .and_then(Value::as_str)
+            .expect("workflow_id")
+            .to_string();
+
+        let get_result = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "get_workflow".into(),
+                params: json!({ "workflow_id": workflow_id }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get_result.get("workflow_id"), Some(&json!(workflow_id)));
+        assert_eq!(
+            get_result.get("current_step"),
+            Some(&json!("thread_local_review"))
+        );
+
+        let close_result = handle_request(
+            RpcRequest {
+                id: json!(3),
+                method: "close_workflow".into(),
+                params: json!({ "workflow_id": workflow_id }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            close_result,
+            json!({ "workflow_id": workflow_id, "closed": true })
+        );
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(4),
+                method: "get_workflow".into(),
+                params: json!({ "workflow_id": workflow_id }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+        let response = RpcResponse::from_core_error(json!(4), &err);
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("workflow_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_next_step_unknown_workflow_id_returns_workflow_not_found_error_details() {
+        let _env_lock = workflow_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_workflow_dir(store_dir.path());
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "next_step".into(),
+                params: json!({ "workflow_id": "does-not-exist" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("workflow_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_next_step_malformed_step_input_returns_workflow_step_input_mismatch_error_details()
+    {
+        let _env_lock = workflow_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_workflow_dir(store_dir.path());
+
+        let heap_file = write_fixture();
+        let heap_path = heap_file.path().to_string_lossy().into_owned();
+
+        let start_result = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "start_workflow".into(),
+                params: json!({ "kind": "triage_memory_leak", "heap_path": heap_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        let workflow_id = start_result
+            .get("workflow_id")
+            .and_then(Value::as_str)
+            .expect("workflow_id")
+            .to_string();
+
+        // investigate_suspect requires {"leak_id": <string>}; send an
+        // unrelated field instead.
+        let err = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "next_step".into(),
+                params: json!({
+                    "workflow_id": workflow_id,
+                    "step_input": { "not_a_field": true },
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(2), &err);
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("workflow_step_input_mismatch"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_start_workflow_missing_heap_path_returns_invalid_input() {
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "start_workflow".into(),
+                params: json!({ "kind": "tune_gc" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("heap_path is required"));
     }
 }
