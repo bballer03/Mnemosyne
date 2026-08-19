@@ -578,6 +578,7 @@ fn object_diff_request(
         retained_change_threshold: 1_048_576,
         top_n: 50,
         retain_field_data: false,
+        cross_reference_leaks: false,
     }
 }
 

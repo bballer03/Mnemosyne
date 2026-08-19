@@ -579,6 +579,7 @@ fn realistic_dump_pair_object_diff_finishes_within_budget() {
         retained_change_threshold: 1_048_576,
         top_n: 50,
         retain_field_data: false,
+        cross_reference_leaks: false,
     };
 
     // The repository does not yet carry a committed real diff pair, so this

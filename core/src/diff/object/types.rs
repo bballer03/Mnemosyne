@@ -1,4 +1,4 @@
-use crate::hprof::ObjectId;
+use crate::{analysis::LeakSeverity, hprof::ObjectId};
 use serde::{Deserialize, Serialize};
 
 use super::fingerprint::ObjectFingerprint;
@@ -78,6 +78,15 @@ pub struct ObjectDelta {
     pub dominator_chain: Vec<String>,
     pub reference_chain: Vec<String>,
     pub kind: ObjectDeltaKind,
+    /// Leak-progression cross-reference (M10-B, opt-in via
+    /// `DiffRequest.cross_reference_leaks`): the severity of a
+    /// `detect_leaks()` suspect on the after-heap whose `class_name`
+    /// matches this delta's, when the caller opted in and a match was
+    /// found. `None` (and omitted from JSON) whenever cross-referencing
+    /// was not requested or no matching suspect was found -- every
+    /// existing `diff --mode object` invocation is unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leak_severity: Option<LeakSeverity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

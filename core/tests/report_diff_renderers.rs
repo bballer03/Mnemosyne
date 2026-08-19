@@ -90,6 +90,7 @@ fn object_diff_report() -> ObjectDiffReport {
             String::from("UserSession"),
         ],
         kind: ObjectDeltaKind::Added,
+        leak_severity: None,
     });
     report.removed.push(ObjectDelta {
         class_name: String::from("com.example.LegacyCache"),
@@ -107,6 +108,7 @@ fn object_diff_report() -> ObjectDiffReport {
         dominator_chain: vec![String::from("Server"), String::from("Legacy")],
         reference_chain: vec![String::from("<gc-root>"), String::from("LegacyCache")],
         kind: ObjectDeltaKind::Removed,
+        leak_severity: None,
     });
     report.retained_changed.push(ObjectDelta {
         class_name: String::from("com.example.RequestMap"),
@@ -124,6 +126,7 @@ fn object_diff_report() -> ObjectDiffReport {
         dominator_chain: vec![String::from("Gateway"), String::from("Cache")],
         reference_chain: vec![String::from("<gc-root>"), String::from("RequestMap")],
         kind: ObjectDeltaKind::RetainedChanged,
+        leak_severity: None,
     });
     report
 }
@@ -174,6 +177,37 @@ fn text_renderer_includes_object_diff_section_when_populated() {
         rendered.contains("  match quality: collision_rate=0.012"),
         "{rendered}"
     );
+}
+
+#[test]
+fn text_renderer_appends_leak_marker_only_when_leak_severity_populated() {
+    use mnemosyne_core::analysis::LeakSeverity;
+
+    let mut diff = heap_diff_with_object_section();
+    let object_diff = diff.object_diff.as_mut().expect("object diff present");
+    object_diff.added[0].leak_severity = Some(LeakSeverity::Critical);
+    let rendered = render_text(&diff);
+
+    assert!(
+        rendered.contains("com.example.UserSession") && rendered.contains("[LEAK: CRITICAL]"),
+        "{rendered}"
+    );
+    // The unannotated `retained_changed` entry must not pick up a marker.
+    let retained_changed_line = rendered
+        .lines()
+        .find(|line| line.contains("com.example.RequestMap"))
+        .expect("retained_changed line present");
+    assert!(
+        !retained_changed_line.contains("[LEAK:"),
+        "{retained_changed_line}"
+    );
+}
+
+#[test]
+fn text_renderer_omits_leak_marker_by_default() {
+    let rendered = render_text(&heap_diff_with_object_section());
+
+    assert!(!rendered.contains("[LEAK:"), "{rendered}");
 }
 
 #[test]

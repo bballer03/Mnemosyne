@@ -1,4 +1,6 @@
-use crate::{analysis::LeakSeverity, AnalysisMode, GcRootKind, ProvenanceKind};
+use crate::{
+    analysis::LeakSeverity, diff::ObjectDiffReport, AnalysisMode, GcRootKind, ProvenanceKind,
+};
 use regex::Regex;
 use serde_json::{json, Value};
 
@@ -7,10 +9,20 @@ use super::{
     SkipReason, SkippedRule, Violation,
 };
 
+/// Evaluate `policy` against `input`.
+///
+/// `object_diff` is an additive parameter (M10-B): `Some` supplies the
+/// baseline-to-heap object diff that `Predicate::ObjectGrowthThreshold`
+/// needs, computed once up front by the caller (`ci-check --baseline`).
+/// Every predicate that existed before M10-B ignores it entirely, so
+/// passing `None` reproduces this function's pre-M10-B behavior byte for
+/// byte -- the same additive-parameter shape used for `requested_mode`
+/// when deep-only predicates were introduced.
 pub fn evaluate(
     policy: &Policy,
     input: &PolicyInput<'_>,
     requested_mode: AnalysisMode,
+    object_diff: Option<&ObjectDiffReport>,
 ) -> PolicyResult {
     let mut result = PolicyResult {
         mode_used: input.mode_used(),
@@ -45,7 +57,7 @@ pub fn evaluate(
             continue;
         }
 
-        let Some(outcome) = evaluate_rule(rule, input) else {
+        let Some(outcome) = evaluate_rule(rule, input, object_diff) else {
             result.skipped.push(SkippedRule {
                 rule_id: rule.id.clone(),
                 reason: SkipReason::UnsupportedInThisMode,
@@ -83,7 +95,11 @@ struct RuleOutcome {
     message: String,
 }
 
-fn evaluate_rule(rule: &super::PolicyRule, input: &PolicyInput<'_>) -> Option<RuleOutcome> {
+fn evaluate_rule(
+    rule: &super::PolicyRule,
+    input: &PolicyInput<'_>,
+    object_diff: Option<&ObjectDiffReport>,
+) -> Option<RuleOutcome> {
     match rule.predicate {
         Predicate::TotalBytes => {
             let actual = match input {
@@ -248,7 +264,125 @@ fn evaluate_rule(rule: &super::PolicyRule, input: &PolicyInput<'_>) -> Option<Ru
                 .len() as u64;
             Some(evaluate_numeric(rule, actual))
         }
+        Predicate::ObjectGrowthThreshold => {
+            let PolicyInput::Deep(_) = input else {
+                return None;
+            };
+
+            // Two-heap predicate (M10-B design doc §2.2): the object diff
+            // is supplied by the caller (ci-check --baseline), not derived
+            // from `input`. Absent it, this falls through to the same
+            // generic "unsupported in this mode" skip every other
+            // Option-returning predicate uses when its required data is
+            // missing -- `ci-check` itself is responsible for refusing to
+            // silently reach this point when a policy needs a baseline
+            // (see `object_growth_threshold_requires_baseline`).
+            let diff = object_diff?;
+            Some(evaluate_object_growth_threshold(rule, diff))
+        }
     }
+}
+
+/// A single object-diff entry (`added` or `retained_changed`) that matched
+/// an `object_growth_threshold` rule's class filter, reduced to the
+/// growth value being compared against the rule's threshold.
+struct GrowthCandidate<'a> {
+    value: u64,
+    object_id: crate::hprof::ObjectId,
+    class_name: &'a str,
+}
+
+/// Implements M10-B design doc §2.3: scans `retained_changed` (using
+/// `|after - before|`) and `added` (using `after_retained_bytes`, since an
+/// added object has no "before") for entries matching the rule's `class`
+/// (or every entry when `class` is absent), then reports a single
+/// aggregate `Violation` citing the worst (largest-value) offender --
+/// matching the single-violation-per-rule shape every other predicate in
+/// this module already uses.
+fn evaluate_object_growth_threshold(
+    rule: &super::PolicyRule,
+    diff: &ObjectDiffReport,
+) -> RuleOutcome {
+    let candidates = collect_growth_candidates(rule, diff);
+
+    let violators: Vec<&GrowthCandidate> = candidates
+        .iter()
+        .filter(|candidate| !compare_u64(candidate.value, rule.comparison, rule.threshold))
+        .collect();
+
+    if violators.is_empty() {
+        let actual = candidates.iter().map(|c| c.value).max().unwrap_or(0);
+        return RuleOutcome {
+            passed: true,
+            actual: json!(actual),
+            expected: json!(rule.threshold),
+            message: format!(
+                "expected {} {} {}, no tracked object exceeded the threshold",
+                predicate_name(rule.predicate),
+                comparison_symbol(rule.comparison),
+                rule.threshold,
+            ),
+        };
+    }
+
+    let worst = violators
+        .iter()
+        .max_by_key(|candidate| candidate.value)
+        .expect("violators is non-empty");
+
+    RuleOutcome {
+        passed: false,
+        actual: json!(worst.value),
+        expected: json!(rule.threshold),
+        message: format!(
+            "{} object(s) violated {} {} {}; worst offender: {} (object_id={}, value={})",
+            violators.len(),
+            predicate_name(rule.predicate),
+            comparison_symbol(rule.comparison),
+            rule.threshold,
+            worst.class_name,
+            worst.object_id,
+            worst.value,
+        ),
+    }
+}
+
+fn collect_growth_candidates<'a>(
+    rule: &super::PolicyRule,
+    diff: &'a ObjectDiffReport,
+) -> Vec<GrowthCandidate<'a>> {
+    let class_matches = |class_name: &str| -> bool {
+        match rule.class.as_deref() {
+            Some(expected) => expected == class_name,
+            None => true,
+        }
+    };
+
+    let mut candidates = Vec::new();
+
+    for delta in &diff.retained_changed {
+        if class_matches(&delta.class_name) {
+            candidates.push(GrowthCandidate {
+                value: delta
+                    .after_retained_bytes
+                    .abs_diff(delta.before_retained_bytes),
+                object_id: delta.example_object_id,
+                class_name: &delta.class_name,
+            });
+        }
+    }
+
+    for delta in &diff.added {
+        if class_matches(&delta.class_name) {
+            candidates.push(GrowthCandidate {
+                value: delta.after_retained_bytes,
+                object_id: delta.example_object_id,
+                class_name: &delta.class_name,
+            });
+        }
+    }
+
+    candidates
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,6 +467,7 @@ fn predicate_name(predicate: Predicate) -> &'static str {
         Predicate::RetainedSize => "retained_size",
         Predicate::DominatorRootCount => "dominator_root_count",
         Predicate::ClassloaderLeakCount => "classloader_leak_count",
+        Predicate::ObjectGrowthThreshold => "object_growth_threshold",
     }
 }
 
@@ -344,6 +479,7 @@ fn rule_requires_deep(rule: &super::PolicyRule) -> bool {
                 | Predicate::RetainedSize
                 | Predicate::DominatorRootCount
                 | Predicate::ClassloaderLeakCount
+                | Predicate::ObjectGrowthThreshold
         )
 }
 
@@ -657,6 +793,7 @@ mod tests {
     use crate::analysis::{
         ClassLoaderReport, DuplicateClassGroup, LeakInsight, LeakKind, LeakSeverity,
     };
+    use crate::diff::{IdentityStrategy, ObjectDelta, ObjectDeltaKind, ObjectFingerprint};
     use crate::hprof::{ClassStat, RecordStat};
     use crate::{
         AnalyzeResponse, Comparison, DominatorNode, GcRootKind, GraphMetrics, HeapSummary,
@@ -896,6 +1033,48 @@ mod tests {
         Policy::from_toml_str(toml).expect("policy TOML should parse")
     }
 
+    fn growth_rule(id: &str, class: Option<&str>, threshold: u64) -> PolicyRule {
+        let mut rule = numeric_rule(
+            id,
+            Predicate::ObjectGrowthThreshold,
+            Comparison::Lte,
+            threshold,
+        );
+        rule.class = class.map(str::to_string);
+        rule
+    }
+
+    fn object_delta(
+        class_name: &str,
+        object_id: u64,
+        before_retained_bytes: u64,
+        after_retained_bytes: u64,
+        kind: ObjectDeltaKind,
+    ) -> ObjectDelta {
+        ObjectDelta {
+            class_name: class_name.to_string(),
+            fingerprint: ObjectFingerprint {
+                class_id: object_id as u32,
+                retained_bucket: 0,
+                dominator_signature: 0,
+                field_signature: 0,
+            },
+            example_object_id: object_id,
+            before_count: if before_retained_bytes > 0 { 1 } else { 0 },
+            after_count: 1,
+            before_retained_bytes,
+            after_retained_bytes,
+            dominator_chain: Vec::new(),
+            reference_chain: Vec::new(),
+            kind,
+            leak_severity: None,
+        }
+    }
+
+    fn empty_object_diff_report() -> ObjectDiffReport {
+        ObjectDiffReport::new(IdentityStrategy::ClassDominator, 10, 1_048_576)
+    }
+
     #[test]
     fn evaluate_total_bytes_pass_when_below_threshold() {
         let overview = overview_summary(1024 * 1024, 10, 3, Vec::new());
@@ -910,6 +1089,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -932,6 +1112,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert_eq!(result.evaluations.len(), 1);
@@ -958,6 +1139,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -989,6 +1171,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1019,6 +1202,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1039,6 +1223,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1062,6 +1247,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1084,6 +1270,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1110,6 +1297,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert_eq!(result.violations.len(), 1);
@@ -1132,6 +1320,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Auto,
+            None,
         );
 
         assert!(result.violations.is_empty());
@@ -1154,6 +1343,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert_eq!(result.violations.len(), 1);
@@ -1180,6 +1370,7 @@ mod tests {
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Overview,
+            None,
         );
 
         assert_eq!(result.violations.len(), 1);
@@ -1196,7 +1387,12 @@ mod tests {
             4096,
         ));
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.mode_used, AnalysisMode::Deep);
@@ -1221,7 +1417,12 @@ mod tests {
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert!(result.skipped.is_empty());
@@ -1252,7 +1453,12 @@ mod tests {
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert_eq!(result.violations.len(), 1);
         assert_eq!(result.violations[0].actual, json!(10_u64));
@@ -1285,7 +1491,12 @@ mod tests {
         rule.severity_filter = Some("critical_only".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert_eq!(result.violations.len(), 1);
         assert_eq!(result.violations[0].actual, json!(1_u64));
@@ -1323,7 +1534,12 @@ mod tests {
         rule.severity_filter = Some("high_or_above".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert_eq!(result.violations.len(), 1);
         assert_eq!(result.violations[0].actual, json!(3_u64));
@@ -1350,7 +1566,12 @@ mod tests {
         rule.severity_filter = Some("bogus".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(
             !result.violations.is_empty() || !result.skipped.is_empty(),
@@ -1384,7 +1605,12 @@ mod tests {
         rule.class = Some("com.example.Cache".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(3072_u64));
@@ -1426,7 +1652,12 @@ mod tests {
         rule.class_pattern = Some("^com\\.example\\.cache\\..*$".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(3072_u64));
@@ -1459,7 +1690,12 @@ leak_id = "leak-2"
 "#,
         );
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(8192_u64));
@@ -1492,7 +1728,12 @@ leak_id = "leak-2"
         rule.class = Some("com.example.Missing".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(0_u64));
@@ -1522,7 +1763,12 @@ leak_id = "leak-2"
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(2_u64));
@@ -1543,7 +1789,12 @@ leak_id = "leak-2"
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert_eq!(result.violations.len(), 1);
         assert_eq!(result.violations[0].predicate, "classloader_leak_count");
@@ -1563,7 +1814,12 @@ leak_id = "leak-2"
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert!(result.skipped.is_empty());
@@ -1587,7 +1843,12 @@ leak_id = "leak-2"
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.skipped.len(), 1);
@@ -1614,11 +1875,265 @@ leak_id = "leak-2"
             &policy,
             &PolicyInput::Overview(&overview),
             AnalysisMode::Auto,
+            None,
         );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.skipped.len(), 1);
         assert_eq!(result.skipped[0].rule_id, "no-classloader-leaks");
+        assert_eq!(
+            result.skipped[0].reason,
+            super::super::SkipReason::DeepOnlyInOverviewMode
+        );
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_fires_on_retained_changed_growth() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.retained_changed.push(object_delta(
+            "com.example.CacheEntry",
+            1001,
+            1_048_576,
+            20 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].predicate, "object_growth_threshold");
+        assert_eq!(result.violations[0].actual, json!(19 * 1_048_576_u64));
+        assert!(result.violations[0]
+            .message
+            .contains("com.example.CacheEntry"));
+        assert!(result.violations[0].message.contains("1001"));
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_fires_on_added_growth() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.added.push(object_delta(
+            "com.example.CacheEntry",
+            2002,
+            0,
+            50 * 1_048_576,
+            ObjectDeltaKind::Added,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].actual, json!(50 * 1_048_576_u64));
+        assert!(result.violations[0].message.contains("2002"));
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_stays_clean_on_stable_diff() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.retained_changed.push(object_delta(
+            "com.example.CacheEntry",
+            1001,
+            1_048_576,
+            2 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        report.added.push(object_delta(
+            "com.example.CacheEntry",
+            2002,
+            0,
+            1_048_576,
+            ObjectDeltaKind::Added,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.evaluations[0].actual, json!(1_048_576_u64));
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_class_filter_ignores_other_classes() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.retained_changed.push(object_delta(
+            "com.example.Unrelated",
+            3003,
+            1_048_576,
+            100 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.evaluations[0].actual, json!(0_u64));
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_no_class_applies_to_every_entry() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.retained_changed.push(object_delta(
+            "com.example.AnyClass",
+            4004,
+            1_048_576,
+            50 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-growth-anywhere",
+            None,
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].actual, json!(49 * 1_048_576_u64));
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_aggregates_multiple_violators_citing_worst() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let mut report = empty_object_diff_report();
+        report.retained_changed.push(object_delta(
+            "com.example.CacheEntry",
+            5001,
+            1_048_576,
+            15 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        report.retained_changed.push(object_delta(
+            "com.example.CacheEntry",
+            5002,
+            1_048_576,
+            80 * 1_048_576,
+            ObjectDeltaKind::RetainedChanged,
+        ));
+        report.added.push(object_delta(
+            "com.example.CacheEntry",
+            5003,
+            0,
+            5 * 1_048_576,
+            ObjectDeltaKind::Added,
+        ));
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            Some(&report),
+        );
+
+        assert_eq!(
+            result.violations.len(),
+            1,
+            "single aggregate violation per rule"
+        );
+        assert_eq!(result.violations[0].actual, json!(79 * 1_048_576_u64));
+        assert!(result.violations[0].message.contains("5002"));
+        assert!(
+            result.violations[0].message.contains('2'),
+            "should cite a violator count"
+        );
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_skipped_when_object_diff_absent() {
+        let response = deep_response(4096, 128, Vec::new(), Vec::new());
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].rule_id, "no-runaway-cache-growth");
+        assert_eq!(
+            result.skipped[0].reason,
+            super::super::SkipReason::UnsupportedInThisMode
+        );
+    }
+
+    #[test]
+    fn evaluate_object_growth_threshold_deep_only_skipped_on_overview_mode_input() {
+        let overview = overview_summary(4096, 16, 12, Vec::new());
+        let policy = policy_with_rule(growth_rule(
+            "no-runaway-cache-growth",
+            Some("com.example.CacheEntry"),
+            10 * 1_048_576,
+        ));
+
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Overview(&overview),
+            AnalysisMode::Auto,
+            None,
+        );
+
+        assert!(result.violations.is_empty());
+        assert_eq!(result.skipped.len(), 1);
         assert_eq!(
             result.skipped[0].reason,
             super::super::SkipReason::DeepOnlyInOverviewMode
@@ -1645,7 +2160,12 @@ leak_id = "leak-2"
         rule.class = Some("byte[]".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(7_u64));
@@ -1671,7 +2191,12 @@ leak_id = "leak-2"
         rule.class = Some("byte[]".into());
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert_eq!(result.evaluations[0].actual, json!(300_u64));
@@ -1697,7 +2222,12 @@ leak_id = "leak-2"
         rule.mode_requirement = ModeRequirement::DeepOnly;
         let policy = policy_with_rule(rule);
 
-        let result = evaluate(&policy, &PolicyInput::Deep(&response), AnalysisMode::Deep);
+        let result = evaluate(
+            &policy,
+            &PolicyInput::Deep(&response),
+            AnalysisMode::Deep,
+            None,
+        );
 
         assert!(result.violations.is_empty());
         assert!(result.skipped.is_empty());

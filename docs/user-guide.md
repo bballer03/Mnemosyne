@@ -357,10 +357,12 @@ Flags:
 - `--format text|json|junit|github-actions`
 - `--output <FILE>`
 - `--fail-on info|warning|error|critical`
+- `--baseline <BEFORE_HEAP>` (M10-B) — required only when the loaded policy contains an `object_growth_threshold` rule
 
 What it does:
 
 - loads a dedicated TOML policy file from `--policy`
+- if the policy contains an `object_growth_threshold` rule, requires `--baseline` and runs a `--mode object` diff between `--baseline` and `<HEAP>` up front, once, regardless of how many rules need it
 - resolves the requested mode at the CLI boundary (`auto` by default)
 - in `deep`, runs the full analysis path and evaluates the resulting `AnalyzeResponse`
 - in `overview`, parses the bounded-memory overview summary and evaluates the resulting `OverviewSummary`
@@ -372,7 +374,7 @@ Policy TOML shape:
 - optional `[defaults]` for default rule severity
 - repeated `[[rule]]` blocks for predicate checks
 
-The current policy surface supports 11 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+The current policy surface supports 12 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and `object_growth_threshold`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
 
 `classloader_leak_count` (M13) thresholds on the number of `DuplicateClassGroup` entries — the cross-loader "same class name loaded by 2+ distinct classloaders" signal, not the older single-loader `potential_leaks` heuristic (there is no predicate over `potential_leaks`). Like the other deep-only predicates, it is skipped (not errored) on overview-mode input, and also skipped if the policy is evaluated against a deep `AnalyzeResponse` that never had classloader analysis enabled — `ci-check` handles this automatically by turning on `enable_classloaders` whenever the loaded policy declares a `classloader_leak_count` rule, so no extra flag is needed:
 
@@ -387,6 +389,24 @@ severity = "error"
 
 This example fails the build the moment any class name is loaded by more than one classloader in the analyzed heap — the standard first gate for catching a webapp redeploy leak before it compounds across further redeploys.
 
+`object_growth_threshold` (M10-B) is the first predicate scoped to a specific class and the first genuinely **two-heap** predicate — it fails CI when a tracked object (or class of objects) grows beyond a per-class retained-size limit between `--baseline` and `<HEAP>`. It scans the object diff's `retained_changed` entries (comparing `|after_retained_bytes - before_retained_bytes|`) and `added` entries (comparing `retained_bytes`, since an added object has no "before") for every entry whose class matches the rule's `class` field — or every entry, when `class` is omitted. Multiple violating objects within one rule are reported as a single aggregate violation with a count and the worst (largest-delta) offender cited by id, not one violation per object:
+
+```toml
+[[rule]]
+id = "no-runaway-cache-growth"
+predicate = "object_growth_threshold"
+class = "com.example.CacheEntry"   # omit to apply to every tracked object
+op = "<="
+value = 10485760                   # bytes; max allowed retained-size delta per object
+severity = "error"
+```
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof
+```
+
+Because this predicate cannot be evaluated without a baseline to diff against, `ci-check` refuses loudly — exit code `2`, the same family as a malformed policy file — when the loaded policy contains an `object_growth_threshold` rule and `--baseline` was not supplied. It never silently evaluates the rule with no growth data, and never silently skips it either.
+
 Severity and mode behavior:
 
 - the ladder is `info < warning < error < critical`
@@ -400,7 +420,7 @@ Exit codes:
 
 - `0`: clean, or only violations below `--fail-on`
 - `1`: at least one violation met or exceeded `--fail-on`
-- `2`: invalid policy file or schema error
+- `2`: invalid policy file or schema error, or an `object_growth_threshold` rule with `--baseline` omitted (M10-B)
 - `3`: unreadable heap or analysis failure
 - `4`: explicit `--mode overview` with a deep-only rule
 
@@ -411,6 +431,7 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof
 ```
 
 ### `flamegraph`
@@ -656,6 +677,7 @@ Flags:
 - `--object-diff-min-retained <bytes>` — default `4096`; objects below this retained-size floor are skipped to keep memory bounded (hidden in `--help`, shown in `--help-long`).
 - `--retain-field-data` — opt in to field-level retention; required for `full-fingerprint`.
 - `--format {text|json|toon}` — default `text`.
+- `--cross-reference-leaks` (M10-B) — opt in, default off. Ignored when `--mode class`.
 
 What it does:
 
@@ -664,6 +686,7 @@ What it does:
 - prints top changed classes or record categories
 - prints class-level retained deltas when both heaps build graph-backed diff context successfully
 - with `--mode object`: fingerprints objects in both dumps (HPROF ids are never used as identity — they are not stable across dumps), then reports objects present only in `after` (`added`), only in `before` (`removed`), and present in both with a retained-size delta beyond the threshold (`retained_changed`), each with a dominator-class chain and reference chain, plus a `match_quality` block reporting the fingerprint collision rate
+- with `--mode object --cross-reference-leaks`: additionally runs `detect_leaks()` against the after-heap and annotates any `added`/`retained_changed` entry whose class matches a leak suspect with that suspect's severity — connects "this object grew" with "this object grew *and* is already a flagged leak suspect." Text output appends a `[LEAK: <severity>]` suffix to matching lines; JSON/TOON carry the same data as `leak_severity` on the delta. Off by default, so pre-M10-B `diff --mode object` output is byte-identical when the flag is not passed.
 
 Example:
 
@@ -701,9 +724,15 @@ object diff (strategy=class+dominator, bucket=1KB, threshold=1MB):
   match quality: collision_rate=0.012  false_match_risk=Low  false_split_risk=Medium
 ```
 
+With `--cross-reference-leaks`, an annotated line gets a suffix:
+
+```text
+    com.example.UserSession    +52428800 bytes  count=1  dom=[Server,Pool,Cache,...]  [LEAK: HIGH]
+```
+
 Exit codes: `0` diff produced, `2` I/O error, `3` heap parse error, `5` mode mismatch (e.g. `--mode object` against an overview-only dump), `6` fingerprint budget exceeded (`feature_unavailable_object_diff_too_large` — raise `--object-diff-min-retained` or use a smaller dump), `7` `full-fingerprint` requested without `--retain-field-data`.
 
-Current limitation: object-level diff is a two-snapshot comparison only (no 3+ snapshot trend tracking), and `ci-check` has no object-growth predicate yet — both are tracked as follow-up work in `docs/roadmap.md` (M10-B).
+Current limitation: object-level diff is a two-snapshot comparison only (no 3+ snapshot trend tracking). `ci-check --baseline` and `diff --cross-reference-leaks` shipped in M10-B; MCP wiring for both remains open future work.
 
 ### `fix`
 

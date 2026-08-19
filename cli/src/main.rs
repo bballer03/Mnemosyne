@@ -209,6 +209,10 @@ struct CiCheckArgs {
     output: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
     fail_on: SeverityArg,
+    /// Before-heap for `object_growth_threshold` rules (M10-B). Required
+    /// when the loaded policy contains such a rule; otherwise unused.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -250,6 +254,11 @@ struct DiffArgs {
     object_diff_min_retained: u64,
     #[arg(long)]
     retain_field_data: bool,
+    /// Cross-reference `--mode object` deltas against `detect_leaks()` on
+    /// the after-heap, annotating matches with their leak severity
+    /// (M10-B). Default off; every existing invocation is unaffected.
+    #[arg(long)]
+    cross_reference_leaks: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -1131,6 +1140,7 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
             retained_change_threshold: args.retained_change_threshold,
             top_n: args.top,
             retain_field_data: args.retain_field_data,
+            cross_reference_leaks: args.cross_reference_leaks,
         })
         .await
         .with_context(|| {
@@ -2313,6 +2323,36 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
         Err(err) => exit_ci_check_with_error(2, err.into()),
     };
 
+    // M10-B: object_growth_threshold is a genuine two-heap predicate (design
+    // doc §2.1) -- it cannot be evaluated without a baseline to diff
+    // against. Refuse loudly (same "invalid policy" exit-code family as a
+    // malformed TOML file above) rather than silently reaching `evaluate()`
+    // with no object diff and having the rule quietly skip.
+    let needs_baseline = policy
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
+
+    if needs_baseline && args.baseline.is_none() {
+        let err = CoreError::ConfigError {
+            detail: format!(
+                "object_growth_threshold_requires_baseline: policy '{}' contains an \
+                 object_growth_threshold rule but --baseline was not supplied",
+                args.policy.display()
+            ),
+            suggestion: Some(
+                "Pass --baseline <BEFORE_HEAP> so ci-check can diff it against the heap under test."
+                    .into(),
+            ),
+        };
+        exit_ci_check_with_error(2, err.into());
+    }
+
+    let object_diff = match args.baseline.as_ref() {
+        Some(baseline) => Some(run_ci_check_baseline_diff(baseline, &args.heap).await),
+        None => None,
+    };
+
     let resolved_mode = match validate_heap_file(&args.heap)
         .and_then(|_| resolve_cli_mode(&args.heap, args.mode))
     {
@@ -2330,7 +2370,12 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 Err(err) => exit_ci_check_with_error(3, err),
             };
             finish_spinner(&pb, "Heap policy evaluation complete.");
-            mnemosyne_core::evaluate(&policy, &PolicyInput::Overview(&summary), requested_mode)
+            mnemosyne_core::evaluate(
+                &policy,
+                &PolicyInput::Overview(&summary),
+                requested_mode,
+                object_diff.as_ref(),
+            )
         }
         AnalysisMode::Deep => {
             let enable_classloaders = policy
@@ -2360,7 +2405,12 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 Err(err) => exit_ci_check_with_error(3, err),
             };
             finish_spinner(&pb, "Heap policy evaluation complete.");
-            mnemosyne_core::evaluate(&policy, &PolicyInput::Deep(&response), requested_mode)
+            mnemosyne_core::evaluate(
+                &policy,
+                &PolicyInput::Deep(&response),
+                requested_mode,
+                object_diff.as_ref(),
+            )
         }
         AnalysisMode::Auto => unreachable!("resolved CLI mode should never remain auto"),
     };
@@ -2391,6 +2441,76 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
         Ok(())
     } else {
         process::exit(exit_code);
+    }
+}
+
+/// Runs the `--baseline`-to-`--heap` object diff `ci-check` needs for
+/// `object_growth_threshold` rules (M10-B design doc §2.2): "compute once,
+/// evaluate all rules against it" up front, same shape `handle_ci_check`'s
+/// single `analyze_heap()` call already has. Uses `DiffMode::Object` with
+/// the same default `IdentityStrategy`/threshold/top-n constants
+/// `handle_diff` falls back to when its own flags are left at default,
+/// since `ci-check` does not expose the object-diff tuning flags itself.
+async fn run_ci_check_baseline_diff(
+    baseline: &Path,
+    heap: &Path,
+) -> mnemosyne_core::ObjectDiffReport {
+    if let Err(err) = validate_heap_file(baseline) {
+        exit_ci_check_with_error(3, err);
+    }
+    if let Err(err) = validate_heap_file(heap) {
+        exit_ci_check_with_error(3, err);
+    }
+
+    let pb = start_spinner("Diffing baseline against heap...");
+    let result = mnemosyne_core::diff::run_diff(DiffRequest {
+        before_path: baseline.to_string_lossy().into_owned(),
+        after_path: heap.to_string_lossy().into_owned(),
+        mode: DiffMode::Object,
+        identity_strategy: IdentityStrategy::default(),
+        retained_bucket_bits: 10,
+        min_retained_bytes:
+            mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+        retained_change_threshold:
+            mnemosyne_core::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+        top_n: mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+        retain_field_data: false,
+        cross_reference_leaks: false,
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to diff baseline heap dump: {} -> {}",
+            baseline.display(),
+            heap.display()
+        )
+    });
+
+    match result {
+        Ok(mnemosyne_core::diff::DiffResult::Object(diff)) => {
+            finish_spinner(&pb, "Baseline diff complete.");
+            diff.object_diff.unwrap_or_else(|| {
+                exit_ci_check_with_error(
+                    3,
+                    anyhow::anyhow!(
+                        "object diff mode produced no object_diff section for baseline '{}' -> '{}'",
+                        baseline.display(),
+                        heap.display()
+                    ),
+                )
+            })
+        }
+        Ok(mnemosyne_core::diff::DiffResult::Class(_)) => {
+            finish_spinner(&pb, "Baseline diff failed.");
+            exit_ci_check_with_error(
+                3,
+                anyhow::anyhow!("expected an object diff for --baseline but got a class diff"),
+            )
+        }
+        Err(err) => {
+            finish_spinner(&pb, "Baseline diff failed.");
+            exit_ci_check_with_error(3, err)
+        }
     }
 }
 

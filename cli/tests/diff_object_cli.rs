@@ -527,6 +527,63 @@ fn mode_object_emits_object_diff_section() {
 }
 
 #[test]
+fn default_mode_object_never_emits_leak_marker_without_flag() {
+    // Regression gate (M10-B design doc §4): `--cross-reference-leaks` is
+    // opt-in and defaults to false, so `ObjectDelta.leak_severity` stays
+    // `None` for every entry and the text renderer's `[LEAK: ...]` suffix
+    // must never appear when the flag is absent.
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let assert = cmd
+        .args([
+            "diff",
+            fixture_path.as_str(),
+            fixture_path.as_str(),
+            "--mode",
+            "object",
+        ])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(&assert.get_output().stdout);
+    assert!(!stdout.contains("[LEAK:"), "{stdout}");
+}
+
+#[test]
+fn cross_reference_leaks_flag_runs_without_error() {
+    // `detect_leaks()`'s default severity floor (High, gigabyte-scale
+    // retained size) is not reachable by this small synthetic fixture, so
+    // this is a wiring/regression smoke test -- the flag must parse, the
+    // diff must still succeed, and the object diff section must still
+    // render exactly as before (no `[LEAK:` marker appears, since nothing
+    // crosses the default threshold). The annotation logic itself
+    // (`annotate_leak_progression`) is verified directly against an
+    // independently computed reference in
+    // `core/tests/diff_object_engine.rs`.
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let assert = cmd
+        .args([
+            "diff",
+            fixture_path.as_str(),
+            fixture_path.as_str(),
+            "--mode",
+            "object",
+            "--cross-reference-leaks",
+        ])
+        .assert()
+        .success();
+
+    let stdout = stdout_string(&assert.get_output().stdout);
+    assert!(stdout.contains("object diff (strategy="), "{stdout}");
+    assert!(!stdout.contains("[LEAK:"), "{stdout}");
+}
+
+#[test]
 fn full_fingerprint_without_retain_field_data_returns_code_7() {
     let fixture = write_fixture(&build_graph_fixture());
     let fixture_path = path_arg(fixture.path());
