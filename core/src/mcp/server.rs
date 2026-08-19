@@ -1625,6 +1625,10 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 retained_change_threshold: params.retained_change_threshold,
                 top_n: params.top_n,
                 retain_field_data: params.retain_field_data,
+                // M10-B's --cross-reference-leaks / DiffRequest.cross_reference_leaks
+                // is CLI-first (design doc §3 "Out"); MCP wiring is deferred, so this
+                // handler always leaves it false pending a future slice.
+                cross_reference_leaks: false,
             })
             .await?
             {
@@ -3215,6 +3219,7 @@ mod tests {
                 crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
             top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
             retain_field_data: false,
+            cross_reference_leaks: false,
         })
         .await
         .expect("direct object diff should succeed")

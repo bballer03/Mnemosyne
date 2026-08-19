@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    analysis::LeakInsight,
     errors::CoreError,
     graph::DominatorTree,
     hprof::{ClassId, ObjectGraph, ObjectId},
@@ -251,6 +252,28 @@ pub fn diff_object_graphs_with_limit(
     Ok(report)
 }
 
+/// Leak-progression cross-reference (M10-B design doc §2.4): sets each
+/// delta's `leak_severity` to the worst (max) severity among
+/// `leak_suspects` entries whose `class_name` matches the delta's, when
+/// any match exists. `None` when there is no match. Deterministic
+/// regardless of `leak_suspects` ordering -- picks the max `LeakSeverity`
+/// among matches rather than the first, so annotation output does not
+/// depend on `detect_leaks()`'s internal ranking order.
+///
+/// Called by `core::diff::run_diff`'s object-mode path, only when the
+/// caller opts in via `DiffRequest.cross_reference_leaks` (default
+/// `false`) -- every existing `diff --mode object` invocation that does
+/// not set the flag is unaffected.
+pub fn annotate_leak_progression(deltas: &mut [ObjectDelta], leak_suspects: &[LeakInsight]) {
+    for delta in deltas.iter_mut() {
+        delta.leak_severity = leak_suspects
+            .iter()
+            .filter(|suspect| suspect.class_name == delta.class_name)
+            .map(|suspect| suspect.severity)
+            .max();
+    }
+}
+
 fn collect_fingerprints(
     graph: &ObjectGraph,
     dom: &DominatorTree,
@@ -324,6 +347,7 @@ fn make_delta(
         dominator_chain: Vec::new(),
         reference_chain: Vec::new(),
         kind,
+        leak_severity: None,
     }
 }
 

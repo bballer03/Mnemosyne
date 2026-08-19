@@ -57,6 +57,7 @@ fn default_object_diff_request(before_path: String, after_path: String) -> DiffR
             mnemosyne_core::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
         top_n: mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
         retain_field_data: false,
+        cross_reference_leaks: false,
     }
 }
 

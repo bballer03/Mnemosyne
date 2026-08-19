@@ -215,6 +215,7 @@ fn default_request() -> DiffRequest {
         retained_change_threshold: 1,
         top_n: 50,
         retain_field_data: false,
+        cross_reference_leaks: false,
     }
 }
 
@@ -237,6 +238,85 @@ fn engine_populates_all_three_sections() {
         .retained_changed
         .iter()
         .any(|delta| delta.class_name == "com.example.RetainedChange"));
+}
+
+/// M10-B leak-progression cross-reference: `annotate_leak_progression`
+/// should set `leak_severity` on every `added`/`retained_changed` delta
+/// whose class matches a `detect_leaks_from_graph` suspect, to the worst
+/// (max) severity among matches -- verified against an independently
+/// computed reference (a fresh filter+max over the same suspect list),
+/// per the design doc §4 validation gate. Uses `detect_leaks_from_graph`
+/// directly on the already-built after-graph (with a low severity floor)
+/// rather than `run_diff`'s `cross_reference_leaks` flag, since the
+/// default `LeakDetectionOptions` severity floor `run_diff` uses
+/// (`LeakSeverity::High`, gigabyte-scale retained size) is impractical to
+/// reach with a synthetic in-memory fixture -- this exercises the same
+/// `annotate_leak_progression` function `run_diff` calls, just with the
+/// leak suspects supplied directly instead of re-derived from disk.
+#[test]
+fn cross_reference_annotates_matching_class_with_worst_severity() {
+    use mnemosyne_core::analysis::{detect_leaks_from_graph, LeakDetectionOptions, LeakSeverity};
+    use mnemosyne_core::diff::object::annotate_leak_progression;
+
+    let before = build_engine_before_graph();
+    let after = build_engine_after_graph();
+    let mut report = run_diff(&before, &after, default_request());
+    let after_dom = build_dominator_tree(&after);
+
+    let leaks = detect_leaks_from_graph(
+        "unused.hprof",
+        &after,
+        &after_dom,
+        &LeakDetectionOptions {
+            min_severity: LeakSeverity::Low,
+            ..Default::default()
+        },
+    )
+    .expect("graph-backed leak detection should not need to touch disk for a populated graph");
+    assert!(
+        !leaks.is_empty(),
+        "fixture should produce at least one leak suspect"
+    );
+
+    // Sanity: nothing is annotated before cross-referencing.
+    assert!(report
+        .added
+        .iter()
+        .chain(report.retained_changed.iter())
+        .all(|delta| delta.leak_severity.is_none()));
+
+    annotate_leak_progression(&mut report.added, &leaks);
+    annotate_leak_progression(&mut report.retained_changed, &leaks);
+
+    for delta in report.added.iter().chain(report.retained_changed.iter()) {
+        let expected = leaks
+            .iter()
+            .filter(|leak| leak.class_name == delta.class_name)
+            .map(|leak| leak.severity)
+            .max();
+        assert_eq!(
+            delta.leak_severity, expected,
+            "class {} annotation should match the independently computed reference",
+            delta.class_name
+        );
+    }
+
+    assert!(
+        report
+            .added
+            .iter()
+            .chain(report.retained_changed.iter())
+            .any(|delta| delta.leak_severity.is_some()),
+        "at least one delta should have matched a leak suspect by class name"
+    );
+
+    // `removed` deltas are never passed to `annotate_leak_progression` by
+    // `run_diff` (they no longer exist on the after-heap `detect_leaks`
+    // inspects), so they must stay unannotated.
+    assert!(report
+        .removed
+        .iter()
+        .all(|delta| delta.leak_severity.is_none()));
 }
 
 #[test]

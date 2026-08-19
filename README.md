@@ -66,7 +66,7 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 
 ### 🧪 CI Regression Policies
 - `mnemosyne-cli ci-check <heap.hprof> --policy policy.toml` turns heap analysis into a first-class CI gate instead of requiring custom `jq` or Groovy glue
-- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 11 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`
+- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 12 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and the two-heap `object_growth_threshold` (requires `ci-check --baseline <BEFORE_HEAP>`)
 - The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
 - Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
 
@@ -503,7 +503,7 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml --fail-on error
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output heap-policy.xml
 ```
 
-`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 11 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, and `classloader_leak_count`.
+`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 12 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and `object_growth_threshold` (M10-B). `object_growth_threshold` is a two-heap predicate: it requires `ci-check --baseline <BEFORE_HEAP>`, and a policy containing such a rule fails loudly (exit code 2) if `--baseline` is omitted rather than silently skipping the rule.
 
 The shipped severity ladder is `info < warning < error < critical`; `--fail-on` defaults to `error` and changes the process exit status when any violation meets or exceeds that threshold. All renderers still show every violation and skipped rule; `--fail-on` controls the exit code only.
 
@@ -671,6 +671,8 @@ Heap diff: before.hprof -> after.hprof
 ```
 
 The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) when you want a before/after artifact; use `mnemosyne-cli ci-check` when you want Mnemosyne itself to own the policy gate and exit code.
+
+`mnemosyne-cli diff before.hprof after.hprof --mode object` reports fingerprint-matched `added` / `removed` / `retained_changed` objects with dominator + reference chains and a `MatchQuality` collision-rate envelope; add `--cross-reference-leaks` to annotate `added`/`retained_changed` lines with `[LEAK: <severity>]` when the object's class matches a `detect_leaks()` suspect on the after-heap. Gate CI on object-level growth with `mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof` and an `object_growth_threshold` rule.
 
 ---
 

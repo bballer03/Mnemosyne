@@ -344,6 +344,7 @@ fn default_object_diff_request(before_path: String, after_path: String) -> DiffR
         retained_change_threshold: crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
         top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
         retain_field_data: false,
+        cross_reference_leaks: false,
     }
 }
 
