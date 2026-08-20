@@ -229,43 +229,98 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** Parent-loader chain walk on adversarial/cyclic HPROF data — mitigated with a bounded depth (16) plus a visited-set cycle guard that terminates well before the depth bound, same discipline as M8 Slice 8.A's path-enumeration budget caps. False positives on legitimately re-loaded framework classes — mitigated by reporting the raw signal without a baked-in severity judgment, same "give the operator the data" philosophy as `MatchQuality` (M10) and `potential_leaks` itself.
 - **Estimated slice count:** 2–5 slices (4 shipped: 13.A–13.C implementation + 13.D doc-sync).
 
+### M14 — UI Backend-Parity & AI-Native Redesign (Usability, Parity-Closing)
+
+- **Status:** 🔲 Pending — design doc [milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md).
+- **Theme:** Close the gap between what core/CLI/MCP can already do (M8–M13) and what the browser UI can show, while restructuring navigation around an AI-guided default with the full MAT-equivalent power surface kept undiminished underneath.
+- **Goal:** Every M8–M13 backend capability gets a UI surface. Navigation gets an AI-guided landing layer (triage/chat/NL-query, backed by M11 workflows) as the default entry point, with today's power views (dominator tree, object inspector, query console, leak workspace) fully intact and one click away — accelerator, not replacement.
+- **Scope:**
+  - Comparison basket UI (M10 object-level diff) — pick two artifacts/snapshots, ranked `added`/`removed`/`retained_changed` with match-quality indicator. Biggest net-new UI surface, no dependency on other slices.
+  - Object Inspector extensions (M8): refs-out/referrers-in as clickable chips, dominator parent/children navigation.
+  - GC-path visualizer extension (M8): multi-path list view, not just the single shortest path.
+  - Referrer panel (M8): new "Top referenced objects" table in Artifact Explorer.
+  - Thread view frame-locals (M8): per-frame local-variable rows.
+  - Snapshot picker (M9): "Recent heaps" list on the guided landing, backed by `list_snapshots`/`open_snapshot`.
+  - Classloader duplicates panel (M13): "Duplicate classes across loaders" section + ancestor chain.
+  - AI-guided landing + workflow cards (M11): new default route, natural-language query bar translating to OQL/analysis calls, `triage_memory_leak`/`tune_gc`/`traverse_object_graph`/`compare_snapshots` each surfaced as a guided card.
+  - Visual direction: extend the existing dark/Inter theme (`ui/src/app/globals.css`) rather than introducing a second visual language.
+- **Out of scope:** New backend capability (this milestone surfaces what already exists). MAT backend-parity gaps (OQL depth, duplicate arrays, group-by-superclass, plugin runtime) — that's M15. Desktop packaging — that's M16.
+- **Why now / strategic rationale:** User-requested, brainstormed 2026-08-20. Every prior M8–M13 milestone deliberately deferred UI work ("backend-before-UI" pattern) — this milestone is the accumulated backlog from that pattern, not new scope invention. Highest usability leverage per unit of work: the backend risk is already retired, this is presentation only.
+- **Success criteria:** Every listed backend surface has a working UI page verified in-browser (golden path + one edge case each, per this project's UI-verification bar). Guided landing and power views are both reachable within one click of each other at all times. No regression to existing M4–M6 UI routes.
+- **Risks / dependencies:** UI work has no existing test-suite precedent as heavy as the Rust side in this repo — mitigate by keeping `bun run test`/`tsc --noEmit`/in-browser verification as a hard gate per slice, same discipline as `cargo test`/clippy/fmt on the Rust side. Scope creep into a second design language — mitigate by treating `globals.css`'s existing tokens as the source of truth, extended not replaced.
+- **Estimated slice count:** 5–8 slices.
+
+### M15 — MAT Backend Parity Completion (Parity-Closing)
+
+- **Status:** 🔲 Pending — design doc to be authored.
+- **Theme:** Close the remaining backend/analysis gaps against Eclipse MAT identified in the parity matrix (§2): OQL depth, duplicate primitive-array detection, group-by-superclass, and a custom plugin/extension runtime.
+- **Goal:** No MAT analysis capability left un-mirrored in core/CLI/MCP, absorbing the deferred B1/B9 backlog items below as this milestone's actual scope rather than indefinite deferral.
+- **Scope:**
+  - OQL depth: subqueries, `UNION`, multi-hop traversal, full predicate functions, `eval(...)`, regex `=~`, `dominators(...)`, `outbounds`/`inbounds` traversal — closing the remaining ~70% of MAT's OQL surface beyond M7-4's targeted slice.
+  - Duplicate primitive-array / boxed-array detection, mirroring the existing `analyze_strings()` duplicate-group shape.
+  - `--group-by superclass` (and the related "group by class → superclass tree").
+  - Custom plugin/extension runtime (MAT's `IQuery` equivalent) — builds on the existing design reference `docs/design/m6-plugin-extension-system.md`.
+- **Out of scope:** UI surfacing of any of the above (that's a follow-on to M14's pattern, scoped when this milestone's backend lands). Live JVM interaction (unrelated to OQL/grouping/plugins).
+- **Why now / strategic rationale:** These are the last four rows in the MAT parity matrix (§2) still marked 🟡/❌ that are pure analysis-capability gaps (M7-5's benchmark rerun, tracked separately as M12, is a credibility/evidence gap, not a capability gap). Closing them retires the "Path to MAT" framing's remaining honest caveats.
+- **Success criteria:** Each of the four scope items has core+CLI+MCP+test+doc coverage matching the M8–M13 bar (design doc, TDD, `cargo {check,test,clippy,fmt}` clean, doc sync).
+- **Risks / dependencies:** OQL depth is explicitly flagged in this roadmap's own risk register as "treadmill risk" (§8) — mitigate by shipping it as a bounded, named slice list (not an open-ended "improve OQL" task) the same way M7-4's targeted slice was scoped. Plugin runtime is the highest-risk/highest-effort item in this milestone — consider sequencing it last within M15, or splitting it into its own M15-B if scope proves too large once designed.
+- **Estimated slice count:** 6–10 slices.
+
+### M16 — Desktop Packaging & Distribution (Adoption)
+
+- **Status:** 🔲 Pending — design doc to be authored.
+- **Theme:** Ship Mnemosyne as a downloadable, installable desktop application (parity with how users obtain and run Eclipse MAT today), not just a CLI binary + optional dev-mode Tauri shell.
+- **Goal:** A user can download one installer per platform (Windows/macOS/Linux), run it, and get the full M14 GUI without installing Rust, Node, or building from source — absorbing the deferred B7 backlog item as this milestone's actual scope.
+- **Scope:**
+  - Harden the existing `tauri/` scaffold (already wraps the shared `ui/` build and injects host bridges) into a release-grade build: signed installers where platform tooling requires it, auto-update story (or an explicit documented decision to skip auto-update for v1), and inclusion in the tagged-release pipeline alongside the existing 5-target CLI archives / GHCR / Homebrew channels.
+  - Bundle the M14 UI (this milestone depends on M14 having shipped a GUI worth bundling — sequencing note, not a hard blocker on individual M14 slices).
+- **Out of scope:** New native commands beyond what `tauri/src/commands.rs` already exposes (`load_heap`, `query_heap`, `get_references`/`get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, `propose_fix` — extend only if M14 UI work surfaces a gap). Auto-update infrastructure unless scoped in explicitly during design.
+- **Why now / strategic rationale:** User-requested for adoption — "for easy adoption we could also package and make this downloadable with gui like eclipse mat." The scaffold already exists (M6); this is release-hardening, not new architecture, matching the "adoption-data dependent" B7 backlog note this roadmap already carried.
+- **Success criteria:** A signed (or documented-as-unsigned-with-rationale) installer exists per target platform, downloadable from GitHub Releases alongside the CLI archives, launches the M14 GUI, and loads/analyzes a real heap dump end-to-end without any local Rust/Node toolchain.
+- **Risks / dependencies:** Code-signing requires platform-specific credentials/certificates this environment may not have — flag early in design rather than discovering it mid-slice, same "check the environment before promising the milestone" discipline M12 already established when it turned out to be blocked here. Depends on M14 shipping a GUI worth packaging.
+- **Estimated slice count:** 4–6 slices.
+
 ### Other backlog items (lower priority — not proposed as standalone M8+)
 
 | # | Item | Origin | Priority | Notes |
 |---|---|---|---|---|
-| B1 | Full OQL expansion (subqueries, multi-hop, regex, `eval`) | M7-4 deferred | P2 | Treadmill risk; absorb into M8 / M9 incrementally rather than as standalone |
 | B2 | Property-based parser testing | M7 deferred | P2 | `proptest` for binary parser robustness — fold into M8 hardening slice |
 | B3 | Byte-accurate progress bars | M7 deferred | P3 | Polish — fold into M8 |
-| B4 | Incremental leak tracking (3+ snapshots) | D3 | P2 | Depends on M9 + M10; consider M14 |
-| B5 | IDE-native memory annotations (LSP / VS Code) | D4 | P3 | Differentiator; consider M14+ |
+| B4 | Incremental leak tracking (3+ snapshots) | D3 | P2 | Depends on M9 + M10; consider M17 |
+| B5 | IDE-native memory annotations (LSP / VS Code) | D4 | P3 | Differentiator; consider M17+ |
 | B6 | Smart heap reduction advisor | D5 | P3 | Builds on M8 + M10 |
-| B7 | Tauri desktop release (signed) | M6 follow-on | P3 | Adoption-data dependent |
 | B8 | Streaming responses (MCP) | M5 follow-on | P3 | Only if evidence shows need |
-| B9 | Custom plugin / extension runtime | MAT parity | P3 | Defer until adoption justifies |
+
+B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted from this backlog into **M15**'s actual scope, above. B7 (Tauri desktop release, signed) is promoted into **M16**.
 
 ---
 
-## 6. Recommended Next Milestone — **M8 Reachability & References Deep Dive**
+## 6. Recommended Next Milestone — **M14 UI Backend-Parity & AI-Native Redesign**
 
-**Recommendation:** Schedule **M8 — Reachability & References Deep Dive** as the active next milestone.
+**Status update (2026-08-20):** M8, M9, M10, M10-B, M11, and M13 are all shipped as of this update — the sequencing below this note is now history, preserved for the record. M12 remains blocked (no native-Linux + Eclipse MAT reference workstation available in the executing environment). The active recommendation is now M14.
 
-**Justification (4–6 sentences):**
+**Recommendation:** Schedule **M14 — UI Backend-Parity & AI-Native Redesign** as the active next milestone, followed by M15 (MAT backend parity completion) and M16 (desktop packaging).
 
-1. **Highest user value among parity-closing options:** all-paths-to-GC-roots, group-by-referrer, and object inspector are top-3 MAT investigation workflows that Mnemosyne users explicitly lack today, and they directly serve the project's core mission (leak triage credibility). M9 (persistence) and M10 (object diff) have higher infrastructure value but lower per-day user value.
-2. **Lowest design risk:** the `ObjectGraph`, dominator, and `get_referrers()` primitives all exist; M8 is composition + new CLI/MCP surfaces, not new graph algorithms. M9 and M10 both require new on-disk schemas and identity heuristics with non-trivial design risk.
-3. **Best leverage of existing M1–M7 architecture:** the analyzers reuse existing graph traversal, the deep-mode-only constraint pattern is established (M7-3 / M7-4), and provenance markers, exit codes, and overview-aware error paths are already in place to copy.
-4. **Strategic positioning — both parity-closing and differentiator-extending:** every M8 surface ships with structured provenance, MCP first-class exposure, JSON / TOON / GH Actions output, and overview-aware errors. M8 closes a MAT gap **while widening** the provenance / MCP / automation moat. Pure differentiator milestones (M11) are valuable but should follow at least one parity push to keep the MAT-comparison story credible.
-5. **Fit with Mnemosyne identity:** the project's stated goal is "Path to MAT" — closing three top-3 MAT investigation workflows in one milestone is the most direct expression of that goal. It also lays groundwork for M9 (snapshots must include the new analyzers' precomputed outputs) and M11 (MCP workflows can compose the new tools).
-6. **Parallelizable with M12:** M12 is documentation + benchmark execution only and does not touch source code, so it can run in parallel with M8 without ownership conflicts.
+**Justification:**
 
-**Recommended sequencing:**
+1. **Retired backend risk, presentation-only work left:** every M8–M13 milestone deliberately deferred UI work under a "backend-before-UI" pattern (see each milestone's own "Not shipped" notes above). That backlog is now the single highest-leverage piece of remaining work — the analysis capability already exists and is tested; M14 is surfacing it, not inventing it.
+2. **User-requested, explicitly scoped via brainstorming session (2026-08-20):** AI-guided default navigation with the full MAT-equivalent power surface kept undiminished underneath — see [milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md).
+3. **M15 (remaining OQL/array/superclass/plugin gaps) and M16 (desktop packaging) sequenced after M14** because M16 explicitly depends on M14 having shipped a GUI worth packaging, and M15's backend gaps don't block M14's UI-backfill scope (M14 surfaces what's already shipped, not what M15 will add).
 
-1. **M8** — Reachability & References Deep Dive (active)
-2. **M12** — Reference-workstation rerun (parallel with M8; no source changes)
-3. **M9** — Snapshot persistence (after M8 stabilizes the new analyzers)
-4. **M10** — Object-level diff (after M9 lands cheap re-open)
-5. **M11** — MCP workflow suite (after M8 + M10 give it richer primitives to compose)
-6. **M13** — Classloader explorer (parallel-eligible with M11; independent surface)
+**Recommended sequencing (current):**
+
+1. **M14** — UI Backend-Parity & AI-Native Redesign (active)
+2. **M15** — MAT Backend Parity Completion (independent of M14; can run in parallel in a separate worktree track if capacity allows)
+3. **M16** — Desktop Packaging & Distribution (depends on M14 shipping a GUI)
+
+**Historical sequencing (M8–M13 era, completed):**
+
+1. ~~M8~~ — Reachability & References Deep Dive — ✅ shipped
+2. ~~M12~~ — Reference-workstation rerun — blocked (environment)
+3. ~~M9~~ — Snapshot persistence — ✅ shipped
+4. ~~M10~~ — Object-level diff — ✅ shipped (+ M10-B follow-up)
+5. ~~M11~~ — MCP workflow suite — ✅ shipped
+6. ~~M13~~ — Classloader explorer — ✅ shipped
 
 ---
 
@@ -345,6 +400,9 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M11 MCP Workflow Suite** | [design/milestone-11-mcp-workflow-suite.md](design/milestone-11-mcp-workflow-suite.md) | ✅ Shipped (slices 11.A–11.D implementation, 11.E doc-sync) |
 | **M12 Reference-Workstation Re-run** | reuse [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | ⏳ Pending |
 | **M13 Classloader Explorer** | [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) | ✅ Shipped (slices 13.A–13.C implementation, 13.D doc-sync) |
+| **M14 UI Backend-Parity & AI-Native Redesign** | [design/milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md) | ⏳ Pending |
+| **M15 MAT Backend Parity Completion** | _to be authored_ | ⏳ Pending |
+| **M16 Desktop Packaging & Distribution** | _to be authored_ | ⏳ Pending |
 
 ---
 
