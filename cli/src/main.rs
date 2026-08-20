@@ -182,6 +182,10 @@ struct AnalyzeArgs {
     /// Rank objects by incoming reference count ("group by referrer")
     #[arg(long = "by-referrer")]
     by_referrer: bool,
+    /// Enable duplicate primitive-array content detection (byte[], char[],
+    /// int[], ...; wasted-memory report, same shape as `--strings`)
+    #[arg(long = "duplicate-arrays")]
+    duplicate_arrays: bool,
     /// Number of results for top-N queries (threads, strings, top-instances)
     #[arg(long = "top-n", default_value_t = 10)]
     top_n: usize,
@@ -824,6 +828,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
     let mut enable_classloaders = args.classloaders;
     let mut enable_top_instances = args.top_instances;
     let enable_by_referrer = args.by_referrer;
+    let mut enable_duplicate_arrays = args.duplicate_arrays;
     let mut top_n = args.top_n;
     let mut min_capacity = args.min_capacity;
 
@@ -835,6 +840,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = false;
                 enable_classloaders = false;
                 enable_top_instances = false;
+                enable_duplicate_arrays = false;
                 top_n = 10;
                 min_capacity = 16;
             }
@@ -844,6 +850,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = true;
                 enable_classloaders = true;
                 enable_top_instances = true;
+                enable_duplicate_arrays = true;
                 top_n = top_n.max(15);
                 min_capacity = min_capacity.max(32);
             }
@@ -853,6 +860,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = false;
                 enable_classloaders = false;
                 enable_top_instances = true;
+                enable_duplicate_arrays = false;
                 top_n = 5;
                 min_capacity = 64;
             }
@@ -901,6 +909,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         enable_collections,
         enable_top_instances,
         enable_by_referrer,
+        enable_duplicate_arrays,
         top_n,
         min_collection_capacity: min_capacity,
         min_duplicate_count: 2,
@@ -1000,6 +1009,10 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!("{}", build_string_duplicates_table(strings));
             }
 
+            if let Some(arrays) = &response.array_report {
+                print_array_duplicates(arrays);
+            }
+
             if let Some(collections) = &response.collection_report {
                 println!();
                 println!(
@@ -1089,6 +1102,7 @@ async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Res
         enable_collections: false,
         enable_top_instances: false,
         enable_by_referrer: false,
+        enable_duplicate_arrays: false,
         top_n: 10,
         min_collection_capacity: 16,
         min_duplicate_count: 2,
@@ -2396,6 +2410,7 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 enable_collections: false,
                 enable_top_instances: false,
                 enable_by_referrer: false,
+                enable_duplicate_arrays: false,
                 top_n: 10,
                 min_collection_capacity: 16,
                 min_duplicate_count: 2,
@@ -3042,6 +3057,49 @@ fn build_string_duplicates_table(report: &mnemosyne_core::analysis::StringReport
     }
 
     table
+}
+
+fn build_array_duplicates_table(report: &mnemosyne_core::analysis::ArrayReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Element Type", CellAlignment::Left),
+        header_cell("Length", CellAlignment::Right),
+        header_cell("Count", CellAlignment::Right),
+        header_cell("Waste", CellAlignment::Right),
+    ]);
+
+    for group in report.duplicate_groups.iter().take(10) {
+        table.add_row(vec![
+            Cell::new(format!("{}[]", group.element_type)).set_alignment(CellAlignment::Left),
+            right_cell(group.length),
+            right_cell(group.count),
+            right_cell(format_megabytes(group.total_wasted_bytes)),
+        ]);
+    }
+
+    table
+}
+
+fn print_array_duplicates(report: &mnemosyne_core::analysis::ArrayReport) {
+    if report.duplicate_groups.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "{}",
+        bold_label(&format!(
+            "Duplicate Array Analysis ({} arrays scanned, {} duplicate groups):",
+            report.total_arrays,
+            report.duplicate_groups.len()
+        ))
+    );
+    println!(
+        "  {} {}",
+        bold_label("Total duplicate waste:"),
+        format_megabytes(report.total_duplicate_waste)
+    );
+    println!("{}", build_array_duplicates_table(report));
 }
 
 fn build_collection_table(report: &mnemosyne_core::analysis::CollectionReport) -> Table {

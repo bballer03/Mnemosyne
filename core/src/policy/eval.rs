@@ -957,6 +957,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance,

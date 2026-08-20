@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod array_analysis;
 pub mod classloader;
 pub mod collection;
 pub mod engine;
@@ -10,6 +11,7 @@ pub mod thread;
 pub mod top_instances;
 
 pub use ai::*;
+pub use array_analysis::*;
 pub use classloader::*;
 pub use collection::*;
 pub use engine::*;
