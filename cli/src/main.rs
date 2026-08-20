@@ -505,6 +505,7 @@ enum GroupByArg {
     Package,
     #[value(name = "classloader")]
     Classloader,
+    Superclass,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -632,6 +633,7 @@ impl From<GroupByArg> for HistogramGroupBy {
             GroupByArg::Class => HistogramGroupBy::Class,
             GroupByArg::Package => HistogramGroupBy::Package,
             GroupByArg::Classloader => HistogramGroupBy::ClassLoader,
+            GroupByArg::Superclass => HistogramGroupBy::Superclass,
         }
     }
 }

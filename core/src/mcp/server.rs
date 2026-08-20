@@ -1171,7 +1171,7 @@ fn tool_catalog() -> Value {
                     { "name": "min_severity", "type": "string", "required": false, "description": "Optional minimum leak severity override." },
                     { "name": "packages", "type": "array<string>", "required": false, "description": "Optional package prefix filters." },
                     { "name": "leak_types", "type": "array<string>", "required": false, "description": "Optional leak-kind filter list." },
-                    { "name": "histogram_group_by", "type": "string", "required": false, "description": "Histogram grouping: class, package, or class_loader." },
+                    { "name": "histogram_group_by", "type": "string", "required": false, "description": "Histogram grouping: class, package, class_loader, or superclass." },
                     { "name": "enable_ai", "type": "boolean", "required": false, "description": "Enable AI insights for the analysis response." },
                     { "name": "enable_classloaders", "type": "boolean", "required": false, "description": "Attach classloader analysis." },
                     { "name": "enable_threads", "type": "boolean", "required": false, "description": "Attach thread analysis." },
