@@ -2,6 +2,7 @@ import { Navigate, createBrowserRouter, createMemoryRouter, RouterProvider, type
 
 import { ArtifactLoaderPage } from "../features/artifact-loader/ArtifactLoaderPage";
 import { ArtifactExplorerPage } from "../features/artifact-explorer/ArtifactExplorerPage";
+import { ComparisonPage } from "../features/comparison/ComparisonPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { HeapDominatorPage } from "../features/heap-explorer/HeapDominatorPage";
 import { HeapExplorerLayout } from "../features/heap-explorer/HeapExplorerLayout";
@@ -26,6 +27,10 @@ export const routes: RouteObject[] = [
   {
     path: "/artifacts/explorer",
     element: <ArtifactExplorerPage />,
+  },
+  {
+    path: "/compare",
+    element: <ComparisonPage />,
   },
   {
     path: "/heap-explorer",
