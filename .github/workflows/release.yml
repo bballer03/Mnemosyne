@@ -124,6 +124,74 @@ jobs:
           path: ${{ matrix.archive_name }}
           if-no-files-found: error
 
+  build-desktop:
+    name: Build Desktop Installer ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    needs: validate-version
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            tauri_args: ""
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            tauri_args: ""
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            tauri_args: "--target x86_64-apple-darwin"
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            tauri_args: "--target aarch64-apple-darwin"
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            tauri_args: ""
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Add Rust target
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Install Linux bundler dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Build Tauri bundle
+        id: tauri-build
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: tauri
+          args: ${{ matrix.tauri_args }}
+          # No tagName/releaseId: build-only mode. The `release` job below
+          # attaches these bundles to the same tagged release the CLI
+          # archives publish to, via artifactPaths + upload-artifact.
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '\n') }}
+          if-no-files-found: error
+
   docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -171,6 +239,7 @@ jobs:
     needs:
       - validate-version
       - build
+      - build-desktop
       - docker
     permissions: { contents: write }
     steps:
@@ -181,6 +250,13 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: package-*
+          merge-multiple: true
+          path: dist
+
+      - name: Download desktop installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-*
           merge-multiple: true
           path: dist
 

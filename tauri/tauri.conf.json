@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.mnemosyne.app",
   "build": {
-    "beforeDevCommand": "cd ../ui && bun run dev",
+    "beforeDevCommand": { "script": "bun run dev", "cwd": "../ui" },
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cd ../ui && bun run build",
+    "beforeBuildCommand": { "script": "bun run build", "cwd": "../ui" },
     "frontendDist": "../ui/dist"
   },
   "app": {
