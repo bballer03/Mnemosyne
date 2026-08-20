@@ -5,6 +5,7 @@ const bunExecutable = process.execPath;
 const testBatches = [
   [
     "src/lib/analysis-types.test.ts",
+    "src/lib/diff-types.test.ts",
     "src/app/App.test.tsx",
     "src/features/leak-workspace/LeakSourceMapPage.test.tsx",
     "src/features/leak-workspace/LeakFixPage.test.tsx",
@@ -30,6 +31,11 @@ const testBatches = [
     "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
     "src/features/heap-explorer/components/ModeRail.test.tsx",
     "src/features/heap-explorer/components/QueryConsolePanel.test.tsx",
+    "src/features/comparison/comparison-bridge-client.test.ts",
+    "src/features/comparison/MatchQualityBadge.test.tsx",
+    "src/features/comparison/ObjectDeltaTable.test.tsx",
+    "src/features/comparison/ComparisonPicker.test.tsx",
+    "src/features/comparison/ComparisonPage.test.tsx",
   ],
 ];
 
