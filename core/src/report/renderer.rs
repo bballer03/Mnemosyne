@@ -1339,6 +1339,7 @@ mod tests {
             }),
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
@@ -1415,6 +1416,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
@@ -1483,6 +1485,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
@@ -1553,6 +1556,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance: vec![ProvenanceMarker::new(
@@ -1631,6 +1635,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: Some(ReferrerReport {
                 entries: vec![ReferrerEntry {

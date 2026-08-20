@@ -646,6 +646,10 @@ struct AnalyzeHeapParams {
     enable_top_instances: bool,
     #[serde(default)]
     by_referrer: bool,
+    /// Attach duplicate primitive-array content detection (M15 Slice
+    /// 15.A). ADDITIVE: defaults to `false`.
+    #[serde(default)]
+    enable_duplicate_arrays: bool,
     #[serde(default)]
     top_n: Option<usize>,
     #[serde(default)]
@@ -1179,9 +1183,10 @@ fn tool_catalog() -> Value {
                     { "name": "enable_collections", "type": "boolean", "required": false, "description": "Attach collection analysis." },
                     { "name": "enable_top_instances", "type": "boolean", "required": false, "description": "Attach the top-instances report." },
                     { "name": "by_referrer", "type": "boolean", "required": false, "description": "Attach the group-by-referrer report (objects ranked by incoming reference count)." },
+                    { "name": "enable_duplicate_arrays", "type": "boolean", "required": false, "description": "Attach duplicate primitive-array content detection." },
                     { "name": "top_n", "type": "number", "required": false, "description": "Result count used by top-N analysis sections." },
                     { "name": "min_collection_capacity", "type": "number", "required": false, "description": "Minimum collection capacity to report." },
-                    { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string count to report." },
+                    { "name": "min_duplicate_count", "type": "number", "required": false, "description": "Minimum duplicate string/array count to report." },
                     snapshot_param()
                 ]
             },
@@ -1588,6 +1593,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 enable_collections: params.enable_collections,
                 enable_top_instances: params.enable_top_instances,
                 enable_by_referrer: params.by_referrer,
+                enable_duplicate_arrays: params.enable_duplicate_arrays,
                 top_n: params.top_n.unwrap_or(AnalyzeRequest::default().top_n),
                 min_collection_capacity: params
                     .min_collection_capacity

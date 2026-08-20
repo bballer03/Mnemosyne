@@ -1,8 +1,9 @@
 use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
-    analyze_by_referrer, analyze_classloaders, analyze_strings, find_top_instances,
-    inspect_collections, inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport,
-    ReferrerReport, StringReport, ThreadReport, TopInstancesReport,
+    analyze_by_referrer, analyze_classloaders, analyze_duplicate_arrays, analyze_strings,
+    find_top_instances, inspect_collections, inspect_threads, AnalysisMode, ArrayReport,
+    ClassLoaderReport, CollectionReport, ReferrerReport, StringReport, ThreadReport,
+    TopInstancesReport,
 };
 use crate::{
     config::{AnalysisConfig, AppConfig},
@@ -54,6 +55,10 @@ pub struct AnalyzeRequest {
     pub enable_collections: bool,
     pub enable_top_instances: bool,
     pub enable_by_referrer: bool,
+    /// Attach duplicate primitive-array content detection (M15 Slice
+    /// 15.A). ADDITIVE: default `false`, so existing `analyze` callers are
+    /// unaffected until they opt in.
+    pub enable_duplicate_arrays: bool,
     pub top_n: usize,
     pub min_collection_capacity: usize,
     pub min_duplicate_count: usize,
@@ -73,6 +78,7 @@ impl Default for AnalyzeRequest {
             enable_collections: false,
             enable_top_instances: false,
             enable_by_referrer: false,
+            enable_duplicate_arrays: false,
             top_n: 10,
             min_collection_capacity: 16,
             min_duplicate_count: 2,
@@ -144,6 +150,11 @@ pub struct AnalyzeResponse {
     pub collection_report: Option<CollectionReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_report: Option<StringReport>,
+    /// Duplicate primitive-array content report (M15 Slice 15.A).
+    /// ADDITIVE: only populated when `enable_duplicate_arrays` is
+    /// requested, so today's `analyze` output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array_report: Option<ArrayReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_instances: Option<TopInstancesReport>,
     /// Group-by-referrer ranking (M8 Slice 8.B). ADDITIVE: only populated
@@ -275,6 +286,7 @@ type GraphBackedAssembly = (
     Option<ClassLoaderReport>,
     Option<CollectionReport>,
     Option<StringReport>,
+    Option<ArrayReport>,
     Option<TopInstancesReport>,
     Option<ReferrerReport>,
     Vec<ProvenanceMarker>,
@@ -315,6 +327,9 @@ fn assemble_graph_backed_analysis(
             request.min_duplicate_count,
         )
     });
+    let array_report = request
+        .enable_duplicate_arrays
+        .then(|| analyze_duplicate_arrays(obj_graph, request.min_duplicate_count));
     let top_instances = request
         .enable_top_instances
         .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
@@ -333,6 +348,7 @@ fn assemble_graph_backed_analysis(
             classloader_report,
             collection_report,
             string_report,
+            array_report,
             top_instances,
             referrer_report,
             fallback_provenance(),
@@ -347,6 +363,7 @@ fn assemble_graph_backed_analysis(
             classloader_report,
             collection_report,
             string_report,
+            array_report,
             top_instances,
             referrer_report,
             Vec::new(),
@@ -364,8 +381,10 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         max_objects: request.config.parser.max_objects,
     };
     let summary = parse_heap(&parse_job)?;
-    let retain_field_data =
-        request.enable_strings || request.enable_collections || request.enable_threads;
+    let retain_field_data = request.enable_strings
+        || request.enable_collections
+        || request.enable_threads
+        || request.enable_duplicate_arrays;
 
     // Attempt graph-backed analysis
     let dominator_result = try_build_dominator(&request.heap_path, retain_field_data);
@@ -379,6 +398,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
         referrer_report,
         provenance,
@@ -390,6 +410,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         (
             graph,
             leaks,
+            None,
             None,
             None,
             None,
@@ -435,6 +456,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
         referrer_report,
         provenance,
@@ -533,6 +555,7 @@ pub async fn analyze_heap_from_graph(
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
         referrer_report,
         provenance,
@@ -563,6 +586,7 @@ pub async fn analyze_heap_from_graph(
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
         referrer_report,
         provenance,
@@ -1404,6 +1428,7 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
             referrer_report: None,
             provenance: Vec::new(),
