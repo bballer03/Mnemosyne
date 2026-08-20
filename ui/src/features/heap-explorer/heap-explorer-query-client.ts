@@ -27,10 +27,40 @@ export type ObjectReferrersResult = {
   referrers: ObjectReferenceEntry[];
 };
 
+/// A class-name-resolved object reference, mirroring core's structured
+/// `analysis::inspector::ObjectRef` (`{ object_id, class_name }`) -- kept
+/// separate from `ObjectReferenceEntry` above (which carries `shallowSize`/
+/// `displayName` from `getReferences`/`getReferrers`) since `inspectObject`
+/// returns the leaner MCP-shaped `ObjectRef`, not the query-client's own
+/// reference-entry shape.
+export type ObjectInspectionRef = {
+  objectId: string;
+  className: string;
+};
+
+export type FieldValueEntry = {
+  name: string;
+  typeName: string;
+  value: string;
+};
+
+export type ObjectInspection = {
+  objectId: string;
+  className: string;
+  shallowSize: number;
+  retainedSize?: number;
+  fields?: FieldValueEntry[];
+  referencesOut: ObjectInspectionRef[];
+  referrersIn: ObjectInspectionRef[];
+  dominatorParent?: ObjectInspectionRef;
+  dominatorChildren: ObjectInspectionRef[];
+};
+
 export type HeapExplorerHostBridge = {
   queryHeap?: (input: HeapQueryInput) => Promise<unknown>;
   getReferences?: (objectId: string) => Promise<unknown>;
   getReferrers?: (objectId: string) => Promise<unknown>;
+  inspectObject?: (objectId: string, retainFieldData?: boolean) => Promise<unknown>;
 };
 
 declare global {
@@ -69,6 +99,14 @@ function readOptionalString(value: unknown, field: string): string | undefined {
   }
 
   return value;
+}
+
+function readOptionalNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  return readNumber(value, field);
 }
 
 function readStringArray(value: unknown, field: string): string[] {
@@ -161,6 +199,78 @@ function parseObjectReferrersResult(value: unknown): ObjectReferrersResult {
   };
 }
 
+function parseObjectInspectionRef(value: unknown, path: string): ObjectInspectionRef {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    objectId: readString(value.object_id, `${path}.object_id`),
+    className: readString(value.class_name, `${path}.class_name`),
+  };
+}
+
+function parseFieldValueEntry(value: unknown, path: string): FieldValueEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    name: readString(value.name, `${path}.name`),
+    typeName: readString(value.type_name, `${path}.type_name`),
+    value: readString(value.value, `${path}.value`),
+  };
+}
+
+function parseObjectInspection(value: unknown): ObjectInspection {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid heap explorer bridge payload: inspection result must be an object.");
+  }
+
+  if (!Array.isArray(value.references_out)) {
+    throw new TypeError("Invalid heap explorer bridge payload: expected inspection.references_out to be an array.");
+  }
+
+  if (!Array.isArray(value.referrers_in)) {
+    throw new TypeError("Invalid heap explorer bridge payload: expected inspection.referrers_in to be an array.");
+  }
+
+  if (!Array.isArray(value.dominator_children)) {
+    throw new TypeError("Invalid heap explorer bridge payload: expected inspection.dominator_children to be an array.");
+  }
+
+  const fields = value.fields === undefined
+    ? undefined
+    : (() => {
+        if (!Array.isArray(value.fields)) {
+          throw new TypeError("Invalid heap explorer bridge payload: expected inspection.fields to be an array.");
+        }
+
+        return value.fields.map((entry, index) => parseFieldValueEntry(entry, `inspection.fields[${index}]`));
+      })();
+
+  return {
+    objectId: readString(value.object_id, "inspection.object_id"),
+    className: readString(value.class_name, "inspection.class_name"),
+    shallowSize: readNumber(value.shallow_size, "inspection.shallow_size"),
+    retainedSize: readOptionalNumber(value.retained_size, "inspection.retained_size"),
+    fields,
+    referencesOut: value.references_out.map((entry, index) =>
+      parseObjectInspectionRef(entry, `inspection.references_out[${index}]`),
+    ),
+    referrersIn: value.referrers_in.map((entry, index) =>
+      parseObjectInspectionRef(entry, `inspection.referrers_in[${index}]`),
+    ),
+    dominatorParent:
+      value.dominator_parent === null || value.dominator_parent === undefined
+        ? undefined
+        : parseObjectInspectionRef(value.dominator_parent, "inspection.dominator_parent"),
+    dominatorChildren: value.dominator_children.map((entry, index) =>
+      parseObjectInspectionRef(entry, `inspection.dominator_children[${index}]`),
+    ),
+  };
+}
+
 function getHeapExplorerBridge(): HeapExplorerHostBridge | undefined {
   if (globalThis.window === undefined) {
     return undefined;
@@ -179,6 +289,10 @@ export function isReferencesAvailable(): boolean {
 
 export function isReferrersAvailable(): boolean {
   return Boolean(getHeapExplorerBridge()?.getReferrers);
+}
+
+export function isInspectObjectAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.inspectObject);
 }
 
 export async function runHeapQuery(input: HeapQueryInput) {
@@ -243,6 +357,28 @@ export async function getObjectReferrers(objectId: string) {
     return {
       status: "error" as const,
       error: error instanceof Error ? error.message : "Unknown referrers lookup failure.",
+    };
+  }
+}
+
+export async function inspectObject(objectId: string, retainFieldData?: boolean) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.inspectObject) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.inspectObject(objectId, retainFieldData);
+
+    return {
+      status: "ready" as const,
+      data: parseObjectInspection(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown object inspection failure.",
     };
   }
 }

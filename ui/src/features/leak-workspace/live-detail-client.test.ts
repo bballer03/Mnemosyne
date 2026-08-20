@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import {
   explainLeak,
+  findAllLeakGcPaths,
   getLeakWorkspaceBridgeStatus,
   findLeakGcPath,
+  isFindAllGcPathsAvailable,
   normalizeFixResult,
   normalizeSourceMapResult,
   proposeLeakFix,
@@ -482,5 +484,185 @@ describe("live detail client", () => {
     expect(result.status).toBe("unavailable");
     expect(result.error).toBe("Required local context is missing.");
     expect(result.data?.suggestions).toEqual([]);
+  });
+
+  it("isFindAllGcPathsAvailable returns false when no bridge exists", () => {
+    expect(isFindAllGcPathsAvailable()).toBeFalse();
+  });
+
+  it("isFindAllGcPathsAvailable returns true when the bridge has findAllGcPaths", () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async () => ({
+        object_id: "0x1000",
+        path_length: 0,
+        path: [],
+        all_paths: [],
+        truncated: false,
+      }),
+    };
+
+    expect(isFindAllGcPathsAvailable()).toBeTrue();
+  });
+
+  it("findAllLeakGcPaths marks unavailable when no object target is present", async () => {
+    const result = await findAllLeakGcPaths({ leakId: "leak-1", heapPath: "fixture.hprof" });
+
+    expect(result.status).toBe("unavailable");
+    expect(result.data?.all_paths).toEqual([]);
+  });
+
+  it("findAllLeakGcPaths marks unavailable when no host bridge is installed", async () => {
+    const result = await findAllLeakGcPaths({
+      leakId: "leak-1",
+      heapPath: "fixture.hprof",
+      objectId: "0x1000",
+    });
+
+    expect(result.status).toBe("unavailable");
+    expect(result.error).toBe("Local multi-path GC bridge is unavailable.");
+  });
+
+  it("findAllLeakGcPaths normalizes a bridge-backed multi-path payload and forwards maxPaths", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    let receivedObjectId: string | undefined;
+    let receivedMaxPaths: number | undefined;
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async (objectId, maxPaths) => {
+        receivedObjectId = objectId;
+        receivedMaxPaths = maxPaths;
+        return {
+          object_id: "0x1000",
+          path_length: 1,
+          path: [
+            { object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true },
+          ],
+          all_paths: [
+            [{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }],
+            [
+              { object_id: "0x2000", class_name: "java.lang.Thread", field: "ROOT", is_root: true },
+              { object_id: "0x1000", class_name: "com.example.Cache", field: "entries", is_root: false },
+            ],
+          ],
+          truncated: false,
+          provenance: [],
+        };
+      },
+    };
+
+    const result = await findAllLeakGcPaths({
+      leakId: "leak-1",
+      heapPath: "fixture.hprof",
+      objectId: "0x1000",
+      maxPaths: 5,
+    });
+
+    expect(receivedObjectId).toBe("0x1000");
+    expect(receivedMaxPaths).toBe(5);
+    expect(result.status).toBe("ready");
+    expect(result.data?.object_id).toBe("0x1000");
+    expect(result.data?.all_paths).toHaveLength(2);
+    expect(result.data?.all_paths[1]?.[1]).toEqual({
+      object_id: "0x1000",
+      class_name: "com.example.Cache",
+      via: "entries",
+      is_root: false,
+    });
+    expect(result.data?.truncated).toBeFalse();
+  });
+
+  it("findAllLeakGcPaths defaults truncated to false and all_paths to empty when omitted", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async () => ({
+        object_id: "0x1000",
+        path_length: 0,
+        path: [],
+      }),
+    };
+
+    const result = await findAllLeakGcPaths({
+      leakId: "leak-1",
+      heapPath: "fixture.hprof",
+      objectId: "0x1000",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.data?.all_paths).toEqual([]);
+    expect(result.data?.truncated).toBeFalse();
+  });
+
+  it("findAllLeakGcPaths marks truncated results as ready with truncated=true", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async () => ({
+        object_id: "0x1000",
+        path_length: 1,
+        path: [{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }],
+        all_paths: [[{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }]],
+        truncated: true,
+      }),
+    };
+
+    const result = await findAllLeakGcPaths({
+      leakId: "leak-1",
+      heapPath: "fixture.hprof",
+      objectId: "0x1000",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.data?.truncated).toBeTrue();
+  });
+
+  it("findAllLeakGcPaths returns an error when the bridge throws", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async () => {
+        throw new Error("multi-path bridge exploded");
+      },
+    };
+
+    const result = await findAllLeakGcPaths({
+      leakId: "leak-1",
+      heapPath: "fixture.hprof",
+      objectId: "0x1000",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("multi-path bridge exploded");
+  });
+
+  it("treats findAllGcPaths-only bridge installs as ready", () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      capabilities: { provider: "ready" },
+      findAllGcPaths: async () => ({
+        object_id: "0x1000",
+        path_length: 0,
+        path: [],
+        all_paths: [],
+        truncated: false,
+      }),
+    };
+
+    expect(getLeakWorkspaceBridgeStatus()).toEqual({ bridge: "ready", provider: "ready" });
   });
 });

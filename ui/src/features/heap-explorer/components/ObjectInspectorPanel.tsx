@@ -5,8 +5,12 @@ import type { AnalysisArtifact } from "../../../lib/analysis-types";
 import {
   getObjectReferences,
   getObjectReferrers,
+  inspectObject,
+  isInspectObjectAvailable,
   isReferencesAvailable,
   isReferrersAvailable,
+  type ObjectInspection,
+  type ObjectInspectionRef,
   type ObjectReferenceEntry,
   type ObjectReferencesResult,
   type ObjectReferrersResult,
@@ -86,13 +90,44 @@ function renderReferenceList(entries: ObjectReferenceEntry[]) {
   );
 }
 
+/// M14 Slice 14.B: dominator parent/children navigation chip, built from the
+/// leaner `inspectObject` `ObjectInspectionRef` shape (`{ objectId,
+/// className }`, no `shallowSize`/`displayName`) -- same
+/// `/heap-explorer/object-inspector?objectId=...` navigation target as
+/// `renderReferenceList` above, just a smaller card since there is less
+/// data to show.
+function renderInspectionRefChip(entry: ObjectInspectionRef) {
+  return (
+    <Link
+      key={`${entry.objectId}:${entry.className}`}
+      to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`}
+      style={liveReferenceLinkStyle}
+    >
+      <strong style={{ overflowWrap: "anywhere" }}>{entry.className}</strong>
+      <p style={liveReferenceMetaStyle}>{entry.objectId}</p>
+    </Link>
+  );
+}
+
+function renderDominatorChildrenList(entries: ObjectInspectionRef[]) {
+  return (
+    <ul style={liveReferenceListStyle}>
+      {entries.map((entry) => (
+        <li key={`${entry.objectId}:${entry.className}`}>{renderInspectionRefChip(entry)}</li>
+      ))}
+    </ul>
+  );
+}
+
 export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspectorPanelProps) {
   const selectedRow = selectedRowIndex === undefined ? undefined : artifact.graph.dominators[selectedRowIndex];
   const selectedObjectId = selectedRow?.objectId ? selectedRow.objectId : undefined;
   const referencesAvailable = isReferencesAvailable();
   const referrersAvailable = isReferrersAvailable();
+  const inspectObjectAvailable = isInspectObjectAvailable();
   const [referencesState, setReferencesState] = useState<LiveLookupState<ObjectReferencesResult>>({ status: "idle" });
   const [referrersState, setReferrersState] = useState<LiveLookupState<ObjectReferrersResult>>({ status: "idle" });
+  const [inspectionState, setInspectionState] = useState<LiveLookupState<ObjectInspection>>({ status: "idle" });
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +173,48 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
     };
   }, [referrersAvailable, referencesAvailable, selectedObjectId]);
 
+  // M14 Slice 14.B: independent effect for the newer `inspectObject` bridge
+  // method, kept separate from the references/referrers effect above so
+  // that effect's behavior (and every existing test asserting against it)
+  // stays byte-identical when the bridge lacks `inspectObject` -- this
+  // effect simply never fires anything user-visible in that case.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedObjectId) {
+      setInspectionState({ status: "idle" });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const objectId: string = selectedObjectId;
+
+    setInspectionState(inspectObjectAvailable ? { status: "loading" } : { status: "unavailable" });
+
+    if (!inspectObjectAvailable) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadInspection() {
+      const result = await inspectObject(objectId);
+
+      if (cancelled) {
+        return;
+      }
+
+      setInspectionState(result);
+    }
+
+    void loadInspection();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectObjectAvailable, selectedObjectId]);
+
   const liveBridgeUnavailable = !referencesAvailable && !referrersAvailable;
 
   function renderReferenceSection(
@@ -168,6 +245,61 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
     return (
       <section style={{ display: "grid", gap: "0.6rem" }}>
         <h2 style={{ margin: 0, fontSize: "1rem", color: "#e2e8f0" }}>{title}</h2>
+        {content}
+      </section>
+    );
+  }
+
+  // M14 Slice 14.B: live dominator parent/children chips, sourced from the
+  // new `inspectObject` bridge method. Renders nothing at all when the
+  // bridge does not support `inspectObject` -- a hard regression gate: the
+  // rest of the panel must render byte-identical to pre-14.B output for
+  // every host that has not yet wired the new bridge method up.
+  function renderDominatorContextSection() {
+    if (!inspectObjectAvailable) {
+      return null;
+    }
+
+    let content;
+
+    if (!selectedObjectId) {
+      content = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>Live dominator navigation requires an object id in the artifact.</p>;
+    } else if (inspectionState.status === "idle" || inspectionState.status === "loading") {
+      content = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>Loading dominator context...</p>;
+    } else if (inspectionState.status === "error") {
+      content = <p style={{ margin: 0, color: "#fda4af", lineHeight: 1.7 }}>{inspectionState.error}</p>;
+    } else if (inspectionState.status === "unavailable") {
+      content = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>Live dominator context is not available.</p>;
+    } else {
+      const { dominatorParent, dominatorChildren } = inspectionState.data;
+
+      content = (
+        <div style={{ display: "grid", gap: "0.75rem" }}>
+          <div style={{ display: "grid", gap: "0.4rem" }}>
+            <h3 style={{ margin: 0, fontSize: "0.9rem", color: "#cbd5e1" }}>Parent</h3>
+            {dominatorParent ? (
+              <ul style={liveReferenceListStyle}>
+                <li>{renderInspectionRefChip(dominatorParent)}</li>
+              </ul>
+            ) : (
+              <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>No dominator parent (GC root or none).</p>
+            )}
+          </div>
+          <div style={{ display: "grid", gap: "0.4rem" }}>
+            <h3 style={{ margin: 0, fontSize: "0.9rem", color: "#cbd5e1" }}>Children</h3>
+            {dominatorChildren.length === 0 ? (
+              <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>No dominator children.</p>
+            ) : (
+              renderDominatorChildrenList(dominatorChildren)
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <section style={{ display: "grid", gap: "0.6rem" }}>
+        <h2 style={{ margin: 0, fontSize: "1rem", color: "#e2e8f0" }}>Dominator context (live)</h2>
         {content}
       </section>
     );
@@ -234,6 +366,8 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
             "No incoming referrers.",
             "Loading incoming referrers...",
           )}
+
+          {renderDominatorContextSection()}
         </div>
       ) : (
         <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>
