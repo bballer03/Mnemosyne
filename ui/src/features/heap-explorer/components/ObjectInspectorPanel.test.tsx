@@ -217,4 +217,74 @@ describe("ObjectInspectorPanel", () => {
     expect(errorMessage.tagName).toBe("P");
     expect(errorMessage).toHaveStyle("color: #fda4af");
   });
+
+  it("renders today's view unchanged when the bridge lacks inspectObject (regression gate)", () => {
+    setHeapExplorerBridge({
+      getReferences: async () => ({ objectId: "0xcafebabe", references: [] }),
+      getReferrers: async () => ({ objectId: "0xcafebabe", referrers: [] }),
+    });
+
+    const view = renderPanel(1);
+    const panel = within(view.container);
+
+    expect(panel.getByText(/com\.example\.cache\.lrucache@0xdeadbeef/i)).toBeInTheDocument();
+    expect(panel.queryByRole("heading", { name: /dominator context/i })).toBeNull();
+    expect(panel.queryByText(/no dominator parent/i)).toBeNull();
+    expect(panel.queryByText(/no dominator children/i)).toBeNull();
+  });
+
+  it("renders dominator parent and children as navigable chips when inspectObject is available", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({
+        object_id: "0xcafebabe",
+        class_name: "com.example.jobs.WorkerQueue",
+        shallow_size: 48,
+        retained_size: 768,
+        references_out: [],
+        referrers_in: [],
+        dominator_parent: { object_id: "0xdeadbeef", class_name: "com.example.cache.LruCache" },
+        dominator_children: [{ object_id: "0xfeedface", class_name: "com.example.jobs.Job" }],
+      }),
+    });
+
+    const view = renderPanel(1);
+
+    const parentLink = await view.findByRole("link", { name: /com\.example\.cache\.lrucache/i });
+    const childLink = await view.findByRole("link", { name: /com\.example\.jobs\.job/i });
+
+    expect(parentLink).toHaveAttribute("href", "/heap-explorer/object-inspector?objectId=0xdeadbeef");
+    expect(childLink).toHaveAttribute("href", "/heap-explorer/object-inspector?objectId=0xfeedface");
+  });
+
+  it("renders honest empty dominator-context messages when inspectObject returns none", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({
+        object_id: "0xcafebabe",
+        class_name: "com.example.jobs.WorkerQueue",
+        shallow_size: 48,
+        retained_size: 768,
+        references_out: [],
+        referrers_in: [],
+        dominator_parent: null,
+        dominator_children: [],
+      }),
+    });
+
+    const view = renderPanel(1);
+
+    expect(await view.findByText(/no dominator parent/i)).toBeInTheDocument();
+    expect(view.getByText(/no dominator children/i)).toBeInTheDocument();
+  });
+
+  it("shows an error message when the bridge rejects the inspectObject lookup", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => {
+        throw new Error("inspection bridge down");
+      },
+    });
+
+    const view = renderPanel(1);
+
+    expect(await view.findByText(/inspection bridge down/i)).toBeInTheDocument();
+  });
 });

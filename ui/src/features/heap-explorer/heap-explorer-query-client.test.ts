@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   getObjectReferrers,
   getObjectReferences,
+  inspectObject,
+  isInspectObjectAvailable,
   isReferencesAvailable,
   isReferrersAvailable,
   runHeapQuery,
@@ -231,5 +233,172 @@ describe("heap explorer query client", () => {
 
   it("isReferrersAvailable returns false when no bridge exists", () => {
     expect(isReferrersAvailable()).toBeFalse();
+  });
+
+  it("isInspectObjectAvailable returns false when no bridge exists", () => {
+    expect(isInspectObjectAvailable()).toBeFalse();
+  });
+
+  it("isInspectObjectAvailable returns true when the bridge has inspectObject", () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({
+        object_id: "0xabc",
+        class_name: "com.example.Cache",
+        shallow_size: 32,
+        retained_size: null,
+        references_out: [],
+        referrers_in: [],
+        dominator_parent: null,
+        dominator_children: [],
+      }),
+    });
+
+    expect(isInspectObjectAvailable()).toBeTrue();
+  });
+
+  it("inspectObject returns unavailable when no bridge exists", async () => {
+    expect(await inspectObject("0xabc")).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("inspectObject returns unavailable when the bridge has no inspectObject method", async () => {
+    setHeapExplorerBridge({
+      queryHeap: async () => ({
+        columns: [],
+        rows: [],
+      }),
+    });
+
+    expect(await inspectObject("0xabc")).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("inspectObject validates and returns a full object inspection", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({
+        object_id: "0xabc",
+        class_name: "com.example.Cache",
+        shallow_size: 32,
+        retained_size: 128,
+        references_out: [{ object_id: "0x1", class_name: "java.lang.String" }],
+        referrers_in: [{ object_id: "0x2", class_name: "com.example.Owner" }],
+        dominator_parent: { object_id: "0x3", class_name: "com.example.Root" },
+        dominator_children: [{ object_id: "0x4", class_name: "com.example.Leaf" }],
+      }),
+    });
+
+    expect(await inspectObject("0xabc")).toEqual({
+      status: "ready",
+      data: {
+        objectId: "0xabc",
+        className: "com.example.Cache",
+        shallowSize: 32,
+        retainedSize: 128,
+        fields: undefined,
+        referencesOut: [{ objectId: "0x1", className: "java.lang.String" }],
+        referrersIn: [{ objectId: "0x2", className: "com.example.Owner" }],
+        dominatorParent: { objectId: "0x3", className: "com.example.Root" },
+        dominatorChildren: [{ objectId: "0x4", className: "com.example.Leaf" }],
+      },
+    });
+  });
+
+  it("inspectObject handles a null retained_size and dominator_parent", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({
+        object_id: "0xabc",
+        class_name: "com.example.Cache",
+        shallow_size: 32,
+        retained_size: null,
+        references_out: [],
+        referrers_in: [],
+        dominator_parent: null,
+        dominator_children: [],
+      }),
+    });
+
+    expect(await inspectObject("0xabc")).toEqual({
+      status: "ready",
+      data: {
+        objectId: "0xabc",
+        className: "com.example.Cache",
+        shallowSize: 32,
+        retainedSize: undefined,
+        fields: undefined,
+        referencesOut: [],
+        referrersIn: [],
+        dominatorParent: undefined,
+        dominatorChildren: [],
+      },
+    });
+  });
+
+  it("inspectObject passes retainFieldData through to the bridge and parses fields", async () => {
+    let receivedRetainFieldData: boolean | undefined;
+    setHeapExplorerBridge({
+      inspectObject: async (_objectId, retainFieldData) => {
+        receivedRetainFieldData = retainFieldData;
+        return {
+          object_id: "0xabc",
+          class_name: "com.example.Cache",
+          shallow_size: 32,
+          retained_size: null,
+          fields: [{ name: "count", type_name: "int", value: "7" }],
+          references_out: [],
+          referrers_in: [],
+          dominator_parent: null,
+          dominator_children: [],
+        };
+      },
+    });
+
+    const result = await inspectObject("0xabc", true);
+
+    expect(receivedRetainFieldData).toBeTrue();
+    expect(result).toEqual({
+      status: "ready",
+      data: {
+        objectId: "0xabc",
+        className: "com.example.Cache",
+        shallowSize: 32,
+        retainedSize: undefined,
+        fields: [{ name: "count", typeName: "int", value: "7" }],
+        referencesOut: [],
+        referrersIn: [],
+        dominatorParent: undefined,
+        dominatorChildren: [],
+      },
+    });
+  });
+
+  it("inspectObject returns an error when the bridge throws", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => {
+        throw new Error("bridge down");
+      },
+    });
+
+    expect(await inspectObject("0xabc")).toEqual({
+      status: "error",
+      error: "bridge down",
+    });
+  });
+
+  it("inspectObject rejects malformed payloads", async () => {
+    setHeapExplorerBridge({
+      inspectObject: async () => ({ object_id: 42 }),
+    });
+
+    const result = await inspectObject("0xabc");
+
+    expect(result).toMatchObject({ status: "error" });
+
+    if (result.status !== "error") {
+      throw new Error("Expected malformed inspection payload to return an error state.");
+    }
+
+    expect(result.error).toContain("expected inspection.references_out to be an array");
   });
 });
