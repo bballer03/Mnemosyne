@@ -7,5 +7,6 @@ pub use executor::execute_query;
 pub use parser::parse_query;
 pub use types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause,
-    LogicalOp, Query, QueryError, QueryParseError, QueryResult, SelectClause, Value, WhereClause,
+    LogicalOp, Query, QueryError, QueryParseError, QueryResult, SelectClause, TraversalFunction,
+    Value, WhereClause,
 };

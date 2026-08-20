@@ -1,14 +1,25 @@
 use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
-    SelectClause, Value,
+    SelectClause, TraversalFunction, Value,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
-    graph::{gc_root_path::shortest_gc_root_path, DominatorTree},
+    graph::{gc_root_path::shortest_gc_root_path, DominatorTree, VIRTUAL_ROOT_ID},
     hprof::{field_types, read_field, FieldValue, ObjectGraph, ObjectId},
 };
 use regex::Regex;
+use std::collections::HashSet;
+
+/// Bounded-walk-with-cycle-guard depth for `dominators(...)` chain
+/// resolution. Mirrors the pattern established by M13's
+/// `resolve_loader_chain` and M15 15.B's `resolve_superclass_key` walk.
+/// Dominator chains cannot actually cycle by construction (the dominator
+/// tree is a tree), but the bound and visited-set guard cost nothing and
+/// match this codebase's established discipline for chain walks.
+const DOMINATOR_CHAIN_MAX_DEPTH: usize = 64;
+const DOMINATORS_OVERVIEW_HINT: &str =
+    "re-run with --mode deep; dominators(...) requires a deep-mode dominator tree.";
 
 const GC_ROOT_PATH_MAX_DEPTH: usize = 32;
 const GC_ROOT_PATH_OVERVIEW_HINT: &str =
@@ -32,22 +43,43 @@ pub fn execute_query(
     validate_supported_query(query, dominator)?;
 
     let columns = projected_columns(&query.select);
-    let mut matched_ids = Vec::new();
-
-    for (&object_id, object) in &graph.objects {
-        if !matches_class_pattern(
-            graph,
-            object.class_id,
-            &query.from.class_pattern,
-            query.from.instanceof,
-        ) {
-            continue;
+    let mut matched_ids = if let ClassPattern::Traversal(traversal) = &query.from.class_pattern {
+        // Traversal FROM sources (outbounds/inbounds/dominators) already
+        // resolve to an explicit object-id set -- no full-graph class-name
+        // scan needed, just filter that set through the ordinary WHERE
+        // pipeline exactly like a class-pattern FROM source does.
+        let candidates = resolve_traversal_candidates(*traversal, graph, dominator)?;
+        let mut ids = Vec::with_capacity(candidates.len());
+        for object_id in candidates {
+            if graph.get_object(object_id).is_none() {
+                // Dangling reference in the source object's edge list;
+                // silently skip, consistent with OBJECTS projection's
+                // handling of unresolved targets elsewhere in this module.
+                continue;
+            }
+            if matches_filter(query, graph, dominator, object_id)? {
+                ids.push(object_id);
+            }
         }
-        if !matches_filter(query, graph, dominator, object_id)? {
-            continue;
+        ids
+    } else {
+        let mut ids = Vec::new();
+        for (&object_id, object) in &graph.objects {
+            if !matches_class_pattern(
+                graph,
+                object.class_id,
+                &query.from.class_pattern,
+                query.from.instanceof,
+            ) {
+                continue;
+            }
+            if !matches_filter(query, graph, dominator, object_id)? {
+                continue;
+            }
+            ids.push(object_id);
         }
-        matched_ids.push(object_id);
-    }
+        ids
+    };
 
     matched_ids.sort_unstable();
 
@@ -138,6 +170,16 @@ fn validate_supported_query(
             return Err(QueryError::feature_unavailable_in_overview_mode(
                 feature,
                 STRING_PREDICATE_OVERVIEW_HINT,
+            ));
+        }
+
+        if matches!(
+            query.from.class_pattern,
+            ClassPattern::Traversal(TraversalFunction::Dominators(_))
+        ) {
+            return Err(QueryError::feature_unavailable_in_overview_mode(
+                "dominators(...)",
+                DOMINATORS_OVERVIEW_HINT,
             ));
         }
     }
@@ -331,6 +373,73 @@ fn lookup_instance_field_type(
     })
 }
 
+/// Resolves an `outbounds(id)` / `inbounds(id)` / `dominators(id)` `FROM`
+/// source to its candidate object-id set (M15 Slice 15.C).
+///
+/// `outbounds`/`inbounds` are pure composition over `ObjectGraph::get_references`
+/// / `get_referrers` -- both already return an empty `Vec` for an
+/// unknown/nonexistent object id (no new "not found" error path), which
+/// keeps this consistent with how a `FROM <class-pattern>` matching zero
+/// classes already produces an empty-but-valid `QueryResult` rather than a
+/// structured error.
+///
+/// `dominators` requires a deep-mode `DominatorTree`; `validate_supported_query`
+/// already rejects the query before this is reached in overview mode, so the
+/// `None` arm here is a defensive fallback, never hit in practice.
+fn resolve_traversal_candidates(
+    traversal: TraversalFunction,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+) -> Result<Vec<ObjectId>, QueryError> {
+    match traversal {
+        TraversalFunction::Outbounds(id) => Ok(graph.get_references(id)),
+        TraversalFunction::Inbounds(id) => Ok(graph.get_referrers(id)),
+        TraversalFunction::Dominators(id) => match dominator {
+            Some(dom) => Ok(resolve_dominator_chain(dom, id, DOMINATOR_CHAIN_MAX_DEPTH)),
+            None => Err(QueryError::feature_unavailable_in_overview_mode(
+                "dominators(...)",
+                DOMINATORS_OVERVIEW_HINT,
+            )),
+        },
+    }
+}
+
+/// Walks `DominatorTree::immediate_dominator` repeatedly starting from
+/// `object_id`'s own immediate dominator (not including `object_id` itself),
+/// up to `max_depth` entries. Stops early when an object has no immediate
+/// dominator, when the walk reaches the virtual super-root, or when a cycle
+/// is detected (a previously-visited id would be revisited) -- same
+/// bounded-walk-with-cycle-guard shape as M13's `resolve_loader_chain`.
+fn resolve_dominator_chain(
+    dominator: &DominatorTree,
+    object_id: ObjectId,
+    max_depth: usize,
+) -> Vec<ObjectId> {
+    let mut chain = Vec::new();
+    let mut visited: HashSet<ObjectId> = HashSet::new();
+    visited.insert(object_id);
+
+    let mut current = object_id;
+    while chain.len() < max_depth {
+        let Some(next) = dominator.immediate_dominator(current) else {
+            break;
+        };
+        if next == VIRTUAL_ROOT_ID {
+            break;
+        }
+        if !visited.insert(next) {
+            // Cycle detected -- cannot happen by construction (the
+            // dominator tree is a tree), but terminate defensively rather
+            // than trust that invariant blindly.
+            break;
+        }
+        chain.push(next);
+        current = next;
+    }
+
+    chain
+}
+
 fn matches_class_pattern(
     graph: &ObjectGraph,
     class_id: u64,
@@ -366,6 +475,13 @@ fn class_name_matches(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern
     match pattern {
         ClassPattern::Exact(expected) => class_name == *expected,
         ClassPattern::Glob(glob) => glob_match(glob, &class_name),
+        // `execute_query` resolves `ClassPattern::Traversal` sources
+        // directly via `resolve_traversal_candidates` before this function
+        // is ever reached, and `matches_instanceof_condition` never
+        // constructs a `Traversal` pattern. Kept for match exhaustiveness;
+        // a traversal function is never a valid class-name pattern to match
+        // against, so this arm always returns `false`.
+        ClassPattern::Traversal(_) => false,
     }
 }
 
