@@ -1650,6 +1650,267 @@ fn at_gc_root_path_combined_with_at_retained_size_and_instanceof() {
     assert_eq!(result.rows, vec![vec![CellValue::Id(0x7300)]]);
 }
 
+// ---------------------------------------------------------------------------
+// M15 Slice 15.C: outbounds/inbounds/dominators traversal functions
+// ---------------------------------------------------------------------------
+
+fn add_traversal_node(
+    graph: &mut ObjectGraph,
+    object_id: ObjectId,
+    class_id: ObjectId,
+    references: Vec<ObjectId>,
+    is_gc_root: bool,
+) {
+    graph.objects.insert(
+        object_id,
+        HeapObject {
+            id: object_id,
+            class_id,
+            shallow_size: 16,
+            references,
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    if is_gc_root {
+        graph.gc_roots.push(GcRoot {
+            object_id,
+            root_type: GcRootType::StickyClass,
+        });
+    }
+}
+
+/// Fixture for `outbounds`/`inbounds` equivalence tests: object `1` (a GC
+/// root) references `2` and `3`; object `4` (also a GC root) additionally
+/// references `3`, giving `3` two referrers for a meaningful `inbounds` test.
+fn build_outbounds_inbounds_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(&mut graph, 2, 1, "com.example.Node", Vec::new());
+
+    add_traversal_node(&mut graph, 1, 2, vec![2, 3], true);
+    add_traversal_node(&mut graph, 2, 2, Vec::new(), false);
+    add_traversal_node(&mut graph, 3, 2, Vec::new(), false);
+    add_traversal_node(&mut graph, 4, 2, vec![3], true);
+
+    graph
+}
+
+/// Fixture for `dominators` chain tests: a clean, non-diverging chain
+/// `10 -> 20 -> 30` (each intermediate node has exactly one referrer) so the
+/// dominator tree's immediate-dominator chain is unambiguous and walkable.
+fn build_dominator_chain_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(&mut graph, 2, 1, "com.example.Node", Vec::new());
+
+    add_traversal_node(&mut graph, 10, 2, vec![20], true);
+    add_traversal_node(&mut graph, 20, 2, vec![30], false);
+    add_traversal_node(&mut graph, 30, 2, Vec::new(), false);
+
+    graph
+}
+
+#[test]
+fn outbounds_matches_direct_get_references_call() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM outbounds(1)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    let mut expected: Vec<CellValue> = graph
+        .get_references(1)
+        .into_iter()
+        .map(CellValue::Id)
+        .collect();
+    expected.sort_by_key(|cell| match cell {
+        CellValue::Id(id) => *id,
+        _ => unreachable!(),
+    });
+    let actual: Vec<CellValue> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec![CellValue::Id(2), CellValue::Id(3)]);
+}
+
+#[test]
+fn inbounds_matches_direct_get_referrers_call() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM inbounds(3)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    let mut expected: Vec<CellValue> = graph
+        .get_referrers(3)
+        .into_iter()
+        .map(CellValue::Id)
+        .collect();
+    expected.sort_by_key(|cell| match cell {
+        CellValue::Id(id) => *id,
+        _ => unreachable!(),
+    });
+    let actual: Vec<CellValue> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec![CellValue::Id(1), CellValue::Id(4)]);
+}
+
+#[test]
+fn dominators_matches_direct_immediate_dominator_walk() {
+    let graph = build_dominator_chain_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM dominators(30)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    // Manually walk immediate_dominator the same way the executor's
+    // resolve_dominator_chain does, to prove equivalence per this project's
+    // "zero new analysis logic, pure composition" discipline. The traversal
+    // set then flows through the same `matched_ids.sort_unstable()` every
+    // other FROM source does, so results come back in ascending object-id
+    // order, not dominance-chain order.
+    let first = dominator
+        .immediate_dominator(30)
+        .expect("30 should be dominated");
+    let second = dominator
+        .immediate_dominator(first)
+        .expect("intermediate node should be dominated");
+    let mut expected = vec![CellValue::Id(first), CellValue::Id(second)];
+    expected.sort_by_key(|cell| match cell {
+        CellValue::Id(id) => *id,
+        _ => unreachable!(),
+    });
+    let actual: Vec<CellValue> = result.rows.into_iter().map(|row| row[0].clone()).collect();
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec![CellValue::Id(10), CellValue::Id(20)]);
+}
+
+#[test]
+fn dominators_chain_stops_before_virtual_root() {
+    let graph = build_dominator_chain_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM dominators(10)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    // 10 is a direct GC-root child of the virtual super-root; its only
+    // "dominator" is the virtual root itself, which must never leak into
+    // OQL results.
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn outbounds_on_unknown_object_id_returns_empty_result() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM outbounds(999999)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+    assert!(!result.truncated);
+}
+
+#[test]
+fn inbounds_on_unknown_object_id_returns_empty_result() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT @objectId FROM inbounds(999999)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn dominators_on_unknown_object_id_returns_empty_result() {
+    let graph = build_dominator_chain_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query("SELECT @objectId FROM dominators(999999)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn outbounds_combined_with_where_filter() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM outbounds(1) WHERE @objectId = 3"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(3)]]);
+    assert_eq!(result.total_matched, 1);
+}
+
+#[test]
+fn outbounds_combined_with_limit() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query("SELECT @objectId FROM outbounds(1) LIMIT 1").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.truncated);
+    assert_eq!(result.total_matched, 1);
+}
+
+#[test]
+fn inbounds_combined_with_where_and_limit() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM inbounds(3) WHERE @objectId > 0 LIMIT 1"#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.truncated);
+}
+
+#[test]
+fn dominators_in_overview_mode_returns_unavailable_error() {
+    let graph = build_dominator_chain_graph();
+    let query = parse_query("SELECT @objectId FROM dominators(30)").expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode dominators() should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "dominators(...)" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn outbounds_select_all_projects_object_id_and_class_name() {
+    let graph = build_outbounds_inbounds_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query("SELECT * FROM outbounds(1)").expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.columns, vec!["@objectId", "@className"]);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![CellValue::Id(2), CellValue::Str("com.example.Node".into())],
+            vec![CellValue::Id(3), CellValue::Str("com.example.Node".into())],
+        ]
+    );
+}
+
 #[test]
 fn is_null_combined_with_objects_projection() {
     let graph = build_objects_projection_graph();

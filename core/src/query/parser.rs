@@ -1,6 +1,6 @@
 use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
-    QueryParseError, SelectClause, Value, WhereClause,
+    QueryParseError, SelectClause, TraversalFunction, Value, WhereClause,
 };
 
 pub fn parse_query(input: &str) -> Result<Query, QueryParseError> {
@@ -69,6 +69,16 @@ impl<'a> Parser<'a> {
     fn parse_from_clause(&mut self) -> Result<FromClause, QueryParseError> {
         self.skip_ws();
         let instanceof = self.consume_keyword("INSTANCEOF");
+
+        if !instanceof {
+            if let Some(traversal) = self.try_parse_traversal_function()? {
+                return Ok(FromClause {
+                    class_pattern: ClassPattern::Traversal(traversal),
+                    instanceof: false,
+                });
+            }
+        }
+
         let pattern = self.parse_quoted_string()?;
         let class_pattern = if pattern.contains('*') {
             ClassPattern::Glob(pattern)
@@ -80,6 +90,61 @@ impl<'a> Parser<'a> {
             class_pattern,
             instanceof,
         })
+    }
+
+    /// Recognizes `outbounds(<id>)` / `inbounds(<id>)` / `dominators(<id>)`
+    /// as alternative `FROM` sources (M15 Slice 15.C). The argument is
+    /// scoped to a literal object-id integer for this slice -- nested query
+    /// arguments are Slice 15.E's job (subqueries). Returns `Ok(None)`
+    /// without consuming input if none of the three keywords match, so the
+    /// caller can fall back to the ordinary quoted class-pattern parse.
+    fn try_parse_traversal_function(
+        &mut self,
+    ) -> Result<Option<TraversalFunction>, QueryParseError> {
+        let keyword = if self.consume_keyword("outbounds") {
+            "outbounds"
+        } else if self.consume_keyword("inbounds") {
+            "inbounds"
+        } else if self.consume_keyword("dominators") {
+            "dominators"
+        } else {
+            return Ok(None);
+        };
+
+        self.skip_ws();
+        if !self.consume_char('(') {
+            return Err(self.error(format!("expected '(' after '{keyword}'")));
+        }
+        let object_id = self.parse_object_id()?;
+        self.skip_ws();
+        if !self.consume_char(')') {
+            return Err(self.error(format!("expected ')' to close '{keyword}(...)'")));
+        }
+
+        let traversal = match keyword {
+            "outbounds" => TraversalFunction::Outbounds(object_id),
+            "inbounds" => TraversalFunction::Inbounds(object_id),
+            _ => TraversalFunction::Dominators(object_id),
+        };
+
+        Ok(Some(traversal))
+    }
+
+    /// Parses an unsigned 64-bit object-id literal (no sign, unlike the
+    /// general integer literal `parse_value` accepts for `WHERE` values).
+    fn parse_object_id(&mut self) -> Result<u64, QueryParseError> {
+        self.skip_ws();
+        let start = self.pos;
+        while matches!(self.peek_char(), Some(ch) if ch.is_ascii_digit()) {
+            self.pos += ch_len(self.peek_char().unwrap());
+        }
+        if self.pos == start {
+            return Err(self.error("expected object id"));
+        }
+
+        let raw = &self.input[start..self.pos];
+        raw.parse::<u64>()
+            .map_err(|_| self.error(format!("invalid object id '{raw}'")))
     }
 
     fn parse_where_clause(&mut self) -> Result<WhereClause, QueryParseError> {
@@ -410,5 +475,82 @@ mod tests {
             .expect("query should parse");
 
         assert!(format!("{:?}", query.select).contains("GcRootPath"));
+    }
+
+    #[test]
+    fn parser_constructs_outbounds_traversal_from_clause() {
+        let query = parse_query("SELECT * FROM outbounds(12345)").expect("query should parse");
+
+        assert_eq!(
+            query.from,
+            FromClause {
+                class_pattern: ClassPattern::Traversal(TraversalFunction::Outbounds(12345)),
+                instanceof: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parser_constructs_inbounds_traversal_from_clause() {
+        let query = parse_query("SELECT * FROM inbounds(999)").expect("query should parse");
+
+        assert_eq!(
+            query.from,
+            FromClause {
+                class_pattern: ClassPattern::Traversal(TraversalFunction::Inbounds(999)),
+                instanceof: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parser_constructs_dominators_traversal_from_clause() {
+        let query = parse_query("SELECT * FROM dominators(42)").expect("query should parse");
+
+        assert_eq!(
+            query.from,
+            FromClause {
+                class_pattern: ClassPattern::Traversal(TraversalFunction::Dominators(42)),
+                instanceof: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parser_supports_traversal_from_combined_with_where_and_limit() {
+        let query =
+            parse_query(r#"SELECT @objectId FROM outbounds(1) WHERE @shallowSize > 0 LIMIT 5"#)
+                .expect("query should parse");
+
+        assert_eq!(
+            query.from.class_pattern,
+            ClassPattern::Traversal(TraversalFunction::Outbounds(1))
+        );
+        assert!(query.filter.is_some());
+        assert_eq!(query.limit, Some(5));
+    }
+
+    #[test]
+    fn parser_rejects_traversal_function_missing_open_paren() {
+        let error = parse_query("SELECT * FROM outbounds 12345)").expect_err("should fail");
+        assert!(error.to_string().contains("expected '('"));
+    }
+
+    #[test]
+    fn parser_rejects_traversal_function_missing_close_paren() {
+        let error = parse_query("SELECT * FROM outbounds(12345").expect_err("should fail");
+        assert!(error.to_string().contains("expected ')'"));
+    }
+
+    #[test]
+    fn parser_rejects_traversal_function_non_integer_argument() {
+        let error = parse_query(r#"SELECT * FROM outbounds("abc")"#).expect_err("should fail");
+        assert!(error.to_string().contains("expected object id"));
+    }
+
+    #[test]
+    fn parser_rejects_negative_object_id_in_traversal_function() {
+        let error = parse_query("SELECT * FROM outbounds(-1)").expect_err("should fail");
+        assert!(error.to_string().contains("expected object id"));
     }
 }

@@ -43,6 +43,26 @@ pub struct FromClause {
 pub enum ClassPattern {
     Exact(String),
     Glob(String),
+    /// A traversal function producing an explicit object-id set instead of
+    /// matching by class name. Slots into the same `FromClause.class_pattern`
+    /// extension point as `Exact`/`Glob` rather than introducing a parallel
+    /// `Query.from` shape -- see M15 Slice 15.C commit body for rationale.
+    Traversal(TraversalFunction),
+}
+
+/// `outbounds(id)` / `inbounds(id)` / `dominators(id)` OQL traversal
+/// functions (M15 Slice 15.C). Each wraps a literal object id; nested-query
+/// arguments (`outbounds(SELECT ...)`) are out of scope for this slice and
+/// land with subqueries in M15 Slice 15.E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraversalFunction {
+    /// Objects the given object id directly references (outgoing edges).
+    Outbounds(u64),
+    /// Objects that directly reference the given object id (incoming edges).
+    Inbounds(u64),
+    /// The chain of immediate dominators of the given object id, nearest
+    /// first, walking towards the virtual super-root (exclusive).
+    Dominators(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
