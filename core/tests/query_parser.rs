@@ -93,3 +93,48 @@ fn parse_query_supports_single_quoted_string_literals() {
         })
     );
 }
+
+// M15 Slice 15.D: regex `=~` operator.
+
+#[test]
+fn parse_query_supports_regex_operator() {
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE @className =~ "^com\.example\..*""#,
+    )
+    .expect("query should parse");
+
+    assert_eq!(
+        query.filter,
+        Some(WhereClause {
+            conditions: vec![Condition {
+                field: FieldRef::BuiltIn(BuiltInField::ClassName),
+                op: ComparisonOp::RegexMatch,
+                value: Value::Str(r"^com\.example\..*".into()),
+            }],
+            operators: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn parse_query_rejects_malformed_regex_pattern() {
+    let error =
+        parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "(unclosed""#)
+            .expect_err("malformed regex should fail to parse, not panic");
+
+    assert!(
+        error.to_string().to_lowercase().contains("regex"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_rejects_regex_operator_with_non_string_value() {
+    let error = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE kind =~ 123"#)
+        .expect_err("=~ with a non-string literal should fail to parse, not panic");
+
+    assert!(
+        error.to_string().to_lowercase().contains("regex"),
+        "unexpected parse error: {error}"
+    );
+}

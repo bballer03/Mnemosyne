@@ -1298,6 +1298,164 @@ fn contains_in_overview_mode_returns_unavailable_error() {
     ));
 }
 
+// M15 Slice 15.D: regex `=~` operator.
+
+#[test]
+fn regex_matches_prefix_pattern_on_instance_field() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2004)]]
+    );
+}
+
+#[test]
+fn regex_excludes_non_matching_instance_field() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    let matched_ids: Vec<_> = result.rows.into_iter().flatten().collect();
+    assert!(!matched_ids.contains(&CellValue::Id(0x2001))); // "guest@1"
+    assert!(!matched_ids.contains(&CellValue::Id(0x2002))); // ".foo"
+    assert!(!matched_ids.contains(&CellValue::Id(0x2003))); // "exact"
+}
+
+#[test]
+fn regex_no_match_returns_empty_result() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^zzz.*""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert!(result.rows.is_empty());
+    assert_eq!(result.total_matched, 0);
+}
+
+#[test]
+fn regex_in_overview_mode_returns_unavailable_error() {
+    let graph = build_string_query_graph();
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*""#)
+        .expect("query should parse");
+
+    let error = execute_query(&query, &graph, None)
+        .expect_err("overview-mode string predicates should fail structurally");
+
+    assert!(matches!(
+        error,
+        QueryError::FeatureUnavailableInOverviewMode { feature, hint }
+            if feature == "name" && hint.contains("--mode deep")
+    ));
+}
+
+#[test]
+fn regex_combined_with_instanceof_works() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*" AND name INSTANCEOF "java.lang.String""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2004)]]
+    );
+}
+
+#[test]
+fn regex_combined_with_contains_via_or() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin$" OR name CONTAINS "exact""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2000)], vec![CellValue::Id(0x2003)]]
+    );
+}
+
+#[test]
+fn regex_combined_with_like_via_and() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*" AND name LIKE "%Root""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(0x2004)]]);
+}
+
+#[test]
+fn malformed_regex_pattern_built_directly_returns_structured_error_not_panic() {
+    // Bypasses the parser's own eager validation (constructs the `Query`
+    // directly, as an MCP/library caller might) to prove the executor's
+    // independent compile-once-per-query step also fails structurally
+    // rather than panicking on a pattern the parser never got to see.
+    use mnemosyne_core::query::{
+        BuiltInField, ComparisonOp, Condition, FieldRef, FromClause, Query, SelectClause, Value,
+        WhereClause,
+    };
+
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = Query {
+        select: SelectClause::Fields(vec![FieldRef::BuiltIn(BuiltInField::ObjectId)]),
+        from: FromClause {
+            class_pattern: mnemosyne_core::query::ClassPattern::Exact("com.example.User".into()),
+            instanceof: false,
+        },
+        filter: Some(WhereClause {
+            conditions: vec![Condition {
+                field: FieldRef::InstanceField("name".into()),
+                op: ComparisonOp::RegexMatch,
+                value: Value::Str("(unclosed".into()),
+            }],
+            operators: Vec::new(),
+        }),
+        limit: None,
+    };
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("malformed regex pattern should fail structurally, not panic");
+
+    assert!(matches!(error, QueryError::Unsupported(_)));
+}
+
+#[test]
+fn where_at_to_string_regex_matches_string_content() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT @objectId FROM "java.lang.String" WHERE @toString =~ "^hello.*""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.rows, vec![vec![CellValue::Id(15)]]);
+}
+
 #[test]
 fn where_at_to_string_like_matches_string_content() {
     let graph = build_string_query_graph();

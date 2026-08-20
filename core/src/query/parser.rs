@@ -2,6 +2,7 @@ use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
     QueryParseError, SelectClause, TraversalFunction, Value, WhereClause,
 };
+use regex::Regex;
 
 pub fn parse_query(input: &str) -> Result<Query, QueryParseError> {
     let mut parser = Parser::new(input);
@@ -185,6 +186,9 @@ impl<'a> Parser<'a> {
         }
         let op = self.parse_comparison_op()?;
         let value = self.parse_value()?;
+        if op == ComparisonOp::RegexMatch {
+            self.validate_regex_pattern(&value)?;
+        }
         Ok(Condition { field, op, value })
     }
 
@@ -214,6 +218,11 @@ impl<'a> Parser<'a> {
             ("!=", ComparisonOp::Ne),
             (">=", ComparisonOp::Ge),
             ("<=", ComparisonOp::Le),
+            // Must be checked before the plain "=" token below -- otherwise
+            // "=" would greedily match first and leave a dangling "~" that
+            // fails the subsequent value parse instead of being recognized
+            // as the regex operator.
+            ("=~", ComparisonOp::RegexMatch),
             ("=", ComparisonOp::Eq),
             (">", ComparisonOp::Gt),
             ("<", ComparisonOp::Lt),
@@ -232,6 +241,23 @@ impl<'a> Parser<'a> {
             return Ok(ComparisonOp::InstanceOf);
         }
         Err(self.error("expected comparison operator"))
+    }
+
+    /// Eagerly validates a `=~` regex pattern at parse time so a malformed
+    /// pattern fails fast, before any graph work, with a structured error
+    /// rather than surfacing as a panic or a silent no-match deep inside
+    /// query execution (M15 Slice 15.D, §6 R3). The compiled `regex::Regex`
+    /// itself is discarded here -- `Condition`/`Value` derive
+    /// `Serialize`/`Deserialize`/`Eq` and cannot hold a compiled regex, so
+    /// the pattern travels onward as a plain string and the executor
+    /// (re-)compiles it once per query evaluation.
+    fn validate_regex_pattern(&self, value: &Value) -> Result<(), QueryParseError> {
+        let Value::Str(pattern) = value else {
+            return Err(self.error("=~ requires a quoted regex pattern"));
+        };
+        Regex::new(pattern)
+            .map_err(|err| self.error(format!("invalid regex pattern '{pattern}': {err}")))?;
+        Ok(())
     }
 
     fn parse_value(&mut self) -> Result<Value, QueryParseError> {

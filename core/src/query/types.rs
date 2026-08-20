@@ -99,6 +99,20 @@ pub enum ComparisonOp {
     Like,
     /// Case-sensitive substring match on string values.
     Contains,
+    /// Regex pattern match (`=~`) on string-capable fields (M15 Slice 15.D).
+    ///
+    /// Powered by the `regex` crate's linear-time (non-backtracking) engine
+    /// so a user-supplied pattern cannot become a ReDoS footgun against
+    /// adversarial input -- see `docs/design/milestone-15-mat-backend-parity.md`
+    /// §6 R3. The pattern itself always travels as a plain `Value::Str` (this
+    /// enum stays `Copy`/`Eq`/`Serialize`, so it cannot hold a compiled
+    /// `regex::Regex`); the parser eagerly validates the pattern compiles so
+    /// a malformed regex fails fast before any graph work, and the executor
+    /// independently (re-)compiles it once per query evaluation -- not once
+    /// per candidate object -- for both defense-in-depth (a `Query` built
+    /// programmatically, e.g. via the MCP surface, bypasses the parser) and
+    /// performance.
+    RegexMatch,
     IsNull,
     IsNotNull,
     InstanceOf,

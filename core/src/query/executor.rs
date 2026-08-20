@@ -1,7 +1,7 @@
 use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
-    SelectClause, TraversalFunction, Value,
+    SelectClause, TraversalFunction, Value, WhereClause,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
@@ -31,7 +31,7 @@ const NULL_PREDICATE_OVERVIEW_HINT: &str =
 const RETAINED_SIZE_OVERVIEW_HINT: &str =
     "re-run with --mode deep or use @shallowSize for a per-object approximation.";
 const STRING_PREDICATE_OVERVIEW_HINT: &str =
-    "re-run with --mode deep; LIKE and CONTAINS on instance fields require deep-mode field data.";
+    "re-run with --mode deep; LIKE, CONTAINS, and =~ on instance fields require deep-mode field data.";
 const TO_STRING_OVERVIEW_HINT: &str =
     "re-run with --mode deep; @toString requires deep-mode field data.";
 
@@ -41,6 +41,17 @@ pub fn execute_query(
     dominator: Option<&DominatorTree>,
 ) -> Result<QueryResult, QueryError> {
     validate_supported_query(query, dominator)?;
+
+    // Compile any `=~` regex patterns in the WHERE clause exactly once, here,
+    // before either candidate loop below -- not once per candidate object.
+    // The parser already validated pattern syntax eagerly (fail-fast, before
+    // any graph work), but a `Query` can also be built directly by a caller
+    // that bypassed the string parser (e.g. the MCP surface), so this is
+    // also the defense-in-depth compile point (M15 Slice 15.D).
+    let regexes: Vec<Option<Regex>> = match &query.filter {
+        Some(filter) => compile_regex_conditions(filter)?,
+        None => Vec::new(),
+    };
 
     let columns = projected_columns(&query.select);
     let mut matched_ids = if let ClassPattern::Traversal(traversal) = &query.from.class_pattern {
@@ -57,7 +68,7 @@ pub fn execute_query(
                 // handling of unresolved targets elsewhere in this module.
                 continue;
             }
-            if matches_filter(query, graph, dominator, object_id)? {
+            if matches_filter(query, graph, dominator, object_id, &regexes)? {
                 ids.push(object_id);
             }
         }
@@ -73,7 +84,7 @@ pub fn execute_query(
             ) {
                 continue;
             }
-            if !matches_filter(query, graph, dominator, object_id)? {
+            if !matches_filter(query, graph, dominator, object_id, &regexes)? {
                 continue;
             }
             ids.push(object_id);
@@ -219,7 +230,10 @@ fn query_uses_to_string(query: &Query) -> bool {
 fn query_uses_instance_string_predicates(query: &Query) -> Option<String> {
     query.filter.as_ref().and_then(|filter| {
         filter.conditions.iter().find_map(|condition| {
-            if !matches!(condition.op, ComparisonOp::Like | ComparisonOp::Contains) {
+            if !matches!(
+                condition.op,
+                ComparisonOp::Like | ComparisonOp::Contains | ComparisonOp::RegexMatch
+            ) {
                 return None;
             }
 
@@ -493,19 +507,61 @@ fn glob_match(pattern: &str, value: &str) -> bool {
     }
 }
 
+/// Compiles every `=~` regex pattern in `filter.conditions` once, up front,
+/// returning a `Vec` parallel to `filter.conditions` (`None` for
+/// non-regex conditions). Called exactly once per `execute_query` call --
+/// deliberately *not* once per candidate object -- so a WHERE clause with a
+/// regex predicate does not pay recompilation cost per object on large
+/// heaps (M15 Slice 15.D). A non-string value or a pattern that fails to
+/// compile is a structured `QueryError`, never a panic; this is also the
+/// defense-in-depth check for a `Query` assembled directly (bypassing the
+/// parser's own eager validation), e.g. via the MCP surface.
+fn compile_regex_conditions(filter: &WhereClause) -> Result<Vec<Option<Regex>>, QueryError> {
+    filter
+        .conditions
+        .iter()
+        .map(|condition| {
+            if condition.op != ComparisonOp::RegexMatch {
+                return Ok(None);
+            }
+            let Value::Str(pattern) = &condition.value else {
+                return Err(QueryError::Unsupported(
+                    "=~ requires a string regex pattern".into(),
+                ));
+            };
+            Regex::new(pattern).map(Some).map_err(|err| {
+                QueryError::Unsupported(format!("invalid regex pattern '{pattern}': {err}"))
+            })
+        })
+        .collect()
+}
+
 fn matches_filter(
     query: &Query,
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
+    regexes: &[Option<Regex>],
 ) -> Result<bool, QueryError> {
     let Some(filter) = &query.filter else {
         return Ok(true);
     };
 
-    let mut result = evaluate_condition(&filter.conditions[0], graph, dominator, object_id)?;
+    let mut result = evaluate_condition(
+        &filter.conditions[0],
+        graph,
+        dominator,
+        object_id,
+        regexes.first().and_then(Option::as_ref),
+    )?;
     for (idx, op) in filter.operators.iter().enumerate() {
-        let next = evaluate_condition(&filter.conditions[idx + 1], graph, dominator, object_id)?;
+        let next = evaluate_condition(
+            &filter.conditions[idx + 1],
+            graph,
+            dominator,
+            object_id,
+            regexes.get(idx + 1).and_then(Option::as_ref),
+        )?;
         result = match op {
             super::types::LogicalOp::And => result && next,
             super::types::LogicalOp::Or => result || next,
@@ -519,6 +575,7 @@ fn evaluate_condition(
     graph: &ObjectGraph,
     dominator: Option<&DominatorTree>,
     object_id: ObjectId,
+    regex: Option<&Regex>,
 ) -> Result<bool, QueryError> {
     if condition.op == ComparisonOp::InstanceOf {
         return Ok(matches_instanceof_condition(
@@ -540,7 +597,7 @@ fn evaluate_condition(
     }
 
     let left = resolve_field_value(&condition.field, graph, dominator, object_id);
-    Ok(compare_values(left, condition.op, &condition.value))
+    Ok(compare_values(left, condition.op, &condition.value, regex))
 }
 
 fn resolve_field_value(
@@ -743,7 +800,7 @@ fn resolve_reference_target(
     }
 }
 
-fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
+fn compare_values(left: CellValue, op: ComparisonOp, right: &Value, regex: Option<&Regex>) -> bool {
     match (left, right) {
         (CellValue::Int(left), Value::Int(right)) => match op {
             ComparisonOp::Eq => left == *right,
@@ -759,6 +816,7 @@ fn compare_values(left: CellValue, op: ComparisonOp, right: &Value) -> bool {
             ComparisonOp::Ne => left != *right,
             ComparisonOp::Like => like_match(right, &left),
             ComparisonOp::Contains => left.contains(right),
+            ComparisonOp::RegexMatch => regex.is_some_and(|regex| regex.is_match(&left)),
             _ => false,
         },
         (CellValue::Bool(left), Value::Bool(right)) => match op {
