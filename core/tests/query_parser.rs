@@ -1,6 +1,6 @@
 use mnemosyne_core::query::{
-    parse_query, BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, Query,
-    SelectClause, Value, WhereClause,
+    parse_query, parse_query_statement, BuiltInField, ClassPattern, ComparisonOp, Condition,
+    FieldRef, FromClause, Query, QueryStatement, SelectClause, Value, WhereClause,
 };
 
 #[test]
@@ -137,4 +137,113 @@ fn parse_query_rejects_regex_operator_with_non_string_value() {
         error.to_string().to_lowercase().contains("regex"),
         "unexpected parse error: {error}"
     );
+}
+
+// M15 Slice 15.E: one-level subqueries (`FROM OBJECTS (<subquery>)`) and `UNION`.
+
+#[test]
+fn parser_constructs_subquery_from_clause() {
+    let query =
+        parse_query(r#"SELECT * FROM OBJECTS (SELECT * FROM "com.example.User" WHERE kind > 5)"#)
+            .expect("query with a one-level subquery should parse");
+
+    let ClassPattern::Subquery(inner) = &query.from.class_pattern else {
+        panic!("expected ClassPattern::Subquery, got {:?}", query.from);
+    };
+    assert_eq!(
+        inner.from.class_pattern,
+        ClassPattern::Exact("com.example.User".into())
+    );
+    assert!(inner.filter.is_some());
+}
+
+#[test]
+fn parser_supports_subquery_combined_with_outer_where_and_limit() {
+    let query = parse_query(
+        r#"SELECT @objectId FROM OBJECTS (SELECT * FROM outbounds(1)) WHERE @objectId > 0 LIMIT 5"#,
+    )
+    .expect("query should parse");
+
+    assert!(matches!(
+        query.from.class_pattern,
+        ClassPattern::Subquery(_)
+    ));
+    assert!(query.filter.is_some());
+    assert_eq!(query.limit, Some(5));
+}
+
+#[test]
+fn parser_rejects_subquery_missing_open_paren() {
+    let error = parse_query(r#"SELECT * FROM OBJECTS SELECT * FROM "com.example.User""#)
+        .expect_err("should fail");
+    assert!(error.to_string().contains("expected '('"));
+}
+
+#[test]
+fn parser_rejects_subquery_missing_close_paren() {
+    let error = parse_query(r#"SELECT * FROM OBJECTS (SELECT * FROM "com.example.User""#)
+        .expect_err("should fail");
+    assert!(error.to_string().contains("expected ')'"));
+}
+
+#[test]
+fn parser_rejects_second_level_nested_subquery() {
+    // Bounded to one level of nesting (M15 Slice 15.E §4.1 item 4): a
+    // subquery reachable through `OBJECTS(...)` must not itself contain
+    // another `OBJECTS(...)` subquery. This must be a hard, specific parse
+    // error naming the bound -- not silent truncation and not an
+    // unbounded/looping parse.
+    let error = parse_query(
+        r#"SELECT * FROM OBJECTS (SELECT * FROM OBJECTS (SELECT * FROM "com.example.User"))"#,
+    )
+    .expect_err("doubly nested subquery should be rejected at parse time");
+
+    assert!(
+        error
+            .to_string()
+            .to_lowercase()
+            .contains("nesting depth exceeded"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_statement_returns_single_for_ordinary_query() {
+    let statement = parse_query_statement(r#"SELECT * FROM "com.example.User""#)
+        .expect("ordinary query should parse as a statement");
+
+    assert!(matches!(statement, QueryStatement::Single(_)));
+}
+
+#[test]
+fn parse_query_statement_recognizes_union_of_two_queries() {
+    let statement = parse_query_statement(
+        r#"SELECT * FROM "com.example.User" WHERE kind = 1 UNION SELECT * FROM "com.example.Admin""#,
+    )
+    .expect("UNION of two queries should parse");
+
+    let QueryStatement::Union(left, right) = statement else {
+        panic!("expected QueryStatement::Union");
+    };
+    assert_eq!(
+        left.from.class_pattern,
+        ClassPattern::Exact("com.example.User".into())
+    );
+    assert_eq!(
+        right.from.class_pattern,
+        ClassPattern::Exact("com.example.Admin".into())
+    );
+}
+
+#[test]
+fn parse_query_still_rejects_trailing_union_keyword() {
+    // `parse_query` (the pre-existing, unchanged entry point) intentionally
+    // does not understand `UNION` -- only `parse_query_statement` does.
+    // Every existing caller of `parse_query` must keep seeing exactly the
+    // same "trailing input" rejection it always has.
+    let error =
+        parse_query(r#"SELECT * FROM "com.example.User" UNION SELECT * FROM "com.example.Admin""#)
+            .expect_err("parse_query should reject trailing UNION, not silently accept it");
+
+    assert!(error.to_string().contains("expected end of query"));
 }

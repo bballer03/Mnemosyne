@@ -1,7 +1,7 @@
 use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
-    SelectClause, TraversalFunction, Value, WhereClause,
+    QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
@@ -18,6 +18,16 @@ use std::collections::HashSet;
 /// tree is a tree), but the bound and visited-set guard cost nothing and
 /// match this codebase's established discipline for chain walks.
 const DOMINATOR_CHAIN_MAX_DEPTH: usize = 64;
+
+/// Executor-side mirror of `parser::MAX_SUBQUERY_NESTING_DEPTH` (M15 Slice
+/// 15.E): defense-in-depth against a `Query` assembled directly (bypassing
+/// the parser, e.g. via the MCP surface) with more than one level of
+/// `ClassPattern::Subquery` nesting -- returns a structured `QueryError`
+/// rather than recursing without bound, same discipline as 15.D's
+/// independent regex-compile defense-in-depth check.
+const MAX_SUBQUERY_NESTING_DEPTH: usize = 1;
+const SUBQUERY_NESTING_DEPTH_EXCEEDED_MESSAGE: &str =
+    "subquery nesting depth exceeded: OQL subqueries support only one level of nesting";
 const DOMINATORS_OVERVIEW_HINT: &str =
     "re-run with --mode deep; dominators(...) requires a deep-mode dominator tree.";
 
@@ -54,65 +64,254 @@ pub fn execute_query(
     };
 
     let columns = projected_columns(&query.select);
-    let mut matched_ids = if let ClassPattern::Traversal(traversal) = &query.from.class_pattern {
-        // Traversal FROM sources (outbounds/inbounds/dominators) already
-        // resolve to an explicit object-id set -- no full-graph class-name
-        // scan needed, just filter that set through the ordinary WHERE
-        // pipeline exactly like a class-pattern FROM source does.
-        let candidates = resolve_traversal_candidates(*traversal, graph, dominator)?;
-        let mut ids = Vec::with_capacity(candidates.len());
-        for object_id in candidates {
-            if graph.get_object(object_id).is_none() {
-                // Dangling reference in the source object's edge list;
-                // silently skip, consistent with OBJECTS projection's
-                // handling of unresolved targets elsewhere in this module.
-                continue;
-            }
-            if matches_filter(query, graph, dominator, object_id, &regexes)? {
-                ids.push(object_id);
-            }
-        }
-        ids
-    } else {
-        let mut ids = Vec::new();
-        for (&object_id, object) in &graph.objects {
-            if !matches_class_pattern(
-                graph,
-                object.class_id,
-                &query.from.class_pattern,
-                query.from.instanceof,
-            ) {
-                continue;
-            }
-            if !matches_filter(query, graph, dominator, object_id, &regexes)? {
-                continue;
-            }
-            ids.push(object_id);
-        }
-        ids
-    };
-
+    let mut matched_ids = resolve_matched_ids(query, graph, dominator, &regexes)?;
     matched_ids.sort_unstable();
 
-    if let SelectClause::Objects(field) = &query.select {
-        return execute_objects_projection(query, graph, field, matched_ids, columns);
+    finalize_query_result(
+        &query.select,
+        query.limit,
+        graph,
+        dominator,
+        matched_ids,
+        columns,
+    )
+}
+
+/// Evaluates a top-level OQL statement -- a single `Query`, or two `Query`s
+/// joined by `UNION` (M15 Slice 15.E). Pairs with `parser::parse_query_statement`;
+/// `execute_query` above is unchanged and keeps handling a bare `Query`
+/// exactly as before for every caller that doesn't need `UNION`.
+pub fn execute_query_statement(
+    statement: &QueryStatement,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+) -> Result<QueryResult, QueryError> {
+    match statement {
+        QueryStatement::Single(query) => execute_query(query, graph, dominator),
+        QueryStatement::Union(left, right) => execute_union_query(left, right, graph, dominator),
+    }
+}
+
+/// Runs `left` and `right` independently through the ordinary
+/// candidate-resolution pipeline (`resolve_matched_ids` -- the same routine
+/// every `FromClause` source, including a one-level subquery, already
+/// funnels through), each bounded by its own `LIMIT` if it has one, unions
+/// the two resulting object-id sets with duplicates removed by object id
+/// (M15 Slice 15.E §4.1 item 5), and projects the combined id set through
+/// `left`'s own `SELECT`.
+///
+/// `UNION` cannot simply concatenate two already-projected `QueryResult`s:
+/// deduplication is defined "by object id" (§4.1 item 5), but a projected
+/// row does not always carry an identifiable object id (e.g.
+/// `SELECT @className FROM ...`) -- so the dedup has to happen at the
+/// id-set level, before either side's `SELECT` runs, exactly mirroring how
+/// `ClassPattern::Subquery`'s inner query contributes a bare id set rather
+/// than a projected result.
+///
+/// Each side's own `LIMIT` (the grammar lets either `<query1>` or
+/// `<query2>` carry one, since each is parsed as a complete, independent
+/// query body) bounds *that side's own contribution* before the merge --
+/// i.e. `<query> LIMIT n` on one side of `UNION` behaves exactly as it
+/// would if that side were run standalone, not as a limit on the final
+/// merged/deduplicated total. There is no separate statement-level `LIMIT`
+/// concept for the combined result, so `left`'s `SELECT` wins for the
+/// combined projection (matching SQL `UNION`'s expectation that both sides
+/// share a column shape -- this implementation does not require it, but
+/// the shape mismatch is the caller's to avoid) and no further limit is
+/// applied to the already-bounded, deduplicated merge.
+fn execute_union_query(
+    left: &Query,
+    right: &Query,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+) -> Result<QueryResult, QueryError> {
+    // `resolve_ids_bounded_by_own_limit` validates each side independently
+    // (overview-mode feature gates included) before resolving it, so no
+    // separate `validate_supported_query` call is needed here.
+    let left_ids = resolve_ids_bounded_by_own_limit(left, graph, dominator, 0)?;
+    let right_ids = resolve_ids_bounded_by_own_limit(right, graph, dominator, 0)?;
+
+    let mut seen: HashSet<ObjectId> = HashSet::with_capacity(left_ids.len() + right_ids.len());
+    let mut merged = Vec::with_capacity(left_ids.len() + right_ids.len());
+    for object_id in left_ids.into_iter().chain(right_ids) {
+        if seen.insert(object_id) {
+            merged.push(object_id);
+        }
+    }
+    merged.sort_unstable();
+
+    let columns = projected_columns(&left.select);
+    finalize_query_result(&left.select, None, graph, dominator, merged, columns)
+}
+
+/// Resolves `query`'s `FromClause` source to its matched-and-filtered
+/// object-id set: a plain class-name/glob scan, a traversal function
+/// (`outbounds`/`inbounds`/`dominators`), or a one-level subquery -- every
+/// variant converges on the same "candidate set, then apply this query's
+/// own WHERE" shape. Used directly by `execute_query` (a top-level query is
+/// never itself nested inside a subquery, hence depth 0) and indirectly, via
+/// `resolve_ids_bounded_by_own_limit`, by `execute_union_query` and
+/// `resolve_subquery_candidates`.
+fn resolve_matched_ids(
+    query: &Query,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    regexes: &[Option<Regex>],
+) -> Result<Vec<ObjectId>, QueryError> {
+    resolve_matched_ids_at_depth(query, graph, dominator, regexes, 0)
+}
+
+fn resolve_matched_ids_at_depth(
+    query: &Query,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    regexes: &[Option<Regex>],
+    depth: usize,
+) -> Result<Vec<ObjectId>, QueryError> {
+    match &query.from.class_pattern {
+        ClassPattern::Traversal(traversal) => {
+            // Traversal FROM sources (outbounds/inbounds/dominators) already
+            // resolve to an explicit object-id set -- no full-graph class-name
+            // scan needed, just filter that set through the ordinary WHERE
+            // pipeline exactly like a class-pattern FROM source does.
+            let candidates = resolve_traversal_candidates(*traversal, graph, dominator)?;
+            let mut ids = Vec::with_capacity(candidates.len());
+            for object_id in candidates {
+                if graph.get_object(object_id).is_none() {
+                    // Dangling reference in the source object's edge list;
+                    // silently skip, consistent with OBJECTS projection's
+                    // handling of unresolved targets elsewhere in this module.
+                    continue;
+                }
+                if matches_filter(query, graph, dominator, object_id, regexes)? {
+                    ids.push(object_id);
+                }
+            }
+            Ok(ids)
+        }
+        ClassPattern::Subquery(inner) => {
+            if depth >= MAX_SUBQUERY_NESTING_DEPTH {
+                return Err(QueryError::Unsupported(
+                    SUBQUERY_NESTING_DEPTH_EXCEEDED_MESSAGE.into(),
+                ));
+            }
+            let candidates = resolve_subquery_candidates(inner, graph, dominator, depth + 1)?;
+            let mut ids = Vec::with_capacity(candidates.len());
+            for object_id in candidates {
+                if graph.get_object(object_id).is_none() {
+                    continue;
+                }
+                if matches_filter(query, graph, dominator, object_id, regexes)? {
+                    ids.push(object_id);
+                }
+            }
+            Ok(ids)
+        }
+        ClassPattern::Exact(_) | ClassPattern::Glob(_) => {
+            let mut ids = Vec::new();
+            for (&object_id, object) in &graph.objects {
+                if !matches_class_pattern(
+                    graph,
+                    object.class_id,
+                    &query.from.class_pattern,
+                    query.from.instanceof,
+                ) {
+                    continue;
+                }
+                if !matches_filter(query, graph, dominator, object_id, regexes)? {
+                    continue;
+                }
+                ids.push(object_id);
+            }
+            Ok(ids)
+        }
+    }
+}
+
+/// Evaluates a subquery's own FROM+WHERE+LIMIT pipeline -- never its
+/// `SELECT` clause, which is irrelevant here: like `outbounds`/`inbounds`/
+/// `dominators`, a subquery FROM source contributes a bare object-id set,
+/// not a projected result. The outer query performs its own independent
+/// `SELECT` projection over whichever candidates survive both the inner
+/// and outer `WHERE` clauses (M15 Slice 15.E §4.1 item 4). `depth` is the
+/// nesting depth `inner` itself is evaluated at; see
+/// `MAX_SUBQUERY_NESTING_DEPTH` for the bound this enforces.
+fn resolve_subquery_candidates(
+    inner: &Query,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    depth: usize,
+) -> Result<Vec<ObjectId>, QueryError> {
+    resolve_ids_bounded_by_own_limit(inner, graph, dominator, depth)
+}
+
+/// Resolves `query`'s own FROM+WHERE candidate set (via
+/// `resolve_matched_ids_at_depth`, starting the subquery-nesting count at
+/// `depth`) and bounds it by `query`'s own `LIMIT`, if it has one. Shared by
+/// two call sites that both need "the id set this query would contribute,
+/// standalone" rather than a projected `QueryResult`: a `ClassPattern::Subquery`
+/// FROM source (`resolve_subquery_candidates`, `depth` threading the parser's
+/// one-level nesting bound through) and each independent side of a `UNION`
+/// (`execute_union_query`, always at `depth` 0 -- a `UNION` side is never
+/// itself inside a subquery's nesting count).
+fn resolve_ids_bounded_by_own_limit(
+    query: &Query,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    depth: usize,
+) -> Result<Vec<ObjectId>, QueryError> {
+    validate_supported_query(query, dominator)?;
+
+    let regexes: Vec<Option<Regex>> = match &query.filter {
+        Some(filter) => compile_regex_conditions(filter)?,
+        None => Vec::new(),
+    };
+
+    let mut ids = resolve_matched_ids_at_depth(query, graph, dominator, &regexes, depth)?;
+    ids.sort_unstable();
+    if let Some(limit) = query.limit {
+        ids.truncate(limit);
+    }
+    Ok(ids)
+}
+
+/// Shared tail of `execute_query`/`execute_union_query`: projects an
+/// already-resolved, already-sorted `matched_ids` candidate set through the
+/// given `select`/`limit`. Takes `select`/`limit` directly rather than a
+/// whole `Query` so `execute_union_query` can pass `left`'s `SELECT` with
+/// `limit: None` (each side's own `LIMIT` was already applied to its own
+/// contribution before the merge -- see `execute_union_query`'s doc
+/// comment -- so the combined, deduplicated id set is not truncated
+/// again here). Still reuses the identical `OBJECTS` vs.
+/// ordinary-projection branching and `total_matched`/`truncated`
+/// bookkeeping `execute_query` always used.
+fn finalize_query_result(
+    select: &SelectClause,
+    limit: Option<usize>,
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    mut matched_ids: Vec<ObjectId>,
+    columns: Vec<String>,
+) -> Result<QueryResult, QueryError> {
+    if let SelectClause::Objects(field) = select {
+        return execute_objects_projection(limit, graph, field, matched_ids, columns);
     }
 
     let total_before_limit = matched_ids.len();
-    if let Some(limit) = query.limit {
+    if let Some(limit) = limit {
         matched_ids.truncate(limit);
     }
 
     let mut rows = Vec::with_capacity(matched_ids.len());
     for object_id in matched_ids {
-        rows.push(project_row(&query.select, graph, dominator, object_id));
+        rows.push(project_row(select, graph, dominator, object_id));
     }
 
     Ok(QueryResult {
         columns,
         rows,
-        total_matched: total_before_limit.min(query.limit.unwrap_or(total_before_limit)),
-        truncated: query.limit.is_some_and(|limit| total_before_limit > limit),
+        total_matched: total_before_limit.min(limit.unwrap_or(total_before_limit)),
+        truncated: limit.is_some_and(|limit| total_before_limit > limit),
     })
 }
 
@@ -264,7 +463,7 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
 }
 
 fn execute_objects_projection(
-    query: &Query,
+    limit: Option<usize>,
     graph: &ObjectGraph,
     field: &FieldRef,
     matched_ids: Vec<ObjectId>,
@@ -282,15 +481,15 @@ fn execute_objects_projection(
     }
 
     let total_before_limit = rows.len();
-    if let Some(limit) = query.limit {
+    if let Some(limit) = limit {
         rows.truncate(limit);
     }
 
     Ok(QueryResult {
         columns,
         rows,
-        total_matched: total_before_limit.min(query.limit.unwrap_or(total_before_limit)),
-        truncated: query.limit.is_some_and(|limit| total_before_limit > limit),
+        total_matched: total_before_limit.min(limit.unwrap_or(total_before_limit)),
+        truncated: limit.is_some_and(|limit| total_before_limit > limit),
     })
 }
 
@@ -489,13 +688,15 @@ fn class_name_matches(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern
     match pattern {
         ClassPattern::Exact(expected) => class_name == *expected,
         ClassPattern::Glob(glob) => glob_match(glob, &class_name),
-        // `execute_query` resolves `ClassPattern::Traversal` sources
-        // directly via `resolve_traversal_candidates` before this function
-        // is ever reached, and `matches_instanceof_condition` never
-        // constructs a `Traversal` pattern. Kept for match exhaustiveness;
-        // a traversal function is never a valid class-name pattern to match
-        // against, so this arm always returns `false`.
+        // `resolve_matched_ids_at_depth` resolves `ClassPattern::Traversal`
+        // and `ClassPattern::Subquery` sources directly (via
+        // `resolve_traversal_candidates` / `resolve_subquery_candidates`)
+        // before this function is ever reached, and
+        // `matches_instanceof_condition` never constructs either variant.
+        // Kept for match exhaustiveness; neither is a valid class-name
+        // pattern to match against, so these arms always return `false`.
         ClassPattern::Traversal(_) => false,
+        ClassPattern::Subquery(_) => false,
     }
 }
 
