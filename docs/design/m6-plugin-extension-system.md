@@ -104,7 +104,9 @@ This would sit alongside `llm::complete()` as a fallback: if `AiProvider` doesn'
 
 ## 3. Plugin Discovery & Registration
 
-### 3.1 Static (compile-time)
+Phase 2 ships **§3.1 only**. §3.2–3.3 describe proposed Phase 3 behavior — not implemented.
+
+### 3.1 Static (compile-time) — shipped (Phase 2)
 
 Library users call registration functions before invoking analysis:
 
@@ -116,9 +118,9 @@ registry.register_formatter(Box::new(MySarifFormatter));
 
 No ABI concerns. No security risk beyond normal `mnemosyne-core` usage.
 
-### 3.2 Config-based
+### 3.2 Config-based (Phase 3 — proposed, not shipped)
 
-A `[plugins]` section in `mnemosyne.toml`:
+A future `[plugins]` section in `mnemosyne.toml` would allow:
 
 ```toml
 [plugins]
@@ -126,9 +128,9 @@ analyzers = ["path/to/libmy_analyzer.so"]
 formatters = ["path/to/libsarif_fmt.so"]
 ```
 
-### 3.3 Directory-based
+### 3.3 Directory-based (Phase 3 — proposed, not shipped)
 
-Well-known directory `~/.mnemosyne/plugins/` scanned at startup. Each `.so`/`.dylib`/`.dll` exposes a C-ABI entry point:
+A future well-known directory `~/.mnemosyne/plugins/` would be scanned at startup. Each `.so`/`.dylib`/`.dll` would expose a C-ABI entry point:
 
 ```rust
 #[no_mangle]
