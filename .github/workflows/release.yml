@@ -172,11 +172,123 @@ jobs:
         working-directory: ui
         run: bun install --frozen-lockfile
 
+      # Slice 16.B — code-signing is conditional on GitHub Actions secrets.
+      # Each platform step logs loudly when secrets are absent so maintainers
+      # know exactly where to plug in real certificates later.
+      - name: Desktop auto-update (v1 decision)
+        run: |
+          echo "M16 16.B: Desktop auto-update SKIPPED for v1 — no Tauri updater plugin is wired."
+          echo "Users re-download installers from GitHub Releases (same as the CLI today)."
+          echo "Revisit after a full code-signing + update-signing trust chain is in place."
+
+      - name: Resolve code-signing (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          echo "M16 16.B: Linux desktop bundles (.deb/.AppImage/.rpm) ship unsigned by design."
+          echo "No OS-level signing gate applies on Linux — no GitHub secrets required."
+
+      - name: Resolve code-signing (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        id: win-signing
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${WINDOWS_CERTIFICATE:-}" && -n "${WINDOWS_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Windows Authenticode signing ENABLED — WINDOWS_CERTIFICATE secrets present."
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD secrets NOT configured."
+            echo "Shipping UNSIGNED Windows installer (.msi/.exe)."
+            echo "Windows SmartScreen will warn on first run — see SECURITY.md for the workaround."
+          fi
+
+      - name: Import Windows code-signing certificate
+        if: ${{ runner.os == 'Windows' && steps.win-signing.outputs.enabled == 'true' }}
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path certificate -Force
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          Remove-Item certificate/tempCert.txt
+          Import-PfxCertificate `
+            -FilePath certificate/certificate.pfx `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+
+      - name: Resolve code-signing (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        id: mac-signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${APPLE_CERTIFICATE:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${KEYCHAIN_PASSWORD:-}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: macOS code signing + notarization ENABLED — Apple secrets present."
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple signing/notarization secrets NOT configured."
+            echo "Required when enabling: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,"
+            echo "APPLE_ID, APPLE_PASSWORD, KEYCHAIN_PASSWORD (optional: APPLE_TEAM_ID)."
+            echo "Shipping UNSIGNED macOS bundle (.dmg/.app)."
+            echo "macOS Gatekeeper will block on first open — use Right-click → Open. See SECURITY.md."
+          fi
+
+      - name: Import Apple Developer certificate
+        if: ${{ runner.os == 'macOS' && steps.mac-signing.outputs.enabled == 'true' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          echo "${APPLE_CERTIFICATE}" | base64 --decode > certificate.p12
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+          CERT_ID="$(
+            security find-identity -v -p codesigning build.keychain \
+              | grep -E 'Developer ID Application|Apple Development' \
+              | head -1 \
+              | awk -F'"' '{print $2}'
+          )"
+          if [[ -z "${CERT_ID}" ]]; then
+            echo "Failed to resolve Apple signing identity from imported certificate" >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "${GITHUB_ENV}"
+          echo "Imported Apple signing identity: ${CERT_ID}"
+
       - name: Build Tauri bundle
         id: tauri-build
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed through when secrets exist; tauri-cli signs/notarizes only when
+          # the import steps above ran. Empty values produce unsigned bundles.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: tauri
           args: ${{ matrix.tauri_args }}

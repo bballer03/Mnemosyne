@@ -181,6 +181,12 @@ npx --yes bun run lint
 
 The optional desktop shell currently validates with `cargo check --manifest-path tauri/Cargo.toml`.
 
+**Desktop installers (M16):** tagged releases may attach Tauri bundles for Windows, macOS,
+and Linux. v1 ships **unsigned** installers unless release CI secrets are configured — see
+[SECURITY.md — Desktop app distribution](SECURITY.md#desktop-app-distribution-m16) for
+SmartScreen/Gatekeeper workarounds. **Auto-update is skipped for v1**; re-download from
+GitHub Releases when upgrading (same as the CLI).
+
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
 
