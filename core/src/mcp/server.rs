@@ -1226,6 +1226,14 @@ async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<V
 
     let resolved_mode = resolve_heap_mode(&params.heap_path, requested_mode)?;
 
+    if params.snapshot.is_some() && resolved_mode == AnalysisMode::Overview {
+        return Err(CoreError::FeatureUnavailableInOverviewMode {
+            feature: "snapshot".into(),
+            hint: "re-run with mode=deep; snapshot keys load a cached deep-mode object graph."
+                .into(),
+        });
+    }
+
     let result = match resolved_mode {
         AnalysisMode::Overview => {
             let summary =
@@ -5192,6 +5200,47 @@ mod tests {
         assert_eq!(
             value.pointer("/error_details/code"),
             Some(&json!("invalid_input"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_snapshot_with_resolved_overview_returns_feature_unavailable() {
+        let _lock = snapshot_env_lock().await;
+        let _guard = mode_test_guard().await;
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let _pin = pin_snapshot_dir(snapshot_dir.path());
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let manifest = seed_snapshot(snapshot_dir.path(), file.path(), false);
+        let policy_toml = "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "overview",
+                "snapshot": manifest.heap_sha256,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("feature_unavailable_in_overview_mode"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/feature"),
+            Some(&json!("snapshot"))
+        );
+        assert!(
+            value
+                .pointer("/error_details/details/hint")
+                .and_then(Value::as_str)
+                .is_some_and(|hint| hint.contains("mode=deep")),
+            "{value}"
         );
     }
 
