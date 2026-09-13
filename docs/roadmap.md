@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-13 (post-M16 product plan: M17–M23 candidates)
+> **Last updated:** 2026-09-14 (M17 desktop bridge completion closeout)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
@@ -272,20 +272,20 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
   - **CI release-pipeline integration (Slice 16.A):** `.github/workflows/release.yml` gains a `build-desktop` matrix job **configured** for Windows/macOS/Linux (`cargo tauri build`, per-target artifact upload, release attachment on tagged releases). Desktop bundles appear on **post-M16 tags only** — historical `v0.3.0` and earlier CLI-only releases have no desktop installers. Tagged CI artifact upload **not evidenced yet**.
   - **Conditional code-signing + auto-update decision (Slice 16.B):** signing steps are wired but **no-op loudly** when secrets are absent. **Windows:** Authenticode via `WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD` (optional `WINDOWS_TIMESTAMP_URL`); CI derives the cert thumbprint and injects `bundle.windows.*` into `tauri.conf.json` before build when secrets are present. **macOS:** requires `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `KEYCHAIN_PASSWORD` for signing + notarization. **Linux:** unsigned by design. **Current default:** no signing secrets configured in CI → all desktop artifacts ship **unsigned**. **Auto-update:** explicitly **skipped for v1** — no Tauri updater plugin; users re-download from GitHub Releases. Documented in `SECURITY.md` and README Desktop app section.
   - **Installation docs + Homebrew Cask evaluation (Slice 16.C):** README gains a "Desktop app (GUI)" subsection (download pattern, per-platform install steps, SmartScreen/Gatekeeper workarounds for unsigned builds). Homebrew **Cask deferred for v1** — GitHub Releases remains the sole desktop distribution channel; existing `HomebrewFormula/mnemosyne.rb` stays CLI-only. `tauri/Cargo.toml` version synced to `0.3.0`.
-- **Not shipped (explicit non-goals, per design doc §4/§6):** Actual code-signing certificates/accounts (organizational decision outside this milestone). In-app auto-update infrastructure. Homebrew Cask / winget / Flatpak / Snap. New Tauri native commands for M14's comparison/workflow bridges or `inspectObject`/`findAllGcPaths` — those UI surfaces still degrade to explicit unavailable states in the desktop shell (same as pre-M16).
+- **Not shipped (explicit non-goals, per design doc §4/§6):** Actual code-signing certificates/accounts (organizational decision outside this milestone). In-app auto-update infrastructure. Homebrew Cask / winget / Flatpak / Snap.
 - **Platform verification asymmetry (honest):** Windows builds were launch-tested locally (`.msi`/`.exe` produced). macOS/Linux are **not launch-tested** in this environment; the `build-desktop` job is **configured** in `release.yml` but no tagged CI run has been evidenced yet — do not claim successful artifact upload until one exists.
 - **Why now / strategic rationale:** User-requested for adoption. M14 shipped a GUI worth bundling; M16 hardens the existing M6 Tauri scaffold into the tagged-release pipeline rather than inventing new architecture.
 - **Success criteria (met with caveats):** `build-desktop` CI job configured for all three OS families; Windows launch-tested locally. Tagged CI artifact upload not evidenced yet. Signing is conditional-on-secrets with loud unsigned fallback and user-facing SmartScreen/Gatekeeper documentation. Auto-update decision recorded (skip v1). README accurately describes the unsigned default — no signed/notarized claims.
 - **Risks / dependencies:** R1 (no signing credentials in this environment) — mitigated by conditional CI wiring + documented unsigned default. R2 (OS security warnings on unsigned builds) — mitigated by README/SECURITY.md workarounds. R3 (asymmetric launch testing) — documented per platform above.
 - **Estimated slice count:** 4 shipped (16.A–16.D).
 
-### M17 — Desktop Guided UX Bridge Completion — 🔲 Pending
+### M17 — Desktop Guided UX Bridge Completion — ✅ Shipped
 
-- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-17-desktop-guided-ux-bridges.md`.
-- **Goal:** Wire M14's `inspectObject`, `findAllGcPaths`, comparison, workflow, and snapshot-list capabilities into the Tauri desktop using existing core behavior.
-- **Why next:** M16 packages these UI surfaces today, but missing native commands force honest unavailable states. This is the smallest direct path from "installable" to a complete guided desktop.
-- **Boundary:** No new analyzer, signing, auto-update, or bridge redesign. Preserve browser fallback and structured overview/provenance behavior.
-- **Slices:** inspector/all-paths commands; object comparison; workflow/snapshot commands; packaged-desktop contract and smoke evidence.
+- **Status:** ✅ **Shipped** — [design doc](design/milestone-17-desktop-guided-ux-bridges.md); [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md). All seven required M14 bridge methods (`inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) are injected in `tauri/src/bridge.ts` and backed by native Tauri commands over existing `mnemosyne_core` behavior. **Evidence:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 24/24 pass. **Honest gap:** packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence remains M21.
+- **Goal:** Wire M14's live bridge capabilities into the Tauri desktop using existing core behavior — achieved for all four capability groups (inspector, multi-path GC, comparison, workflow/snapshots).
+- **Why it mattered:** M16 distributed the M14 UI, but pre-M17 the desktop host injected only the two legacy bridges, forcing honest unavailable states on guided and power surfaces.
+- **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. `getWorkflow`/`closeWorkflow` explicitly not wired (no `ui/src` callers). Browser-without-bridge fallback unchanged.
+- **Slices shipped:** 17.A inspector/all-paths; 17.B object comparison; 17.C workflow/snapshot commands; 17.D command-layer evidence + docs closeout (GUI smoke deferred).
 
 ### M18 — MCP Agent and IDE Loop Completion — 🔲 Pending
 
@@ -350,9 +350,9 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ## 6. Recommended Post-M16 Sequence — **M17 Desktop Guided UX Bridge Completion**
 
-**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, M14, M15, and M16 are shipped. M16 remains unsigned by default and has no evidenced tagged desktop artifact upload; macOS/Linux remain not launch-tested. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. Every M17+ item below is a 🔲 candidate, not shipped.
+**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16, and **M17** are shipped. M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. M18+ items below are 🔲 candidates, not shipped.
 
-**Recommendation:** Schedule **M17** first, then M18–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
+**Recommendation:** Schedule **M18** next, then M19–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
 
 **Ranking rationale:**
 
@@ -364,7 +364,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 **Recommended sequencing (current):**
 
-1. **M17 — Desktop Guided UX Bridge Completion** — complete M14 capabilities in the packaged app.
+1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ — ✅ shipped; M14 bridge methods wired in Tauri (command-layer evidence; GUI launch evidence → M21).
 2. **M18 — MCP Agent and IDE Loop Completion** — policy/baseline, leak cross-reference, snapshots, flamegraphs.
 3. **M19 — Guided Analysis and Investigation Continuity** — M15 UI, classloader workflow, bounded conversation depth.
 4. **M20 — Bounded MAT Migration Polish** — multi-class `FROM`, capped multi-hop `OBJECTS`, operator polish.
