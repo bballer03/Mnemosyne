@@ -284,18 +284,23 @@ impl PluginRegistry {
 }
 
 /// Test-only fixtures shared by this module's own unit tests *and* by
-/// `core::analysis::engine`'s integration-level pipeline tests (M15 Slice
-/// 15.F's validation gate: "a test-only `AnalyzerPlugin` implementation
-/// registers and its `analyze()` output appears in a full pipeline run").
-/// Gated the same way `crate::hprof::test_fixtures` is (compiled for both
-/// `cfg(test)` and the `test-fixtures` feature) so `engine.rs`'s
-/// `#[cfg(test)] mod tests` can reach it via `crate::plugin::test_support`.
+/// `core::analysis::engine`'s and `core::report::renderer`'s
+/// integration-level pipeline tests (M15 Slice 15.F's validation gate: "a
+/// test-only `AnalyzerPlugin` implementation registers and its `analyze()`
+/// output appears in a full pipeline run"). Unlike `crate::hprof::test_fixtures`,
+/// nothing outside this crate's own `#[cfg(test)]` modules consumes these
+/// demo plugins (no cli integration test reaches them), so this is gated on
+/// `cfg(test)` alone -- adding `feature = "test-fixtures"` here would make
+/// this module compile whenever that feature is unified in (e.g. via cli's
+/// `[dev-dependencies]` enabling it), including in a plain, non-test build
+/// of this crate's `lib` target where nothing referencing these structs is
+/// compiled, producing spurious `dead_code` lints.
 ///
 /// This holds the *one* test-only demo `AnalyzerPlugin` this slice adds
 /// (per the design doc's "avoid inventing a flagship plugin nobody asked
 /// for" -- see the module-level doc comment above). It is never
 /// registered by any production binary in this workspace.
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub(crate) mod test_support {
     use super::{AnalyzerFinding, AnalyzerPlugin, AnalyzerResult, ReportFormatterPlugin};
     use crate::{

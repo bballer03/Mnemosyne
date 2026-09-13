@@ -171,6 +171,10 @@ fn decode_backing_array(array_object: &HeapObject, coder: Option<i8>) -> Option<
     }
 }
 
+// `as_chunks` is unstable on our pinned MSRV toolchain; suppress the newer
+// clippy lint (only fires on toolchains where it's stabilized) rather than
+// adopting an API not available everywhere this crate builds.
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 fn decode_utf16_bytes(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
         .chunks_exact(2)
