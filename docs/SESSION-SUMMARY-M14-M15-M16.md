@@ -83,7 +83,7 @@ merge — never trusting the agent's self-reported numbers.
 | 16.C | README Desktop app install docs; Homebrew Cask deferred; `tauri/Cargo.toml` synced to `0.3.0` |
 | 16.D | Documentation sync — M16 marked shipped (unsigned default) across roadmap/STATUS/CHANGELOG/ARCHITECTURE/design doc |
 
-**M16 caveats (honest):** no signing credentials in CI today → default unsigned artifacts; desktop bundles on post-M16 tags only (not historical `v0.3.0`); macOS/Linux CI build-verified, Windows launch-tested; M14 comparison/workflow bridges still unwired in Tauri.
+**M16 caveats (honest):** no signing credentials in CI today → default unsigned artifacts; desktop bundles on post-M16 tags only (not historical `v0.3.0`); Windows launch-tested locally, macOS/Linux **not launch-tested** (`build-desktop` job configured in `release.yml`, no evidenced tagged CI run); M14 comparison/workflow bridges still unwired in Tauri.
 
 ## Notable incidents / lessons learned
 
