@@ -39,6 +39,17 @@ pub fn graph_has_field_data(graph: &mnemosyne_core::hprof::ObjectGraph) -> bool 
         .any(|object| !object.field_data.is_empty())
 }
 
+/// Returns true when an in-flight field-data reparse may still be cached for
+/// the session that requested it (epoch unchanged and heap path still loaded).
+pub fn should_install_field_data_cache(
+    capture_epoch: u64,
+    current_epoch: u64,
+    capture_heap_path: &str,
+    current_heap_path: Option<&str>,
+) -> bool {
+    current_epoch == capture_epoch && current_heap_path == Some(capture_heap_path)
+}
+
 pub fn inspect_object_for_session(
     graph: &mnemosyne_core::hprof::ObjectGraph,
     heap_path: &str,
@@ -206,6 +217,29 @@ mod tests {
             },
         )
         .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn should_install_field_data_cache_requires_matching_epoch_and_heap_path() {
+        assert!(should_install_field_data_cache(
+            3,
+            3,
+            "/tmp/a.hprof",
+            Some("/tmp/a.hprof"),
+        ));
+        assert!(!should_install_field_data_cache(
+            3,
+            4,
+            "/tmp/a.hprof",
+            Some("/tmp/a.hprof"),
+        ));
+        assert!(!should_install_field_data_cache(
+            3,
+            3,
+            "/tmp/a.hprof",
+            Some("/tmp/b.hprof"),
+        ));
+        assert!(!should_install_field_data_cache(3, 3, "/tmp/a.hprof", None));
     }
 
     #[test]

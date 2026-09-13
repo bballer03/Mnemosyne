@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::atomic::Ordering,
+};
 
 use mnemosyne_core::{
     analysis::{analyze_heap, validate_leak_id, ObjectInspection},
@@ -13,7 +16,8 @@ use mnemosyne_core::{
 };
 use mnemosyne_desktop_session::{
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
-    inspect_object_for_session, parse_identity_strategy, parse_object_id, DiffObjectsSessionInput,
+    inspect_object_for_session, parse_identity_strategy, parse_object_id,
+    should_install_field_data_cache, DiffObjectsSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -106,6 +110,7 @@ pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<He
         gc_root_count: graph.gc_roots.len(),
     };
 
+    state.bump_session_epoch();
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
     *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
     *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
@@ -120,6 +125,7 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
         return Err(NO_HEAP_LOADED.to_string());
     }
 
+    state.bump_session_epoch();
     *graph = None;
     *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
     *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = None;
@@ -257,6 +263,8 @@ pub async fn inspect_object(
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let retain_field_data = retain_field_data.unwrap_or(false);
+    let session_epoch = state.session_epoch.load(Ordering::Acquire);
+    let heap_path_for_cache = heap_path.clone();
     let cached_field_graph = if retain_field_data && !graph_has_field_data(&graph) {
         state
             .field_data_graph
@@ -300,10 +308,24 @@ pub async fn inspect_object(
     .map_err(|error| error.to_string())??;
 
     if let Some(field_graph) = refreshed_field_graph {
-        *state
-            .field_data_graph
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = Some(field_graph);
+        let current_epoch = state.session_epoch.load(Ordering::Acquire);
+        let current_heap_path = state
+            .heap_path
+            .read()
+            .map_err(|_| LOCK_ERROR.to_string())?
+            .as_deref()
+            .map(str::to_string);
+        if should_install_field_data_cache(
+            session_epoch,
+            current_epoch,
+            &heap_path_for_cache,
+            current_heap_path.as_deref(),
+        ) {
+            *state
+                .field_data_graph
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = Some(field_graph);
+        }
     }
 
     Ok(inspection)

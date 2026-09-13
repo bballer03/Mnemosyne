@@ -1,4 +1,7 @@
-use std::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    RwLock,
+};
 
 use mnemosyne_core::config::AppConfig;
 use mnemosyne_core::hprof::ObjectGraph;
@@ -13,6 +16,9 @@ pub struct HeapSession {
     /// Lazily populated when `inspect_object` is called with
     /// `retain_field_data: true` against a lean session graph.
     pub field_data_graph: RwLock<Option<ObjectGraph>>,
+    /// Incremented on every `load_heap` / `unload_heap` so in-flight field-data
+    /// reparse work can detect a replaced session before installing its cache.
+    pub session_epoch: AtomicU64,
     pub config: RwLock<AppConfig>,
     pub heap_path: RwLock<Option<String>>,
 }
@@ -22,8 +28,13 @@ impl HeapSession {
         Self {
             graph: RwLock::new(None),
             field_data_graph: RwLock::new(None),
+            session_epoch: AtomicU64::new(0),
             config: RwLock::new(AppConfig::default()),
             heap_path: RwLock::new(None),
         }
+    }
+
+    pub fn bump_session_epoch(&self) -> u64 {
+        self.session_epoch.fetch_add(1, Ordering::Release)
     }
 }
