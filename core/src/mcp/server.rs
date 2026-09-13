@@ -5,7 +5,7 @@ use crate::{
         AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
     },
     config::AppConfig,
-    diff::{DiffRequest, DiffResult},
+    diff::{DiffMode, DiffRequest, DiffResult, IdentityStrategy},
     errors::{CoreError, CoreResult},
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{
@@ -555,8 +555,9 @@ struct DetectClassloaderLeaksParams {
     heap_path: String,
 }
 
-/// M18 Slice 18.A: single-heap policy gate — mirrors `mnemosyne-cli ci-check`
-/// without baseline support (18.B) or rendered output formats.
+/// M18 Slice 18.A/18.B: policy gate — mirrors `mnemosyne-cli ci-check`
+/// (including optional baseline for `object_growth_threshold`) without
+/// rendered output formats.
 #[derive(Debug, Deserialize, Default)]
 struct CiCheckParams {
     heap_path: String,
@@ -570,6 +571,13 @@ struct CiCheckParams {
     fail_on: Severity,
     #[serde(default)]
     snapshot: Option<String>,
+    /// Before-heap path for `object_growth_threshold` rules (M18.B). Mutually
+    /// exclusive with `baseline_snapshot`.
+    #[serde(default)]
+    baseline: Option<String>,
+    /// Before-heap snapshot key alternative to `baseline` (M18.B).
+    #[serde(default)]
+    baseline_snapshot: Option<String>,
 }
 
 /// M11 Slice 11.D: params for the `describe_workflow` tool.
@@ -1135,6 +1143,54 @@ fn ci_check_response(result: PolicyResult, fail_on: Severity) -> Value {
     })
 }
 
+fn resolve_ci_check_baseline(params: &CiCheckParams) -> CoreResult<Option<String>> {
+    match (&params.baseline, &params.baseline_snapshot) {
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "exactly one of baseline or baseline_snapshot is allowed, not both".into(),
+        )),
+        (None, None) => Ok(None),
+        (Some(path), None) => Ok(Some(path.clone())),
+        (None, Some(key)) => {
+            let store = snapshot_store();
+            let payload = store.load(key)?;
+            Ok(Some(payload.manifest.heap_path))
+        }
+    }
+}
+
+/// Runs the baseline-to-heap object diff `ci_check` needs for
+/// `object_growth_threshold` rules (M18.B), mirroring
+/// `mnemosyne-cli ci-check --baseline`.
+async fn run_ci_check_baseline_diff(
+    baseline: &str,
+    heap: &str,
+) -> CoreResult<crate::diff::ObjectDiffReport> {
+    let result = crate::diff::run_diff(DiffRequest {
+        before_path: baseline.into(),
+        after_path: heap.into(),
+        mode: DiffMode::Object,
+        identity_strategy: IdentityStrategy::default(),
+        retained_bucket_bits: 10,
+        min_retained_bytes: crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+        retained_change_threshold: crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+        top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+        retain_field_data: false,
+        cross_reference_leaks: false,
+    })
+    .await?;
+
+    match result {
+        DiffResult::Object(diff) => diff.object_diff.ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "object diff mode produced no object_diff section for baseline '{baseline}' -> '{heap}'"
+            ))
+        }),
+        DiffResult::Class(_) => Err(CoreError::InvalidInput(
+            "expected an object diff for baseline but got a class diff".into(),
+        )),
+    }
+}
+
 async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<Value> {
     let requested_mode = params.mode;
     let fail_on = params.fail_on;
@@ -1145,7 +1201,9 @@ async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<V
         .iter()
         .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
 
-    if needs_baseline {
+    let baseline_path = resolve_ci_check_baseline(&params)?;
+
+    if needs_baseline && baseline_path.is_none() {
         return Err(CoreError::ConfigError {
             detail: format!(
                 "object_growth_threshold_requires_baseline: policy '{}' contains an \
@@ -1153,12 +1211,16 @@ async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<V
                 ci_check_policy_label(&params)
             ),
             suggestion: Some(
-                "Baseline support is not yet available on ci_check (M18.B). Remove \
-                 object_growth_threshold rules or use mnemosyne-cli ci-check --baseline."
+                "Pass baseline (or baseline_snapshot) so ci_check can diff it against the heap under test."
                     .into(),
             ),
         });
     }
+
+    let object_diff = match baseline_path.as_deref() {
+        Some(baseline) => Some(run_ci_check_baseline_diff(baseline, &params.heap_path).await?),
+        None => None,
+    };
 
     let resolved_mode = resolve_heap_mode(&params.heap_path, requested_mode)?;
 
@@ -1170,7 +1232,7 @@ async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<V
                 &policy,
                 &PolicyInput::Overview(&summary),
                 requested_mode,
-                None,
+                object_diff.as_ref(),
             )
         }
         AnalysisMode::Deep => {
@@ -1214,7 +1276,7 @@ async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<V
                 &policy,
                 &PolicyInput::Deep(&analysis),
                 requested_mode,
-                None,
+                object_diff.as_ref(),
             )
         }
         AnalysisMode::Auto => unreachable!("resolved MCP mode should never remain auto"),
@@ -1496,14 +1558,16 @@ fn tool_catalog() -> Value {
             },
             {
                 "name": "ci_check",
-                "description": "Evaluate a TOML policy against one heap dump and return a structured PolicyResult plus the equivalent CLI ci-check exit classification. Baseline/object-growth rules require M18.B baseline support.",
+                "description": "Evaluate a TOML policy against one heap dump and return a structured PolicyResult plus the equivalent CLI ci-check exit classification. object_growth_threshold rules require baseline or baseline_snapshot.",
                 "params": [
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump under test." },
                     { "name": "policy_path", "type": "string", "required": false, "description": "Path to a policy TOML file. Exactly one of policy_path or policy_toml is required." },
                     { "name": "policy_toml", "type": "string", "required": false, "description": "Inline policy TOML. Exactly one of policy_path or policy_toml is required." },
                     analysis_mode_param(),
                     { "name": "fail_on", "type": "string", "required": false, "default": "error", "enum": ["info", "warning", "error", "critical"], "description": "Minimum violation severity that maps to exit_code 1, matching mnemosyne-cli ci-check --fail-on." },
-                    snapshot_param()
+                    snapshot_param(),
+                    { "name": "baseline", "type": "string", "required": false, "description": "Before-heap path for object_growth_threshold rules. Exactly one of baseline or baseline_snapshot when required." },
+                    { "name": "baseline_snapshot", "type": "string", "required": false, "description": "Before-heap snapshot key alternative to baseline (see open_snapshot/list_snapshots)." }
                 ],
                 "output_schema": "{ result: PolicyResult, exit_code: number, fail_on: string }"
             },
@@ -4823,6 +4887,8 @@ mod tests {
             "mode",
             "fail_on",
             "snapshot",
+            "baseline",
+            "baseline_snapshot",
         ] {
             assert!(names.contains(&expected), "ci_check params missing {expected}");
         }
@@ -4961,6 +5027,100 @@ mod tests {
                 .and_then(Value::as_str)
                 .is_some_and(|message| message.contains("object_growth_threshold_requires_baseline")),
             "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_with_baseline_evaluates_instead_of_skipping() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let policy_toml = "[[rule]]\nid = \"no-runaway-growth\"\npredicate = \"object_growth_threshold\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let result = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline": heap_path,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let policy_result = result.get("result").expect("structured result");
+        let skipped = policy_result
+            .get("skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(
+            skipped.is_empty(),
+            "object_growth_threshold should have been evaluated, not skipped: {result}"
+        );
+        let evaluations = policy_result
+            .get("evaluations")
+            .and_then(Value::as_array)
+            .expect("evaluations array");
+        assert!(
+            evaluations
+                .iter()
+                .any(|entry| entry.get("rule_id") == Some(&json!("no-runaway-growth"))),
+            "{result}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_with_baseline_snapshot_evaluates() {
+        let _lock = snapshot_env_lock().await;
+        let _guard = mode_test_guard().await;
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let _pin = pin_snapshot_dir(snapshot_dir.path());
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let manifest = seed_snapshot(snapshot_dir.path(), file.path(), false);
+        let policy_toml = "[[rule]]\nid = \"no-runaway-growth\"\npredicate = \"object_growth_threshold\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let result = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline_snapshot": manifest.heap_sha256,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let skipped = result
+            .pointer("/result/skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(skipped.is_empty(), "{result}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_baseline_and_baseline_snapshot_both_set_returns_invalid_input() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let policy_toml = "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline": heap_path,
+                "baseline_snapshot": "some-key",
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("invalid_input"))
         );
     }
 
