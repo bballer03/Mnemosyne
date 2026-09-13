@@ -1,6 +1,6 @@
 # Milestone 17 — Desktop Guided UX Bridge Completion
 
-> **Status:** 🟡 In progress — Slice 17.A shipped; Slices 17.B–17.D pending.
+> **Status:** 🟡 In progress — Slices 17.A–17.B shipped; Slices 17.C–17.D pending.
 > **Owner (design):** Design Consulting Agent
 > **Owner (implementation):** Implementation Agent (per slice)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M17
@@ -22,7 +22,7 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 | Slice | Scope | Status |
 |---|---|---|
 | **17.A** | `inspectObject`, `findAllGcPaths` | ✅ Shipped |
-| **17.B** | `diffObjects` (comparison bridge) | 🔲 Pending |
+| **17.B** | `diffObjects` (comparison bridge) | ✅ Shipped |
 | **17.C** | Workflow bridge (`describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) | 🔲 Pending |
 | **17.D** | Packaged-desktop integration evidence | 🔲 Pending |
 
@@ -47,8 +47,19 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 
 **Verification:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 7/7 pass (includes new retain-field-data and malformed-id cases).
 
+### Slice 17.B — Comparison command
+
+**Files:** `tauri/src/commands.rs`, `tauri/src/bridge.ts`, `tauri/src/main.rs`, `tauri/session-ops/`
+
+- [x] `diff_objects` Tauri command maps to `core::diff::run_diff` with `DiffMode::Object`, resolving `beforeKey`/`afterKey` via `SnapshotStore::load` (SHA-256 snapshot key) with a direct heap-file-path fallback.
+- [x] Preserves `MatchQuality`, identity strategy (`ClassRetained`/`ClassDominator`/`FullFingerprint`), production fingerprint budget defaults, and `cross_reference_leaks` default-off (UI does not pass it; bridge accepts it for forward compatibility).
+- [x] `bridge.ts` injects `__MNEMOSYNE_COMPARISON_BRIDGE__.diffObjects(input)` → `invoke("diff_objects", { input })`, returning the snake_case `ObjectDiffReport` wire shape the existing `parseObjectDiffReport` parser expects.
+- [x] Unit tests in `tauri/session-ops/` cover snapshot-key resolution, direct heap paths, same-snapshot empty deltas, add/remove deltas (zero min-retained floor on synthetic fixtures), match-quality/strategy/`topN`, invalid keys/strategies, and leak cross-reference default-off (`cargo test --features test-fixtures` — 15/15 pass).
+
+**Smoke path (manual):** Launch the desktop app with cached snapshots, open `/compare`, enter two snapshot keys, and run live diff — the comparison basket should render ranked deltas instead of the unavailable state.
+
 ## 4. Out of scope (M17)
 
-- Slices 17.B–17.D until scheduled.
+- Slices 17.C–17.D until scheduled.
 - `getWorkflow` / `closeWorkflow` (no current `ui/src` callers).
 - New analysis capability, signing credentials, auto-update.

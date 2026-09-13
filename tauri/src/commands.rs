@@ -2,17 +2,18 @@ use std::path::PathBuf;
 
 use mnemosyne_core::{
     analysis::{analyze_heap, validate_leak_id, ObjectInspection},
+    diff::ObjectDiffReport,
     focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
     propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
+    snapshot::SnapshotStore,
     AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
     HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ParseOptions, ProvenanceMarker,
     SourceMapResult,
 };
-
 use mnemosyne_desktop_session::{
-    find_all_gc_paths_for_session, graph_has_field_data, inspect_object_for_session,
-    parse_object_id,
+    diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
+    inspect_object_for_session, parse_identity_strategy, parse_object_id, DiffObjectsSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -69,6 +70,16 @@ pub struct ObjectReferencesResult {
 pub struct ObjectReferrersResult {
     object_id: String,
     referrers: Vec<ObjectReferenceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffObjectsBridgeInput {
+    before_key: String,
+    after_key: String,
+    strategy: Option<String>,
+    top_n: Option<usize>,
+    cross_reference_leaks: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,6 +371,27 @@ pub async fn map_to_code(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn diff_objects(input: DiffObjectsBridgeInput) -> Result<ObjectDiffReport, String> {
+    let strategy = match input.strategy.as_deref() {
+        None => None,
+        Some(raw) => Some(parse_identity_strategy(raw)?),
+    };
+
+    let store = default_snapshot_store();
+    diff_objects_for_session(
+        &store,
+        DiffObjectsSessionInput {
+            before_key: input.before_key,
+            after_key: input.after_key,
+            strategy,
+            top_n: input.top_n,
+            cross_reference_leaks: input.cross_reference_leaks,
+        },
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn propose_fix(
     leak_id: String,
     heap_path: String,
@@ -475,4 +507,29 @@ fn format_object_id(object_id: u64, id_size: usize) -> String {
 
 fn prettify_class_name(raw: &str) -> String {
     raw.replace('/', ".")
+}
+
+const SNAPSHOT_DIR_ENV: &str = "MNEMOSYNE_SNAPSHOT_DIR";
+
+fn default_snapshot_store() -> SnapshotStore {
+    SnapshotStore::new(default_snapshot_store_root())
+}
+
+fn default_snapshot_store_root() -> PathBuf {
+    if let Ok(dir) = std::env::var(SNAPSHOT_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("snapshots");
+    fallback
 }

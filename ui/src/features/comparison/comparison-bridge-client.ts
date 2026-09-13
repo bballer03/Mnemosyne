@@ -23,17 +23,11 @@
 // `nextStep` (14.D scope) join this same bridge or get their own is left
 // for that slice to decide.
 //
-// Tauri wiring: `tauri/src/bridge.ts` does not inject
-// `__MNEMOSYNE_COMPARISON_BRIDGE__` yet (no `diff_objects` Tauri command
-// exists in `tauri/src/commands.rs`). Per the design doc's explicit scope
-// cap (§4 "Out": Tauri command additions are in-scope only where a slice's
-// own UI is broken without them), this slice does not add one -- the
-// file-load path (`parseHeapDiffArtifact`, consuming
-// `mnemosyne diff --mode object --format json` output) is the primary,
-// fully-functional path and requires no bridge at all. This client-side
-// probe is forward-compatible plumbing: once a host injects the bridge,
-// `isDiffObjectsAvailable()` starts returning true with no other code
-// changes needed.
+// Tauri wiring (M17 Slice 17.B): `tauri/src/bridge.ts` injects
+// `__MNEMOSYNE_COMPARISON_BRIDGE__.diffObjects` → native `diff_objects`
+// command over `DiffMode::Object`. The file-load path remains the primary
+// browser fallback; this client-side probe activates live diff when the
+// packaged desktop host is connected.
 
 import { parseObjectDiffReport, type IdentityStrategy, type ObjectDiffReport } from "../../lib/diff-types";
 

@@ -17,6 +17,7 @@ fn main() {
             commands::explain_leak,
             commands::inspect_object,
             commands::find_all_gc_paths,
+            commands::diff_objects,
             commands::find_gc_path,
             commands::map_to_code,
             commands::propose_fix,

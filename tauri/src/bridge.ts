@@ -24,4 +24,8 @@ if (isTauri) {
     mapToCode: (input) => invoke("map_to_code", input),
     proposeFix: (input) => invoke("propose_fix", input),
   };
+
+  hostWindow.__MNEMOSYNE_COMPARISON_BRIDGE__ = {
+    diffObjects: (input) => invoke("diff_objects", { input }),
+  };
 }
