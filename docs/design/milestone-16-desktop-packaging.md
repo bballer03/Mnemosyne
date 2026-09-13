@@ -81,6 +81,7 @@ All slices end with a real built-and-launched installer verification on at least
 - **Files owned:** `README.md`, possibly new `HomebrewFormula/mnemosyne-desktop.rb` (Cask) if item 6's evaluation favors it.
 - **Validation gates:** documentation accurately describes the actual shipped (possibly unsigned) experience per platform — no claiming a signed/notarized experience that Slice 16.B didn't actually achieve.
 - **Target size:** Documentation + optional Cask file.
+- **Homebrew Cask decision (16.C):** **Deferred for v1.** Cask only serves macOS, does not remove Gatekeeper prompts for unsigned `.dmg` builds, and adds per-release SHA256 maintenance separate from the existing CLI Formula. GitHub Releases remains the sole desktop distribution channel; see `README.md` Desktop app section.
 
 ### Slice 16.D — Documentation sync
 

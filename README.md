@@ -170,7 +170,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
 ### Browser-first dashboard and desktop scaffold
-The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, the leak workspace route family under `/leaks/:leakId`, a `/compare` comparison basket, and an AI-guided landing page (M14). Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, query-console, and new thread-view routes can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references, referrers, and dominator context as clickable navigation chips; the GC-path view can enumerate every path instead of only the shortest; the comparison basket can run a live object-level diff; and the guided landing can drive an M11 workflow end-to-end or list cached snapshots. Every one of those live capabilities degrades to an explicit unavailable state without a connected bridge — artifact-backed panels (referrer, classloader, thread) never need one at all. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects the two pre-M14 host bridges, but native desktop bundles are not yet part of the tagged release pipeline, and the M14 comparison/workflow bridges are not yet wired into the Tauri native-command layer.
+The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, the leak workspace route family under `/leaks/:leakId`, a `/compare` comparison basket, and an AI-guided landing page (M14). Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, query-console, and new thread-view routes can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references, referrers, and dominator context as clickable navigation chips; the GC-path view can enumerate every path instead of only the shortest; the comparison basket can run a live object-level diff; and the guided landing can drive an M11 workflow end-to-end or list cached snapshots. Every one of those live capabilities degrades to an explicit unavailable state without a connected bridge — artifact-backed panels (referrer, classloader, thread) never need one at all. An optional Tauri shell lives under `tauri/`; it bundles the same `ui/` build and injects the two pre-M14 host bridges. Tagged releases now attach Tauri desktop installers alongside the CLI archives (see **Desktop app** below). The M14 comparison/workflow bridges are not yet wired into the Tauri native-command layer.
 
 ```bash
 cd ui
@@ -179,13 +179,42 @@ npx --yes bun run build
 npx --yes bun run lint
 ```
 
-The optional desktop shell currently validates with `cargo check --manifest-path tauri/Cargo.toml`.
+The desktop shell validates with `cargo check --manifest-path tauri/Cargo.toml`.
 
-**Desktop installers (M16):** tagged releases may attach Tauri bundles for Windows, macOS,
-and Linux. v1 ships **unsigned** installers unless release CI secrets are configured — see
-[SECURITY.md — Desktop app distribution](SECURITY.md#desktop-app-distribution-m16) for
-SmartScreen/Gatekeeper workarounds. **Auto-update is skipped for v1**; re-download from
-GitHub Releases when upgrading (same as the CLI).
+### Desktop app (GUI)
+
+Install the native Mnemosyne GUI from the same [GitHub Releases](https://github.com/bballer03/mnemosyne/releases) page as the CLI — each `v*` tag publishes desktop bundles next to the `mnemosyne-cli-*` archives.
+
+**Signing and upgrades:** v1 installers ship **unsigned** unless release CI signing secrets are configured (see [SECURITY.md — Desktop app distribution](SECURITY.md#desktop-app-distribution-m16) for SmartScreen/Gatekeeper workarounds — do not assume a signed or notarized build). There is **no in-app auto-updater** in v1; re-download from Releases when upgrading.
+
+**Pick your asset** (Tauri `productName` is `Mnemosyne`; `<version>` matches the release tag without the leading `v`):
+
+| Platform | Release-matrix target | Typical installer filenames |
+| --- | --- | --- |
+| **Windows** (x64) | `x86_64-pc-windows-msvc` | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe` |
+| **macOS** (Apple Silicon) | `aarch64-apple-darwin` | `Mnemosyne_<version>_aarch64.dmg` |
+| **macOS** (Intel) | `x86_64-apple-darwin` | `Mnemosyne_<version>_x64.dmg` |
+| **Linux** (x86_64) | `x86_64-unknown-linux-gnu` | `Mnemosyne_<version>_amd64.deb`, `Mnemosyne_<version>_amd64.AppImage`, `Mnemosyne-<version>-1.x86_64.rpm` |
+| **Linux** (aarch64) | `aarch64-unknown-linux-gnu` | `Mnemosyne_<version>_arm64.deb`, `Mnemosyne_<version>_arm64.AppImage`, `Mnemosyne-<version>-1.aarch64.rpm` |
+
+When a release lists multiple formats for one platform, choose one: `.msi` or `-setup.exe` on Windows, `.dmg` on macOS, or your preferred Linux package manager format (`.deb`, `.AppImage`, or `.rpm`). Each CI desktop job builds all Tauri bundle targets declared in `tauri/tauri.conf.json` (`bundle.targets: "all"`).
+
+**Install steps**
+
+- **Windows:** Run the `.msi` or `-setup.exe`. If SmartScreen warns on first launch, follow [SECURITY.md](SECURITY.md#desktop-app-distribution-m16).
+- **macOS:** Open the `.dmg`, drag **Mnemosyne.app** to Applications, then launch. On first open, use **Right-click → Open** if Gatekeeper blocks an unsigned build — details in [SECURITY.md](SECURITY.md#desktop-app-distribution-m16).
+- **Linux (.deb):** `sudo apt install ./Mnemosyne_<version>_*.deb` (or `dpkg -i`). Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu).
+- **Linux (.AppImage):** `chmod +x Mnemosyne_<version>_*.AppImage && ./Mnemosyne_<version>_*.AppImage`
+- **Linux (.rpm):** `sudo rpm -i Mnemosyne-*.rpm`
+
+**Build from source** (requires Rust, Bun, and platform bundler deps — see [docs/design/milestone-16-desktop-packaging.md](docs/design/milestone-16-desktop-packaging.md)):
+
+```bash
+cd ui && bun install && bun run build
+cargo tauri build --manifest-path tauri/Cargo.toml
+```
+
+Homebrew Cask was evaluated and **deferred for v1** — GitHub Releases remains the supported desktop install path; [`HomebrewFormula/mnemosyne.rb`](HomebrewFormula/mnemosyne.rb) is CLI-only and unchanged.
 
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
