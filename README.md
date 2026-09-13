@@ -49,10 +49,10 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `mnemosyne-cli parse` and `mnemosyne-cli analyze` now accept `--mode auto|deep|overview`; `auto` flips to overview at 4 GiB by default and can be overridden with `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`
 - Overview mode is a streaming, graph-free triage path with approximate shallow sizes only. Retained sizes, dominator data, and leak suspects remain deep-mode-only.
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
-- `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
-- Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `mnemosyne-cli analyze --group-by class|package|classloader|superclass` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
+- Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --duplicate-arrays --top-instances` adds per-thread retained-size views, duplicate-string analysis, duplicate primitive-array detection, collection waste inspection, classloader summaries, and top-instance ranking in one run
 - `--classloaders` now also detects cross-loader duplicate classes (MAT's "Duplicate Classes" report -- the classic Tomcat/Jetty/Spring hot-redeploy leak: same class name loaded by 2+ distinct classloaders) alongside the existing single-loader `potential_leaks` heuristic, plus a bounded parent-loader ancestor chain per loader
-- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS` / regex `=~`, `OBJECTS`, `IS NULL` / `IS NOT NULL`, traversal functions (`outbounds`/`inbounds`/`dominators`), one-level subqueries, and `UNION`
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
@@ -542,8 +542,12 @@ mnemosyne-cli query heap.hprof "SELECT @objectId, @retainedSize FROM \"com.examp
 | `CONTAINS` | Match plain substrings on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
 | `OBJECTS x.field` | Project the one-hop referent of an object-reference field instead of the matched source object. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
 | `IS NULL` / `IS NOT NULL` | Test whether an object-reference field is unset or present. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+| `=~` | Regex match on string-capable fields (linear-time `regex` crate). | `SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*"` |
+| `outbounds(id)` / `inbounds(id)` / `dominators(id)` | Traversal functions in `FROM` clauses (single-hop out/in; dominator chain). | `SELECT @objectId FROM outbounds(1) WHERE @objectId = 3` |
+| Subqueries | One-level nesting: `FROM OBJECTS (SELECT ...)`. | `SELECT * FROM OBJECTS (SELECT @objectId FROM "com.example.*" LIMIT 10)` |
+| `UNION` | Combine two queries, deduplicated by object id. | `SELECT @objectId FROM "A" WHERE x < 3 UNION SELECT @objectId FROM "A" WHERE x > 7` |
 
-These additions stay intentionally narrower than full MAT OQL: no subqueries, no multi-hop `OBJECTS`, and no broad set algebra. For the full semantics and explicit non-scope, see [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md).
+Named deferrals (not silent gaps): `eval(...)`, multi-class `FROM`, arbitrary-depth subquery nesting, multi-hop `OBJECTS`. M7-4 baseline: [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md). M15 bounded expansion: [docs/design/milestone-15-mat-backend-parity.md](docs/design/milestone-15-mat-backend-parity.md).
 
 #### Output TOON (for CI/CD)
 ```bash
@@ -861,7 +865,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
 - M7 is shipped: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks remains 🟡 partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 shipped on 2026-04-26
-- Post-v0.3.0 milestone planning is pending Tech PM review; current follow-on remains evidence-driven around richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
+- M8, M9, M10, M10-B, M11, M13, M14, and M15 are shipped post-v0.3.0; **M16** (desktop packaging) is the active next milestone; M12 (reference-workstation benchmark rerun) remains blocked on environment
 
 ---
 

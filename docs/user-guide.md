@@ -226,7 +226,8 @@ Flags:
 - `--mode auto|deep|overview`
 - `--format text|markdown|html|json|toon`
 - `--profile overview|incident-response|ci-regression`
-- `--group-by class|package|classloader`
+- `--group-by class|package|classloader|superclass`
+- `--duplicate-arrays` — attach duplicate primitive-array content detection (requires field-data retention, same precondition as `--strings`)
 - `--by-referrer` — attach a group-by-referrer report ranking objects by incoming-reference count
 - `-o, --output-file <FILE>`
 - `--ai`
@@ -826,13 +827,17 @@ Operators:
 | `CONTAINS` | Plain substring matching on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
 | `OBJECTS x.field` | One-hop referent projection for object-reference fields. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
 | `IS NULL` / `IS NOT NULL` | Nullability checks for object-reference fields. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+| `=~` | Regex match on string-capable fields (uses the linear-time `regex` crate; malformed patterns fail at parse time). | `SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*"` |
+| `outbounds(id)` / `inbounds(id)` / `dominators(id)` | Traversal functions in `FROM` clauses: outgoing references, incoming referrers, or immediate-dominator chain. | `SELECT @objectId FROM outbounds(1) WHERE @objectId = 3` |
+| Subqueries | One-level nesting via `FROM OBJECTS (SELECT ...)`. Deeper nesting returns a structured "nesting depth exceeded" error. | `SELECT * FROM OBJECTS (SELECT @objectId FROM "com.example.*" LIMIT 10)` |
+| `UNION` | Combine two queries; results deduplicated by object id. Each side's own `LIMIT` applies before the merge. | `SELECT @objectId FROM "A" WHERE x < 3 UNION SELECT @objectId FROM "A" WHERE x > 7` |
 
 Other query notes:
 
 - single-quoted string literals now work alongside double-quoted ones
 - `OBJECTS` is intentionally single-hop only in the shipped surface
 - `SELECT @gcRootPath` returns `Null` for matched objects that are unreachable from any GC root
-- the targeted M7-4 slice is documented in [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md)
+- M7-4 baseline: [design/milestone-7-4-oql-targeted-expansion.md](design/milestone-7-4-oql-targeted-expansion.md); M15 bounded expansion: [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md)
 
 Expected output pattern:
 
@@ -844,7 +849,30 @@ Matched: 1
 
 Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields. Exit codes `10`-`13` apply to explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
-Current limitation: the query surface is real, but it is still smaller than a full MAT-style OQL environment. The targeted expansion now covers the highest-value predicates and projections, but multi-hop traversal, subqueries, broader set algebra, and deeper explorer semantics are still future work.
+Named deferrals (not silent gaps): `eval(...)` scriptlets, multi-class `FROM`, arbitrary-depth subquery nesting, and multi-hop `OBJECTS`. The M7-4 + M15 bounded list covers the highest-value MAT OQL workflows for heap triage; see the design docs linked above for the full explicit non-scope list.
+
+### Duplicate primitive-array detection
+
+Use `--duplicate-arrays` on `analyze` (or MCP `analyze_heap` with `enable_duplicate_arrays: true`) to detect primitive arrays with identical element type, length, and byte-for-byte content — the same memory-waste pattern MAT flags alongside duplicate strings.
+
+Requires field-data retention (the heap must have been parsed with retained array contents available — same precondition as `--strings`). The `incident-response` profile enables `--duplicate-arrays` automatically.
+
+Output shape mirrors string duplicate detection: `DuplicateArrayGroup { element_type, content_hash, length, count, total_wasted_bytes }` in an optional `array_report` on `AnalyzeResponse`.
+
+```bash
+mnemosyne-cli analyze heap.hprof --duplicate-arrays --strings
+```
+
+### Plugin extension API (Phase 2)
+
+Mnemosyne ships a **Phase-2 static plugin registry** (M15 Slice 15.F) for Rust projects that depend on `mnemosyne-core`:
+
+- `AnalyzerPlugin` — custom analysis pass over `ObjectGraph` + optional `DominatorTree`; results append to `AnalyzeResponse::plugin_results` via `analyze_heap_with_plugins()`
+- `ReportFormatterPlugin` — custom output format selectable via `OutputFormat::Custom(name)` and `render_report_with_plugins()`
+
+Registration is compile-time only (`registry.register_analyzer(...)`, `registry.register_formatter(...)`). There is no filesystem discovery, no `cdylib` loading, and no CLI `--plugin` flag — Phase 3 dynamic loading stays gated per [design/m6-plugin-extension-system.md](design/m6-plugin-extension-system.md).
+
+See `core/src/plugin/mod.rs` module docs and [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) §4.4.
 
 ### `explain`
 

@@ -63,7 +63,7 @@ merge — never trusting the agent's self-reported numbers.
 | 14.D | AI-guided landing page, workflow cards, natural-language input, persistent power-route nav (`__MNEMOSYNE_WORKFLOW_BRIDGE__`) |
 | 14.E | Visual consistency pass + M14 documentation sync |
 
-**M15 — MAT backend parity (6/7 slices complete; 15.G remaining)**
+**M15 — MAT backend parity (7/7 slices complete)**
 | Slice | What |
 |---|---|
 | 15.A | Duplicate primitive-array detection |
@@ -72,7 +72,7 @@ merge — never trusting the agent's self-reported numbers.
 | 15.D | OQL regex operator `=~` |
 | 15.E | OQL one-level subqueries + `UNION` (found and fixed a real per-side-LIMIT ordering bug) |
 | 15.F | Phase 2 static plugin/extension runtime (`AnalyzerPlugin`, `ReportFormatterPlugin`, `PluginRegistry`) |
-| 15.G | **Not started** |
+| 15.G | Documentation sync — M15 marked shipped across roadmap/STATUS/CHANGELOG/README/ARCHITECTURE/user-guide/plugin design doc |
 
 **M16 — Desktop packaging (1/4 slices complete; 16.B-D remaining)**
 | Slice | What |
@@ -104,7 +104,6 @@ clippy/fmt/tsc all clean at time of writing.
 
 ## What remains
 
-- M15.G (final MAT-parity slice, not yet started/scoped in detail beyond the roadmap entry).
 - M16.B-D (desktop packaging: code signing strategy, auto-update, multi-platform installer
   verification).
 - Environment permanently blocks: no Eclipse MAT available in this sandbox for side-by-side
@@ -113,5 +112,5 @@ clippy/fmt/tsc all clean at time of writing.
 
 ## Process note
 
-Per explicit instruction, autonomous dispatch stops here — no further slices (15.G, 16.B-D) were
-started after this document. Resume by picking up 15.G from `docs/design/milestone-15-mat-backend-parity.md` §5.
+Per explicit instruction, autonomous dispatch stops here — no further slices (16.B-D) were
+started after this document. Resume by picking up M16 from `docs/design/milestone-16-desktop-packaging.md`.
