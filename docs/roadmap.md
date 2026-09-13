@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-13 (post-M16 desktop-packaging closeout)
+> **Last updated:** 2026-09-13 (post-M16 product plan: M17–M23 candidates)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
@@ -279,6 +279,60 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** R1 (no signing credentials in this environment) — mitigated by conditional CI wiring + documented unsigned default. R2 (OS security warnings on unsigned builds) — mitigated by README/SECURITY.md workarounds. R3 (asymmetric launch testing) — documented per platform above.
 - **Estimated slice count:** 4 shipped (16.A–16.D).
 
+### M17 — Desktop Guided UX Bridge Completion — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-17-desktop-guided-ux-bridges.md`.
+- **Goal:** Wire M14's `inspectObject`, `findAllGcPaths`, comparison, workflow, and snapshot-list capabilities into the Tauri desktop using existing core behavior.
+- **Why next:** M16 packages these UI surfaces today, but missing native commands force honest unavailable states. This is the smallest direct path from "installable" to a complete guided desktop.
+- **Boundary:** No new analyzer, signing, auto-update, or bridge redesign. Preserve browser fallback and structured overview/provenance behavior.
+- **Slices:** inspector/all-paths commands; object comparison; workflow/snapshot commands; packaged-desktop contract and smoke evidence.
+
+### M18 — MCP Agent and IDE Loop Completion — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-18-mcp-agent-loop-completion.md`.
+- **Goal:** Let agents run `ci-check` with optional baseline, leak-annotated diffs, snapshot save/remove, and flamegraph generation through structured MCP calls.
+- **Why now:** These core/CLI capabilities already ship; MCP omission forces IDE agents to shell out and breaks Mnemosyne's MCP-first invariant.
+- **Boundary:** Thin MCP adapters only where core behavior exists. No shell execution, policy duplication, transport rewrite, or token streaming.
+- **Slices:** single-heap policy tool; baseline growth; `diff_heaps.cross_reference_leaks`; snapshot mutation; flamegraph artifacts; real MCP transcripts.
+
+### M19 — Guided Analysis and Investigation Continuity — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-19-guided-analysis-completion.md`.
+- **Goal:** Surface M15 duplicate-array/static-plugin/superclass data, add a classloader-leak workflow over M13, and replace separate three-turn AI caps with one shared bounded 12-turn default (hard maximum 32).
+- **Why now:** This is mostly presentation and orchestration over shipped backends, so it converts existing capability into guided usefulness before adding deeper analysis.
+- **Boundary:** No new classloader heuristic, dynamic plugin loading, user-defined workflow language, arbitrary history, or streaming.
+- **Slices:** duplicate-array panel; MCP/Tauri-backed superclass regroup control; static plugin findings; classloader workflow; guided workflow card; bounded shared conversation history.
+
+### M20 — Bounded MAT Migration Polish — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-20-bounded-mat-migration-polish.md`.
+- **Goal:** Reduce common MAT saved-query migration friction with multi-class `FROM`, `OBJECTS` chains capped at three field segments, and small classloader/operator UI polish.
+- **Why after M17–M19:** Agent, desktop, and guided UI loops have higher product leverage. This milestone then takes only bounded, evidenced MAT leftovers.
+- **Boundary:** OQL remains explicitly partial. `eval(...)`, arbitrary-depth subqueries, query-engine rewrites, and Phase-3 plugins stay out.
+- **Slices:** sanitized compatibility corpus; multi-class `FROM`; bounded multi-hop `OBJECTS`; `unique_class_count` CLI rendering and cheap UI-only superclass presentation.
+
+### M21 — Credibility and Release Evidence — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-21-credibility-release-evidence.md`.
+- **Goal:** Publish the missing snapshot-load benchmark and evidence post-M16 desktop build/attachment/launch claims without overstating signing or platform coverage.
+- **M12 relationship:** M12 remains separately blocked on a native-Linux reference workstation, Eclipse MAT, and the 10 GiB fixture. Run it in parallel when available; do not remove the partial benchmark caveat before it succeeds.
+- **Boundary:** Workflow configuration is not build evidence; a built artifact is not launch evidence; an unsigned artifact is not signed/notarized.
+- **Slices:** snapshot Criterion benchmark; desktop release artifact proof; per-platform launch evidence; exact M12 prerequisite check/handoff.
+
+### M22 — Advanced OQL Compatibility — 🔲 Pending (conditional)
+
+- **Status:** 🔲 **Pending candidate, demand-gated** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-22-advanced-oql-compatibility.md`.
+- **Scheduling gate:** At least 20 sanitized, currently failing real-world saved queries must show that deeper nesting or `eval(...)` blocks migration after M20.
+- **Candidate scope:** Subqueries capped at depth 8 and only an allowlisted, Rust-native pure-expression subset justified by the corpus.
+- **Boundary:** No Java/JVM, JavaScript, shell, reflection, I/O, network, arbitrary code execution, or unbounded recursion.
+
+### M23 — Extension Runtime and Custom Inspectors — 🔲 Pending (conditional)
+
+- **Status:** 🔲 **Pending candidate, adoption-gated** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-23-extension-runtime-custom-inspectors.md`.
+- **Scheduling gate:** At least two maintained out-of-tree extensions must be blocked by Phase-2 static registration.
+- **Candidate scope:** Versioned manifest/compatibility negotiation, safe discovery and opt-in, one isolated extension proof, MCP provenance, and declarative custom-inspector view models.
+- **Boundary:** Raw Rust trait-object ABI is not a stable plugin contract; no JVM/JAR plugins, automatic internet installation, arbitrary plugin JavaScript, marketplace, or default-on native loading.
+
 ### Other backlog items (lower priority — not proposed as standalone M8+)
 
 | # | Item | Origin | Priority | Notes |
@@ -294,22 +348,34 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ---
 
-## 6. Recommended Next Milestone — **M14 UI Backend-Parity & AI-Native Redesign**
+## 6. Recommended Post-M16 Sequence — **M17 Desktop Guided UX Bridge Completion**
 
-**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, M14, M15, and now **M16** are all shipped as of this update — the sequencing below this note is now history, preserved for the record. M12 remains blocked (no native-Linux + Eclipse MAT reference workstation available in the executing environment). M16 shipped with documented caveats: desktop installers build in tagged-release CI but **default unsigned** (no signing secrets configured); desktop bundles appear on post-M16 tags only, not historical `v0.3.0`.
+**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, M14, M15, and M16 are shipped. M16 remains unsigned by default and has no evidenced tagged desktop artifact upload; macOS/Linux remain not launch-tested. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. Every M17+ item below is a 🔲 candidate, not shipped.
 
-**Recommendation (historical, at the time M14 was scheduled):** Schedule **M14 — UI Backend-Parity & AI-Native Redesign** as the active next milestone, followed by M15 (MAT backend parity completion) and M16 (desktop packaging).
+**Recommendation:** Schedule **M17** first, then M18–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
 
-**Justification:**
+**Ranking rationale:**
 
-1. **Retired backend risk, presentation-only work left:** every M8–M13 milestone deliberately deferred UI work under a "backend-before-UI" pattern (see each milestone's own "Not shipped" notes above). That backlog is now the single highest-leverage piece of remaining work — the analysis capability already exists and is tested; M14 is surfacing it, not inventing it.
-2. **User-requested, explicitly scoped via brainstorming session (2026-08-20):** AI-guided default navigation with the full MAT-equivalent power surface kept undiminished underneath — see [milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md).
-3. **M15 (remaining OQL/array/superclass/plugin gaps) and M16 (desktop packaging) sequenced after M14** because M16 explicitly depends on M14 having shipped a GUI worth packaging, and M15's backend gaps don't block M14's UI-backfill scope (M14 surfaces what's already shipped, not what M15 will add).
+1. **Complete shipped product loops before adding analysis depth:** M17 fixes desktop surfaces users can already see but cannot run; M18 removes agent shell-outs for capabilities the CLI/core already have.
+2. **Surface and orchestrate existing backend value:** M19 gives M15 data a UI and adds the missing classloader workflow without inventing a new analyzer.
+3. **Take only bounded MAT leftovers:** M20 targets common saved-query friction and small operator polish, while preserving explicit limits and deferrals.
+4. **Publish evidence after utility:** M21 closes runnable credibility gaps. M12 runs in parallel only when its external environment exists and remains honestly blocked otherwise.
+5. **Delay expensive tails:** M22 deep OQL and M23 dynamic extensions/custom inspectors start only with real demand. Live JVM attach, MAT index interchange, and MCP streaming remain discovery items, not scheduled milestones.
 
 **Recommended sequencing (current):**
 
-1. **M12** — Reference-workstation rerun (blocked on environment; can run in parallel when hardware is available)
-2. **Configure release CI signing secrets** (optional follow-up) — enables signed Windows Authenticode and macOS notarization on future tagged releases; until then desktop installers remain unsigned by default
+1. **M17 — Desktop Guided UX Bridge Completion** — complete M14 capabilities in the packaged app.
+2. **M18 — MCP Agent and IDE Loop Completion** — policy/baseline, leak cross-reference, snapshots, flamegraphs.
+3. **M19 — Guided Analysis and Investigation Continuity** — M15 UI, classloader workflow, bounded conversation depth.
+4. **M20 — Bounded MAT Migration Polish** — multi-class `FROM`, capped multi-hop `OBJECTS`, operator polish.
+5. **M21 — Credibility and Release Evidence** — snapshot benchmark and desktop artifact/launch proof.
+6. **M22 — Advanced OQL Compatibility** — conditional on a failing saved-query corpus.
+7. **M23 — Extension Runtime and Custom Inspectors** — conditional on out-of-tree extension demand.
+
+**Parallel/optional tracks:**
+
+- **M12 — Reference-workstation rerun:** blocked on environment; run unchanged when prerequisites exist. Never infer native-Linux/MAT/10 GiB results from WSL or workflow configuration.
+- **Configure release CI signing secrets:** optional organizational follow-up. Signing is not a functional dependency for M17–M21 and must not be claimed until a signed/notarized artifact is verified.
 
 **Historical sequencing (M8–M13 era, completed):**
 
