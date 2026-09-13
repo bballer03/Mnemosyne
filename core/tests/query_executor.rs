@@ -6,7 +6,10 @@ use mnemosyne_core::{
         ObjectId, ObjectKind,
     },
     parse_hprof_with_options,
-    query::{execute_query, parse_query, CellValue, QueryError},
+    query::{
+        execute_query, execute_query_statement, parse_query, parse_query_statement, CellValue,
+        QueryError, QueryStatement,
+    },
     ParseOptions,
 };
 
@@ -2093,4 +2096,255 @@ fn is_null_combined_with_objects_projection() {
             ],
         ]
     );
+}
+
+// M15 Slice 15.E: one-level subqueries (`FROM OBJECTS (<subquery>)`) and `UNION`.
+
+#[test]
+fn subquery_restricts_outer_candidates_matches_direct_inner_query() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Equivalence-check discipline (per this session's established "zero
+    // new analysis logic, prove it via direct comparison" convention):
+    // the outer subquery-sourced query, with no WHERE/LIMIT of its own,
+    // must produce exactly the same rows as running the inner query on
+    // its own.
+    let inner = parse_query(r#"SELECT * FROM "com.example.User" WHERE kind > 5"#)
+        .expect("inner query should parse");
+    let inner_result =
+        execute_query(&inner, &graph, Some(&dominator)).expect("inner query should execute");
+
+    let outer =
+        parse_query(r#"SELECT * FROM OBJECTS (SELECT * FROM "com.example.User" WHERE kind > 5)"#)
+            .expect("outer subquery should parse");
+    let outer_result =
+        execute_query(&outer, &graph, Some(&dominator)).expect("outer subquery should execute");
+
+    assert_eq!(outer_result.rows, inner_result.rows);
+    assert_eq!(
+        outer_result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2004),
+                CellValue::Str("com.example.User".into())
+            ],
+            vec![
+                CellValue::Id(0x2005),
+                CellValue::Str("com.example.User".into())
+            ],
+            vec![
+                CellValue::Id(0x2006),
+                CellValue::Str("com.example.User".into())
+            ],
+        ]
+    );
+}
+
+#[test]
+fn subquery_composed_with_outbounds_and_regex_in_inner_where() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // 0x2004 == 8196; its sole outbound reference is object 14, the
+    // `java.lang.String` instance backing its `name` field. Proves a
+    // subquery's inner FROM/WHERE can freely use 15.C's traversal
+    // functions and 15.D's regex operator -- the subquery pipeline simply
+    // re-invokes the same query executor recursively once.
+    let query = parse_query(
+        r#"SELECT * FROM OBJECTS (SELECT * FROM outbounds(8196) WHERE @className =~ "^java\.lang\..*")"#,
+    )
+    .expect("subquery composed with outbounds+regex should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(14),
+            CellValue::Str("java.lang.String".into())
+        ]]
+    );
+}
+
+#[test]
+fn subquery_inner_where_still_applies_when_outer_where_present() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Inner restricts to kind > 5 (0x2004, 0x2005, 0x2006); outer further
+    // restricts to @objectId != 0x2005 (8197). Both WHERE clauses must
+    // apply -- the outer query's own filter runs on top of the subquery's
+    // candidate set, exactly like it runs on top of a traversal function's
+    // candidate set.
+    let query = parse_query(
+        r#"SELECT @objectId FROM OBJECTS (SELECT * FROM "com.example.User" WHERE kind > 5) WHERE @objectId != 8197"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![CellValue::Id(0x2004)], vec![CellValue::Id(0x2006)]]
+    );
+}
+
+#[test]
+fn doubly_nested_subquery_built_directly_returns_structured_error_not_infinite_recursion() {
+    // Bypasses the parser's own nesting-depth rejection (constructs the
+    // `Query` directly, as an MCP/library caller might) to prove the
+    // executor's independent depth guard also fails structurally rather
+    // than recursing without bound (M15 Slice 15.E defense-in-depth,
+    // mirroring 15.D's `malformed_regex_pattern_built_directly...` test).
+    use mnemosyne_core::query::{ClassPattern, FromClause, Query, SelectClause};
+
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let innermost = Query {
+        select: SelectClause::All,
+        from: FromClause {
+            class_pattern: ClassPattern::Exact("com.example.User".into()),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+    let middle = Query {
+        select: SelectClause::All,
+        from: FromClause {
+            class_pattern: ClassPattern::Subquery(Box::new(innermost)),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+    let outer = Query {
+        select: SelectClause::All,
+        from: FromClause {
+            class_pattern: ClassPattern::Subquery(Box::new(middle)),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+
+    let error = execute_query(&outer, &graph, Some(&dominator))
+        .expect_err("doubly nested subquery should fail structurally, not recurse unbounded");
+
+    assert!(matches!(error, QueryError::Unsupported(_)));
+    assert!(error.to_string().to_lowercase().contains("nesting"));
+}
+
+#[test]
+fn execute_query_statement_single_matches_execute_query_directly() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User" WHERE kind = 7"#)
+        .expect("query should parse");
+    let direct = execute_query(&query, &graph, Some(&dominator)).expect("direct execute");
+
+    let statement =
+        parse_query_statement(r#"SELECT @objectId FROM "com.example.User" WHERE kind = 7"#)
+            .expect("statement should parse");
+    assert!(matches!(statement, QueryStatement::Single(_)));
+    let via_statement =
+        execute_query_statement(&statement, &graph, Some(&dominator)).expect("statement execute");
+
+    assert_eq!(direct, via_statement);
+}
+
+#[test]
+fn union_of_disjoint_queries_returns_combined_set() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let statement = parse_query_statement(
+        r#"SELECT @objectId FROM "com.example.User" WHERE kind < 3 UNION SELECT @objectId FROM "com.example.User" WHERE kind > 7"#,
+    )
+    .expect("union query should parse");
+    assert!(matches!(statement, QueryStatement::Union(_, _)));
+
+    let result = execute_query_statement(&statement, &graph, Some(&dominator))
+        .expect("union query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+    assert_eq!(ids, vec![0x2000, 0x2001, 0x2005, 0x2006]);
+    assert_eq!(result.total_matched, 4);
+}
+
+#[test]
+fn union_of_overlapping_queries_dedupes_by_object_id() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let statement = parse_query_statement(
+        r#"SELECT @objectId FROM "com.example.User" WHERE kind <= 3 UNION SELECT @objectId FROM "com.example.User" WHERE kind >= 2 AND kind <= 4"#,
+    )
+    .expect("union query should parse");
+
+    let result = execute_query_statement(&statement, &graph, Some(&dominator))
+        .expect("union query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    // Left alone: {0x2000, 0x2001, 0x2002}. Right alone: {0x2001, 0x2002,
+    // 0x2003}. 0x2001/0x2002 overlap and must not be double-counted.
+    assert_eq!(ids, vec![0x2000, 0x2001, 0x2002, 0x2003]);
+    assert_eq!(result.total_matched, 4);
+    let mut deduped = ids.clone();
+    deduped.dedup();
+    assert_eq!(
+        deduped.len(),
+        ids.len(),
+        "object id appeared more than once"
+    );
+}
+
+#[test]
+fn union_right_side_limit_bounds_its_own_contribution_before_merge() {
+    let graph = build_string_query_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let statement = parse_query_statement(
+        r#"SELECT @objectId FROM "com.example.User" WHERE kind = 1 UNION SELECT @objectId FROM "com.example.User" WHERE kind > 0 LIMIT 3"#,
+    )
+    .expect("union query should parse");
+
+    let result = execute_query_statement(&statement, &graph, Some(&dominator))
+        .expect("union query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    // Left matches only 0x2000 (kind = 1). Right, unbounded, would match
+    // all 7 users (every `kind` is > 0); its own `LIMIT 3` bounds its
+    // contribution to the first 3 by ascending object id (0x2000, 0x2001,
+    // 0x2002) *before* the union/dedup step -- each side of `UNION` is
+    // evaluated as an independent `Query`, own `LIMIT` included, exactly as
+    // if it had been run standalone. If `LIMIT` were silently dropped here,
+    // this would instead return all 7 users.
+    assert_eq!(ids, vec![0x2000, 0x2001, 0x2002]);
 }

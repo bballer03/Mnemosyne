@@ -1,12 +1,52 @@
 use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
-    QueryParseError, SelectClause, TraversalFunction, Value, WhereClause,
+    QueryParseError, QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
 };
 use regex::Regex;
 
+/// Bound on `FROM OBJECTS (<subquery>)` nesting: a query parsed at depth 0
+/// (the top-level statement) may contain one subquery (parsed at depth 1),
+/// but that inner query may not itself contain another `OBJECTS(...)`
+/// subquery (M15 Slice 15.E §4.1 item 4 -- "bounded to one level of
+/// nesting, not arbitrary recursion"). Mirrored, defense-in-depth, by
+/// `executor::MAX_SUBQUERY_NESTING_DEPTH` for a `Query` assembled directly.
+const MAX_SUBQUERY_NESTING_DEPTH: usize = 1;
+
 pub fn parse_query(input: &str) -> Result<Query, QueryParseError> {
     let mut parser = Parser::new(input);
-    parser.parse_query()
+    let query = parser.parse_query_body(0)?;
+    parser.skip_ws();
+    if !parser.is_eof() {
+        return Err(parser.error("expected end of query"));
+    }
+    Ok(query)
+}
+
+/// Parses a full top-level OQL statement, which may be a single query or
+/// two queries joined by `UNION` (M15 Slice 15.E §4.1 item 5). `parse_query`
+/// above is left untouched -- it keeps parsing exactly one `Query` and
+/// rejecting any trailing input (including a trailing `UNION ...`, exactly
+/// as it always has) -- so every existing caller and test built around
+/// `parse_query` continues to see identical behavior. Reach for this
+/// function specifically to obtain `UNION` support.
+pub fn parse_query_statement(input: &str) -> Result<QueryStatement, QueryParseError> {
+    let mut parser = Parser::new(input);
+    let left = parser.parse_query_body(0)?;
+    parser.skip_ws();
+
+    if parser.consume_keyword("UNION") {
+        let right = parser.parse_query_body(0)?;
+        parser.skip_ws();
+        if !parser.is_eof() {
+            return Err(parser.error("expected end of query"));
+        }
+        return Ok(QueryStatement::Union(left, right));
+    }
+
+    if !parser.is_eof() {
+        return Err(parser.error("expected end of query"));
+    }
+    Ok(QueryStatement::Single(left))
 }
 
 struct Parser<'a> {
@@ -19,11 +59,18 @@ impl<'a> Parser<'a> {
         Self { input, pos: 0 }
     }
 
-    fn parse_query(&mut self) -> Result<Query, QueryParseError> {
+    /// Parses one `SELECT ... FROM ... [WHERE ...] [LIMIT ...]` body without
+    /// requiring end-of-input afterwards -- shared by the top-level
+    /// `parse_query`/`parse_query_statement` entry points (which each apply
+    /// their own EOF/`UNION` handling) and by `try_parse_subquery_from_source`
+    /// (which expects a closing `)` afterwards, not EOF). `depth` is this
+    /// query's own subquery-nesting depth: 0 for a top-level query, 1 for a
+    /// query reached through one `OBJECTS(...)` subquery.
+    fn parse_query_body(&mut self, depth: usize) -> Result<Query, QueryParseError> {
         self.expect_keyword("SELECT")?;
         let select = self.parse_select_clause()?;
         self.expect_keyword("FROM")?;
-        let from = self.parse_from_clause()?;
+        let from = self.parse_from_clause(depth)?;
         let filter = if self.consume_keyword("WHERE") {
             Some(self.parse_where_clause()?)
         } else {
@@ -34,10 +81,6 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        self.skip_ws();
-        if !self.is_eof() {
-            return Err(self.error("expected end of query"));
-        }
 
         Ok(Query {
             select,
@@ -67,7 +110,7 @@ impl<'a> Parser<'a> {
         Ok(SelectClause::Fields(fields))
     }
 
-    fn parse_from_clause(&mut self) -> Result<FromClause, QueryParseError> {
+    fn parse_from_clause(&mut self, depth: usize) -> Result<FromClause, QueryParseError> {
         self.skip_ws();
         let instanceof = self.consume_keyword("INSTANCEOF");
 
@@ -75,6 +118,12 @@ impl<'a> Parser<'a> {
             if let Some(traversal) = self.try_parse_traversal_function()? {
                 return Ok(FromClause {
                     class_pattern: ClassPattern::Traversal(traversal),
+                    instanceof: false,
+                });
+            }
+            if let Some(subquery) = self.try_parse_subquery_from_source(depth)? {
+                return Ok(FromClause {
+                    class_pattern: ClassPattern::Subquery(Box::new(subquery)),
                     instanceof: false,
                 });
             }
@@ -129,6 +178,40 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Some(traversal))
+    }
+
+    /// Recognizes `OBJECTS (<subquery>)` as an alternative `FROM` source
+    /// (M15 Slice 15.E), same "try, return `Ok(None)` if the keyword isn't
+    /// there" shape as `try_parse_traversal_function` above. `depth` is the
+    /// nesting depth of the query currently being parsed (0 for a top-level
+    /// query); encountering `OBJECTS(...)` while already at
+    /// `MAX_SUBQUERY_NESTING_DEPTH` is a hard parse error naming the bound,
+    /// not a silent truncation or a fallback to some other parse path.
+    fn try_parse_subquery_from_source(
+        &mut self,
+        depth: usize,
+    ) -> Result<Option<Query>, QueryParseError> {
+        if !self.consume_keyword("OBJECTS") {
+            return Ok(None);
+        }
+
+        self.skip_ws();
+        if !self.consume_char('(') {
+            return Err(self.error("expected '(' after 'OBJECTS'"));
+        }
+        if depth >= MAX_SUBQUERY_NESTING_DEPTH {
+            return Err(self.error(
+                "subquery nesting depth exceeded: OQL subqueries support only one level of nesting",
+            ));
+        }
+
+        let inner = self.parse_query_body(depth + 1)?;
+        self.skip_ws();
+        if !self.consume_char(')') {
+            return Err(self.error("expected ')' to close 'OBJECTS(...)' subquery"));
+        }
+
+        Ok(Some(inner))
     }
 
     /// Parses an unsigned 64-bit object-id literal (no sign, unlike the

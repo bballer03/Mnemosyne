@@ -48,6 +48,17 @@ pub enum ClassPattern {
     /// extension point as `Exact`/`Glob` rather than introducing a parallel
     /// `Query.from` shape -- see M15 Slice 15.C commit body for rationale.
     Traversal(TraversalFunction),
+    /// `FROM OBJECTS (<subquery>)` (M15 Slice 15.E). The boxed `Query` is
+    /// evaluated first via its own FROM+WHERE+LIMIT pipeline (its `SELECT`
+    /// clause is not consulted -- see `executor::resolve_subquery_candidates`),
+    /// and the resulting object-id set becomes this `FromClause`'s candidate
+    /// set, same extension-point shape as `Traversal` above. Bounded to one
+    /// level of nesting: a `Query` reachable through this variant must not
+    /// itself contain another `ClassPattern::Subquery` in its `from` --
+    /// enforced by the parser at parse time (`parser::MAX_SUBQUERY_NESTING_DEPTH`)
+    /// and, defense-in-depth, by the executor for a `Query` assembled
+    /// directly (e.g. via the MCP surface, bypassing the parser).
+    Subquery(Box<Query>),
 }
 
 /// `outbounds(id)` / `inbounds(id)` / `dominators(id)` OQL traversal
@@ -124,6 +135,25 @@ pub enum Value {
     Str(String),
     Null,
     Bool(bool),
+}
+
+/// A top-level OQL statement: either a single `Query`, or two `Query`s
+/// joined by `UNION` (M15 Slice 15.E §4.1 item 5). Deliberately a separate
+/// type from `Query` itself rather than a new field/variant on `Query` --
+/// `Query` keeps its exact M7-4 shape (`select`/`from`/`filter`/`limit`),
+/// so every existing caller and test that constructs or matches a `Query`
+/// literal (the CLI `query` command, the MCP `query_heap` handler, the
+/// Tauri `query_heap` command, and every OQL test predating this slice)
+/// needs zero changes. `UNION` is intentionally binary and non-recursive
+/// (no `Query3` chained on): the design doc bounds this slice to "two
+/// `Query` results concatenated, deduplicated by object id", not an
+/// open-ended `UNION` chain. A `Query` reached through `Union` may still
+/// itself use a one-level `ClassPattern::Subquery` FROM source -- the two
+/// features compose independently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueryStatement {
+    Single(Query),
+    Union(Query, Query),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
