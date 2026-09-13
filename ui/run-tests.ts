@@ -19,6 +19,14 @@ const testBatches = [
     "src/features/dashboard/components/LeakTable.test.tsx",
   ],
   [
+    // Split off from the batch below (M14 Slice 14.C): running all of
+    // heap-explorer + comparison + the new artifact-explorer/thread panels
+    // in a single `bun test` process reliably triggers a V8 "RangeError:
+    // Out of memory" partway through (reproduced independently of this
+    // slice's changes -- `ObjectInspectorPanel.test.tsx`, untouched by this
+    // slice, passes cleanly in isolation but OOMs when combined with 20
+    // other heavy React-Router-rendering suites in one process). Splitting
+    // keeps `bun run test` a reliable CI-equivalent gate rather than a flake.
     "src/features/heap-explorer/heap-explorer-query-client.test.ts",
     "src/features/heap-explorer/HeapObjectInspectorPage.test.tsx",
     "src/features/heap-explorer/HeapExplorerLayout.test.tsx",
@@ -29,6 +37,8 @@ const testBatches = [
     "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
     "src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx",
     "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
+  ],
+  [
     "src/features/heap-explorer/components/ModeRail.test.tsx",
     "src/features/heap-explorer/components/QueryConsolePanel.test.tsx",
     "src/features/comparison/comparison-bridge-client.test.ts",
@@ -36,6 +46,10 @@ const testBatches = [
     "src/features/comparison/ObjectDeltaTable.test.tsx",
     "src/features/comparison/ComparisonPicker.test.tsx",
     "src/features/comparison/ComparisonPage.test.tsx",
+    "src/features/artifact-explorer/components/ReferrerPanel.test.tsx",
+    "src/features/artifact-explorer/components/ClassloaderExplorerPanel.test.tsx",
+    "src/features/heap-explorer/components/ThreadExplorerPanel.test.tsx",
+    "src/features/heap-explorer/HeapThreadsPage.test.tsx",
   ],
 ];
 

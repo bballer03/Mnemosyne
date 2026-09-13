@@ -113,6 +113,141 @@ function buildArtifactWithOptionalAnalyzers() {
   };
 }
 
+// Shape verified against a real `mnemosyne analyze --by-referrer
+// --classloaders --threads --format json` run (Slice 14.C) against a
+// synthetic HPROF fixture combining a cross-loader duplicate class, a
+// two-frame thread stack with ROOT_JAVA_FRAME locals, and a parent-loader
+// reference edge.
+function buildArtifactWithReferrerClassloaderThreadSections() {
+  return {
+    summary: {
+      heap_path: "heap.hprof",
+      total_objects: 20,
+      total_size_bytes: 987,
+      classes: [],
+      generated_at: "2026-04-14T00:00:00Z",
+      header: null,
+      total_records: 20,
+      record_stats: [],
+    },
+    leaks: [],
+    recommendations: [],
+    elapsed: { secs: 0, nanos: 0 },
+    graph: {
+      node_count: 5,
+      edge_count: 1,
+      dominators: [],
+    },
+    thread_report: {
+      threads: [
+        {
+          object_id: 20480,
+          name: "Thread-7",
+          daemon: false,
+          stack_trace: [
+            {
+              method_name: "run",
+              class_name: "com/example/WorkerThread",
+              source_file: "WorkerThread.java",
+              line_number: 42,
+              locals: [
+                {
+                  variable_slot: 0,
+                  object_id: "0x00003000",
+                  class_name: "com.example.webapp.RequestHandler",
+                  root_kind: "JavaFrame",
+                },
+              ],
+            },
+            {
+              method_name: "mainLoop",
+              class_name: "com/example/WorkerThread",
+              source_file: "WorkerThread.java",
+              line_number: 17,
+              locals: [],
+            },
+          ],
+          retained_bytes: 0,
+          thread_local_count: 0,
+          thread_local_bytes: 0,
+        },
+      ],
+      total_thread_count: 1,
+      total_thread_retained: 0,
+      top_retainers: [
+        {
+          object_id: 20480,
+          name: "Thread-7",
+          daemon: false,
+          stack_trace: null,
+          retained_bytes: 0,
+          thread_local_count: 0,
+          thread_local_bytes: 0,
+        },
+      ],
+    },
+    classloader_report: {
+      loaders: [
+        {
+          object_id: 4096,
+          class_name: "com.example.webapp.WebappLoader",
+          loaded_class_count: 1,
+          instance_count: 1,
+          total_shallow_bytes: 0,
+          retained_bytes: 4,
+          parent_loader: null,
+          unique_class_count: 0,
+          ancestor_chain: [],
+        },
+        {
+          object_id: 8192,
+          class_name: "com.example.webapp.WebappLoader",
+          loaded_class_count: 1,
+          instance_count: 1,
+          total_shallow_bytes: 0,
+          retained_bytes: 4,
+          parent_loader: 4096,
+          unique_class_count: 0,
+          ancestor_chain: [4096],
+        },
+      ],
+      potential_leaks: [],
+      duplicate_classes: [
+        {
+          class_name: "com.example.webapp.RequestHandler",
+          loader_object_ids: [4096, 8192],
+          loader_count: 2,
+        },
+      ],
+    },
+    referrer_report: {
+      entries: [
+        {
+          object_id: "0x00001000",
+          class_name: "com/example/webapp/WebappLoader",
+          retained_size: 4,
+          referrer_count: 1,
+          top_referrer_classes: [["com/example/webapp/WebappLoader", 1]],
+        },
+        {
+          object_id: "0x00002000",
+          class_name: "com/example/webapp/WebappLoader",
+          retained_size: 4,
+          referrer_count: 0,
+          top_referrer_classes: [],
+        },
+      ],
+      total_objects_considered: 5,
+    },
+    provenance: [
+      {
+        kind: "FALLBACK",
+        detail: "Graph-backed dominator analysis was available but leak filters produced no results; heuristic fallback was used for leak detection.",
+      },
+    ],
+  };
+}
+
 describe("parseAnalysisArtifact", () => {
   it("accepts a valid Mnemosyne analysis artifact", () => {
     const parsed = parseAnalysisArtifact({
@@ -471,5 +606,144 @@ describe("parseAnalysisArtifact", () => {
         provenance: [],
       }),
     ).toThrow(/expected leaks\[0\]\.provenance\[0\]\.detail to be a string/i);
+  });
+
+  it("parses referrer, extended-classloader, and thread report sections from a real backend shape", () => {
+    const parsed = parseAnalysisArtifact(buildArtifactWithReferrerClassloaderThreadSections());
+
+    expect(parsed.referrerReport).toEqual({
+      entries: [
+        {
+          objectId: "0x00001000",
+          className: "com/example/webapp/WebappLoader",
+          retainedSize: 4,
+          referrerCount: 1,
+          topReferrerClasses: [["com/example/webapp/WebappLoader", 1]],
+        },
+        {
+          objectId: "0x00002000",
+          className: "com/example/webapp/WebappLoader",
+          retainedSize: 4,
+          referrerCount: 0,
+          topReferrerClasses: [],
+        },
+      ],
+      totalObjectsConsidered: 5,
+    });
+
+    expect(parsed.classloaderReport).toEqual({
+      loaders: [
+        {
+          objectId: 4096,
+          className: "com.example.webapp.WebappLoader",
+          loadedClassCount: 1,
+          instanceCount: 1,
+          totalShallowBytes: 0,
+          retainedBytes: 4,
+          parentLoader: undefined,
+          uniqueClassCount: 0,
+          ancestorChain: [],
+        },
+        {
+          objectId: 8192,
+          className: "com.example.webapp.WebappLoader",
+          loadedClassCount: 1,
+          instanceCount: 1,
+          totalShallowBytes: 0,
+          retainedBytes: 4,
+          parentLoader: 4096,
+          uniqueClassCount: 0,
+          ancestorChain: [4096],
+        },
+      ],
+      potentialLeaks: [],
+      duplicateClasses: [
+        {
+          className: "com.example.webapp.RequestHandler",
+          loaderObjectIds: [4096, 8192],
+          loaderCount: 2,
+        },
+      ],
+    });
+
+    expect(parsed.threadReport?.totalThreadCount).toBe(1);
+    expect(parsed.threadReport?.totalThreadRetained).toBe(0);
+    expect(parsed.threadReport?.threads[0]).toEqual({
+      objectId: 20480,
+      name: "Thread-7",
+      daemon: false,
+      stackTrace: [
+        {
+          methodName: "run",
+          className: "com/example/WorkerThread",
+          sourceFile: "WorkerThread.java",
+          lineNumber: 42,
+          locals: [
+            {
+              variableSlot: 0,
+              objectId: "0x00003000",
+              className: "com.example.webapp.RequestHandler",
+              rootKind: "JavaFrame",
+            },
+          ],
+        },
+        {
+          methodName: "mainLoop",
+          className: "com/example/WorkerThread",
+          sourceFile: "WorkerThread.java",
+          lineNumber: 17,
+          locals: [],
+        },
+      ],
+      retainedBytes: 0,
+      threadLocalCount: 0,
+      threadLocalBytes: 0,
+    });
+    expect(parsed.threadReport?.topRetainers[0]?.stackTrace).toBeUndefined();
+  });
+
+  it("leaves referrerReport and threadReport undefined when absent from the artifact (pre-M8 artifact)", () => {
+    const parsed = parseAnalysisArtifact(buildArtifactWithOptionalAnalyzers());
+
+    expect(parsed.referrerReport).toBeUndefined();
+    expect(parsed.threadReport).toBeUndefined();
+  });
+
+  it("defaults classloader duplicateClasses/uniqueClassCount/ancestorChain when absent from an older artifact", () => {
+    const parsed = parseAnalysisArtifact(buildArtifactWithOptionalAnalyzers());
+
+    expect(parsed.classloaderReport?.duplicateClasses).toEqual([]);
+    expect(parsed.classloaderReport?.loaders[0]).toMatchObject({
+      uniqueClassCount: 0,
+      ancestorChain: [],
+    });
+  });
+
+  it("leaves classloaderReport, referrerReport, and threadReport entirely undefined when absent", () => {
+    const parsed = parseAnalysisArtifact({
+      summary: {
+        heap_path: "heap.hprof",
+        total_objects: 42,
+        total_size_bytes: 2048,
+        classes: [],
+        generated_at: "2026-04-14T00:00:00Z",
+        header: null,
+        total_records: 2,
+        record_stats: [],
+      },
+      leaks: [],
+      recommendations: [],
+      elapsed: { secs: 1, nanos: 0 },
+      graph: {
+        node_count: 1,
+        edge_count: 0,
+        dominators: [],
+      },
+      provenance: [],
+    });
+
+    expect(parsed.classloaderReport).toBeUndefined();
+    expect(parsed.referrerReport).toBeUndefined();
+    expect(parsed.threadReport).toBeUndefined();
   });
 });

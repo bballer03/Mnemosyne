@@ -3,6 +3,63 @@ export type ArtifactProvenanceMarker = {
   detail?: string;
 };
 
+export type ReferrerEntry = {
+  objectId: string;
+  className: string;
+  retainedSize?: number;
+  referrerCount: number;
+  topReferrerClasses: Array<[string, number]>;
+};
+
+export type ReferrerReport = {
+  entries: ReferrerEntry[];
+  totalObjectsConsidered: number;
+};
+
+export type DuplicateClassGroup = {
+  className: string;
+  loaderObjectIds: number[];
+  loaderCount: number;
+};
+
+// Which raw HPROF GC-root sub-record a frame local was resolved from
+// (core::analysis::thread::FrameLocalRootKind). Serialized as the bare
+// Rust enum variant name -- no `#[serde(rename_all)]` on this enum, so
+// the wire values are exactly "JavaFrame" / "JniLocal".
+export type FrameLocalRootKind = "JavaFrame" | "JniLocal";
+
+export type FrameLocal = {
+  variableSlot: number;
+  objectId: string;
+  className: string;
+  rootKind: FrameLocalRootKind;
+};
+
+export type StackFrameInfo = {
+  methodName: string;
+  className: string;
+  sourceFile?: string;
+  lineNumber: number;
+  locals: FrameLocal[];
+};
+
+export type ThreadInfo = {
+  objectId: number;
+  name: string;
+  daemon: boolean;
+  stackTrace?: StackFrameInfo[];
+  retainedBytes: number;
+  threadLocalCount: number;
+  threadLocalBytes: number;
+};
+
+export type ThreadReport = {
+  threads: ThreadInfo[];
+  totalThreadCount: number;
+  totalThreadRetained: number;
+  topRetainers: ThreadInfo[];
+};
+
 export type AnalysisArtifact = {
   summary: {
     heapPath: string;
@@ -116,6 +173,8 @@ export type AnalysisArtifact = {
       totalShallowBytes: number;
       retainedBytes?: number;
       parentLoader?: number;
+      uniqueClassCount: number;
+      ancestorChain: number[];
     }>;
     potentialLeaks: Array<{
       objectId: number;
@@ -124,7 +183,10 @@ export type AnalysisArtifact = {
       loadedClassCount: number;
       reason: string;
     }>;
+    duplicateClasses: DuplicateClassGroup[];
   };
+  referrerReport?: ReferrerReport;
+  threadReport?: ThreadReport;
   provenance: ArtifactProvenanceMarker[];
 };
 
@@ -493,6 +555,41 @@ function parseTopInstancesSection(
   };
 }
 
+function readOptionalNumberArray(value: unknown, field: string): number[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid Mnemosyne analysis artifact: expected ${field} to be an array`);
+  }
+
+  return value.map((entry, index) => readNumber(entry, `${field}[${index}]`));
+}
+
+function parseDuplicateClassGroups(value: unknown, field: string): DuplicateClassGroup[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  const groups = readArray(value, field);
+
+  return groups.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`Invalid Mnemosyne analysis artifact: expected ${field}[${index}] to be an object`);
+    }
+
+    return {
+      className: readString(entry.class_name, `${field}[${index}].class_name`),
+      loaderObjectIds: readOptionalNumberArray(
+        entry.loader_object_ids,
+        `${field}[${index}].loader_object_ids`,
+      ),
+      loaderCount: readNumber(entry.loader_count, `${field}[${index}].loader_count`),
+    };
+  });
+}
+
 function parseClassloaderReportSection(
   section: Record<string, unknown>,
 ): NonNullable<AnalysisArtifact["classloaderReport"]> {
@@ -530,6 +627,20 @@ function parseClassloaderReportSection(
           entry.parent_loader,
           `classloader_report.loaders[${index}].parent_loader`,
         ),
+        // Additive M13 fields (`unique_class_count`/`ancestor_chain`): the
+        // current backend always populates them once `classloader_report`
+        // is present, but an older, previously-saved artifact JSON file
+        // (pre-M13) may lack them entirely -- default gracefully rather
+        // than throw, same discipline as every other optional field here.
+        uniqueClassCount:
+          readOptionalNumber(
+            entry.unique_class_count,
+            `classloader_report.loaders[${index}].unique_class_count`,
+          ) ?? 0,
+        ancestorChain: readOptionalNumberArray(
+          entry.ancestor_chain,
+          `classloader_report.loaders[${index}].ancestor_chain`,
+        ),
       };
     }),
     potentialLeaks: potentialLeaks.map((entry, index) => {
@@ -559,6 +670,159 @@ function parseClassloaderReportSection(
         reason: readString(entry.reason, `classloader_report.potential_leaks[${index}].reason`),
       };
     }),
+    // Additive M13 field: absent entirely on a pre-M13 artifact JSON.
+    duplicateClasses: parseDuplicateClassGroups(
+      section.duplicate_classes,
+      "classloader_report.duplicate_classes",
+    ),
+  };
+}
+
+function parseReferrerReportSection(
+  section: Record<string, unknown>,
+): NonNullable<AnalysisArtifact["referrerReport"]> {
+  const entries = readArray(section.entries, "referrer_report.entries");
+
+  return {
+    entries: entries.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new Error(
+          `Invalid Mnemosyne analysis artifact: expected referrer_report.entries[${index}] to be an object`,
+        );
+      }
+
+      const topReferrerClasses = readArray(
+        entry.top_referrer_classes,
+        `referrer_report.entries[${index}].top_referrer_classes`,
+      );
+
+      return {
+        objectId: readString(entry.object_id, `referrer_report.entries[${index}].object_id`),
+        className: readString(entry.class_name, `referrer_report.entries[${index}].class_name`),
+        retainedSize: readOptionalNumber(
+          entry.retained_size,
+          `referrer_report.entries[${index}].retained_size`,
+        ),
+        referrerCount: readNumber(
+          entry.referrer_count,
+          `referrer_report.entries[${index}].referrer_count`,
+        ),
+        topReferrerClasses: topReferrerClasses.map((pair, pairIndex) => {
+          if (!Array.isArray(pair) || pair.length !== 2) {
+            throw new Error(
+              `Invalid Mnemosyne analysis artifact: expected referrer_report.entries[${index}].top_referrer_classes[${pairIndex}] to be a [string, number] pair`,
+            );
+          }
+
+          return [
+            readString(
+              pair[0],
+              `referrer_report.entries[${index}].top_referrer_classes[${pairIndex}][0]`,
+            ),
+            readNumber(
+              pair[1],
+              `referrer_report.entries[${index}].top_referrer_classes[${pairIndex}][1]`,
+            ),
+          ] as [string, number];
+        }),
+      };
+    }),
+    totalObjectsConsidered: readNumber(
+      section.total_objects_considered,
+      "referrer_report.total_objects_considered",
+    ),
+  };
+}
+
+function parseFrameLocalRootKind(value: unknown, field: string): FrameLocalRootKind {
+  if (value === "JavaFrame" || value === "JniLocal") {
+    return value;
+  }
+
+  throw new Error(`Invalid Mnemosyne analysis artifact: expected ${field} to be "JavaFrame" or "JniLocal"`);
+}
+
+function parseStackFrameInfoList(value: unknown, field: string): StackFrameInfo[] {
+  const frames = readArray(value, field);
+
+  return frames.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`Invalid Mnemosyne analysis artifact: expected ${field}[${index}] to be an object`);
+    }
+
+    const locals = readArray(entry.locals, `${field}[${index}].locals`);
+
+    return {
+      methodName: readString(entry.method_name, `${field}[${index}].method_name`),
+      className: readString(entry.class_name, `${field}[${index}].class_name`),
+      sourceFile: readOptionalString(entry.source_file, `${field}[${index}].source_file`),
+      lineNumber: readNumber(entry.line_number, `${field}[${index}].line_number`),
+      locals: locals.map((local, localIndex) => {
+        if (!isRecord(local)) {
+          throw new Error(
+            `Invalid Mnemosyne analysis artifact: expected ${field}[${index}].locals[${localIndex}] to be an object`,
+          );
+        }
+
+        return {
+          variableSlot: readNumber(
+            local.variable_slot,
+            `${field}[${index}].locals[${localIndex}].variable_slot`,
+          ),
+          objectId: readString(local.object_id, `${field}[${index}].locals[${localIndex}].object_id`),
+          className: readString(local.class_name, `${field}[${index}].locals[${localIndex}].class_name`),
+          rootKind: parseFrameLocalRootKind(
+            local.root_kind,
+            `${field}[${index}].locals[${localIndex}].root_kind`,
+          ),
+        };
+      }),
+    };
+  });
+}
+
+function parseThreadInfoList(value: unknown, field: string): ThreadInfo[] {
+  const threads = readArray(value, field);
+
+  return threads.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`Invalid Mnemosyne analysis artifact: expected ${field}[${index}] to be an object`);
+    }
+
+    const stackTrace =
+      entry.stack_trace === undefined || entry.stack_trace === null
+        ? undefined
+        : parseStackFrameInfoList(entry.stack_trace, `${field}[${index}].stack_trace`);
+
+    return {
+      objectId: readNumber(entry.object_id, `${field}[${index}].object_id`),
+      name: readString(entry.name, `${field}[${index}].name`),
+      daemon: entry.daemon === true,
+      stackTrace,
+      retainedBytes: readNumber(entry.retained_bytes, `${field}[${index}].retained_bytes`),
+      threadLocalCount: readNumber(
+        entry.thread_local_count,
+        `${field}[${index}].thread_local_count`,
+      ),
+      threadLocalBytes: readNumber(
+        entry.thread_local_bytes,
+        `${field}[${index}].thread_local_bytes`,
+      ),
+    };
+  });
+}
+
+function parseThreadReportSection(
+  section: Record<string, unknown>,
+): NonNullable<AnalysisArtifact["threadReport"]> {
+  return {
+    threads: parseThreadInfoList(section.threads, "thread_report.threads"),
+    totalThreadCount: readNumber(section.total_thread_count, "thread_report.total_thread_count"),
+    totalThreadRetained: readNumber(
+      section.total_thread_retained,
+      "thread_report.total_thread_retained",
+    ),
+    topRetainers: parseThreadInfoList(section.top_retainers, "thread_report.top_retainers"),
   };
 }
 
@@ -656,6 +920,16 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     "classloader_report",
     parseClassloaderReportSection,
   );
+  const referrerReport = readOptionalSection(
+    input.referrer_report,
+    "referrer_report",
+    parseReferrerReportSection,
+  );
+  const threadReport = readOptionalSection(
+    input.thread_report,
+    "thread_report",
+    parseThreadReportSection,
+  );
 
   return {
     summary: {
@@ -703,6 +977,8 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     collectionReport,
     topInstances,
     classloaderReport,
+    referrerReport,
+    threadReport,
     provenance: readProvenanceMarkers(input.provenance, "provenance"),
   };
 }

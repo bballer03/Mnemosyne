@@ -4,7 +4,9 @@ import { Link, Navigate } from "react-router-dom";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
+import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
 import { HistogramExplorerPanel } from "./components/HistogramExplorerPanel";
+import { ReferrerPanel } from "./components/ReferrerPanel";
 import { SelectedBucketDetail } from "./components/SelectedBucketDetail";
 
 const panelStyle = {
@@ -75,6 +77,22 @@ export function ArtifactExplorerPage() {
         <aside aria-label="Selected bucket detail" style={panelStyle}>
           <SelectedBucketDetail artifact={artifact} selectedKey={selectedHistogramKey} />
         </aside>
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "1rem",
+          alignItems: "start",
+        }}
+      >
+        <section aria-label="Referrer panel" style={panelStyle}>
+          <ReferrerPanel artifact={artifact} />
+        </section>
+        <section aria-label="Classloader explorer panel" style={panelStyle}>
+          <ClassloaderExplorerPanel artifact={artifact} />
+        </section>
       </section>
     </main>
   );

@@ -31,6 +31,9 @@ export function ModeRail({ selectedObject }: { selectedObject?: SelectedObject }
         <NavLink to="/heap-explorer/query-console" style={linkStyle}>
           Query Console
         </NavLink>
+        <NavLink to="/heap-explorer/threads" style={linkStyle}>
+          Threads
+        </NavLink>
       </nav>
 
       <section style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1" }}>
