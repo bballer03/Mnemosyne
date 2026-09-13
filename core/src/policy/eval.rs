@@ -960,6 +960,7 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance,
         }
     }
