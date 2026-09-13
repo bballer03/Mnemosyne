@@ -5,6 +5,8 @@ import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
 import { useArtifactStore } from "./use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
+import { GuidedLanding } from "../workflow-landing/GuidedLanding";
+import { TopNav } from "../../app/TopNav";
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -36,6 +38,41 @@ function panelStyle() {
   } as const;
 }
 
+// M14 Slice 14.D landing-page-restructure decision (design doc §5's "Files
+// owned" note leaves this to implementation): this page keeps ALL of its
+// existing markup, copy, and post-load behavior completely unchanged --
+// including the auto-navigate-to-`/dashboard` effect below
+// (`NavigateToDashboardOnSuccess`), which several regression tests in
+// `ArtifactLoaderPage.test.tsx` assert on directly (e.g. the "mnemosyne
+// triage dashboard" heading appearing after upload). Rather than replacing
+// this page's content with the guided landing (design doc §5's diagram
+// shows both living at `/`), the guided-workflow content
+// (`GuidedLanding` -- triage summary card, NL input bar, workflow cards,
+// "Recent heaps") is appended as a new section below the existing
+// dropzone/validation-console/recent-loads layout. In practice this section
+// is most visible before any artifact is loaded (an always-present
+// accelerator hub) and again if the user navigates back to `/` with an
+// artifact already in `useArtifactStore` (the auto-navigate effect only
+// fires once, right after a *new* successful load) -- both are legitimate
+// uses of "the landing route", and neither requires touching the
+// drop-flow's own tested behavior. This was judged safer than an in-place
+// rewrite per this slice's explicit instruction to prioritize not breaking
+// the existing drop-flow tests over any particular implementation shape.
+//
+// `TopNav` (persistent top-level navigation to every power route) is
+// rendered here, at the top of the landing page, rather than as a shared
+// layout route wrapping every entry in `router.tsx`'s `routes` array --
+// that was tried first and reverted (see `router.tsx`'s own comment): it
+// collided with several existing pages' own in-page cross-navigation links
+// that already share the same accessible names ("Dashboard", "Artifact
+// Explorer", etc.), breaking a number of *pre-existing* tests that query
+// those pages' own nav by role/name. Rendering `TopNav` only on `/` still
+// satisfies this slice's concrete requirement -- every power route
+// reachable from the landing page without any workflow step first -- while
+// touching zero other routes. Guarded by `isInRouterContext` exactly like
+// `NavigateToDashboardOnSuccess` below, since `<NavLink>` requires a
+// `<Router>` ancestor and this page is rendered without one in several of
+// its own existing tests.
 export function ArtifactLoaderPage() {
   const {
     artifactName,
@@ -152,7 +189,9 @@ export function ArtifactLoaderPage() {
   ];
 
   return (
-    <main
+    <>
+      {isInRouterContext ? <TopNav /> : null}
+      <main
       style={{
         display: "grid",
         gap: "1.5rem",
@@ -352,10 +391,13 @@ export function ArtifactLoaderPage() {
         </aside>
       </section>
 
+      <GuidedLanding heapPath={artifact?.summary.heapPath} />
+
       {isInRouterContext ? (
         <NavigateToDashboardOnSuccess active={shouldNavigateToDashboard} onNavigated={() => setShouldNavigateToDashboard(false)} />
       ) : null}
-    </main>
+      </main>
+    </>
   );
 }
 
