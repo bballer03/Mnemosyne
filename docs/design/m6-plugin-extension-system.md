@@ -1,8 +1,8 @@
 # M6 Phase 8 — Plugin/Extension System Design
 
-> **Status:** Phase 2 shipped (M15 Slice 15.F); Phase 3 still gated  
-> **Parent:** [milestone-6-ecosystem-and-community.md](milestone-6-ecosystem-and-community.md) §20  
-> **Design Owner:** Design Consulting Agent  
+> **Status:** Phase 2 shipped (M15 Slice 15.F); Phase 3 still gated
+> **Parent:** [milestone-6-ecosystem-and-community.md](milestone-6-ecosystem-and-community.md) §20
+> **Design Owner:** Design Consulting Agent
 > **Last Updated:** 2026-09-13 (M15 Slice 15.G doc-sync)
 
 ---
