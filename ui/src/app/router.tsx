@@ -8,6 +8,7 @@ import { HeapDominatorPage } from "../features/heap-explorer/HeapDominatorPage";
 import { HeapExplorerLayout } from "../features/heap-explorer/HeapExplorerLayout";
 import { HeapObjectInspectorPage } from "../features/heap-explorer/HeapObjectInspectorPage";
 import { HeapQueryConsolePage } from "../features/heap-explorer/HeapQueryConsolePage";
+import { HeapThreadsPage } from "../features/heap-explorer/HeapThreadsPage";
 import { LeakExplainPage } from "../features/leak-workspace/LeakExplainPage";
 import { LeakFixPage } from "../features/leak-workspace/LeakFixPage";
 import { LeakGcPathPage } from "../features/leak-workspace/LeakGcPathPage";
@@ -51,6 +52,10 @@ export const routes: RouteObject[] = [
       {
         path: "query-console",
         element: <HeapQueryConsolePage />,
+      },
+      {
+        path: "threads",
+        element: <HeapThreadsPage />,
       },
     ],
   },

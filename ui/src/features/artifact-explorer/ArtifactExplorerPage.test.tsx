@@ -96,6 +96,8 @@ function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }):
           totalShallowBytes: 1024,
           retainedBytes: 4096,
           parentLoader: 1,
+          uniqueClassCount: 12,
+          ancestorChain: [1],
         },
       ],
       potentialLeaks: [
@@ -107,6 +109,7 @@ function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }):
           reason: "Retains 4 KB but loads only 12 classes",
         },
       ],
+      duplicateClasses: [],
     },
     unreachable: {
       totalCount: 3,
