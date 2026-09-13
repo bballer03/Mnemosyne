@@ -56,8 +56,8 @@ documents that signing secrets were present in CI.
 
 | Platform | Signing gate | When unsigned (current default) |
 | --- | --- | --- |
-| **Windows** | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | **SmartScreen** may show "Windows protected your PC" on first run. Click **More info** → **Run anyway**, or unblock the file in file Properties. |
-| **macOS** | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `KEYCHAIN_PASSWORD` (optional: `APPLE_TEAM_ID`) | **Gatekeeper** blocks unidentified developers. **Right-click** the app (or `.dmg`) → **Open** → confirm **Open** once. Subsequent launches work normally. |
+| **Windows** | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` (optional: `WINDOWS_TIMESTAMP_URL`; CI derives the cert thumbprint and injects `bundle.windows.*` into `tauri.conf.json` before `tauri build`) | **SmartScreen** may show "Windows protected your PC" on first run. Click **More info** → **Run anyway**, or unblock the file in file Properties. |
+| **macOS** | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `KEYCHAIN_PASSWORD` | **Gatekeeper** blocks unidentified developers. **Right-click** the app (or `.dmg`) → **Open** → confirm **Open** once. Subsequent launches work normally. |
 | **Linux** | None (unsigned by design) | No OS-level signing gate for `.deb`/`.AppImage`/`.rpm`. Verify downloads via the GitHub Release tag and published checksums when available. |
 
 CI logs a clear line per platform when secrets are missing (see `.github/workflows/release.yml`,

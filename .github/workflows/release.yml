@@ -198,30 +198,60 @@ jobs:
           set -euo pipefail
 
           if [[ -n "${WINDOWS_CERTIFICATE:-}" && -n "${WINDOWS_CERTIFICATE_PASSWORD:-}" ]]; then
-            echo "enabled=true" >> "${GITHUB_OUTPUT}"
-            echo "M16 16.B: Windows Authenticode signing ENABLED — WINDOWS_CERTIFICATE secrets present."
+            echo "secrets_present=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: WINDOWS_CERTIFICATE secrets present — will import PFX and wire Tauri signing next."
           else
-            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "secrets_present=false" >> "${GITHUB_OUTPUT}"
             echo "M16 16.B: WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD secrets NOT configured."
             echo "Shipping UNSIGNED Windows installer (.msi/.exe)."
             echo "Windows SmartScreen will warn on first run — see SECURITY.md for the workaround."
           fi
 
-      - name: Import Windows code-signing certificate
-        if: ${{ runner.os == 'Windows' && steps.win-signing.outputs.enabled == 'true' }}
+      - name: Import Windows code-signing certificate and wire Tauri signing
+        if: ${{ runner.os == 'Windows' && steps.win-signing.outputs.secrets_present == 'true' }}
+        id: win-signing-config
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path certificate -Force
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Path certificate -Force | Out-Null
           Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
           certutil -decode certificate/tempCert.txt certificate/certificate.pfx
           Remove-Item certificate/tempCert.txt
+
+          $pfxPassword = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
           Import-PfxCertificate `
             -FilePath certificate/certificate.pfx `
             -CertStoreLocation Cert:\CurrentUser\My `
-            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+            -Password $pfxPassword | Out-Null
+
+          $pfxData = Get-PfxData -FilePath certificate/certificate.pfx -Password $pfxPassword
+          $thumbprint = $pfxData.EndEntityCertificates[0].Thumbprint
+          if ([string]::IsNullOrWhiteSpace($thumbprint)) {
+            Write-Error "Failed to resolve Windows certificate thumbprint from imported PFX"
+            exit 1
+          }
+
+          $timestampUrl = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { "http://timestamp.comodoca.com" }
+          $confPath = "tauri/tauri.conf.json"
+          $conf = Get-Content $confPath -Raw | ConvertFrom-Json
+          if (-not $conf.bundle) {
+            $conf | Add-Member -NotePropertyName bundle -NotePropertyValue ([pscustomobject]@{})
+          }
+          $conf.bundle | Add-Member -NotePropertyName windows -NotePropertyValue ([pscustomobject]@{
+            certificateThumbprint = $thumbprint
+            digestAlgorithm     = "sha256"
+            timestampUrl        = $timestampUrl
+          }) -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content $confPath -Encoding utf8
+
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "M16 16.B: Windows Authenticode signing ENABLED — PFX imported; thumbprint wired to tauri.conf.json (digest=sha256, timestamp=$timestampUrl)."
 
       - name: Resolve code-signing (macOS)
         if: ${{ runner.os == 'macOS' }}
@@ -231,18 +261,19 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
 
-          if [[ -n "${APPLE_CERTIFICATE:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${KEYCHAIN_PASSWORD:-}" ]]; then
+          if [[ -n "${APPLE_CERTIFICATE:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${KEYCHAIN_PASSWORD:-}" ]]; then
             echo "enabled=true" >> "${GITHUB_OUTPUT}"
-            echo "M16 16.B: macOS code signing + notarization ENABLED — Apple secrets present."
+            echo "M16 16.B: macOS code signing + Apple-ID notarization ENABLED — all required Apple secrets present."
           else
             echo "enabled=false" >> "${GITHUB_OUTPUT}"
             echo "M16 16.B: Apple signing/notarization secrets NOT configured."
-            echo "Required when enabling: APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,"
-            echo "APPLE_ID, APPLE_PASSWORD, KEYCHAIN_PASSWORD (optional: APPLE_TEAM_ID)."
+            echo "Required when enabling (Apple-ID path): APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,"
+            echo "APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD."
             echo "Shipping UNSIGNED macOS bundle (.dmg/.app)."
             echo "macOS Gatekeeper will block on first open — use Right-click → Open. See SECURITY.md."
           fi
@@ -281,14 +312,14 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Passed through when secrets exist; tauri-cli signs/notarizes only when
-          # the import steps above ran. Empty values produce unsigned bundles.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          # Apple env vars are consumed by tauri-cli only when mac-signing ran above.
+          # Windows signing uses bundle.windows.* injected into tauri.conf.json after PFX import.
+          APPLE_CERTIFICATE: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.mac-signing.outputs.enabled == 'true' && env.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: tauri
           args: ${{ matrix.tauri_args }}
