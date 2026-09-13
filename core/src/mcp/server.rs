@@ -714,6 +714,20 @@ struct OpenSnapshotParams {
     key: String,
 }
 
+/// M18 Slice 18.D: params for the `save_snapshot` tool.
+#[derive(Debug, Deserialize)]
+struct SaveSnapshotParams {
+    heap_path: String,
+    #[serde(default)]
+    retain_field_data: bool,
+}
+
+/// M18 Slice 18.D: params for the `remove_snapshot` tool.
+#[derive(Debug, Deserialize)]
+struct RemoveSnapshotParams {
+    key: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryHeapParams {
     heap_path: String,
@@ -882,6 +896,30 @@ fn default_snapshot_dir() -> std::path::PathBuf {
 
 fn snapshot_store() -> SnapshotStore {
     SnapshotStore::new(default_snapshot_dir())
+}
+
+/// Validates that `key` is a snapshot-store SHA-256 hash, not an arbitrary
+/// filesystem path. M18 Slice 18.D restricts `remove_snapshot` mutations to
+/// configured-store keys so callers cannot delete files outside the cache
+/// root via path traversal or absolute paths.
+fn validated_store_snapshot_key(key: &str) -> CoreResult<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "snapshot key must not be empty".into(),
+        ));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+        return Err(CoreError::InvalidInput(
+            "remove_snapshot accepts a store key (SHA-256 hash) only, not a file path".into(),
+        ));
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CoreError::InvalidInput(
+            "remove_snapshot key must be a 64-character SHA-256 hex hash".into(),
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
 }
 
 /// `MNEMOSYNE_WORKFLOW_DIR` overrides the default on-disk root for persisted
@@ -1068,7 +1106,7 @@ fn analysis_mode_param() -> Value {
 /// tool that gained the additive param (`parse_heap`, `analyze_heap`,
 /// `find_gc_path`, `inspect_object`, `query_heap`), mirroring how
 /// `analysis_mode_param()` shares one description across tools.
-const MCP_SNAPSHOT_PARAM_DESCRIPTION: &str = "SHA-256 hash or direct snapshot file path (see `open_snapshot`/`list_snapshots` and `mnemosyne snapshot save`). When set, uses the cached object graph instead of re-parsing heap_path/path -- an invalid, stale, or schema-mismatched key returns a structured snapshot_not_found/snapshot_stale_source/snapshot_schema_mismatch/snapshot_corrupt error rather than silently falling back to a fresh parse.";
+const MCP_SNAPSHOT_PARAM_DESCRIPTION: &str = "SHA-256 hash or direct snapshot file path (see `open_snapshot`/`list_snapshots`/`save_snapshot`/`remove_snapshot` and `mnemosyne snapshot save`). When set, uses the cached object graph instead of re-parsing heap_path/path -- an invalid, stale, or schema-mismatched key returns a structured snapshot_not_found/snapshot_stale_source/snapshot_schema_mismatch/snapshot_corrupt error rather than silently falling back to a fresh parse.";
 
 fn snapshot_param() -> Value {
     json!({
@@ -1560,6 +1598,23 @@ fn tool_catalog() -> Value {
                 "output_schema": "Vec<SnapshotManifest>"
             },
             {
+                "name": "save_snapshot",
+                "description": "Parse a heap dump and cache its object graph + dominator tree in the configured snapshot store (mirrors `mnemosyne snapshot save`).",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump to parse and cache." },
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "When true, instance field values are retained in the cached graph (needed for field-based query_heap)." }
+                ],
+                "output_schema": "SnapshotManifest"
+            },
+            {
+                "name": "remove_snapshot",
+                "description": "Delete a cached snapshot by its SHA-256 store key (mirrors `mnemosyne snapshot rm`). Only keys within the configured snapshot store are accepted — not arbitrary filesystem paths.",
+                "params": [
+                    { "name": "key", "type": "string", "required": true, "description": "SHA-256 hash of the snapshot to remove (store key only)." }
+                ],
+                "output_schema": "{ removed: true, key: string }"
+            },
+            {
                 "name": "detect_classloader_leaks",
                 "description": "Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern.",
                 "params": [
@@ -1646,6 +1701,26 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let store = snapshot_store();
             let manifests = store.list()?;
             Ok(serde_json::to_value(manifests)?)
+        }
+        "save_snapshot" => {
+            let params: SaveSnapshotParams = serde_json::from_value(packet.params)?;
+            let graph = crate::hprof::parse_hprof_file_with_options(
+                &params.heap_path,
+                ParseOptions {
+                    retain_field_data: params.retain_field_data,
+                },
+            )?;
+            let dominator = crate::graph::build_dominator_tree(&graph);
+            let store = snapshot_store();
+            let manifest = store.save(&params.heap_path, &graph, &dominator)?;
+            Ok(serde_json::to_value(manifest)?)
+        }
+        "remove_snapshot" => {
+            let params: RemoveSnapshotParams = serde_json::from_value(packet.params)?;
+            let store_key = validated_store_snapshot_key(&params.key)?;
+            let store = snapshot_store();
+            store.remove(&store_key)?;
+            Ok(json!({ "removed": true, "key": store_key }))
         }
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
@@ -4099,6 +4174,45 @@ mod tests {
             list_snapshots.get("output_schema"),
             Some(&json!("Vec<SnapshotManifest>"))
         );
+
+        let save_snapshot = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("save_snapshot")))
+            .expect("save_snapshot tool");
+        assert_eq!(
+            save_snapshot.get("output_schema"),
+            Some(&json!("SnapshotManifest"))
+        );
+        let save_params = save_snapshot
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("save_snapshot params");
+        for expected in ["heap_path", "retain_field_data"] {
+            assert!(
+                save_params
+                    .iter()
+                    .any(|param| param.get("name") == Some(&json!(expected))),
+                "save_snapshot should advertise the '{expected}' param"
+            );
+        }
+
+        let remove_snapshot = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("remove_snapshot")))
+            .expect("remove_snapshot tool");
+        assert_eq!(
+            remove_snapshot.get("output_schema"),
+            Some(&json!("{ removed: true, key: string }"))
+        );
+        assert_eq!(
+            remove_snapshot.get("params"),
+            Some(&json!([{
+                "name": "key",
+                "type": "string",
+                "required": true,
+                "description": "SHA-256 hash of the snapshot to remove (store key only)."
+            }]))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -4233,6 +4347,161 @@ mod tests {
             .collect();
         assert!(hashes.contains(&manifest_a.heap_sha256));
         assert!(hashes.contains(&manifest_b.heap_sha256));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_save_snapshot_open_list_remove_lifecycle_with_synthetic_heap() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let saved = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "save_snapshot".into(),
+                params: json!({ "heap_path": heap_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let key = saved
+            .get("heap_sha256")
+            .and_then(Value::as_str)
+            .expect("save_snapshot returns heap_sha256")
+            .to_string();
+
+        let opened = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "open_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened.get("heap_sha256"), Some(&json!(key)));
+
+        let listed = handle_request(
+            RpcRequest {
+                id: json!(3),
+                method: "list_snapshots".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        let manifests = listed.as_array().expect("list_snapshots array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].get("heap_sha256"), Some(&json!(key)));
+
+        let removed = handle_request(
+            RpcRequest {
+                id: json!(4),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed.get("removed"), Some(&json!(true)));
+        assert_eq!(removed.get("key"), Some(&json!(key)));
+
+        let listed_after = handle_request(
+            RpcRequest {
+                id: json!(5),
+                method: "list_snapshots".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            listed_after.as_array().expect("list array").is_empty(),
+            "list_snapshots should be empty after remove_snapshot"
+        );
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(6),
+                method: "open_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+        let response = RpcResponse::from_core_error(json!(6), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_remove_snapshot_missing_key_returns_snapshot_not_found_error_details() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_remove_snapshot_rejects_arbitrary_filesystem_path() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let outside_path = outside.path().to_string_lossy().into_owned();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": outside_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("invalid_input"))
+        );
+        assert!(
+            outside.path().exists(),
+            "remove_snapshot must not delete arbitrary filesystem paths"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
