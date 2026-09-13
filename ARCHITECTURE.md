@@ -80,7 +80,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Ecosystem/docs:** The repo now includes the user guide, troubleshooting guide, benchmark comparison doc, CI integration guides, example projects, and the plugin/extension system design reference.
 
 ### Still in progress (post-M6 follow-on)
-- **Desktop signing + M14 bridge wiring (optional follow-up):** M16 ships tagged-release Tauri installers via CI, but default artifacts are unsigned (no signing secrets configured). M14 comparison/workflow bridges and `inspectObject`/`findAllGcPaths` still lack Tauri native commands.
+- **Desktop signing + M14 bridge wiring (optional follow-up):** M16 `build-desktop` job is configured in `release.yml` for post-M16 tags; tagged CI artifact upload not yet evidenced; default unsigned (no signing secrets configured). M14 comparison/workflow bridges and `inspectObject`/`findAllGcPaths` still lack Tauri native commands.
 - **Post-M5 AI follow-through (narrower scope):** Broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming only if the current request/response transport proves insufficient.
 - **Broader ecosystem follow-through:** docs.rs publication, external community hosting, and apples-to-apples benchmark reruns against external tools remain optional future work rather than hidden incomplete milestone scope.
 
