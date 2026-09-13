@@ -1,8 +1,9 @@
 use crate::{
     analysis::{AnalysisMode, AnalyzeResponse, ProvenanceKind},
     config::OutputFormat,
-    errors::CoreResult,
+    errors::{CoreError, CoreResult},
     hprof::{GcRootKind, OverviewSummary},
+    plugin::PluginRegistry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
@@ -63,30 +64,89 @@ pub fn render_report(request: &ReportRequest) -> CoreResult<ReportArtifact> {
         }
     }
 
-    let (contents, mime_type) = match request.format {
-        OutputFormat::Text => (render_text(&request.analysis), "text/plain"),
-        OutputFormat::Toon => (render_toon(&request.analysis), "application/x-toon"),
-        OutputFormat::Markdown => (render_markdown(&request.analysis), "text/markdown"),
-        OutputFormat::Html => (render_html(&request.analysis), "text/html"),
-        OutputFormat::Json => (render_json(&request.analysis)?, "application/json"),
+    let (contents, mime_type) = match &request.format {
+        OutputFormat::Text => (render_text(&request.analysis), "text/plain".to_string()),
+        OutputFormat::Toon => (
+            render_toon(&request.analysis),
+            "application/x-toon".to_string(),
+        ),
+        OutputFormat::Markdown => (
+            render_markdown(&request.analysis),
+            "text/markdown".to_string(),
+        ),
+        OutputFormat::Html => (render_html(&request.analysis), "text/html".to_string()),
+        OutputFormat::Json => (
+            render_json(&request.analysis)?,
+            "application/json".to_string(),
+        ),
+        OutputFormat::Custom(name) => {
+            // A registry-unaware caller asked for a plugin-provided format.
+            // `render_report` has no way to satisfy this on its own -- see
+            // `render_report_with_plugins` below, which is the
+            // registry-aware entry point that actually dispatches
+            // `OutputFormat::Custom`.
+            return Err(CoreError::Unsupported(format!(
+                "custom output format '{name}' requires a plugin registry; call render_report_with_plugins instead of render_report"
+            )));
+        }
     };
 
     Ok(ReportArtifact {
-        mime_type: mime_type.into(),
+        mime_type,
         contents,
     })
+}
+
+/// Like [`render_report`], but also consults `registry` for
+/// `OutputFormat::Custom(name)` requests: if a
+/// [`crate::plugin::ReportFormatterPlugin`] is registered under that name,
+/// its `render()` output is used; otherwise a `CoreError::Unsupported` is
+/// returned naming the missing format. Every other `OutputFormat` variant
+/// is delegated unchanged to `render_report`, so this wrapper is purely
+/// additive -- existing callers that only ever construct the five built-in
+/// formats see identical output whether they call `render_report` or this
+/// function.
+pub fn render_report_with_plugins(
+    request: &ReportRequest,
+    registry: &PluginRegistry,
+) -> CoreResult<ReportArtifact> {
+    if let OutputFormat::Custom(name) = &request.format {
+        return match registry.find_formatter(name) {
+            Some(formatter) => {
+                let contents = formatter.render(&request.analysis)?;
+                Ok(ReportArtifact {
+                    mime_type: formatter.mime_type().to_string(),
+                    contents,
+                })
+            }
+            None => Err(CoreError::Unsupported(format!(
+                "no formatter plugin registered for custom output format '{name}'"
+            ))),
+        };
+    }
+
+    render_report(request)
 }
 
 pub fn render_overview_report(
     summary: &OverviewSummary,
     format: OutputFormat,
 ) -> CoreResult<ReportArtifact> {
-    let (contents, mime_type) = match format {
+    let (contents, mime_type) = match &format {
         OutputFormat::Text => (render_overview_text(summary), "text/plain"),
         OutputFormat::Toon => (render_overview_toon(summary), "application/x-toon"),
         OutputFormat::Markdown => (render_overview_markdown(summary), "text/markdown"),
         OutputFormat::Html => (render_overview_html(summary), "text/html"),
         OutputFormat::Json => (render_overview_json(summary)?, "application/json"),
+        OutputFormat::Custom(name) => {
+            // Overview mode has no plugin-registry-aware counterpart today
+            // (no `render_overview_report_with_plugins` exists) -- named
+            // the same way `render_report`'s own `Custom` arm is, rather
+            // than silently falling back to a built-in format.
+            return Err(CoreError::Unsupported(format!(
+                "custom output format '{name}' is not supported in overview mode"
+            )));
+        }
     };
 
     Ok(ReportArtifact {
@@ -1342,7 +1402,87 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
+        }
+    }
+
+    #[test]
+    fn render_report_custom_format_without_registry_is_unsupported() {
+        // A registry-unaware caller asking `render_report` for a custom
+        // format has no way to satisfy it -- must fail clearly, not
+        // silently fall back to a built-in format or panic.
+        let request = ReportRequest {
+            analysis: sample_classloader_response(),
+            format: OutputFormat::Custom("demo-pipe-summary".into()),
+        };
+        let err = render_report(&request).unwrap_err();
+        assert!(matches!(err, CoreError::Unsupported(_)));
+    }
+
+    #[test]
+    fn render_report_with_plugins_dispatches_to_registered_formatter() {
+        // M15 Slice 15.F validation gate: a `ReportFormatterPlugin` test
+        // implementation's output is selectable via the existing
+        // `OutputFormat`/`render_report` mechanism (extended, not
+        // replaced -- see `render_report_with_plugins`).
+        use crate::plugin::test_support::DemoPipeSummaryFormatter;
+
+        let mut registry = PluginRegistry::new();
+        registry.register_formatter(Box::new(DemoPipeSummaryFormatter));
+
+        let analysis = sample_classloader_response();
+        let expected = format!(
+            "objects={}|leaks={}",
+            analysis.summary.total_objects,
+            analysis.leaks.len()
+        );
+        let request = ReportRequest {
+            analysis,
+            format: OutputFormat::Custom("demo-pipe-summary".into()),
+        };
+
+        let artifact = render_report_with_plugins(&request, &registry).unwrap();
+        assert_eq!(artifact.mime_type, "text/plain");
+        assert_eq!(artifact.contents, expected);
+    }
+
+    #[test]
+    fn render_report_with_plugins_unregistered_custom_name_is_unsupported() {
+        let registry = PluginRegistry::new();
+        let request = ReportRequest {
+            analysis: sample_classloader_response(),
+            format: OutputFormat::Custom("does-not-exist".into()),
+        };
+        let err = render_report_with_plugins(&request, &registry).unwrap_err();
+        assert!(matches!(err, CoreError::Unsupported(_)));
+    }
+
+    #[test]
+    fn render_report_with_plugins_matches_render_report_for_builtin_formats() {
+        // Non-custom formats must be delegated unchanged -- registering a
+        // formatter plugin must not alter output for the five built-in
+        // formats.
+        let mut registry = PluginRegistry::new();
+        registry.register_formatter(Box::new(
+            crate::plugin::test_support::DemoPipeSummaryFormatter,
+        ));
+
+        for format in [
+            OutputFormat::Text,
+            OutputFormat::Toon,
+            OutputFormat::Markdown,
+            OutputFormat::Html,
+            OutputFormat::Json,
+        ] {
+            let request = ReportRequest {
+                analysis: sample_classloader_response(),
+                format: format.clone(),
+            };
+            let plain = render_report(&request).unwrap();
+            let via_registry = render_report_with_plugins(&request, &registry).unwrap();
+            assert_eq!(plain.mime_type, via_registry.mime_type);
+            assert_eq!(plain.contents, via_registry.contents);
         }
     }
 
@@ -1419,6 +1559,7 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response provenance",
@@ -1488,6 +1629,7 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "response detail",
@@ -1559,6 +1701,7 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: vec![ProvenanceMarker::new(
                 ProvenanceKind::Partial,
                 "html response detail",
@@ -1650,6 +1793,7 @@ mod tests {
                 }],
                 total_objects_considered: 4200,
             }),
+            plugin_results: Vec::new(),
             provenance: vec![ProvenanceMarker::bare(ProvenanceKind::Partial)],
         }
     }

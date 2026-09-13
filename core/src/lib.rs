@@ -13,6 +13,7 @@ pub mod hprof;
 pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod plugin;
 pub mod policy;
 pub mod prompts;
 pub mod query;
@@ -52,11 +53,14 @@ pub use hprof::{
     DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
+pub use plugin::{
+    AnalyzerFinding, AnalyzerPlugin, AnalyzerResult, PluginRegistry, ReportFormatterPlugin,
+};
 pub use policy::{
     evaluate, Comparison, Evaluation, ModeRequirement, Policy, PolicyInput, PolicyResult,
     PolicyRule, Predicate, Severity, SkipReason, SkippedRule, Violation,
 };
-pub use report::{ReportArtifact, ReportRequest};
+pub use report::{render_report_with_plugins, ReportArtifact, ReportRequest};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use hprof::test_fixtures;

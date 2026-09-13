@@ -17,6 +17,7 @@ use crate::{
         parse_heap, parse_hprof_file_with_options, ClassDelta, ClassStat, HeapDiff, HeapParseJob,
         HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
     },
+    plugin::{AnalyzerResult, PluginRegistry},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -162,6 +163,18 @@ pub struct AnalyzeResponse {
     /// `--by-referrer`) output stays byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referrer_report: Option<ReferrerReport>,
+    /// Output of every registered [`crate::plugin::AnalyzerPlugin`], in
+    /// registration order (M15 Slice 15.F). ADDITIVE: only populated by
+    /// [`analyze_heap_with_plugins`], never by `analyze_heap` /
+    /// `analyze_heap_with_graph` / `analyze_heap_capturing_graph` /
+    /// `analyze_heap_from_graph` (all of which pass no registry and so
+    /// always leave this empty). `skip_serializing_if = "Vec::is_empty"`
+    /// means an empty `plugin_results` is omitted from the JSON entirely,
+    /// so today's `analyze` output stays byte-identical for every existing
+    /// caller -- see `analyze_heap_back_compat_byte_identical` below,
+    /// unmodified by this slice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_results: Vec<AnalyzerResult>,
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
@@ -371,7 +384,15 @@ fn assemble_graph_backed_analysis(
     }
 }
 
-async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisArtifacts> {
+/// Core analysis pipeline. `registry` is `None` for every pre-M15.F caller
+/// (`analyze_heap`, `analyze_heap_with_graph`, `analyze_heap_capturing_graph`)
+/// and `Some` only when called from [`analyze_heap_with_plugins`] -- see
+/// that function and `AnalyzeResponse::plugin_results` for the M15 Slice
+/// 15.F plugin-runtime wiring.
+async fn analyze_heap_internal(
+    request: AnalyzeRequest,
+    registry: Option<&PluginRegistry>,
+) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
 
@@ -430,6 +451,20 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         None
     };
 
+    // M15 Slice 15.F: run registered AnalyzerPlugins over the graph-backed
+    // pipeline's own (ObjectGraph, DominatorTree) pair. Only possible when
+    // both a registry was supplied AND graph-backed analysis (not the
+    // heuristic summary-only fallback) succeeded -- a plugin has no
+    // ObjectGraph to inspect otherwise. `registry` is `None` for every
+    // caller except `analyze_heap_with_plugins`, so this is a no-op
+    // (`Vec::new()`) for `analyze_heap`/`analyze_heap_with_graph`/
+    // `analyze_heap_capturing_graph`, preserving their byte-identical
+    // output.
+    let plugin_results = match (registry, &dominator_result) {
+        (Some(registry), Some((obj_graph, dom))) => registry.run_analyzers(obj_graph, Some(dom)),
+        _ => Vec::new(),
+    };
+
     let has_graph = dominator_result.is_some();
     let response = AnalyzeResponse {
         mode: AnalysisMode::Deep,
@@ -459,6 +494,7 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         array_report,
         top_instances,
         referrer_report,
+        plugin_results,
         provenance,
     };
 
@@ -475,7 +511,24 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
 }
 
 pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request).await?.response)
+    Ok(analyze_heap_internal(request, None).await?.response)
+}
+
+/// Like [`analyze_heap`], but runs every [`crate::plugin::AnalyzerPlugin`]
+/// registered in `registry` over the same graph-backed pipeline and
+/// attaches their output to [`AnalyzeResponse::plugin_results`] (M15 Slice
+/// 15.F). When `registry` is empty (`PluginRegistry::new()`, the state
+/// Mnemosyne's own binaries ship in today), the returned `AnalyzeResponse`
+/// is byte-identical to what [`analyze_heap`] would return for the same
+/// request -- see `analyze_heap_with_plugins_empty_registry_byte_identical_to_analyze_heap`
+/// in this module's test suite.
+pub async fn analyze_heap_with_plugins(
+    request: AnalyzeRequest,
+    registry: &PluginRegistry,
+) -> CoreResult<AnalyzeResponse> {
+    Ok(analyze_heap_internal(request, Some(registry))
+        .await?
+        .response)
 }
 
 /// Like [`analyze_heap`], but also returns the `(ObjectGraph,
@@ -494,7 +547,7 @@ pub async fn analyze_heap_capturing_graph(
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request).await?;
+    } = analyze_heap_internal(request, None).await?;
     Ok((response, object_graph, dominator_tree))
 }
 
@@ -505,7 +558,7 @@ pub async fn analyze_heap_with_graph(
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request).await?;
+    } = analyze_heap_internal(request, None).await?;
 
     match (object_graph, dominator_tree) {
         (Some(graph), Some(dom)) => Ok((response, graph, dom)),
@@ -589,6 +642,11 @@ pub async fn analyze_heap_from_graph(
         array_report,
         top_instances,
         referrer_report,
+        // `analyze_heap_from_graph` (the snapshot-cache seam) is not
+        // plugin-registry-aware -- see `analyze_heap_with_plugins` for the
+        // entry point that is. Named exclusion, not a silent gap: no
+        // caller of this function passes a registry today.
+        plugin_results: Vec::new(),
         provenance,
     })
 }
@@ -1431,6 +1489,7 @@ mod tests {
             array_report: None,
             top_instances: None,
             referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: Vec::new(),
         }
     }
@@ -1473,6 +1532,56 @@ mod tests {
         assert!(!graph.objects.is_empty());
         assert!(dom.node_count() > 0);
         assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_with_plugins_empty_registry_byte_identical_to_analyze_heap() {
+        // Hard regression gate (M15 Slice 15.F): a caller that constructs
+        // `analyze_heap_with_plugins` with an empty `PluginRegistry` --
+        // the state Mnemosyne's own CLI/MCP binaries ship in today, since
+        // this milestone ships zero built-in analyzer plugins -- must get
+        // byte-identical output to plain `analyze_heap`.
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let baseline = analyze_heap(request.clone()).await.unwrap();
+
+        let registry = PluginRegistry::new();
+        let via_plugins = analyze_heap_with_plugins(request, &registry).await.unwrap();
+
+        assert!(via_plugins.plugin_results.is_empty());
+        assert_eq!(
+            normalized_analysis_bytes(&baseline),
+            normalized_analysis_bytes(&via_plugins)
+        );
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_with_plugins_surfaces_registered_analyzer_output() {
+        // M15 Slice 15.F validation gate: a test-only `AnalyzerPlugin`
+        // registers and its `analyze()` output appears in a full
+        // `analyze_heap_with_plugins` pipeline run.
+        use crate::plugin::test_support::DemoLeakNameAnalyzer;
+
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let baseline = analyze_heap(request.clone()).await.unwrap();
+
+        let mut registry = PluginRegistry::new();
+        registry.register_analyzer(Box::new(DemoLeakNameAnalyzer));
+        let response = analyze_heap_with_plugins(request, &registry).await.unwrap();
+
+        assert_eq!(response.plugin_results.len(), 1);
+        assert_eq!(response.plugin_results[0].name, "demo-leak-name-analyzer");
+
+        // Every other field must match the no-plugin baseline exactly --
+        // registering an analyzer must not perturb the rest of the
+        // pipeline's output.
+        let mut without_plugin_results = response.clone();
+        without_plugin_results.plugin_results = Vec::new();
+        assert_eq!(
+            normalized_analysis_bytes(&baseline),
+            normalized_analysis_bytes(&without_plugin_results)
+        );
     }
 
     #[tokio::test]

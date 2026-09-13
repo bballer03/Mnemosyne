@@ -121,6 +121,13 @@ pub enum OutputFormat {
     Markdown,
     Html,
     Json,
+    /// A plugin-provided format, selected via `custom:<name>` (e.g.
+    /// `--format custom:sarif`) and dispatched by
+    /// `report::render_report_with_plugins` to whichever
+    /// `ReportFormatterPlugin` in a `PluginRegistry` has a matching
+    /// `format_name()` (M15 Slice 15.F). Additive: the five formats above
+    /// are unchanged and `render_report`'s behavior for them is untouched.
+    Custom(String),
 }
 
 impl Default for ParserConfig {
@@ -202,6 +209,19 @@ impl FromStr for OutputFormat {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // "custom:<name>" uses an exact-case, lowercase "custom:" prefix --
+        // unlike the built-in formats below, the plugin-supplied name after
+        // the colon keeps its original case (not lowercased), since a
+        // `ReportFormatterPlugin::format_name()` is matched by exact string
+        // equality in `PluginRegistry::find_formatter`.
+        if let Some(name) = s.strip_prefix("custom:") {
+            return if name.is_empty() {
+                Err(format!("unsupported output format '{s}'"))
+            } else {
+                Ok(OutputFormat::Custom(name.to_string()))
+            };
+        }
+
         match s.to_ascii_lowercase().as_str() {
             "text" => Ok(OutputFormat::Text),
             "toon" => Ok(OutputFormat::Toon),
@@ -297,5 +317,69 @@ impl FromStr for AnalysisProfile {
             "ci-regression" | "ci_regression" => Ok(AnalysisProfile::CiRegression),
             other => Err(format!("unsupported analysis profile '{other}'")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_format_from_str_existing_variants_unchanged() {
+        assert!(matches!(
+            "text".parse::<OutputFormat>(),
+            Ok(OutputFormat::Text)
+        ));
+        assert!(matches!(
+            "TOON".parse::<OutputFormat>(),
+            Ok(OutputFormat::Toon)
+        ));
+        assert!(matches!(
+            "md".parse::<OutputFormat>(),
+            Ok(OutputFormat::Markdown)
+        ));
+        assert!(matches!(
+            "html".parse::<OutputFormat>(),
+            Ok(OutputFormat::Html)
+        ));
+        assert!(matches!(
+            "json".parse::<OutputFormat>(),
+            Ok(OutputFormat::Json)
+        ));
+        assert!("nonsense".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn output_format_from_str_parses_custom_plugin_format() {
+        match "custom:sarif".parse::<OutputFormat>() {
+            Ok(OutputFormat::Custom(name)) => assert_eq!(name, "sarif"),
+            other => panic!("expected OutputFormat::Custom(\"sarif\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_format_from_str_preserves_custom_name_case() {
+        match "custom:MixedCase-Name".parse::<OutputFormat>() {
+            Ok(OutputFormat::Custom(name)) => assert_eq!(name, "MixedCase-Name"),
+            other => panic!("expected OutputFormat::Custom(\"MixedCase-Name\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_format_from_str_rejects_empty_custom_name() {
+        assert!("custom:".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn output_format_serde_round_trip_for_custom_variant() {
+        let format = OutputFormat::Custom("sarif".to_string());
+        let json = serde_json::to_string(&format).expect("should serialize");
+        let round_tripped: OutputFormat = serde_json::from_str(&json).expect("should deserialize");
+        assert!(matches!(round_tripped, OutputFormat::Custom(name) if name == "sarif"));
+    }
+
+    #[test]
+    fn output_format_default_is_unaffected_by_custom_variant() {
+        assert!(matches!(OutputFormat::default(), OutputFormat::Text));
     }
 }
