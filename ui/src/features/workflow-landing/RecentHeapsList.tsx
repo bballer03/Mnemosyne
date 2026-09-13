@@ -58,7 +58,7 @@ export function RecentHeapsList() {
 
   return (
     <section style={sectionStyle} aria-label="Recent heaps">
-      <h3 style={{ marginTop: 0 }}>Recent Heaps</h3>
+      <h4 style={{ marginTop: 0 }}>Recent Heaps</h4>
       <p style={{ marginTop: 0, color: "#94a3b8" }}>Snapshots cached by the connected Mnemosyne host.</p>
 
       {state.status === "loading" ? <p style={{ color: "#94a3b8" }}>Loading snapshots...</p> : null}

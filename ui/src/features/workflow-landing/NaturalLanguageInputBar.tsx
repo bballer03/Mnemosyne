@@ -134,7 +134,7 @@ export function NaturalLanguageInputBar({ heapPath }: NaturalLanguageInputBarPro
 
   return (
     <section style={barStyle} aria-label="Natural language input">
-      <h3 style={{ margin: 0 }}>Ask a question</h3>
+      <h4 style={{ margin: 0 }}>Ask a question</h4>
       <p style={{ margin: 0, color: "#94a3b8" }}>
         Type an OQL query (e.g. <code>SELECT * FROM objects WHERE ...</code>) or ask a plain-language question --
         we'll route it to the right tool.
