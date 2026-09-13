@@ -21,7 +21,8 @@ use crate::{
     query::{execute_query, parse_query},
     snapshot::{SnapshotPayload, SnapshotStore},
     workflow::{WorkflowKind, WorkflowState, WorkflowStore},
-    HistogramGroupBy, ParseOptions,
+    evaluate, Policy, PolicyInput, PolicyResult, Predicate, Severity, HistogramGroupBy,
+    ParseOptions,
 };
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -554,6 +555,23 @@ struct DetectClassloaderLeaksParams {
     heap_path: String,
 }
 
+/// M18 Slice 18.A: single-heap policy gate — mirrors `mnemosyne-cli ci-check`
+/// without baseline support (18.B) or rendered output formats.
+#[derive(Debug, Deserialize, Default)]
+struct CiCheckParams {
+    heap_path: String,
+    #[serde(default)]
+    policy_path: Option<String>,
+    #[serde(default)]
+    policy_toml: Option<String>,
+    #[serde(default)]
+    mode: AnalysisMode,
+    #[serde(default)]
+    fail_on: Severity,
+    #[serde(default)]
+    snapshot: Option<String>,
+}
+
 /// M11 Slice 11.D: params for the `describe_workflow` tool.
 #[derive(Debug, Deserialize)]
 struct DescribeWorkflowParams {
@@ -1061,6 +1079,150 @@ fn resolve_heap_mode(heap_path: &str, requested_mode: AnalysisMode) -> CoreResul
     }
 }
 
+fn load_ci_check_policy(params: &CiCheckParams) -> CoreResult<Policy> {
+    match (&params.policy_path, &params.policy_toml) {
+        (Some(path), None) => Policy::from_toml_file(path),
+        (None, Some(toml)) => Policy::from_toml_str(toml),
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "exactly one of policy_path or policy_toml is required, not both".into(),
+        )),
+        (None, None) => Err(CoreError::InvalidInput(
+            "exactly one of policy_path or policy_toml is required".into(),
+        )),
+    }
+}
+
+fn ci_check_policy_label(params: &CiCheckParams) -> &str {
+    params
+        .policy_path
+        .as_deref()
+        .unwrap_or("(inline policy)")
+}
+
+fn is_explicit_overview_mode_mismatch(violation: &crate::Violation) -> bool {
+    violation.severity == Severity::Critical
+        && violation.actual.is_null()
+        && violation.expected.is_null()
+        && violation
+            .message
+            .contains("cannot run in explicit overview mode")
+}
+
+fn ci_check_exit_code(result: &PolicyResult, fail_on: Severity) -> i32 {
+    if result
+        .violations
+        .iter()
+        .any(is_explicit_overview_mode_mismatch)
+    {
+        4
+    } else if result
+        .violations
+        .iter()
+        .any(|violation| violation.severity >= fail_on)
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn ci_check_response(result: PolicyResult, fail_on: Severity) -> Value {
+    let exit_code = ci_check_exit_code(&result, fail_on);
+    json!({
+        "result": result,
+        "exit_code": exit_code,
+        "fail_on": fail_on,
+    })
+}
+
+async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<Value> {
+    let requested_mode = params.mode;
+    let fail_on = params.fail_on;
+    let policy = load_ci_check_policy(&params)?;
+
+    let needs_baseline = policy
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
+
+    if needs_baseline {
+        return Err(CoreError::ConfigError {
+            detail: format!(
+                "object_growth_threshold_requires_baseline: policy '{}' contains an \
+                 object_growth_threshold rule but baseline was not supplied",
+                ci_check_policy_label(&params)
+            ),
+            suggestion: Some(
+                "Baseline support is not yet available on ci_check (M18.B). Remove \
+                 object_growth_threshold rules or use mnemosyne-cli ci-check --baseline."
+                    .into(),
+            ),
+        });
+    }
+
+    let resolved_mode = resolve_heap_mode(&params.heap_path, requested_mode)?;
+
+    let result = match resolved_mode {
+        AnalysisMode::Overview => {
+            let summary =
+                parse_hprof_overview_file(&params.heap_path, &OverviewOptions::default())?;
+            evaluate(
+                &policy,
+                &PolicyInput::Overview(&summary),
+                requested_mode,
+                None,
+            )
+        }
+        AnalysisMode::Deep => {
+            let enable_classloaders = policy
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.predicate, Predicate::ClassloaderLeakCount));
+
+            let mut request_config = config.clone();
+            request_config.ai.enabled = false;
+
+            let heap_path = params.heap_path.clone();
+            let request = AnalyzeRequest {
+                heap_path: params.heap_path,
+                config: request_config,
+                leak_options: LeakDetectionOptions::from(&config.analysis),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                enable_classloaders,
+                enable_threads: false,
+                enable_strings: false,
+                enable_collections: false,
+                enable_top_instances: false,
+                enable_by_referrer: false,
+                enable_duplicate_arrays: false,
+                top_n: 10,
+                min_collection_capacity: 16,
+                min_duplicate_count: 2,
+            };
+
+            let analysis = if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &heap_path)?;
+                analyze_heap_from_graph(request, &payload.object_graph, &payload.dominator_tree)
+                    .await?
+            } else {
+                analyze_heap(request).await?
+            };
+
+            evaluate(
+                &policy,
+                &PolicyInput::Deep(&analysis),
+                requested_mode,
+                None,
+            )
+        }
+        AnalysisMode::Auto => unreachable!("resolved MCP mode should never remain auto"),
+    };
+
+    Ok(ci_check_response(result, fail_on))
+}
+
 fn overview_options(top_n: Option<usize>) -> OverviewOptions {
     if let Some(top_n) = top_n {
         OverviewOptions {
@@ -1331,6 +1493,19 @@ fn tool_catalog() -> Value {
                     { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump." }
                 ],
                 "output_schema": "Vec<DuplicateClassGroup>"
+            },
+            {
+                "name": "ci_check",
+                "description": "Evaluate a TOML policy against one heap dump and return a structured PolicyResult plus the equivalent CLI ci-check exit classification. Baseline/object-growth rules require M18.B baseline support.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump under test." },
+                    { "name": "policy_path", "type": "string", "required": false, "description": "Path to a policy TOML file. Exactly one of policy_path or policy_toml is required." },
+                    { "name": "policy_toml", "type": "string", "required": false, "description": "Inline policy TOML. Exactly one of policy_path or policy_toml is required." },
+                    analysis_mode_param(),
+                    { "name": "fail_on", "type": "string", "required": false, "default": "error", "enum": ["info", "warning", "error", "critical"], "description": "Minimum violation severity that maps to exit_code 1, matching mnemosyne-cli ci-check --fail-on." },
+                    snapshot_param()
+                ],
+                "output_schema": "{ result: PolicyResult, exit_code: number, fail_on: string }"
             },
             {
                 "name": "describe_workflow",
@@ -1797,6 +1972,10 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             )?;
             let duplicates = detect_duplicate_classes(&graph);
             Ok(serde_json::to_value(duplicates)?)
+        }
+        "ci_check" => {
+            let params: CiCheckParams = serde_json::from_value(packet.params)?;
+            run_ci_check(params, config).await
         }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
@@ -4582,6 +4761,285 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, json!([]));
+    }
+
+    // --- M18 Slice 18.A: `ci_check` ---
+
+    async fn ci_check_result(heap_path: &str, extra_params: Value) -> CoreResult<Value> {
+        let mut params = serde_json::Map::new();
+        params.insert("heap_path".into(), json!(heap_path));
+        if let Some(extra) = extra_params.as_object() {
+            params.extend(extra.clone());
+        }
+
+        handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "ci_check".into(),
+                params: Value::Object(params),
+            },
+            &AppConfig::default(),
+        )
+        .await
+    }
+
+    fn write_policy_file(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_includes_ci_check() {
+        let result = list_tools_result().await;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("ci_check")))
+            .expect("ci_check tool");
+
+        assert!(
+            tool.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("PolicyResult")),
+            "ci_check description should mention structured result"
+        );
+        let params = tool
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("params array");
+        let names: Vec<&str> = params
+            .iter()
+            .filter_map(|param| param.get("name").and_then(Value::as_str))
+            .collect();
+        for expected in [
+            "heap_path",
+            "policy_path",
+            "policy_toml",
+            "mode",
+            "fail_on",
+            "snapshot",
+        ] {
+            assert!(names.contains(&expected), "ci_check params missing {expected}");
+        }
+        assert_eq!(
+            tool.get("output_schema"),
+            Some(&json!("{ result: PolicyResult, exit_code: number, fail_on: string }"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_passes_on_below_threshold_returns_exit_code_zero() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let policy_toml = format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len() as u64 + 1024
+        );
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let policy_result = result.get("result").expect("structured result");
+        assert!(
+            policy_result
+                .get("violations")
+                .and_then(Value::as_array)
+                .is_some_and(|violations| violations.is_empty())
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_fails_on_violation_returns_exit_code_one() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let policy_toml = format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len().saturating_sub(1) as u64
+        );
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(1)));
+        let violations = result
+            .pointer("/result/violations")
+            .and_then(Value::as_array)
+            .expect("violations array");
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.get("rule_id") == Some(&json!("heap-budget")))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_invalid_policy_returns_config_error() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let err = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": "[[rule]]\nid = \"broken\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = \n"
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("config_error"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_missing_heap_returns_file_not_found_error() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let (_dir, policy_path) = write_policy_file(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1024\nseverity = \"error\"\n",
+        );
+        let missing_heap = sandbox.path().join("missing.hprof");
+
+        let err = ci_check_result(
+            &missing_heap.to_string_lossy(),
+            json!({ "policy_path": policy_path.to_string_lossy() }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert!(
+            matches!(
+                value.pointer("/error_details/code"),
+                Some(code) if code == "file_not_found" || code == "io_error"
+            ),
+            "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_without_baseline_returns_config_error() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-runaway-cache-growth\"\npredicate = \"object_growth_threshold\"\nclass = \"com.example.CacheEntry\"\nop = \"<=\"\nvalue = 1048576\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("config_error"))
+        );
+        assert!(
+            value
+                .pointer("/error_details/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("object_growth_threshold_requires_baseline")),
+            "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_explicit_overview_with_deep_only_rule_returns_exit_code_four() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n";
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "overview",
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(4)));
+        let violations = result
+            .pointer("/result/violations")
+            .and_then(Value::as_array)
+            .expect("violations array");
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.get("rule_id") == Some(&json!("no-critical-leaks")))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_auto_overview_skips_deep_only_rule_without_violation() {
+        let _guard = mode_test_guard().await;
+        let _threshold = TempEnvVar::set("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1");
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n";
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "auto",
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let skipped = result
+            .pointer("/result/skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(
+            skipped
+                .iter()
+                .any(|entry| entry.get("rule_id") == Some(&json!("no-critical-leaks"))),
+            "{result}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_policy_path_loads_from_disk() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let (_dir, policy_path) = write_policy_file(&format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len() as u64 + 1024
+        ));
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_path": policy_path.to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
     }
 
     // --- M11 Slice 11.D: workflow tool registration ---
