@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::{
+    analysis::LeakSeverity,
     diff::{ObjectDelta, ObjectDeltaKind, ObjectDiffReport},
     hprof::{ClassLevelDelta, HeapDiff},
 };
@@ -170,7 +171,7 @@ fn render_object_diff_text(report: &ObjectDiffReport) -> String {
 }
 
 fn format_object_delta_line(delta: &ObjectDelta) -> String {
-    match delta.kind {
+    let base = match delta.kind {
         ObjectDeltaKind::Added => format!(
             "    {:<32} {:+} bytes  count={}  dom={}",
             delta.class_name,
@@ -193,6 +194,26 @@ fn format_object_delta_line(delta: &ObjectDelta) -> String {
             delta.after_count,
             dominator_chain_label(&delta.dominator_chain),
         ),
+    };
+
+    match delta.leak_severity {
+        // M10-B leak-progression cross-reference: `--cross-reference-leaks`
+        // only ever populates `leak_severity` on `added`/`retained_changed`
+        // deltas (see `run_diff`'s object-mode path), so this suffix never
+        // appears on a `removed` line in practice. Same bracketed
+        // inline-annotation style as `[SYNTHETIC]` etc. in
+        // `core::report::renderer`.
+        Some(severity) => format!("{base}  [LEAK: {}]", leak_severity_label(severity)),
+        None => base,
+    }
+}
+
+fn leak_severity_label(severity: LeakSeverity) -> &'static str {
+    match severity {
+        LeakSeverity::Low => "LOW",
+        LeakSeverity::Medium => "MEDIUM",
+        LeakSeverity::High => "HIGH",
+        LeakSeverity::Critical => "CRITICAL",
     }
 }
 

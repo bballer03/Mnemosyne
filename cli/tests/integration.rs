@@ -928,6 +928,100 @@ fn ci_check_missing_heap_returns_three() {
 }
 
 #[test]
+fn ci_check_object_growth_threshold_without_baseline_returns_two() {
+    // M10-B: object_growth_threshold is a two-heap predicate. Without
+    // --baseline, ci-check must refuse loudly (same exit-code family as a
+    // malformed policy file above) rather than silently evaluating the
+    // rule with no object diff to compare against.
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-growth-no-baseline.toml",
+        "[[rule]]\nid = \"no-runaway-cache-growth\"\npredicate = \"object_growth_threshold\"\nclass = \"com.example.CacheEntry\"\nop = \"<=\"\nvalue = 1048576\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stdout_string(&output.stderr);
+    assert!(
+        stderr.contains("object_growth_threshold_requires_baseline")
+            && stderr.contains("--baseline"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_check_object_growth_threshold_with_baseline_evaluates_instead_of_skipping() {
+    // Same heap on both sides of --baseline: zero object-level growth, so
+    // the rule should pass -- but the point of this test is that it is
+    // *evaluated* (present in `evaluations`, absent from `skipped`) rather
+    // than silently skipped now that a baseline diff was supplied.
+    let fixture = write_fixture(&build_graph_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, sandbox) = cli_command();
+    let policy_path = write_sandbox_file(
+        sandbox.path(),
+        "policy-growth-with-baseline.toml",
+        "[[rule]]\nid = \"no-runaway-growth\"\npredicate = \"object_growth_threshold\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n",
+    );
+    let policy_arg = path_arg(&policy_path);
+
+    let output = cmd
+        .args([
+            "ci-check",
+            fixture_path.as_str(),
+            "--policy",
+            policy_arg.as_str(),
+            "--baseline",
+            fixture_path.as_str(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        stdout_string(&output.stderr)
+    );
+    let stdout = stdout_string(&output.stdout);
+    let json = serde_json::from_str::<Value>(&stdout).unwrap();
+    let result = json.get("result").expect("result envelope");
+    let skipped = result
+        .get("skipped")
+        .and_then(Value::as_array)
+        .expect("skipped array");
+    assert!(
+        skipped.is_empty(),
+        "object_growth_threshold should have been evaluated, not skipped: {stdout}"
+    );
+    let evaluations = result
+        .get("evaluations")
+        .and_then(Value::as_array)
+        .expect("evaluations array");
+    assert!(
+        evaluations
+            .iter()
+            .any(|entry| entry.get("rule_id").and_then(Value::as_str) == Some("no-runaway-growth")),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn ci_check_explicit_overview_with_deep_only_rule_returns_four() {
     let fixture = write_fixture(&build_simple_fixture());
     let fixture_path = path_arg(fixture.path());

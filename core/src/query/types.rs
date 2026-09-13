@@ -43,6 +43,37 @@ pub struct FromClause {
 pub enum ClassPattern {
     Exact(String),
     Glob(String),
+    /// A traversal function producing an explicit object-id set instead of
+    /// matching by class name. Slots into the same `FromClause.class_pattern`
+    /// extension point as `Exact`/`Glob` rather than introducing a parallel
+    /// `Query.from` shape -- see M15 Slice 15.C commit body for rationale.
+    Traversal(TraversalFunction),
+    /// `FROM OBJECTS (<subquery>)` (M15 Slice 15.E). The boxed `Query` is
+    /// evaluated first via its own FROM+WHERE+LIMIT pipeline (its `SELECT`
+    /// clause is not consulted -- see `executor::resolve_subquery_candidates`),
+    /// and the resulting object-id set becomes this `FromClause`'s candidate
+    /// set, same extension-point shape as `Traversal` above. Bounded to one
+    /// level of nesting: a `Query` reachable through this variant must not
+    /// itself contain another `ClassPattern::Subquery` in its `from` --
+    /// enforced by the parser at parse time (`parser::MAX_SUBQUERY_NESTING_DEPTH`)
+    /// and, defense-in-depth, by the executor for a `Query` assembled
+    /// directly (e.g. via the MCP surface, bypassing the parser).
+    Subquery(Box<Query>),
+}
+
+/// `outbounds(id)` / `inbounds(id)` / `dominators(id)` OQL traversal
+/// functions (M15 Slice 15.C). Each wraps a literal object id; nested-query
+/// arguments (`outbounds(SELECT ...)`) are out of scope for this slice and
+/// land with subqueries in M15 Slice 15.E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraversalFunction {
+    /// Objects the given object id directly references (outgoing edges).
+    Outbounds(u64),
+    /// Objects that directly reference the given object id (incoming edges).
+    Inbounds(u64),
+    /// The chain of immediate dominators of the given object id, nearest
+    /// first, walking towards the virtual super-root (exclusive).
+    Dominators(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +110,20 @@ pub enum ComparisonOp {
     Like,
     /// Case-sensitive substring match on string values.
     Contains,
+    /// Regex pattern match (`=~`) on string-capable fields (M15 Slice 15.D).
+    ///
+    /// Powered by the `regex` crate's linear-time (non-backtracking) engine
+    /// so a user-supplied pattern cannot become a ReDoS footgun against
+    /// adversarial input -- see `docs/design/milestone-15-mat-backend-parity.md`
+    /// §6 R3. The pattern itself always travels as a plain `Value::Str` (this
+    /// enum stays `Copy`/`Eq`/`Serialize`, so it cannot hold a compiled
+    /// `regex::Regex`); the parser eagerly validates the pattern compiles so
+    /// a malformed regex fails fast before any graph work, and the executor
+    /// independently (re-)compiles it once per query evaluation -- not once
+    /// per candidate object -- for both defense-in-depth (a `Query` built
+    /// programmatically, e.g. via the MCP surface, bypasses the parser) and
+    /// performance.
+    RegexMatch,
     IsNull,
     IsNotNull,
     InstanceOf,
@@ -90,6 +135,25 @@ pub enum Value {
     Str(String),
     Null,
     Bool(bool),
+}
+
+/// A top-level OQL statement: either a single `Query`, or two `Query`s
+/// joined by `UNION` (M15 Slice 15.E §4.1 item 5). Deliberately a separate
+/// type from `Query` itself rather than a new field/variant on `Query` --
+/// `Query` keeps its exact M7-4 shape (`select`/`from`/`filter`/`limit`),
+/// so every existing caller and test that constructs or matches a `Query`
+/// literal (the CLI `query` command, the MCP `query_heap` handler, the
+/// Tauri `query_heap` command, and every OQL test predating this slice)
+/// needs zero changes. `UNION` is intentionally binary and non-recursive
+/// (no `Query3` chained on): the design doc bounds this slice to "two
+/// `Query` results concatenated, deduplicated by object id", not an
+/// open-ended `UNION` chain. A `Query` reached through `Union` may still
+/// itself use a one-level `ClassPattern::Subquery` FROM source -- the two
+/// features compose independently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueryStatement {
+    Single(Query),
+    Union(Query, Query),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -13,10 +13,13 @@ pub mod hprof;
 pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod plugin;
 pub mod policy;
 pub mod prompts;
 pub mod query;
 pub mod report;
+pub mod snapshot;
+pub mod workflow;
 
 pub use analysis::{
     focus_leaks, generate_ai_insights, generate_ai_insights_async, AiInsights, AiWireExchange,
@@ -36,7 +39,8 @@ pub use fix::{
     propose_fix, propose_fix_with_config, FixRequest, FixResponse, FixStyle, FixSuggestion,
 };
 pub use graph::{
-    build_dominator_tree, build_histogram, find_gc_path, find_unreachable_objects, DominatorNode,
+    build_dominator_tree, build_histogram, enumerate_gc_paths, find_all_gc_paths, find_gc_path,
+    find_unreachable_objects, resolve_live_instances_by_class, AllPathsRequest, DominatorNode,
     DominatorTree, GcPathNode, GcPathRequest, GcPathResult, GraphMetrics, HistogramEntry,
     HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
@@ -49,11 +53,14 @@ pub use hprof::{
     DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
+pub use plugin::{
+    AnalyzerFinding, AnalyzerPlugin, AnalyzerResult, PluginRegistry, ReportFormatterPlugin,
+};
 pub use policy::{
     evaluate, Comparison, Evaluation, ModeRequirement, Policy, PolicyInput, PolicyResult,
     PolicyRule, Predicate, Severity, SkipReason, SkippedRule, Violation,
 };
-pub use report::{ReportArtifact, ReportRequest};
+pub use report::{render_report_with_plugins, ReportArtifact, ReportRequest};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use hprof::test_fixtures;

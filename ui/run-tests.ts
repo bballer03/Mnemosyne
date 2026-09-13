@@ -5,6 +5,7 @@ const bunExecutable = process.execPath;
 const testBatches = [
   [
     "src/lib/analysis-types.test.ts",
+    "src/lib/diff-types.test.ts",
     "src/app/App.test.tsx",
     "src/features/leak-workspace/LeakSourceMapPage.test.tsx",
     "src/features/leak-workspace/LeakFixPage.test.tsx",
@@ -18,6 +19,14 @@ const testBatches = [
     "src/features/dashboard/components/LeakTable.test.tsx",
   ],
   [
+    // Split off from the batch below (M14 Slice 14.C): running all of
+    // heap-explorer + comparison + the new artifact-explorer/thread panels
+    // in a single `bun test` process reliably triggers a V8 "RangeError:
+    // Out of memory" partway through (reproduced independently of this
+    // slice's changes -- `ObjectInspectorPanel.test.tsx`, untouched by this
+    // slice, passes cleanly in isolation but OOMs when combined with 20
+    // other heavy React-Router-rendering suites in one process). Splitting
+    // keeps `bun run test` a reliable CI-equivalent gate rather than a flake.
     "src/features/heap-explorer/heap-explorer-query-client.test.ts",
     "src/features/heap-explorer/HeapObjectInspectorPage.test.tsx",
     "src/features/heap-explorer/HeapExplorerLayout.test.tsx",
@@ -28,8 +37,38 @@ const testBatches = [
     "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
     "src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx",
     "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
+  ],
+  [
     "src/features/heap-explorer/components/ModeRail.test.tsx",
     "src/features/heap-explorer/components/QueryConsolePanel.test.tsx",
+    "src/features/comparison/comparison-bridge-client.test.ts",
+    "src/features/comparison/MatchQualityBadge.test.tsx",
+    "src/features/comparison/ObjectDeltaTable.test.tsx",
+    "src/features/comparison/ComparisonPicker.test.tsx",
+    "src/features/comparison/ComparisonPage.test.tsx",
+    "src/features/artifact-explorer/components/ReferrerPanel.test.tsx",
+    "src/features/artifact-explorer/components/ClassloaderExplorerPanel.test.tsx",
+    "src/features/heap-explorer/components/ThreadExplorerPanel.test.tsx",
+    "src/features/heap-explorer/HeapThreadsPage.test.tsx",
+  ],
+  [
+    // New batch for M14 Slice 14.D (AI-guided landing + workflow cards +
+    // persistent top-nav). Kept separate from the batches above rather than
+    // appended to one of them -- per this repo's own OOM precedent (see the
+    // comment on the batch above, from Slice 14.C), several of these suites
+    // mount the full `routes` tree via `createMemoryRouter`/`RouterProvider`
+    // (`TopNav.test.tsx`'s reachability tests walk every power route), which
+    // is exactly the kind of heavy React-Router rendering that has
+    // previously tipped a combined batch into a V8 OOM.
+    "src/app/TopNav.test.tsx",
+    "src/features/workflow-landing/workflow-bridge-client.test.ts",
+    "src/features/workflow-landing/natural-language-router.test.ts",
+    "src/features/workflow-landing/WorkflowCard.test.tsx",
+    "src/features/workflow-landing/TriageSummaryCard.test.tsx",
+    "src/features/workflow-landing/WorkflowCards.test.tsx",
+    "src/features/workflow-landing/NaturalLanguageInputBar.test.tsx",
+    "src/features/workflow-landing/RecentHeapsList.test.tsx",
+    "src/features/workflow-landing/GuidedLanding.test.tsx",
   ],
 ];
 

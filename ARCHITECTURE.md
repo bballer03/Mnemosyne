@@ -51,7 +51,7 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **Parser:** `core::hprof::parser` streams HPROF headers/records for record-summary stats, `core::hprof::overview` provides the bounded-memory class-resolved overview path used for large-dump triage, and `core::hprof::binary_parser` parses binary heap records into an object graph for deep graph-backed analysis.
 - **HPROF tag catalog:** `core::hprof::tags` centralizes top-level record tags, heap-dump sub-record tags, and `tag_name()` so streaming parsing, binary parsing, synthetic fixtures, and GC-path traversal share one source of truth.
 - **Object-graph foundation:** `core::hprof::object_graph` defines the canonical heap-object, class, field-descriptor, GC-root, stack-trace, and stack-frame types, and the graph-backed parser now populates them for instances, arrays, roots, parsed `STACK_TRACE` / `STACK_FRAME` records, and opt-in retained field bytes controlled by public `ParseOptions`.
-- **CLI:** `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`, except `ci-check`, which uses `--output` for its policy-gate artifacts, and `flamegraph`, which requires `-o/--output` because the artifact is SVG, folded-stack text, or JSON. `parse`, `analyze`, `ci-check`, and `flamegraph` all use `--mode auto|deep|overview` where appropriate; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. `ci-check` adds `--policy`, `--format text|json|junit|github-actions`, and `--fail-on info|warning|error|critical`; `flamegraph` adds `--root dominator|class-hierarchy|gc-root-path`, `--format svg|folded-stack|json`, `--min-fraction`, `--title`, and `--max-frames`, and exits `5` when the user requests or auto-resolves to overview mode; the `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
+- **CLI:** `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `query`, `gc-path`, `explain`, `chat`, `fix`, `snapshot`, `serve`, and `config` all call the shared core. Reports emit via stdout or `--output-file`, except `ci-check`, which uses `--output` for its policy-gate artifacts, and `flamegraph`, which requires `-o/--output` because the artifact is SVG, folded-stack text, or JSON. `parse`, `analyze`, `ci-check`, and `flamegraph` all use `--mode auto|deep|overview` where appropriate; `auto` resolves by file size with a 4 GiB default threshold that can be overridden via `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`, while `overview` switches to graph-free streaming triage. `ci-check` adds `--policy`, `--format text|json|junit|github-actions`, and `--fail-on info|warning|error|critical`; `flamegraph` adds `--root dominator|class-hierarchy|gc-root-path`, `--format svg|folded-stack|json`, `--min-fraction`, `--title`, and `--max-frames`, and exits `5` when the user requests or auto-resolves to overview mode; the `analyze` command still accepts `--group-by class|package|classloader`, `--threads`, `--strings`, `--collections`, `--top-instances`, `--top-n`, and `--min-capacity`; `chat` now starts a CLI-only leak-focused conversation session that analyzes once, shows the top 3 leak candidates, and supports `/focus <leak-id>`, `/list`, `/help`, and `/exit`; `leaks` now prints an explicit zero-result confirmation; and `diff` now prints class-level retained deltas when graph-backed diffing succeeds.
 - **Query engine:** `core::query` now carries the targeted M7-4 parity slice on top of the earlier OQL foundation: built-in pseudo-attributes `@retainedSize`, `@toString`, and `@gcRootPath`; `LIKE` / `CONTAINS`; `OBJECTS` single-hop projection; `IS NULL` / `IS NOT NULL`; and single-quoted string literals. `core::query::synth` owns synthetic string rendering so the query layer can decode real `java.lang.String` contents when field data is available and fall back honestly elsewhere.
 - **Shared GC-root-path helper:** `core::graph::gc_root_path` now owns the shortest-path helper reused by both `core::query` and `core::report::flamegraph::collapse::gc_root_path`, keeping `@gcRootPath` query output and GC-root-path flamegraph collapse byte-identical.
 - **Analysis modes:** `AnalysisMode::{Auto, Deep, Overview}` is now shared across CLI, MCP, the analysis engine, and report rendering. Deep mode keeps the v0.2.0 object-graph pipeline, while overview mode is streaming, bounded-memory, and explicitly limited to approximate shallow-size triage without dominators, retained sizes, or leak suspects.
@@ -59,6 +59,12 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 - **MCP:** `parse_heap` and `analyze_heap` now accept optional `mode: "auto"|"deep"|"overview"`; overview responses carry a `"mode": "overview"` discriminator and return the streaming overview summary instead of pretending to be a deep `AnalyzeResponse`. Failures keep the legacy string `error` field and also attach machine-readable `error_details`, including structured `feature_unavailable_in_overview_mode` details when deep-only query features are evaluated without a deep graph.
 - **Leak analysis:** `detect_leaks()` and `analyze_heap()` both attempt object-graph → dominator → retained-size analysis first, then fall back to heuristics with `ProvenanceKind::Fallback` markers when graph parsing fails. The graph-backed path now ranks suspects using retained/shallow ratio, accumulation-point detection, dominated counts, short reference chains, and a composite score.
 - **Graph metrics + investigation analyzers:** `analyze_heap()` surfaces real dominator entries with retained sizes from the object graph, grouped histograms, unreachable-object summaries, and optional thread/string/collection/top-instance reports. `ParseOptions { retain_field_data: true }` is only enabled when those field-reading investigation analyzers are requested, while default `analyze_heap()`, `detect_leaks()`, and `gc-path` runs stay on the lean parser path. `diff_heaps()` now augments the existing record-level diff with optional class-level deltas when both snapshots build object graphs.
+- **Reachability & references deep dive (M8):** `core::graph::gc_path` gained `AllPathsRequest` / `find_all_gc_paths()`, reusing the existing BFS/fallback machinery but enumerating a bounded frontier (shared `max_paths` budget, default 20) instead of stopping at the first hit; the existing `path` field on `GcPathResult` is untouched, with results landing in a new optional `all_paths` field, so default `gc-path` output stays byte-identical. New sibling analyzers `core::analysis::referrers` (`analyze_by_referrer()`, ranks objects by incoming-reference count) and `core::analysis::inspector` (`inspect_object()`, a thin composition over existing `ObjectGraph`/`DominatorTree` accessors plus the typed field reader) back `mnemosyne analyze --by-referrer` and the new `mnemosyne inspect` subcommand / MCP `inspect_object` tool respectively; the inspector's ref fields are structured `ObjectRef { object_id, class_name }` rather than baked strings. `core::report::inspect` is a new small renderer family (text/json/toon) alongside `core::report::diff`. `core::analysis::thread` now cross-references `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` GC roots into per-frame `FrameLocal` entries, surfaced as `local:`/`jni-local:` lines under `analyze --threads`. See [docs/design/milestone-8-reachability-references.md](docs/design/milestone-8-reachability-references.md).
+- **Object-level heap diff (M10):** `core::diff` is now the single home for heap-diff logic. `core::diff::run_diff()` dispatches on `DiffMode::{Class, Object}`; class mode delegates to the lifted, behavior-identical `core::diff::class`, while object mode builds `(ObjectGraph, DominatorTree)` pairs for both dumps and fingerprints instances via `core::diff::object::fingerprint` under one of three `IdentityStrategy` values (`class+retained`, `class+dominator` default, `full-fingerprint`). The engine pairs fingerprints across snapshots into `added` / `removed` / `retained_changed` `ObjectDelta` sections, reports a `MatchQuality` collision-rate envelope, and is bounded by `MAX_OBJECT_DIFF_FINGERPRINTS` plus an `--object-diff-min-retained` floor to keep peak RSS within budget on multi-GB dumps. `mnemosyne-cli diff --mode object` and MCP `diff_heaps` (`mode: "object"`) both reuse this path; `--mode class` (the default) remains byte-identical to v0.3.0. Renderers live under `core::report::diff::{text,json,toon}`. See [docs/design/milestone-8-1-object-level-diff.md](docs/design/milestone-8-1-object-level-diff.md).
+- **`ci-check` object-growth predicate + leak-progression cross-reference (M10-B):** `core::policy::evaluate()` gains an additive `object_diff: Option<&ObjectDiffReport>` parameter (every pre-existing call site passes `None`; all ten prior predicates are byte-identical), feeding the new class-scoped, two-heap `Predicate::ObjectGrowthThreshold` (`object_growth_threshold`, 12th predicate, `core::policy::eval`) -- the first predicate scoped to a specific class and the first that cannot be evaluated from a single `AnalyzeResponse`/`OverviewSummary`. `mnemosyne-cli ci-check --baseline <BEFORE_HEAP>` runs a `DiffMode::Object` diff once, up front, when the loaded policy contains such a rule, refusing loudly with a structured `object_growth_threshold_requires_baseline` error (exit code 2) when `--baseline` is absent rather than silently skipping. Separately, `core::diff::object::annotate_leak_progression()` matches `ObjectDelta.class_name` against `detect_leaks()` suspects on the after-heap, populating a new additive `ObjectDelta.leak_severity: Option<LeakSeverity>` field, gated behind a new `DiffRequest.cross_reference_leaks: bool` (default `false`) and CLI `diff --mode object --cross-reference-leaks`; the text renderer appends a `[LEAK: <severity>]` suffix to annotated `added`/`retained_changed` lines. MCP wiring for both flags is deferred. See [docs/design/milestone-10-b-object-growth-policy.md](docs/design/milestone-10-b-object-growth-policy.md).
+- **MCP workflow suite (M11):** new top-level `core::workflow` module (sibling of `analysis`/`diff`/`policy`/`snapshot`/`mcp`) ships four `WorkflowKind` variants as small orchestration state machines over existing, already-tested primitives -- zero new heap-analysis logic anywhere in this module. `TriageMemoryLeak` (`detect` → `investigate_suspect` → `explain` → `propose_fix` → `complete`) composes `detect_leaks`/`find_all_gc_paths`/`analyze_by_referrer`/AI insight generation; `TuneGc` (`root_kind_breakdown` → `thread_local_review` → `top_retainers` → `complete`) is a diagnostic-only GC-root retention review that never touches a live JVM, its own `describe_workflow` text says so explicitly; `TraverseObjectGraph` (`inspect` ⇄ `choose_direction` → `complete`) is the one kind with a real caller-driven branch point, rejecting a `choose_direction` id that wasn't actually offered by the prior `inspect` step; `CompareSnapshots` (`resolve_snapshots` → `diff` → `complete`) composes `core::snapshot::SnapshotStore` (M9) and `core::diff::run_diff()`/`DiffMode::Object` (M10). `WorkflowStore` mirrors `core::mcp::session::McpSessionStore`'s exact persistence shape (atomic `.tmp`-then-rename write, `schema_version: u32`) -- its third consumer in this crate. `core::mcp::server` registers five new tools -- `describe_workflow`, `start_workflow`, `next_step`, `get_workflow`, `close_workflow` -- mirroring the existing AI-session lifecycle tool shape (`create_ai_session`/`resume_ai_session`/`get_ai_session`/`close_ai_session`/`chat_session`), with four structured error codes (`workflow_not_found`, `workflow_corrupt`, `workflow_step_input_mismatch`, `workflow_already_complete`) through the standard `error_details` envelope. `MNEMOSYNE_WORKFLOW_DIR` overrides the on-disk store root -- no `[workflow].directory` config key shipped, the same env-only pattern `MNEMOSYNE_SNAPSHOT_DIR` already established in M9. See [docs/design/milestone-11-mcp-workflow-suite.md](docs/design/milestone-11-mcp-workflow-suite.md) and [docs/mcp-workflows.md](docs/mcp-workflows.md) (worked transcripts for all four kinds).
+- **Classloader explorer & leak detection (M13):** `core::analysis::classloader` is extended, not replaced. Alongside the pre-existing single-loader `potential_leaks` heuristic (M3 Phase 3), new `detect_duplicate_classes(graph)` groups `graph.classes` by normalized class name and keeps only names declared by 2+ distinct `class_loader_id` values -- MAT's "Duplicate Classes" report shape and the actual defining pattern of the classic Tomcat/Jetty/Spring hot-redeploy leak. `ClassLoaderReport` gains `duplicate_classes: Vec<DuplicateClassGroup>` as a new field; `potential_leaks` is untouched -- both signals ship permanently, neither replaces the other. `ClassLoaderInfo` gains `unique_class_count` and `ancestor_chain: Vec<ObjectId>` (new `resolve_loader_chain()`, bounded depth 16 with a visited-set cycle guard against adversarial/malformed HPROF `parent` cycles), both derived from the same single grouping pass that builds `duplicate_classes`. `core::policy` gains the deep-only `classloader_leak_count` predicate (`core::policy::eval`, threshold on `duplicate_classes.len()`), and `core::mcp::server` gains the standalone `detect_classloader_leaks` tool (mirrors why `diff_heaps` exists as its own tool rather than folding into `analyze_heap`). CLI `analyze --classloaders` (no new flag) prints a new "Duplicate classes across loaders" section (non-empty only) and an "Ancestors" column on the per-loader table. See [docs/design/milestone-13-classloader-explorer.md](docs/design/milestone-13-classloader-explorer.md).
+- **Snapshot persistence / parse-once-query-many (M9):** new top-level `core::snapshot` module (sibling of `analysis`/`diff`/`policy`/`report`, not nested under `hprof` or `mcp`) serializes an already-parsed `(ObjectGraph, DominatorTree)` pair to disk so a later invocation can skip the HPROF binary parse entirely. `DominatorTree` gained `Serialize`/`Deserialize` derives (mechanical, no algorithm change). `SnapshotStore` mirrors `core::mcp::session::McpSessionStore`'s exact persistence shape — atomic `.tmp`-then-rename write, `schema_version: u32` convention — and is keyed by heap-file SHA-256, stored as flat `<sha256>.json` files under `dirs::cache_dir()/mnemosyne` (`MNEMOSYNE_SNAPSHOT_DIR` override). `SnapshotStore::load` (silent `snapshot_not_found`/`snapshot_corrupt` only) and `SnapshotStore::find_fresh_for_heap` (silent `Ok(None)` on any staleness, for auto-discovery) are split from `SnapshotStore::load_checked` (loud `snapshot_schema_mismatch`/`snapshot_stale_source`, for explicit `--snapshot <key>` / MCP `snapshot` param usage) — the CLI `mnemosyne snapshot save|load|list|rm` subcommand and additive `--snapshot`/`--refresh` flags on `analyze`/`leaks`/`gc-path`/`inspect`/`query` (new exit codes `10`-`13`) and MCP `open_snapshot`/`list_snapshots` plus an additive `snapshot` param on `analyze_heap`/`parse_heap`/`find_gc_path`/`inspect_object`/`query_heap` all build on this split. M8's analyzer outputs (`ReferrerReport`, `ObjectInspection`, `FrameLocal`s) are deliberately not precomputed into the snapshot payload — they stay on-demand computations over the loaded graph. See [docs/design/milestone-9-snapshot-persistence.md](docs/design/milestone-9-snapshot-persistence.md).
 - **Flame graph reporting:** `core::analysis::analyze_heap_with_graph()` now gives deep-mode callers a stable way to retrieve `AnalyzeResponse`, `ObjectGraph`, and `DominatorTree` together without widening the serialized `AnalyzeResponse` contract. `core::report::flamegraph` then collapses those graph internals into dominator, class-hierarchy, or GC-root-path folded stacks and renders SVG through `inferno` 0.11.x (CDDL-1.0), plus folded-stack text and a JSON envelope.
 - **GC path helper:** `core::graph::gc_path` uses a triple fallback: (1) full `ObjectGraph` BFS via `trace_on_object_graph()`, (2) budget-limited `GcGraph` parsing, (3) synthetic path generation. Edge labels preserve field names when available.
 - **Navigation API:** `core::hprof::object_graph` now exposes `get_object(id)`, `get_references(id)`, and `get_referrers(id)` for programmatic heap exploration.
@@ -98,17 +104,26 @@ core/
    │   └── test_fixtures.rs
    ├── graph/              # Object graph analysis domain
    │   ├── mod.rs
-   │   ├── dominator.rs
-   │   ├── gc_path.rs
+   │   ├── dominator.rs    # M9: DominatorTree now derives Serialize/Deserialize
+   │   ├── gc_path.rs      # M8: extended with AllPathsRequest / find_all_gc_paths()
    │   └── metrics.rs      # Graph metrics / summaries (was graph.rs)
    ├── analysis/           # Leak detection + AI orchestration
    │   ├── mod.rs
    │   ├── engine.rs       # Analysis engine + analyze_heap_with_graph()
-   │   ├── thread.rs       # Thread inspection + stack trace correlation
+   │   ├── thread.rs       # Thread inspection + stack trace correlation; M8: FrameLocal cross-reference
    │   ├── string_analysis.rs # Duplicate strings + top strings by size
    │   ├── collection.rs   # HashMap/ArrayList/etc. waste inspection
    │   ├── top_instances.rs # Largest-instance ranking
+   │   ├── referrers.rs    # M8: group-by-referrer analyzer
+   │   ├── inspector.rs    # M8: single-object inspection (ObjectInspection)
+   │   ├── classloader.rs  # M3 potential_leaks heuristic; M13: duplicate_classes, unique_class_count, ancestor_chain
    │   └── ai.rs
+   ├── diff/               # Heap diff (class-level + M10 object-level)
+   │   ├── mod.rs          # DiffMode, DiffRequest, run_diff()
+   │   ├── class.rs         # Lifted class-level diff (byte-identical to pre-M10)
+   │   └── object/          # Fingerprint-based object identity + diff engine
+   │      ├── fingerprint.rs, dominator_chain.rs, field_signature.rs
+   │      ├── reference_chain.rs, match_quality.rs, engine.rs, types.rs
    ├── policy/             # CI regression policy engine
    │   ├── mod.rs
    │   ├── eval.rs
@@ -121,6 +136,8 @@ core/
    ├── report/             # Report rendering
    │   ├── mod.rs
    │   ├── renderer.rs     # Analyze-report rendering (was report.rs)
+   │   ├── inspect/         # M8: mnemosyne inspect renderer family
+   │   │   ├── mod.rs, text.rs, json.rs, toon.rs
    │   └── flamegraph/     # Flame graph rendering + folded-stack projection
    │      ├── mod.rs
    │      ├── types.rs
@@ -130,54 +147,78 @@ core/
    ├── fix/                # Fix generation
    │   ├── mod.rs
    │   └── generator.rs    # Was fix.rs
+   ├── snapshot/           # M9: parse-once-query-many snapshot cache
+   │   └── mod.rs          # SnapshotManifest, SnapshotPayload, SnapshotStore
+   ├── workflow/           # M11: stateful MCP workflow orchestration
+   │   ├── mod.rs           # WorkflowKind, WorkflowState, WorkflowStore (3rd
+   │   │                    # McpSessionStore-shaped store), describe()/start()/advance()
+   │   ├── triage_memory_leak.rs
+   │   ├── tune_gc.rs
+   │   ├── traverse_object_graph.rs
+   │   └── compare_snapshots.rs
    └── mcp/                # MCP server
       ├── mod.rs
-      └── server.rs       # Was mcp.rs
+      ├── session.rs       # McpSessionStore -- M9's snapshot/mod.rs and M11's
+      │                    # workflow/mod.rs both mirror its atomic-write +
+      │                    # schema-versioning shape exactly
+      └── server.rs       # Was mcp.rs; M9: open_snapshot/list_snapshots + snapshot
+                           # param; M11: describe_workflow/start_workflow/next_step/
+                           # get_workflow/close_workflow tool registration
 ```
 
 ## Browser-First UI Layer
 
-> **Status (Apr 2026):** Shipped as M4 with the planned M6 follow-through now delivered: live object references/referrers when a bridge is present, object-to-leak cross-navigation across heap-explorer panes, and an in-repo Tauri desktop scaffold.
+> **Status (Sep 2026):** Shipped as M4, with M6's live-reference/cross-navigation/Tauri-scaffold follow-through, and now M14's UI backend-parity + AI-native redesign: every M8/M9/M10/M13 backend capability that lacked a browser surface now has one (comparison basket, object-inspector chip navigation, GC-path multi-view, referrer/classloader/thread panels, cached-snapshot picker), plus a new AI-guided landing layer built on M11's workflow suite. This section was last substantially updated at M6 and had drifted from the real M14 route/feature-area additions until this pass.
 
-The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail.
+The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail. Per the project's explicit "don't dumb down the product" constraint from M14's brainstorming session, the AI-guided landing is an *accelerator* layered on top of the existing power-user surface, never a replacement for it — every power route stays one click away via the persistent `TopNav`.
 
 ### Route Map
 
+Matches `ui/src/app/router.tsx` exactly.
+
 | Route | Surface | Data source |
 |-------|---------|-------------|
-| `/` | Artifact loader — drop a JSON artifact or pick a file | — |
+| `/` | AI-guided landing — artifact drop (unchanged since M4) + triage summary card, natural-language input bar, workflow cards, recent-heaps picker, persistent power-route nav (M14) | Artifact + Workflow Bridge |
 | `/dashboard` | Triage dashboard — summary strip, leak table, histogram panel, graph metrics | Artifact |
-| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail | Artifact |
+| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail, referrer panel, classloader panel (M14) | Artifact |
+| `/compare` | Comparison basket — pick two artifacts/snapshots, ranked added/removed/retained-changed tables with a match-quality badge (M14) | Artifact (file) + Comparison Bridge |
 | `/heap-explorer/dominators` | Dominator tree browser — retained-size explorer | Artifact |
-| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail, live refs/referrers | Artifact + Bridge |
+| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail, live refs/referrers/dominator context as navigation chips (M14) | Artifact + Bridge |
 | `/heap-explorer/query-console` | OQL query console — runs `query_heap` via host bridge | Bridge |
+| `/heap-explorer/threads` | Thread explorer — per-thread stacks with per-frame local-variable tables (M14) | Artifact |
 | `/leaks/:leakId/overview` | Leak overview — suspect summary backed by artifact | Artifact |
 | `/leaks/:leakId/explain` | AI explanation — routed through host bridge when available | Bridge |
-| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall | Bridge |
+| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall; multi-path list + truncation notice when the bridge supports `findAllGcPaths` (M14) | Bridge |
 | `/leaks/:leakId/source-map` | Source mapping — bridge-backed | Bridge |
 | `/leaks/:leakId/fix` | Fix suggestions — bridge-backed | Bridge |
 
 ### Feature Areas
 
+Matches the current `ui/src/features/` tree exactly.
+
 ```text
 ui/src/features/
-├── artifact-loader/     # Drop zone, artifact parsing, artifact Zustand store
-├── dashboard/           # Triage dashboard components and dashboard store
-├── artifact-explorer/   # Histogram explorer, analyzer rail, bucket detail
-├── heap-explorer/       # Dominator/object/query pages + cross-nav actions
-└── leak-workspace/      # Leak workspace layout, subpages, live-detail bridge
+├── artifact-loader/      # Drop zone, artifact parsing, artifact Zustand store; hosts the M14 guided landing + TopNav on "/"
+├── dashboard/            # Triage dashboard components and dashboard store
+├── artifact-explorer/    # Histogram explorer, analyzer rail, bucket detail, referrer panel (M14), classloader panel (M14)
+├── heap-explorer/        # Dominator/object/query/thread pages + cross-nav actions; object-inspector chip navigation (M14)
+├── leak-workspace/       # Leak workspace layout, subpages, live-detail bridge; GC-path multi-view (M14)
+├── comparison/           # M14: /compare route — picker, match-quality badge, added/removed/retained-changed tables, comparison-store.ts
+└── workflow-landing/     # M14: AI-guided landing composition — triage summary card, natural-language input bar + router, workflow cards, recent-heaps list
 ```
 
 ### Host Bridge Contract
 
-Two optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server):
+Four optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server), each an independent global rather than one shared bridge, since each is scoped to a genuinely different unit of work (one loaded heap, one leak, a before/after snapshot pair, or cross-cutting workflow/snapshot-cache orchestration that doesn't fit any of those shapes):
 
-- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — provides `explainLeak`, `findGcPath`, `mapToCode`, and `proposeFix`
-- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — provides `queryHeap`, `getReferences`, and `getReferrers`
+- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — `queryHeap`, `getReferences`, `getReferrers`, and (M14) `inspectObject(objectId, retainFieldData?)`
+- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — `explainLeak`, `findGcPath`, `mapToCode`, `proposeFix`, and (M14) `findAllGcPaths(objectId, maxPaths?)`
+- `window.__MNEMOSYNE_COMPARISON_BRIDGE__` (M14, new) — `diffObjects(beforeKey, afterKey, options)`, backing the `/compare` route's live-diff path (loading a precomputed `diff --mode object --format json` file remains the primary, bridge-free path)
+- `window.__MNEMOSYNE_WORKFLOW_BRIDGE__` (M14, new) — `describeWorkflow(kind)`, `startWorkflow(kind, params)`, `nextStep(workflowId, input)`, `listSnapshots()`, backing the guided landing's triage card, workflow cards, and recent-heaps list
 
-The current `tauri/` scaffold already injects both bridges via `tauri/src/bridge.ts` and backs them with native commands in `tauri/src/commands.rs`.
+The `tauri/` scaffold currently injects only the first two bridges (`tauri/src/bridge.ts` / `tauri/src/commands.rs`); the M14 comparison and workflow bridges, and the `inspectObject`/`findAllGcPaths` methods on the two original bridges, have no Tauri native-command equivalent yet — wiring them is scoped to M16 (desktop packaging) rather than this milestone, per M14's own explicit scope cap.
 
-When a bridge is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders. Artifact-backed panels always work without any bridge.
+When a bridge or a specific optional method is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders — this holds for every method on every bridge, old and new alike. Artifact-backed panels (dashboard, artifact explorer including the M14 referrer/classloader panels, the M14 thread explorer) always work without any bridge at all.
 
 ### Architecture Diagram
 
@@ -205,11 +246,12 @@ flowchart TD
     end
 
     subgraph UI["Browser-First UI  (ui/)"]
-        LOADER["Artifact Loader"]
+        LOADER["Artifact Loader\n+ AI-Guided Landing (M14)"]
         DASH["Triage Dashboard"]
-        AE["Artifact Explorer"]
-        HE["Heap Explorer"]
-        LW["Leak Workspace"]
+        AE["Artifact Explorer\n+ Referrer/Classloader panels (M14)"]
+        HE["Heap Explorer\n+ Thread view (M14)"]
+        LW["Leak Workspace\n+ GC-path multi-view (M14)"]
+        CMP["Comparison Basket (M14)"]
     end
 
     subgraph External["External"]
@@ -220,10 +262,10 @@ flowchart TD
     HD -->|"hprof input"| CLI
     CLI --> Core
     Core -->|"JSON artifact\n--format json --output-file"| LOADER
-    LOADER --> DASH & AE & HE & LW
+    LOADER --> DASH & AE & HE & LW & CMP
     AI -->|"provider call"| LLM
     MCP --> MCPC
-    MCP -->|"window bridge\n(optional)"| LW & HE
+    MCP -->|"window bridge\n(optional)"| LW & HE & CMP & LOADER
 ```
 
 > **Note:** `resources/architecture-overview.svg` and `resources/architecture.svg` are pre-rendered Mermaid exports that predate the UI layer. The diagram above is the authoritative current architecture. The SVG files can be regenerated from a Mermaid source if needed for export.
@@ -574,9 +616,9 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Support for Additional Formats**: Currently focused on the standard JVM HPROF format, Mnemosyne could be extended to support other heap or memory snapshot formats. For example, Android .hprof files (which are similar but not identical), or IBM/OpenJ9 heap dumps, etc. The parser component can be augmented or new parser modules added for these formats.
 
-**Browser-First UI (shipped, M4 + M6 follow-through)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer, heap explorer (dominators, object inspector, query console), and the full leak workspace route family. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers whenever a host bridge is present.
+**Browser-First UI (shipped, M4 + M6 follow-through + M14 backend-parity/AI-native redesign)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer (with referrer and classloader panels), heap explorer (dominators, object inspector, query console, thread view), the full leak workspace route family (with GC-path multi-view), a comparison basket for object-level diffs, and an AI-guided landing page built on the M11 workflow suite. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers/dominator context (as clickable chips) whenever a host bridge is present. Every M8–M13 backend capability that previously lacked a browser surface now has one; see "Browser-First UI Layer" above for the full route map.
 
-**Desktop distribution hardening (post-M6)**: `tauri/` already wraps the shared `ui/` React frontend and injects both host bridges through native commands. The remaining follow-on work is release-grade packaging, signing, and distribution only if native desktop delivery proves worth the added complexity.
+**Desktop distribution hardening (M16, not yet started)**: `tauri/` already wraps the shared `ui/` React frontend and injects the two pre-M14 host bridges through native commands. M14 added two further bridges (comparison, workflow) and two further methods on the original two (`inspectObject`, `findAllGcPaths`) with no Tauri native-command equivalent yet — wiring those, plus release-grade packaging, signing, and distribution, is M16's scope.
 
 **Deeper JVM Integration**: In the future, Mnemosyne might integrate with live JVMs via JMX or JVMTI. Instead of requiring a heap dump file, it could connect to a running application (given proper credentials) and trigger a heap dump or even query memory structures in real-time. This would make it more of a live monitoring tool. Combined with the AI, it could act as a continuous memory assistant, not just post-mortem analysis.
 

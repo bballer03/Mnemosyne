@@ -134,6 +134,8 @@ fn predicate_name(predicate: Predicate) -> &'static str {
         Predicate::LeakCount => "leak_count",
         Predicate::RetainedSize => "retained_size",
         Predicate::DominatorRootCount => "dominator_root_count",
+        Predicate::ClassloaderLeakCount => "classloader_leak_count",
+        Predicate::ObjectGrowthThreshold => "object_growth_threshold",
     }
 }
 

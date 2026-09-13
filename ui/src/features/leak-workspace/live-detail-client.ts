@@ -31,6 +31,23 @@ export type GcPathResult = {
   provenance?: ArtifactProvenanceMarker[];
 };
 
+/// M14 Slice 14.B: multi-path GC-root enumeration, additive alongside
+/// `GcPathResult` above -- mirrors core's `GcPathResult.all_paths` /
+/// `truncated` fields (`core::graph::gc_path`), which are themselves
+/// additive on top of the existing single-`path` shape (see that struct's
+/// own doc comments). `path`/`path_length` are kept here too so a caller
+/// that only wants "the shortest path" doesn't need special-casing between
+/// the single-path and all-paths result types.
+export type AllGcPathsResult = {
+  leak_id: string;
+  object_id: string;
+  path: GcPathNode[];
+  path_length: number;
+  all_paths: GcPathNode[][];
+  truncated: boolean;
+  provenance?: ArtifactProvenanceMarker[];
+};
+
 export type SourceMapLocation = {
   file: string;
   line: number;
@@ -71,6 +88,13 @@ export type FindLeakGcPathInput = {
   objectId?: string;
 };
 
+export type FindAllLeakGcPathsInput = {
+  leakId: string;
+  heapPath: string;
+  objectId?: string;
+  maxPaths?: number;
+};
+
 export type ResolveLeakSourceMapInput = {
   leakId: string;
   className: string;
@@ -96,6 +120,7 @@ export type LeakWorkspaceHostBridge = {
   findGcPath?: (input: FindLeakGcPathInput) => Promise<unknown>;
   mapToCode?: (input: ResolveLeakSourceMapInput) => Promise<unknown>;
   proposeFix?: (input: ProposeLeakFixInput) => Promise<unknown>;
+  findAllGcPaths?: (objectId: string, maxPaths?: number) => Promise<unknown>;
 };
 
 declare global {
@@ -218,6 +243,51 @@ function parseGcPathResult(value: unknown, leakId: string): GcPathResult {
   };
 }
 
+function parseGcPathNodeList(value: unknown, field: string): GcPathNode[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid leak workspace bridge payload: expected ${field} to be an array.`);
+  }
+
+  return value.map((node, index) => {
+    if (!isRecord(node)) {
+      throw new Error(`Invalid leak workspace bridge payload: expected ${field}[${index}] to be an object.`);
+    }
+
+    return {
+      object_id: readString(node.object_id, `${field}[${index}].object_id`),
+      class_name: readString(node.class_name, `${field}[${index}].class_name`),
+      via: readOptionalString(node.field, `${field}[${index}].field`),
+      is_root: readOptionalBoolean(node.is_root, `${field}[${index}].is_root`),
+    } satisfies GcPathNode;
+  });
+}
+
+function parseAllGcPathsResult(value: unknown, leakId: string): AllGcPathsResult {
+  if (!isRecord(value)) {
+    throw new Error("Invalid leak workspace bridge payload: all-paths gc-path result must be an object.");
+  }
+
+  const allPaths = value.all_paths === undefined || value.all_paths === null
+    ? []
+    : (() => {
+        if (!Array.isArray(value.all_paths)) {
+          throw new Error("Invalid leak workspace bridge payload: allGcPaths.all_paths must be an array.");
+        }
+
+        return value.all_paths.map((path, index) => parseGcPathNodeList(path, `allGcPaths.all_paths[${index}]`));
+      })();
+
+  return {
+    leak_id: leakId,
+    object_id: readString(value.object_id, "allGcPaths.object_id"),
+    path: parseGcPathNodeList(value.path, "allGcPaths.path"),
+    path_length: readNumber(value.path_length, "allGcPaths.path_length"),
+    all_paths: allPaths,
+    truncated: readOptionalBoolean(value.truncated, "allGcPaths.truncated") ?? false,
+    provenance: readProvenance(value.provenance, "allGcPaths.provenance"),
+  };
+}
+
 function parseSourceMapResult(value: unknown): SourceMapResult {
   if (!isRecord(value)) {
     throw new Error("Invalid leak workspace bridge payload: source-map result must be an object.");
@@ -283,9 +353,15 @@ function getLeakWorkspaceHostBridge(): LeakWorkspaceHostBridge | undefined {
   return window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__;
 }
 
+export function isFindAllGcPathsAvailable(): boolean {
+  return Boolean(getLeakWorkspaceHostBridge()?.findAllGcPaths);
+}
+
 export function getLeakWorkspaceBridgeStatus(): LeakWorkspaceBridgeStatus {
   const bridge = getLeakWorkspaceHostBridge();
-  const hasBridgeMethods = Boolean(bridge?.explainLeak || bridge?.findGcPath || bridge?.mapToCode || bridge?.proposeFix);
+  const hasBridgeMethods = Boolean(
+    bridge?.explainLeak || bridge?.findGcPath || bridge?.mapToCode || bridge?.proposeFix || bridge?.findAllGcPaths,
+  );
 
   if (!bridge || !hasBridgeMethods) {
     return {
@@ -308,6 +384,13 @@ export function normalizeExplainResult(input: ExplainResult): LiveDetailResult<E
 }
 
 export function normalizeGcPathResult(input: GcPathResult): LiveDetailResult<GcPathResult> {
+  return {
+    status: hasFallbackProvenance(input.provenance) ? "fallback" : "ready",
+    data: input,
+  };
+}
+
+export function normalizeAllGcPathsResult(input: AllGcPathsResult): LiveDetailResult<AllGcPathsResult> {
   return {
     status: hasFallbackProvenance(input.provenance) ? "fallback" : "ready",
     data: input,
@@ -391,6 +474,45 @@ export async function findLeakGcPath(
     return {
       status: "error",
       error: error instanceof Error ? error.message : "GC path bridge request failed.",
+    };
+  }
+}
+
+export async function findAllLeakGcPaths(
+  input: FindAllLeakGcPathsInput,
+): Promise<LiveDetailResult<AllGcPathsResult>> {
+  if (!input.objectId) {
+    return {
+      status: "unavailable",
+      data: {
+        leak_id: input.leakId,
+        object_id: "",
+        path: [],
+        path_length: 0,
+        all_paths: [],
+        truncated: false,
+      },
+    };
+  }
+
+  const bridge = getLeakWorkspaceHostBridge();
+
+  if (!bridge?.findAllGcPaths) {
+    return {
+      status: "unavailable",
+      error: "Local multi-path GC bridge is unavailable.",
+    };
+  }
+
+  try {
+    const raw = await bridge.findAllGcPaths(input.objectId, input.maxPaths);
+    const parsed = parseAllGcPathsResult(raw, input.leakId);
+
+    return normalizeAllGcPathsResult(parsed);
+  } catch (error: unknown) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Multi-path GC bridge request failed.",
     };
   }
 }

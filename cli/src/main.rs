@@ -18,15 +18,22 @@ use config_loader::{load_app_config, ConfigOrigin, LoadedConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, analyze_heap_with_graph, detect_leaks, focus_leaks,
-        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AnalysisMode,
-        AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity, ProvenanceKind,
-        OVERVIEW_AUTO_THRESHOLD_BYTES,
+        analyze_heap, analyze_heap_capturing_graph, analyze_heap_from_graph,
+        analyze_heap_with_graph, detect_leaks_from_graph, detect_leaks_with_graph, focus_leaks,
+        generate_ai_chat_turn_async, generate_ai_insights_async, inspect_object, validate_leak_id,
+        AnalysisMode, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, LeakInsight, LeakKind,
+        LeakSeverity, ProvenanceKind, OVERVIEW_AUTO_THRESHOLD_BYTES,
     },
     config::{AnalysisProfile, AppConfig, OutputFormat},
     fix::{propose_fix_with_config, FixRequest, FixStyle},
-    graph::{find_gc_path, GcPathRequest, HistogramGroupBy},
-    hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, HeapSummary, OverviewOptions},
+    graph::{
+        enumerate_gc_paths, find_all_gc_paths, find_gc_path, resolve_live_instances_by_class,
+        AllPathsRequest, DominatorTree, GcPathNode, GcPathRequest, GcPathResult, HistogramGroupBy,
+    },
+    hprof::{
+        parse_heap, parse_hprof_overview_file, HeapParseJob, HeapSummary, ObjectGraph,
+        OverviewOptions,
+    },
     mapper::{map_to_code, MapToCodeRequest},
     mcp::{serve, McpServerOptions},
     parse_hprof_file_with_options,
@@ -41,10 +48,12 @@ use mnemosyne_core::{
             collapse as collapse_flamegraph, render as render_flamegraph, CollapseOptions,
             FlameFormat, FlameRoot,
         },
+        inspect::{render as render_inspect_report, Format as InspectRenderFormat},
         render_overview_report, render_report, ReportArtifact, ReportRequest,
     },
-    CoreError, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy, PolicyInput,
-    Severity as PolicySeverity,
+    snapshot::{SnapshotManifest, SnapshotPayload, SnapshotStore, SNAPSHOT_SCHEMA_VERSION},
+    CoreError, CoreResult, DiffMode, DiffRequest, IdentityStrategy, ParseOptions, Policy,
+    PolicyInput, Predicate, Severity as PolicySeverity,
 };
 use tokio::signal;
 use tracing::{info, warn};
@@ -83,6 +92,8 @@ enum Commands {
     Map(MapArgs),
     /// Find a path from an object to its GC root.
     GcPath(GcPathArgs),
+    /// Inspect a single object: fields, refs in/out, dominator context.
+    Inspect(InspectArgs),
     /// Execute an OQL-style query against the heap graph, including retained instance fields on query paths.
     Query(QueryArgs),
     /// Generate AI explanations for a leak candidate.
@@ -93,6 +104,9 @@ enum Commands {
     Fix(FixArgs),
     /// Start the Model Context Protocol (MCP) server.
     Serve(ServeArgs),
+    /// Manage the parse-once-query-many snapshot cache.
+    #[command(subcommand)]
+    Snapshot(SnapshotCommand),
     /// Show the effective configuration.
     Config,
 }
@@ -104,6 +118,24 @@ struct ParseArgs {
     mode: ModeArg,
 }
 
+/// `--snapshot`/`--refresh` flags shared by every command that currently
+/// calls the binary HPROF parser directly (`analyze`, `leaks`, `gc-path`,
+/// `inspect`, `query`). Flattened into each command's args so the flags
+/// have identical names/help text everywhere (M9 Slice 9.C).
+#[derive(Args, Debug, Clone)]
+struct SnapshotFlags {
+    /// Load exactly this cached snapshot (SHA-256 hash or direct snapshot
+    /// file path) instead of parsing the heap dump. Errors loudly if the
+    /// entry is missing, corrupt, schema-mismatched, or stale relative to
+    /// the given heap file -- never silently falls back to a fresh parse.
+    #[arg(long = "snapshot", value_name = "HASH_OR_PATH")]
+    snapshot: Option<String>,
+    /// Always re-parse the heap dump and overwrite its snapshot cache
+    /// entry, even if a fresh cached snapshot is already available.
+    #[arg(long = "refresh")]
+    refresh: bool,
+}
+
 #[derive(Debug, Parser)]
 struct LeakArgs {
     heap: PathBuf,
@@ -113,6 +145,8 @@ struct LeakArgs {
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
     leak_kind: Vec<LeakKindArg>,
+    #[command(flatten)]
+    snapshot_flags: SnapshotFlags,
 }
 
 #[derive(Debug, Parser)]
@@ -145,6 +179,13 @@ struct AnalyzeArgs {
     /// Show top-N largest instances
     #[arg(long = "top-instances")]
     top_instances: bool,
+    /// Rank objects by incoming reference count ("group by referrer")
+    #[arg(long = "by-referrer")]
+    by_referrer: bool,
+    /// Enable duplicate primitive-array content detection (byte[], char[],
+    /// int[], ...; wasted-memory report, same shape as `--strings`)
+    #[arg(long = "duplicate-arrays")]
+    duplicate_arrays: bool,
     /// Number of results for top-N queries (threads, strings, top-instances)
     #[arg(long = "top-n", default_value_t = 10)]
     top_n: usize,
@@ -155,6 +196,8 @@ struct AnalyzeArgs {
     packages: Vec<String>,
     #[arg(long = "leak-kind", value_enum, value_delimiter = ',')]
     leak_kind: Vec<LeakKindArg>,
+    #[command(flatten)]
+    snapshot_flags: SnapshotFlags,
 }
 
 #[derive(Args, Debug)]
@@ -170,6 +213,10 @@ struct CiCheckArgs {
     output: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = SeverityArg::Error)]
     fail_on: SeverityArg,
+    /// Before-heap for `object_growth_threshold` rules (M10-B). Required
+    /// when the loaded policy contains such a rule; otherwise unused.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -211,6 +258,11 @@ struct DiffArgs {
     object_diff_min_retained: u64,
     #[arg(long)]
     retain_field_data: bool,
+    /// Cross-reference `--mode object` deltas against `detect_leaks()` on
+    /// the after-heap, annotating matches with their leak severity
+    /// (M10-B). Default off; every existing invocation is unaffected.
+    #[arg(long)]
+    cross_reference_leaks: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -228,15 +280,47 @@ struct MapArgs {
 struct GcPathArgs {
     heap: PathBuf,
     #[arg(long = "object-id")]
-    object_id: String,
+    object_id: Option<String>,
     #[arg(long)]
     max_depth: Option<u32>,
+    /// Return every enumerated GC root path (bounded by `--max-paths`)
+    /// instead of only the shortest one.
+    #[arg(long = "all-paths")]
+    all_paths: bool,
+    /// Find all GC root paths for every live instance of this class
+    /// instead of a single `--object-id`. Mutually exclusive with
+    /// `--object-id`.
+    #[arg(long = "by-class", value_name = "CLASS_NAME")]
+    by_class: Option<String>,
+    /// Shared path-enumeration budget across the whole `--all-paths` /
+    /// `--by-class` query (not per-path, not per-instance).
+    #[arg(long = "max-paths", default_value_t = 20)]
+    max_paths: usize,
+    #[command(flatten)]
+    snapshot_flags: SnapshotFlags,
+}
+
+#[derive(Debug, Parser)]
+struct InspectArgs {
+    heap: PathBuf,
+    #[arg(long = "object-id")]
+    object_id: String,
+    /// Populate the fields section with typed instance field values
+    /// (requires re-parsing the heap with field data retained).
+    #[arg(long)]
+    retain_field_data: bool,
+    #[arg(long, value_enum, default_value_t = InspectFormatArg::Text)]
+    format: InspectFormatArg,
+    #[command(flatten)]
+    snapshot_flags: SnapshotFlags,
 }
 
 #[derive(Debug, Parser)]
 struct QueryArgs {
     heap: PathBuf,
     query: String,
+    #[command(flatten)]
+    snapshot_flags: SnapshotFlags,
 }
 
 #[derive(Debug, Parser)]
@@ -276,6 +360,45 @@ struct ServeArgs {
     port: u16,
 }
 
+/// `mnemosyne snapshot save|load|list|rm` -- direct management of the
+/// parse-once-query-many snapshot cache (M9 Slice 9.C), separate from the
+/// additive `--snapshot`/`--refresh` flags on `analyze`/`leaks`/`gc-path`/
+/// `inspect`/`query`.
+#[derive(Subcommand, Debug)]
+enum SnapshotCommand {
+    /// Parse a heap dump and cache its object graph + dominator tree for
+    /// fast re-open by later commands.
+    Save(SnapshotSaveArgs),
+    /// Load a cached snapshot by hash or file path and print its manifest.
+    /// Does not run any analysis -- pairs with `--snapshot` on other
+    /// commands.
+    Load(SnapshotLoadArgs),
+    /// List every snapshot currently in the cache.
+    List,
+    /// Remove a cached snapshot by hash.
+    Rm(SnapshotRmArgs),
+}
+
+#[derive(Debug, Parser)]
+struct SnapshotSaveArgs {
+    heap: PathBuf,
+    /// Override the default cache root for this save only.
+    #[arg(short = 'o', long = "output", value_name = "DIR")]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct SnapshotLoadArgs {
+    /// SHA-256 hash or direct snapshot file path.
+    key: String,
+}
+
+#[derive(Debug, Parser)]
+struct SnapshotRmArgs {
+    /// SHA-256 hash of the snapshot to remove.
+    key: String,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum LeakSeverityArg {
     Low,
@@ -312,6 +435,13 @@ enum OutputFormatArg {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum DiffFormatArg {
+    Text,
+    Json,
+    Toon,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum InspectFormatArg {
     Text,
     Json,
     Toon,
@@ -379,6 +509,7 @@ enum GroupByArg {
     Package,
     #[value(name = "classloader")]
     Classloader,
+    Superclass,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -431,6 +562,16 @@ impl From<DiffFormatArg> for DiffRenderFormat {
             DiffFormatArg::Text => DiffRenderFormat::Text,
             DiffFormatArg::Json => DiffRenderFormat::Json,
             DiffFormatArg::Toon => DiffRenderFormat::Toon,
+        }
+    }
+}
+
+impl From<InspectFormatArg> for InspectRenderFormat {
+    fn from(value: InspectFormatArg) -> Self {
+        match value {
+            InspectFormatArg::Text => InspectRenderFormat::Text,
+            InspectFormatArg::Json => InspectRenderFormat::Json,
+            InspectFormatArg::Toon => InspectRenderFormat::Toon,
         }
     }
 }
@@ -496,6 +637,7 @@ impl From<GroupByArg> for HistogramGroupBy {
             GroupByArg::Class => HistogramGroupBy::Class,
             GroupByArg::Package => HistogramGroupBy::Package,
             GroupByArg::Classloader => HistogramGroupBy::ClassLoader,
+            GroupByArg::Superclass => HistogramGroupBy::Superclass,
         }
     }
 }
@@ -553,11 +695,13 @@ async fn run() -> Result<()> {
         Commands::Diff(args) => handle_diff(args).await?,
         Commands::Map(args) => handle_map(args).await?,
         Commands::GcPath(args) => handle_gc_path(args).await?,
+        Commands::Inspect(args) => handle_inspect(args).await?,
         Commands::Query(args) => handle_query(args).await?,
         Commands::Explain(args) => handle_explain(args, &loaded_config.data).await?,
         Commands::Chat(args) => handle_chat(args, &loaded_config.data).await?,
         Commands::Fix(args) => handle_fix(args, &loaded_config.data).await?,
         Commands::Serve(args) => handle_serve(args, &loaded_config.data).await?,
+        Commands::Snapshot(cmd) => handle_snapshot(cmd).await?,
         Commands::Config => handle_config(&loaded_config)?,
     }
 
@@ -607,14 +751,28 @@ async fn handle_leaks(args: LeakArgs, cfg: &AppConfig) -> Result<()> {
     }
 
     let pb = start_spinner("Detecting leaks...");
-    let leaks = detect_leaks(args.heap.to_string_lossy().as_ref(), options)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to detect leaks from heap dump: {}",
-                args.heap.display()
-            )
-        })?;
+    let heap_path_str = args.heap.to_string_lossy().into_owned();
+    let leaks = match resolve_leaks(
+        &heap_path_str,
+        args.snapshot_flags.snapshot.as_deref(),
+        args.snapshot_flags.refresh,
+        options,
+    )
+    .await
+    {
+        Ok(leaks) => leaks,
+        Err(err) => {
+            if snapshot_exit_code(&err).is_some() {
+                exit_snapshot_with_error(err);
+            }
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to detect leaks from heap dump: {}",
+                    args.heap.display()
+                )
+            });
+        }
+    };
     finish_spinner(&pb, "Leak detection complete.");
     if !leaks.is_empty() {
         println!("{}", bold_label("Potential leaks:"));
@@ -669,6 +827,8 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
     let mut enable_collections = args.collections;
     let mut enable_classloaders = args.classloaders;
     let mut enable_top_instances = args.top_instances;
+    let enable_by_referrer = args.by_referrer;
+    let mut enable_duplicate_arrays = args.duplicate_arrays;
     let mut top_n = args.top_n;
     let mut min_capacity = args.min_capacity;
 
@@ -680,6 +840,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = false;
                 enable_classloaders = false;
                 enable_top_instances = false;
+                enable_duplicate_arrays = false;
                 top_n = 10;
                 min_capacity = 16;
             }
@@ -689,6 +850,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = true;
                 enable_classloaders = true;
                 enable_top_instances = true;
+                enable_duplicate_arrays = true;
                 top_n = top_n.max(15);
                 min_capacity = min_capacity.max(32);
             }
@@ -698,6 +860,7 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 enable_collections = false;
                 enable_classloaders = false;
                 enable_top_instances = true;
+                enable_duplicate_arrays = false;
                 top_n = 5;
                 min_capacity = 64;
             }
@@ -733,8 +896,9 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         pb.println("AI insights enabled...");
     }
 
-    let response = analyze_heap(AnalyzeRequest {
-        heap_path: args.heap.to_string_lossy().into(),
+    let heap_path_str = args.heap.to_string_lossy().into_owned();
+    let analyze_request = AnalyzeRequest {
+        heap_path: heap_path_str.clone(),
         config: config.clone(),
         leak_options,
         enable_ai: use_ai,
@@ -744,12 +908,29 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
         enable_strings,
         enable_collections,
         enable_top_instances,
+        enable_by_referrer,
+        enable_duplicate_arrays,
         top_n,
         min_collection_capacity: min_capacity,
         min_duplicate_count: 2,
-    })
+    };
+    let response = match resolve_analyze_response(
+        &heap_path_str,
+        args.snapshot_flags.snapshot.as_deref(),
+        args.snapshot_flags.refresh,
+        analyze_request,
+    )
     .await
-    .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()))?;
+    {
+        Ok(response) => response,
+        Err(err) => {
+            if snapshot_exit_code(&err).is_some() {
+                exit_snapshot_with_error(err);
+            }
+            return Err(err)
+                .with_context(|| format!("Failed to analyze heap dump: {}", args.heap.display()));
+        }
+    };
     finish_spinner(&pb, "Analysis complete.");
 
     let output_format = config.output.clone();
@@ -771,6 +952,18 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("Top Instances by Size:"));
                 println!("{}", build_top_instances_table(top_instances));
+            }
+
+            if let Some(referrers) = &response.referrer_report {
+                println!();
+                println!(
+                    "{}",
+                    bold_label(&format!(
+                        "Top referenced objects (by incoming reference count, {} considered):",
+                        referrers.total_objects_considered
+                    ))
+                );
+                println!("{}", build_referrer_table(referrers));
             }
 
             if let Some(threads) = &response.thread_report {
@@ -795,6 +988,8 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                 println!();
                 println!("{}", bold_label("ClassLoader Report:"));
                 println!("{}", build_classloader_table(classloaders));
+                print_classloader_duplicates(classloaders);
+                print_classloader_leak_candidates(classloaders);
             }
 
             if let Some(strings) = &response.string_report {
@@ -812,6 +1007,10 @@ async fn handle_analyze(args: AnalyzeArgs, base_config: &AppConfig) -> Result<()
                     format_megabytes(strings.total_duplicate_waste)
                 );
                 println!("{}", build_string_duplicates_table(strings));
+            }
+
+            if let Some(arrays) = &response.array_report {
+                print_array_duplicates(arrays);
             }
 
             if let Some(collections) = &response.collection_report {
@@ -902,6 +1101,8 @@ async fn handle_flamegraph(args: FlameGraphArgs, base_config: &AppConfig) -> Res
         enable_strings: false,
         enable_collections: false,
         enable_top_instances: false,
+        enable_by_referrer: false,
+        enable_duplicate_arrays: false,
         top_n: 10,
         min_collection_capacity: 16,
         min_duplicate_count: 2,
@@ -955,6 +1156,7 @@ async fn handle_diff(args: DiffArgs) -> Result<()> {
             retained_change_threshold: args.retained_change_threshold,
             top_n: args.top,
             retain_field_data: args.retain_field_data,
+            cross_reference_leaks: args.cross_reference_leaks,
         })
         .await
         .with_context(|| {
@@ -1022,10 +1224,50 @@ async fn handle_map(args: MapArgs) -> Result<()> {
 async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
+    if args.snapshot_flags.snapshot.is_some() || args.snapshot_flags.refresh {
+        return handle_gc_path_snapshot(args);
+    }
+
+    if args.all_paths || args.by_class.is_some() {
+        if args.object_id.is_some() && args.by_class.is_some() {
+            anyhow::bail!("--object-id and --by-class are mutually exclusive");
+        }
+        if args.object_id.is_none() && args.by_class.is_none() {
+            anyhow::bail!("--all-paths requires either --object-id or --by-class");
+        }
+
+        let pb = start_spinner("Tracing GC paths...");
+        let request = AllPathsRequest {
+            heap_path: args.heap.to_string_lossy().into(),
+            object_id: args.object_id.clone(),
+            by_class: args.by_class.clone(),
+            max_paths: args.max_paths,
+            max_depth: args.max_depth,
+        };
+
+        match find_all_gc_paths(&request) {
+            Ok(response) => {
+                finish_spinner(&pb, "GC path trace complete.");
+                print_all_gc_paths(&response);
+            }
+            Err(err) => {
+                finish_spinner(&pb, "GC path trace failed.");
+                exit_gc_path_with_error(err);
+            }
+        }
+
+        return Ok(());
+    }
+
+    let object_id = args
+        .object_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--object-id is required"))?;
+
     let pb = start_spinner("Tracing GC path...");
     let response = find_gc_path(&GcPathRequest {
         heap_path: args.heap.to_string_lossy().into(),
-        object_id: args.object_id,
+        object_id,
         max_depth: args.max_depth,
     })
     .with_context(|| {
@@ -1036,6 +1278,168 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
     })?;
     finish_spinner(&pb, "GC path trace complete.");
 
+    print_single_gc_path(&response);
+
+    Ok(())
+}
+
+/// `gc-path` with `--snapshot <key>` / `--refresh` (M9 Slice 9.C): resolves
+/// an `(ObjectGraph, DominatorTree)` pair via [`resolve_object_graph`]
+/// instead of delegating to [`find_gc_path`]/[`find_all_gc_paths`] (which
+/// always re-parse `heap_path` internally with their own tiered
+/// parse/budget/synthetic-fallback strategy -- not applicable once a graph
+/// is already loaded). Builds the same [`GcPathResult`] shape via the
+/// already-public [`enumerate_gc_paths`]/[`resolve_live_instances_by_class`]
+/// helpers `core::graph::gc_path` exposes for exactly this purpose. Only
+/// ever entered when `--snapshot`/`--refresh` is passed, so it cannot
+/// affect the byte-identical no-flags regression path above.
+fn handle_gc_path_snapshot(args: GcPathArgs) -> Result<()> {
+    if args.object_id.is_some() && args.by_class.is_some() {
+        anyhow::bail!("--object-id and --by-class are mutually exclusive");
+    }
+    if args.all_paths && args.object_id.is_none() && args.by_class.is_none() {
+        anyhow::bail!("--all-paths requires either --object-id or --by-class");
+    }
+
+    let pb = start_spinner("Tracing GC path...");
+    let (graph, _dominator) = match resolve_object_graph(
+        &args.heap,
+        args.snapshot_flags.snapshot.as_deref(),
+        args.snapshot_flags.refresh,
+        ParseOptions::default(),
+        false,
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            finish_spinner(&pb, "GC path trace failed.");
+            if snapshot_exit_code(&err).is_some() {
+                exit_snapshot_with_error(err);
+            }
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to trace GC path from heap dump: {}",
+                    args.heap.display()
+                )
+            });
+        }
+    };
+
+    let depth_limit = args.max_depth.unwrap_or(6).clamp(2, 32) as usize;
+
+    if args.all_paths || args.by_class.is_some() {
+        let result = match (&args.object_id, &args.by_class) {
+            (Some(object_id), None) => {
+                let target_id =
+                    parse_inspect_object_id(object_id).filter(|id| graph.objects.contains_key(id));
+                let Some(target_id) = target_id else {
+                    finish_spinner(&pb, "GC path trace failed.");
+                    exit_gc_path_with_error(CoreError::Unsupported(format!(
+                        "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{}'",
+                        args.heap.display()
+                    )));
+                };
+                let (paths, truncated) =
+                    enumerate_gc_paths(&graph, target_id, depth_limit, args.max_paths);
+                let first_path = paths.first().cloned().unwrap_or_default();
+                GcPathResult {
+                    object_id: first_path
+                        .last()
+                        .map(|node| node.object_id.clone())
+                        .unwrap_or_else(|| object_id.clone()),
+                    path_length: first_path.len(),
+                    path: first_path,
+                    provenance: Vec::new(),
+                    all_paths: Some(paths),
+                    truncated,
+                }
+            }
+            (None, Some(class_name)) => {
+                let instances = resolve_live_instances_by_class(&graph, class_name);
+                if instances.is_empty() {
+                    finish_spinner(&pb, "GC path trace failed.");
+                    exit_gc_path_with_error(CoreError::Unsupported(format!(
+                        "gc_path_class_has_no_live_instances: no live instances of class '{class_name}' found in heap dump '{}'",
+                        args.heap.display()
+                    )));
+                }
+
+                let mut all_paths: Vec<Vec<GcPathNode>> = Vec::new();
+                let mut truncated = false;
+                let mut budget = args.max_paths;
+                for (idx, &instance_id) in instances.iter().enumerate() {
+                    if budget == 0 {
+                        truncated = true;
+                        break;
+                    }
+                    let (mut paths, hit_cap) =
+                        enumerate_gc_paths(&graph, instance_id, depth_limit, budget);
+                    if hit_cap {
+                        truncated = true;
+                    }
+                    budget = budget.saturating_sub(paths.len());
+                    all_paths.append(&mut paths);
+                    if budget == 0 && idx + 1 < instances.len() {
+                        truncated = true;
+                    }
+                }
+                let first_path = all_paths.first().cloned().unwrap_or_default();
+                GcPathResult {
+                    object_id: format!("class:{class_name}"),
+                    path_length: first_path.len(),
+                    path: first_path,
+                    provenance: Vec::new(),
+                    all_paths: Some(all_paths),
+                    truncated,
+                }
+            }
+            _ => unreachable!("validated above: exactly one of object_id/by_class is set"),
+        };
+
+        finish_spinner(&pb, "GC path trace complete.");
+        print_all_gc_paths(&result);
+        return Ok(());
+    }
+
+    let object_id = args
+        .object_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--object-id is required"))?;
+    let target_id = parse_inspect_object_id(&object_id).filter(|id| graph.objects.contains_key(id));
+    let Some(target_id) = target_id else {
+        finish_spinner(&pb, "GC path trace failed.");
+        exit_gc_path_with_error(CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{}'",
+            args.heap.display()
+        )));
+    };
+
+    let (paths, _truncated) = enumerate_gc_paths(&graph, target_id, depth_limit, 1);
+    let Some(path) = paths.into_iter().next() else {
+        finish_spinner(&pb, "GC path trace failed.");
+        exit_gc_path_with_error(CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' has no path to a GC root in heap dump '{}'",
+            args.heap.display()
+        )));
+    };
+    finish_spinner(&pb, "GC path trace complete.");
+
+    let response = GcPathResult {
+        object_id: path
+            .last()
+            .map(|node| node.object_id.clone())
+            .unwrap_or(object_id),
+        path_length: path.len(),
+        path,
+        provenance: Vec::new(),
+        all_paths: None,
+        truncated: false,
+    };
+    print_single_gc_path(&response);
+
+    Ok(())
+}
+
+fn print_single_gc_path(response: &GcPathResult) {
     println!("{} {}:", section_label("GC path for"), response.object_id);
     for (idx, node) in response.path.iter().enumerate() {
         let marker = if node.is_root {
@@ -1059,22 +1463,167 @@ async fn handle_gc_path(args: GcPathArgs) -> Result<()> {
             println!("  [{}] {}", styled_provenance(marker.kind), detail);
         }
     }
+}
+
+fn print_all_gc_paths(response: &GcPathResult) {
+    let paths = response.all_paths.as_deref().unwrap_or_default();
+    let truncated_note = if response.truncated {
+        ", truncated"
+    } else {
+        ""
+    };
+    println!(
+        "{} {} ({} found{truncated_note}):",
+        section_label("GC root paths for"),
+        response.object_id,
+        paths.len()
+    );
+
+    if paths.is_empty() {
+        println!("  (no paths found)");
+        return;
+    }
+
+    for (path_idx, path) in paths.iter().enumerate() {
+        println!("  Path {} (depth {}):", path_idx + 1, path.len());
+        for (idx, node) in path.iter().enumerate() {
+            let marker = if node.is_root {
+                style("ROOT").bold().to_string()
+            } else {
+                format!("#{idx}")
+            };
+            println!(
+                "    {} -> {} [{}] via {}",
+                marker,
+                style(node.class_name.as_str()).cyan(),
+                node.object_id,
+                node.field.clone().unwrap_or_else(|| "<direct>".into())
+            );
+        }
+    }
+}
+
+async fn handle_inspect(args: InspectArgs) -> Result<()> {
+    validate_heap_file(&args.heap)?;
+
+    let pb = start_spinner("Inspecting object...");
+    let (graph, dominator) = match resolve_object_graph(
+        &args.heap,
+        args.snapshot_flags.snapshot.as_deref(),
+        args.snapshot_flags.refresh,
+        ParseOptions {
+            retain_field_data: args.retain_field_data,
+        },
+        args.retain_field_data,
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            finish_spinner(&pb, "Object inspection failed.");
+            if snapshot_exit_code(&err).is_some() {
+                exit_snapshot_with_error(err);
+            }
+            return Err(err)
+                .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()));
+        }
+    };
+
+    let target_id =
+        parse_inspect_object_id(&args.object_id).filter(|id| graph.objects.contains_key(id));
+
+    let inspection = target_id
+        .and_then(|id| inspect_object(&graph, Some(&dominator), id, args.retain_field_data));
+
+    let Some(inspection) = inspection else {
+        finish_spinner(&pb, "Object inspection failed.");
+        exit_inspect_with_error(inspect_object_id_not_found(&args.object_id, &args.heap));
+    };
+    finish_spinner(&pb, "Object inspection complete.");
+
+    let rendered = render_inspect_report(&inspection, args.format.into())?;
+    println!("{rendered}");
 
     Ok(())
+}
+
+fn inspect_object_id_not_found(object_id: &str, heap: &Path) -> CoreError {
+    CoreError::Unsupported(format!(
+        "inspect_object_id_not_found: object id '{object_id}' was not found in heap dump '{}'",
+        heap.display()
+    ))
+}
+
+/// Parse a CLI-supplied object id (`0x...` hex or bare decimal), mirroring
+/// the parsing convention `core::graph::gc_path` uses internally.
+fn parse_inspect_object_id(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+    if trimmed.chars().any(|c| matches!(c, 'A'..='F' | 'a'..='f')) {
+        return u64::from_str_radix(trimmed, 16).ok();
+    }
+    trimmed.parse::<u64>().ok()
+}
+
+fn exit_inspect_with_error(err: CoreError) -> ! {
+    let code = inspect_exit_code(&err);
+    print_cli_error(&anyhow::Error::new(err));
+    process::exit(code);
+}
+
+fn inspect_exit_code(err: &CoreError) -> i32 {
+    match err {
+        CoreError::Unsupported(detail) if detail.starts_with("inspect_object_id_not_found:") => 8,
+        _ => 1,
+    }
+}
+
+fn exit_gc_path_with_error(err: CoreError) -> ! {
+    let code = gc_path_exit_code(&err);
+    print_cli_error(&anyhow::Error::new(err));
+    process::exit(code);
+}
+
+fn gc_path_exit_code(err: &CoreError) -> i32 {
+    match err {
+        CoreError::Unsupported(detail) if detail.starts_with("gc_path_object_id_not_found:") => 8,
+        CoreError::Unsupported(detail)
+            if detail.starts_with("gc_path_class_has_no_live_instances:") =>
+        {
+            9
+        }
+        _ => 1,
+    }
 }
 
 async fn handle_query(args: QueryArgs) -> Result<()> {
     validate_heap_file(&args.heap)?;
 
     let pb = start_spinner("Executing query...");
-    let graph = parse_hprof_file_with_options(
-        args.heap.to_string_lossy().as_ref(),
+    let (graph, dominator) = match resolve_object_graph(
+        &args.heap,
+        args.snapshot_flags.snapshot.as_deref(),
+        args.snapshot_flags.refresh,
         ParseOptions {
             retain_field_data: true,
         },
-    )
-    .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
-    let dominator = mnemosyne_core::build_dominator_tree(&graph);
+        true,
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            if snapshot_exit_code(&err).is_some() {
+                exit_snapshot_with_error(err);
+            }
+            return Err(err)
+                .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()));
+        }
+    };
     let query = parse_query(&args.query).map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let result = match execute_query(&query, &graph, Some(&dominator)) {
         Ok(result) => result,
@@ -1385,6 +1934,314 @@ async fn handle_serve(args: ServeArgs, cfg: &AppConfig) -> Result<()> {
     }
 }
 
+// --- M9 Slice 9.C: snapshot cache -----------------------------------------
+
+/// `MNEMOSYNE_SNAPSHOT_DIR` overrides the default snapshot cache root,
+/// mirroring the `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` env-override
+/// convention (`core::analysis::mode`).
+const SNAPSHOT_DIR_ENV: &str = "MNEMOSYNE_SNAPSHOT_DIR";
+
+/// Default snapshot cache root: `dirs::cache_dir()/mnemosyne`, overridable
+/// via `MNEMOSYNE_SNAPSHOT_DIR`. Falls back to a temp-dir-based path on
+/// platforms where `dirs::cache_dir()` returns `None`, mirroring
+/// `config_loader`'s/`core::mcp::session`'s existing `dirs::*_dir()`
+/// fallback shape.
+fn default_snapshot_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var(SNAPSHOT_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("snapshots");
+    fallback
+}
+
+fn snapshot_store() -> SnapshotStore {
+    SnapshotStore::new(default_snapshot_dir())
+}
+
+/// Maps a snapshot-specific structured [`CoreError`] (built by
+/// `core::snapshot`'s `snapshot_not_found`/`snapshot_schema_mismatch`/
+/// `snapshot_stale_source`/`snapshot_corrupt` error codes) to its exit code
+/// per the design doc's §7 table. Returns `None` for any other error (e.g.
+/// an ordinary HPROF parse failure), so callers can fall through to their
+/// existing generic error handling for the byte-identical no-flags path.
+fn snapshot_exit_code(err: &CoreError) -> Option<i32> {
+    match err {
+        CoreError::Unsupported(detail) if detail.starts_with("snapshot_not_found:") => Some(10),
+        CoreError::Unsupported(detail) if detail.starts_with("snapshot_schema_mismatch:") => {
+            Some(11)
+        }
+        CoreError::Unsupported(detail) if detail.starts_with("snapshot_stale_source:") => Some(12),
+        CoreError::Unsupported(detail) if detail.starts_with("snapshot_corrupt:") => Some(13),
+        _ => None,
+    }
+}
+
+fn exit_snapshot_with_error(err: CoreError) -> ! {
+    let code = snapshot_exit_code(&err).unwrap_or(1);
+    print_cli_error(&anyhow::Error::new(err));
+    process::exit(code);
+}
+
+/// Resolve `--snapshot`/`--refresh` (or silent auto-discovery when neither
+/// is passed) into an `(ObjectGraph, DominatorTree)` pair, parsing the heap
+/// dump only when no usable cache entry is found (M9 Slice 9.C). On a
+/// fresh parse (no `--snapshot`, cache miss, or `--refresh`), best-effort
+/// writes the result back to the snapshot cache -- a cache-write failure is
+/// logged (`tracing::warn`) and never fails the caller's command (design
+/// doc R1).
+///
+/// Behavior per §7 of the design doc:
+/// - `--snapshot <key>`: load exactly that entry via
+///   [`SnapshotStore::load_checked`], which errors loudly
+///   (`snapshot_not_found`/`snapshot_schema_mismatch`/
+///   `snapshot_stale_source`/`snapshot_corrupt`) instead of silently
+///   falling back to a parse.
+/// - no flags: silent auto-discovery via
+///   [`SnapshotStore::find_fresh_for_heap`] -- any kind of miss falls
+///   through to a normal parse.
+/// - `--refresh`: always re-parses and overwrites the cache entry,
+///   regardless of whether `--snapshot` was also passed.
+///
+/// `require_field_data`: when `true`, a cached snapshot without field data
+/// is treated as a miss during *auto-discovery only* (never for an
+/// explicit `--snapshot <key>`, which loads exactly what's there --
+/// explicit is loud, not silently different).
+fn resolve_object_graph(
+    heap: &Path,
+    snapshot: Option<&str>,
+    refresh: bool,
+    parse_options: ParseOptions,
+    require_field_data: bool,
+) -> CoreResult<(ObjectGraph, DominatorTree)> {
+    let store = snapshot_store();
+    let heap_path_str = heap.to_string_lossy().into_owned();
+
+    if !refresh {
+        if let Some(key) = snapshot {
+            let payload: SnapshotPayload = store.load_checked(key, &heap_path_str)?;
+            return Ok((payload.object_graph, payload.dominator_tree));
+        }
+
+        if let Ok(Some(payload)) = store.find_fresh_for_heap(&heap_path_str) {
+            if !require_field_data || payload.manifest.has_field_data {
+                return Ok((payload.object_graph, payload.dominator_tree));
+            }
+        }
+    }
+
+    let graph = parse_hprof_file_with_options(&heap_path_str, parse_options)?;
+    let dominator = mnemosyne_core::build_dominator_tree(&graph);
+
+    if let Err(err) = store.save(&heap_path_str, &graph, &dominator) {
+        tracing::warn!(heap_path = %heap_path_str, error = %err, "failed to write snapshot cache entry");
+    }
+
+    Ok((graph, dominator))
+}
+
+/// `analyze`'s snapshot resolution (M9 Slice 9.C): mirrors
+/// [`resolve_object_graph`]'s flag semantics, but produces a full
+/// `AnalyzeResponse` instead of a bare graph, via
+/// [`analyze_heap_from_graph`] (cache hit) or
+/// [`analyze_heap_capturing_graph`] (fresh parse, which also captures the
+/// graph for write-through caching without a second parse pass).
+async fn resolve_analyze_response(
+    heap_path_str: &str,
+    snapshot: Option<&str>,
+    refresh: bool,
+    request: AnalyzeRequest,
+) -> CoreResult<AnalyzeResponse> {
+    let store = snapshot_store();
+
+    if !refresh {
+        if let Some(key) = snapshot {
+            let payload: SnapshotPayload = store.load_checked(key, heap_path_str)?;
+            return analyze_heap_from_graph(
+                request,
+                &payload.object_graph,
+                &payload.dominator_tree,
+            )
+            .await;
+        }
+
+        if let Ok(Some(payload)) = store.find_fresh_for_heap(heap_path_str) {
+            return analyze_heap_from_graph(
+                request,
+                &payload.object_graph,
+                &payload.dominator_tree,
+            )
+            .await;
+        }
+    }
+
+    let (response, object_graph, dominator_tree) = analyze_heap_capturing_graph(request).await?;
+    if let (Some(graph), Some(dom)) = (&object_graph, &dominator_tree) {
+        if let Err(err) = store.save(heap_path_str, graph, dom) {
+            tracing::warn!(heap_path = %heap_path_str, error = %err, "failed to write snapshot cache entry");
+        }
+    }
+    Ok(response)
+}
+
+/// `leaks`'s snapshot resolution (M9 Slice 9.C): mirrors
+/// [`resolve_object_graph`]'s flag semantics via
+/// [`detect_leaks_from_graph`] (cache hit) or [`detect_leaks_with_graph`]
+/// (fresh parse, which also captures the graph for write-through caching).
+async fn resolve_leaks(
+    heap_path_str: &str,
+    snapshot: Option<&str>,
+    refresh: bool,
+    options: LeakDetectionOptions,
+) -> CoreResult<Vec<LeakInsight>> {
+    let store = snapshot_store();
+
+    if !refresh {
+        if let Some(key) = snapshot {
+            let payload: SnapshotPayload = store.load_checked(key, heap_path_str)?;
+            return detect_leaks_from_graph(
+                heap_path_str,
+                &payload.object_graph,
+                &payload.dominator_tree,
+                &options,
+            );
+        }
+
+        if let Ok(Some(payload)) = store.find_fresh_for_heap(heap_path_str) {
+            return detect_leaks_from_graph(
+                heap_path_str,
+                &payload.object_graph,
+                &payload.dominator_tree,
+                &options,
+            );
+        }
+    }
+
+    let (leaks, graph_pair) = detect_leaks_with_graph(heap_path_str, options).await?;
+    if let Some((graph, dom)) = &graph_pair {
+        if let Err(err) = store.save(heap_path_str, graph, dom) {
+            tracing::warn!(heap_path = %heap_path_str, error = %err, "failed to write snapshot cache entry");
+        }
+    }
+    Ok(leaks)
+}
+
+async fn handle_snapshot(cmd: SnapshotCommand) -> Result<()> {
+    match cmd {
+        SnapshotCommand::Save(args) => handle_snapshot_save(args).await,
+        SnapshotCommand::Load(args) => handle_snapshot_load(args),
+        SnapshotCommand::List => handle_snapshot_list(),
+        SnapshotCommand::Rm(args) => handle_snapshot_rm(args),
+    }
+}
+
+async fn handle_snapshot_save(args: SnapshotSaveArgs) -> Result<()> {
+    validate_heap_file(&args.heap)?;
+
+    let pb = start_spinner("Parsing heap dump for snapshot...");
+    let graph = parse_hprof_file_with_options(
+        args.heap.to_string_lossy().as_ref(),
+        ParseOptions::default(),
+    )
+    .with_context(|| format!("Failed to parse heap dump: {}", args.heap.display()))?;
+    let dominator = mnemosyne_core::build_dominator_tree(&graph);
+    finish_spinner(&pb, "Parsed heap dump.");
+
+    let store = match &args.output {
+        Some(dir) => SnapshotStore::new(dir.clone()),
+        None => snapshot_store(),
+    };
+    let manifest = store
+        .save(&args.heap.to_string_lossy(), &graph, &dominator)
+        .with_context(|| {
+            format!(
+                "Failed to save snapshot for heap dump: {}",
+                args.heap.display()
+            )
+        })?;
+
+    println!("{} {}", bold_label("Snapshot saved:"), manifest.heap_sha256);
+    print_snapshot_manifest(&manifest);
+
+    Ok(())
+}
+
+fn handle_snapshot_load(args: SnapshotLoadArgs) -> Result<()> {
+    let store = snapshot_store();
+    let payload = match store.load(&args.key) {
+        Ok(payload) => payload,
+        Err(err) => exit_snapshot_with_error(err),
+    };
+
+    println!("{}", bold_label("Snapshot loaded:"));
+    print_snapshot_manifest(&payload.manifest);
+
+    Ok(())
+}
+
+fn handle_snapshot_list() -> Result<()> {
+    let store = snapshot_store();
+    let manifests = store.list().context("Failed to list snapshots")?;
+
+    if manifests.is_empty() {
+        println!("{}", bold_label("No snapshots cached."));
+        return Ok(());
+    }
+
+    println!("{}", bold_label("Cached snapshots:"));
+    println!("{}", build_snapshot_table(&manifests));
+
+    Ok(())
+}
+
+fn handle_snapshot_rm(args: SnapshotRmArgs) -> Result<()> {
+    let store = snapshot_store();
+    match store.remove(&args.key) {
+        Ok(()) => {
+            println!("{} {}", bold_label("Snapshot removed:"), args.key);
+            Ok(())
+        }
+        Err(err) => exit_snapshot_with_error(err),
+    }
+}
+
+fn print_snapshot_manifest(manifest: &SnapshotManifest) {
+    println!("  {} {}", bold_label("Heap path:"), manifest.heap_path);
+    println!("  {} {}", bold_label("SHA-256:"), manifest.heap_sha256);
+    println!("  {} {}", bold_label("Created at:"), manifest.created_at);
+    println!(
+        "  {} {} (running binary expects {})",
+        bold_label("Schema version:"),
+        manifest.schema_version,
+        SNAPSHOT_SCHEMA_VERSION
+    );
+    println!(
+        "  {} {}",
+        bold_label("Mnemosyne version:"),
+        manifest.mnemosyne_version
+    );
+    println!(
+        "  {} {}",
+        bold_label("Object count:"),
+        manifest.object_count
+    );
+    println!(
+        "  {} {}",
+        bold_label("Has field data:"),
+        manifest.has_field_data
+    );
+}
+
 fn handle_config(loaded: &LoadedConfig) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&loaded.data)?);
     match (&loaded.origin, &loaded.path) {
@@ -1482,6 +2339,36 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
         Err(err) => exit_ci_check_with_error(2, err.into()),
     };
 
+    // M10-B: object_growth_threshold is a genuine two-heap predicate (design
+    // doc §2.1) -- it cannot be evaluated without a baseline to diff
+    // against. Refuse loudly (same "invalid policy" exit-code family as a
+    // malformed TOML file above) rather than silently reaching `evaluate()`
+    // with no object diff and having the rule quietly skip.
+    let needs_baseline = policy
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
+
+    if needs_baseline && args.baseline.is_none() {
+        let err = CoreError::ConfigError {
+            detail: format!(
+                "object_growth_threshold_requires_baseline: policy '{}' contains an \
+                 object_growth_threshold rule but --baseline was not supplied",
+                args.policy.display()
+            ),
+            suggestion: Some(
+                "Pass --baseline <BEFORE_HEAP> so ci-check can diff it against the heap under test."
+                    .into(),
+            ),
+        };
+        exit_ci_check_with_error(2, err.into());
+    }
+
+    let object_diff = match args.baseline.as_ref() {
+        Some(baseline) => Some(run_ci_check_baseline_diff(baseline, &args.heap).await),
+        None => None,
+    };
+
     let resolved_mode = match validate_heap_file(&args.heap)
         .and_then(|_| resolve_cli_mode(&args.heap, args.mode))
     {
@@ -1499,20 +2386,31 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 Err(err) => exit_ci_check_with_error(3, err),
             };
             finish_spinner(&pb, "Heap policy evaluation complete.");
-            mnemosyne_core::evaluate(&policy, &PolicyInput::Overview(&summary), requested_mode)
+            mnemosyne_core::evaluate(
+                &policy,
+                &PolicyInput::Overview(&summary),
+                requested_mode,
+                object_diff.as_ref(),
+            )
         }
         AnalysisMode::Deep => {
+            let enable_classloaders = policy
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.predicate, Predicate::ClassloaderLeakCount));
             let response = match analyze_heap(AnalyzeRequest {
                 heap_path: args.heap.to_string_lossy().into(),
                 config: cfg.clone(),
                 leak_options: LeakDetectionOptions::from(&cfg.analysis),
                 enable_ai: false,
                 histogram_group_by: HistogramGroupBy::Class,
-                enable_classloaders: false,
+                enable_classloaders,
                 enable_threads: false,
                 enable_strings: false,
                 enable_collections: false,
                 enable_top_instances: false,
+                enable_by_referrer: false,
+                enable_duplicate_arrays: false,
                 top_n: 10,
                 min_collection_capacity: 16,
                 min_duplicate_count: 2,
@@ -1524,7 +2422,12 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
                 Err(err) => exit_ci_check_with_error(3, err),
             };
             finish_spinner(&pb, "Heap policy evaluation complete.");
-            mnemosyne_core::evaluate(&policy, &PolicyInput::Deep(&response), requested_mode)
+            mnemosyne_core::evaluate(
+                &policy,
+                &PolicyInput::Deep(&response),
+                requested_mode,
+                object_diff.as_ref(),
+            )
         }
         AnalysisMode::Auto => unreachable!("resolved CLI mode should never remain auto"),
     };
@@ -1555,6 +2458,76 @@ async fn handle_ci_check(args: CiCheckArgs, cfg: &AppConfig) -> Result<()> {
         Ok(())
     } else {
         process::exit(exit_code);
+    }
+}
+
+/// Runs the `--baseline`-to-`--heap` object diff `ci-check` needs for
+/// `object_growth_threshold` rules (M10-B design doc §2.2): "compute once,
+/// evaluate all rules against it" up front, same shape `handle_ci_check`'s
+/// single `analyze_heap()` call already has. Uses `DiffMode::Object` with
+/// the same default `IdentityStrategy`/threshold/top-n constants
+/// `handle_diff` falls back to when its own flags are left at default,
+/// since `ci-check` does not expose the object-diff tuning flags itself.
+async fn run_ci_check_baseline_diff(
+    baseline: &Path,
+    heap: &Path,
+) -> mnemosyne_core::ObjectDiffReport {
+    if let Err(err) = validate_heap_file(baseline) {
+        exit_ci_check_with_error(3, err);
+    }
+    if let Err(err) = validate_heap_file(heap) {
+        exit_ci_check_with_error(3, err);
+    }
+
+    let pb = start_spinner("Diffing baseline against heap...");
+    let result = mnemosyne_core::diff::run_diff(DiffRequest {
+        before_path: baseline.to_string_lossy().into_owned(),
+        after_path: heap.to_string_lossy().into_owned(),
+        mode: DiffMode::Object,
+        identity_strategy: IdentityStrategy::default(),
+        retained_bucket_bits: 10,
+        min_retained_bytes:
+            mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+        retained_change_threshold:
+            mnemosyne_core::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+        top_n: mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+        retain_field_data: false,
+        cross_reference_leaks: false,
+    })
+    .await
+    .with_context(|| {
+        format!(
+            "Failed to diff baseline heap dump: {} -> {}",
+            baseline.display(),
+            heap.display()
+        )
+    });
+
+    match result {
+        Ok(mnemosyne_core::diff::DiffResult::Object(diff)) => {
+            finish_spinner(&pb, "Baseline diff complete.");
+            diff.object_diff.unwrap_or_else(|| {
+                exit_ci_check_with_error(
+                    3,
+                    anyhow::anyhow!(
+                        "object diff mode produced no object_diff section for baseline '{}' -> '{}'",
+                        baseline.display(),
+                        heap.display()
+                    ),
+                )
+            })
+        }
+        Ok(mnemosyne_core::diff::DiffResult::Class(_)) => {
+            finish_spinner(&pb, "Baseline diff failed.");
+            exit_ci_check_with_error(
+                3,
+                anyhow::anyhow!("expected an object diff for --baseline but got a class diff"),
+            )
+        }
+        Err(err) => {
+            finish_spinner(&pb, "Baseline diff failed.");
+            exit_ci_check_with_error(3, err)
+        }
     }
 }
 
@@ -1827,6 +2800,8 @@ const THREAD_NAME_WIDTH: usize = 32;
 const STRING_VALUE_WIDTH: usize = 36;
 const COLLECTION_TYPE_WIDTH: usize = 38;
 const CLASSLOADER_CLASS_WIDTH: usize = 36;
+const SNAPSHOT_PATH_WIDTH: usize = 40;
+const SNAPSHOT_HASH_SHORT_LEN: usize = 12;
 
 fn build_parse_summary_table(summary: &HeapSummary) -> (Table, Vec<(String, String)>) {
     let mut table = base_table();
@@ -1968,6 +2943,41 @@ fn build_top_instances_table(report: &mnemosyne_core::analysis::TopInstancesRepo
     table
 }
 
+fn build_referrer_table(report: &mnemosyne_core::analysis::ReferrerReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Object", CellAlignment::Left),
+        header_cell("Class", CellAlignment::Left),
+        header_cell("Referrers", CellAlignment::Right),
+        header_cell("Retained", CellAlignment::Right),
+        header_cell("Top referrer classes", CellAlignment::Left),
+    ]);
+
+    for entry in &report.entries {
+        let class_cell = truncate_for_table(&entry.class_name, TOP_INSTANCE_CLASS_WIDTH);
+        let top_classes = entry
+            .top_referrer_classes
+            .iter()
+            .map(|(class_name, count)| format!("{class_name}({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        table.add_row(vec![
+            Cell::new(entry.object_id.as_str()).set_alignment(CellAlignment::Left),
+            Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(entry.referrer_count),
+            right_cell(
+                entry
+                    .retained_size
+                    .map(format_megabytes)
+                    .unwrap_or_else(|| "n/a".into()),
+            ),
+            Cell::new(top_classes).set_alignment(CellAlignment::Left),
+        ]);
+    }
+
+    table
+}
+
 fn build_thread_table(report: &mnemosyne_core::analysis::ThreadReport) -> Table {
     let mut table = base_table();
     table.set_header(vec![
@@ -2018,6 +3028,13 @@ fn print_thread_stacks(report: &mnemosyne_core::analysis::ThreadReport) {
                     println!("  at {}.{}(Unknown Source)", class_name, frame.method_name);
                 }
             }
+            for local in &frame.locals {
+                let kind = match local.root_kind {
+                    mnemosyne_core::analysis::FrameLocalRootKind::JavaFrame => "local",
+                    mnemosyne_core::analysis::FrameLocalRootKind::JniLocal => "jni-local",
+                };
+                println!("      {kind}: {} ({})", local.object_id, local.class_name);
+            }
         }
     }
 }
@@ -2040,6 +3057,49 @@ fn build_string_duplicates_table(report: &mnemosyne_core::analysis::StringReport
     }
 
     table
+}
+
+fn build_array_duplicates_table(report: &mnemosyne_core::analysis::ArrayReport) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Element Type", CellAlignment::Left),
+        header_cell("Length", CellAlignment::Right),
+        header_cell("Count", CellAlignment::Right),
+        header_cell("Waste", CellAlignment::Right),
+    ]);
+
+    for group in report.duplicate_groups.iter().take(10) {
+        table.add_row(vec![
+            Cell::new(format!("{}[]", group.element_type)).set_alignment(CellAlignment::Left),
+            right_cell(group.length),
+            right_cell(group.count),
+            right_cell(format_megabytes(group.total_wasted_bytes)),
+        ]);
+    }
+
+    table
+}
+
+fn print_array_duplicates(report: &mnemosyne_core::analysis::ArrayReport) {
+    if report.duplicate_groups.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "{}",
+        bold_label(&format!(
+            "Duplicate Array Analysis ({} arrays scanned, {} duplicate groups):",
+            report.total_arrays,
+            report.duplicate_groups.len()
+        ))
+    );
+    println!(
+        "  {} {}",
+        bold_label("Total duplicate waste:"),
+        format_megabytes(report.total_duplicate_waste)
+    );
+    println!("{}", build_array_duplicates_table(report));
 }
 
 fn build_collection_table(report: &mnemosyne_core::analysis::CollectionReport) -> Table {
@@ -2074,6 +3134,7 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     table.set_header(vec![
         header_cell("Loader", CellAlignment::Left),
         header_cell("Classes", CellAlignment::Right),
+        header_cell("Ancestors", CellAlignment::Right),
         header_cell("Instances", CellAlignment::Right),
         header_cell("Shallow", CellAlignment::Right),
         header_cell("Retained", CellAlignment::Right),
@@ -2084,6 +3145,7 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
         table.add_row(vec![
             Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
             right_cell(loader.loaded_class_count),
+            right_cell(loader.ancestor_chain.len()),
             right_cell(loader.instance_count),
             right_cell(format_megabytes(loader.total_shallow_bytes)),
             right_cell(format_megabytes(loader.retained_bytes.unwrap_or(0))),
@@ -2091,6 +3153,79 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     }
 
     table
+}
+
+fn print_classloader_duplicates(report: &mnemosyne_core::analysis::ClassLoaderReport) {
+    if report.duplicate_classes.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "{}",
+        bold_label(&format!(
+            "Duplicate classes across loaders ({}):",
+            report.duplicate_classes.len()
+        ))
+    );
+    for group in &report.duplicate_classes {
+        let loader_ids = group
+            .loader_object_ids
+            .iter()
+            .map(|id| format!("{id:#x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  {} loaded by {} loaders: {}",
+            style(group.class_name.as_str()).cyan(),
+            group.loader_count,
+            loader_ids
+        );
+    }
+}
+
+fn print_classloader_leak_candidates(report: &mnemosyne_core::analysis::ClassLoaderReport) {
+    if report.potential_leaks.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("{}", bold_label("Potential classloader leaks:"));
+    for candidate in &report.potential_leaks {
+        println!(
+            "  {} ({})",
+            style(candidate.class_name.as_str()).cyan(),
+            candidate.reason
+        );
+    }
+}
+
+fn build_snapshot_table(manifests: &[SnapshotManifest]) -> Table {
+    let mut table = base_table();
+    table.set_header(vec![
+        header_cell("Hash", CellAlignment::Left),
+        header_cell("Heap Path", CellAlignment::Left),
+        header_cell("Objects", CellAlignment::Right),
+        header_cell("Created At", CellAlignment::Left),
+        header_cell("Schema", CellAlignment::Right),
+    ]);
+
+    for manifest in manifests {
+        let path_cell = truncate_for_table(&manifest.heap_path, SNAPSHOT_PATH_WIDTH);
+        table.add_row(vec![
+            Cell::new(short_hash(&manifest.heap_sha256)).set_alignment(CellAlignment::Left),
+            Cell::new(path_cell.display).set_alignment(CellAlignment::Left),
+            right_cell(manifest.object_count),
+            Cell::new(manifest.created_at.as_str()).set_alignment(CellAlignment::Left),
+            right_cell(manifest.schema_version),
+        ]);
+    }
+
+    table
+}
+
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(SNAPSHOT_HASH_SHORT_LEN).collect()
 }
 
 fn base_table() -> Table {

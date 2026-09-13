@@ -52,6 +52,22 @@ pub struct GcPathResult {
     /// Provenance markers (e.g. synthetic / fallback when no real path was resolved).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
+    /// All enumerated paths (M8 Slice 8.A), populated only by
+    /// [`find_all_gc_paths`] when `--all-paths` / `--by-class` is requested.
+    /// ADDITIVE field: `path` above remains the shortest/first path and is
+    /// untouched by this addition, so today's `gc-path` (no new flags)
+    /// output — text and JSON — stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_paths: Option<Vec<Vec<GcPathNode>>>,
+    /// True when the shared `max_paths` budget capped enumeration before it
+    /// could be considered exhaustive. Always `false` (and omitted from
+    /// JSON) for the legacy single-path flow.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 const BASIC_TYPE_OBJECT: u8 = 2;
@@ -118,6 +134,40 @@ pub fn find_gc_path(request: &GcPathRequest) -> CoreResult<GcPathResult> {
     build_synthetic_path(request, &summary, depth_limit)
 }
 
+/// Graph-based single-object lookup (M9 Slice 9.D): traces `object_id` on an
+/// already-loaded `ObjectGraph` (e.g. a snapshot-cached graph) instead of
+/// parsing `heap_path` from disk. Thin public wrapper around the existing
+/// [`trace_on_object_graph`] BFS -- the same traversal [`find_gc_path`]'s
+/// primary (full-`ObjectGraph`) tier already uses -- so results are
+/// identical to a fresh `find_gc_path` call whenever that primary tier
+/// would have succeeded. Unlike [`find_gc_path`], there is no
+/// budget-limited/synthetic fallback here: a snapshot's `ObjectGraph` is
+/// already fully materialized, so those fallback tiers (which exist only to
+/// cope with a parse that is too expensive or fails outright) do not apply.
+///
+/// `heap_path` is used only to build a descriptive error message; it need
+/// not be the path the graph was originally parsed from.
+pub fn find_gc_path_in_graph(
+    graph: &ObjectGraph,
+    heap_path: &str,
+    object_id: &str,
+    max_depth: Option<u32>,
+) -> CoreResult<GcPathResult> {
+    let depth_limit = max_depth.unwrap_or(6).clamp(2, 32) as usize;
+    let target_id = parse_object_id(object_id).filter(|id| graph.objects.contains_key(id));
+    let Some(target_id) = target_id else {
+        return Err(CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{heap_path}'"
+        )));
+    };
+
+    trace_on_object_graph(graph, target_id, depth_limit).ok_or_else(|| {
+        CoreError::Unsupported(format!(
+            "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{heap_path}'"
+        ))
+    })
+}
+
 /// BFS on the full ObjectGraph from GC roots to the target object.
 fn trace_on_object_graph(
     graph: &ObjectGraph,
@@ -157,6 +207,8 @@ fn trace_on_object_graph(
                 is_root: true,
             }],
             provenance: Vec::new(),
+            all_paths: None,
+            truncated: false,
         });
     }
 
@@ -251,6 +303,8 @@ fn trace_on_object_graph(
         path_length: nodes.len(),
         path: nodes,
         provenance: Vec::new(), // Real data — no provenance markers
+        all_paths: None,
+        truncated: false,
     })
 }
 
@@ -264,6 +318,376 @@ fn get_field_names_for_class(graph: &ObjectGraph, class_id: u64) -> Option<Vec<O
             .map(|f| f.name.clone())
             .collect(),
     )
+}
+
+/// Request to enumerate GC root paths for either a specific object or every
+/// live instance of a class (M8 Slice 8.A). Exactly one of `object_id` /
+/// `by_class` must be set; enumeration is bounded by a *shared* `max_paths`
+/// budget across the whole request, not per-path or per-instance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllPathsRequest {
+    pub heap_path: String,
+    pub object_id: Option<String>,
+    pub by_class: Option<String>,
+    pub max_paths: usize,
+    pub max_depth: Option<u32>,
+}
+
+impl AllPathsRequest {
+    /// Default shared path-enumeration budget when the caller does not
+    /// specify one (mirrors the CLI's `--max-paths` default).
+    pub const DEFAULT_MAX_PATHS: usize = 20;
+}
+
+/// Maximum number of alternate incoming edges recorded per node during the
+/// multi-parent BFS in [`enumerate_gc_paths`]. Bounds memory/work on dense
+/// graphs without materially affecting typical diamond-shaped fan-in.
+const ALT_PARENT_CAP: usize = 8;
+
+/// Safety cap on backtracking steps while reconstructing paths from the
+/// multi-parent BFS DAG, so a pathological graph cannot spin forever even
+/// though `max_paths` already bounds the *result* count.
+const MAX_BACKTRACK_WORK: usize = 50_000;
+
+/// A root→target chain of `(object_id, field_into_this_node)` pairs,
+/// reconstructed by [`build_paths_from_parents`] before being rendered into
+/// [`GcPathNode`]s by [`chain_to_nodes`].
+type PathChain = Vec<(u64, Option<String>)>;
+
+/// Multi-parent BFS DAG built by [`enumerate_gc_paths`]: for each node, the
+/// incoming `(parent_id, field_name)` edges recorded during the forward
+/// pass (see [`ALT_PARENT_CAP`]).
+type ParentEdges = HashMap<u64, Vec<(u64, Option<String>)>>;
+
+/// Find every GC root path (bounded by `request.max_paths`) for a specific
+/// object id, or for every live instance of a class (M8 Slice 8.A).
+///
+/// Reuses the same full-`ObjectGraph` parse and BFS traversal shape as
+/// [`find_gc_path`] / [`trace_on_object_graph`] rather than a new
+/// traversal — see [`enumerate_gc_paths`]. Unlike [`find_gc_path`], this
+/// entry point does not fall back to the budget-limited `GcGraph` or a
+/// synthetic path: all-paths/by-class enumeration only makes sense against
+/// real graph data, so a heap that fails to parse returns a real error
+/// instead of a best-effort placeholder.
+pub fn find_all_gc_paths(request: &AllPathsRequest) -> CoreResult<GcPathResult> {
+    // Validate before parsing (fail fast without touching the filesystem) --
+    // `find_all_gc_paths_in_graph` repeats this same check so it stays safe
+    // as a standalone entry point too, but doing it here first preserves
+    // this function's original fail-fast-before-I/O behavior exactly.
+    validate_all_paths_request(request)?;
+
+    let graph = parse_hprof_file_with_options(&request.heap_path, ParseOptions::default())?;
+    find_all_gc_paths_in_graph(&graph, request)
+}
+
+fn validate_all_paths_request(request: &AllPathsRequest) -> CoreResult<()> {
+    match (&request.object_id, &request.by_class) {
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "gc-path: --object-id and --by-class are mutually exclusive".into(),
+        )),
+        (None, None) => Err(CoreError::InvalidInput(
+            "gc-path: one of --object-id or --by-class is required".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Graph-based all-paths/by-class enumeration (M9 Slice 9.D): the exact
+/// post-parse logic [`find_all_gc_paths`] runs, extracted so a caller that
+/// already has an `ObjectGraph` in hand (e.g. loaded from a snapshot cache
+/// instead of parsed from `request.heap_path`) can reuse it without paying
+/// for a second parse. [`find_all_gc_paths`] itself now delegates to this
+/// function after its own parse -- behavior is unchanged, this is a pure
+/// extraction.
+///
+/// `request.heap_path` is still read for the mutual-exclusion validation
+/// and descriptive error/class-lookup messages below; it need not be the
+/// path `graph` was originally parsed from.
+pub fn find_all_gc_paths_in_graph(
+    graph: &ObjectGraph,
+    request: &AllPathsRequest,
+) -> CoreResult<GcPathResult> {
+    validate_all_paths_request(request)?;
+
+    let depth_limit = request.max_depth.unwrap_or(6).clamp(2, 32) as usize;
+    let id_size = graph.identifier_size as usize;
+
+    if let Some(object_id) = &request.object_id {
+        let target_id = parse_object_id(object_id).filter(|id| graph.objects.contains_key(id));
+        let Some(target_id) = target_id else {
+            return Err(CoreError::Unsupported(format!(
+                "gc_path_object_id_not_found: object id '{object_id}' was not found in heap dump '{}'",
+                request.heap_path
+            )));
+        };
+
+        let (paths, truncated) =
+            enumerate_gc_paths(graph, target_id, depth_limit, request.max_paths);
+        let first_path = paths.first().cloned().unwrap_or_default();
+
+        return Ok(GcPathResult {
+            object_id: format_object_id(target_id, id_size),
+            path_length: first_path.len(),
+            path: first_path,
+            provenance: Vec::new(),
+            all_paths: Some(paths),
+            truncated,
+        });
+    }
+
+    let class_name = request
+        .by_class
+        .as_ref()
+        .expect("validated above: by_class is Some when object_id is None");
+    let instances = resolve_live_instances_by_class(graph, class_name);
+    if instances.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "gc_path_class_has_no_live_instances: no live instances of class '{class_name}' found in heap dump '{}'",
+            request.heap_path
+        )));
+    }
+
+    let mut all_paths: Vec<Vec<GcPathNode>> = Vec::new();
+    let mut truncated = false;
+    let mut budget = request.max_paths;
+
+    for (idx, &instance_id) in instances.iter().enumerate() {
+        if budget == 0 {
+            truncated = true;
+            break;
+        }
+        let (mut paths, hit_cap) = enumerate_gc_paths(graph, instance_id, depth_limit, budget);
+        if hit_cap {
+            truncated = true;
+        }
+        budget = budget.saturating_sub(paths.len());
+        all_paths.append(&mut paths);
+        if budget == 0 && idx + 1 < instances.len() {
+            truncated = true;
+        }
+    }
+
+    let first_path = all_paths.first().cloned().unwrap_or_default();
+
+    Ok(GcPathResult {
+        object_id: format!("class:{class_name}"),
+        path_length: first_path.len(),
+        path: first_path,
+        provenance: Vec::new(),
+        all_paths: Some(all_paths),
+        truncated,
+    })
+}
+
+/// Resolve every live instance of `class_name` (matched against the
+/// prettified class name, e.g. `com.example.Foo`) in the graph, sorted by
+/// ascending object id for deterministic ordering.
+pub fn resolve_live_instances_by_class(graph: &ObjectGraph, class_name: &str) -> Vec<u64> {
+    let mut matches: Vec<u64> = graph
+        .objects
+        .values()
+        .filter(|obj| {
+            graph
+                .class_name(obj.class_id)
+                .map(prettify_class_name)
+                .is_some_and(|name| name == class_name)
+        })
+        .map(|obj| obj.id)
+        .collect();
+    matches.sort_unstable();
+    matches
+}
+
+/// Enumerate up to `max_paths` GC root paths to `target_id` on the full
+/// `ObjectGraph`, bounded by `max_depth`. Returns the discovered paths plus
+/// whether enumeration was capped before it could be considered complete.
+///
+/// Performs a single forward BFS pass from all GC roots — same traversal
+/// shape as [`trace_on_object_graph`] — but records every incoming edge
+/// that lands a node at its already-established shortest depth (not just
+/// the first), so diamond-shaped fan-in produces multiple recorded
+/// parents. Paths are then reconstructed by bounded backtracking from the
+/// target towards the roots, stopping as soon as `max_paths` results are
+/// found (see [`build_paths_from_parents`]).
+pub fn enumerate_gc_paths(
+    graph: &ObjectGraph,
+    target_id: u64,
+    max_depth: usize,
+    max_paths: usize,
+) -> (Vec<Vec<GcPathNode>>, bool) {
+    let id_size = graph.identifier_size as usize;
+
+    if max_paths == 0 || !graph.objects.contains_key(&target_id) {
+        return (Vec::new(), false);
+    }
+
+    let root_ids: HashSet<u64> = graph
+        .gc_roots
+        .iter()
+        .map(|r| r.object_id)
+        .filter(|id| graph.objects.contains_key(id))
+        .collect();
+
+    if root_ids.is_empty() {
+        return (Vec::new(), false);
+    }
+
+    if root_ids.contains(&target_id) {
+        let class_name = graph
+            .objects
+            .get(&target_id)
+            .and_then(|obj| graph.class_name(obj.class_id))
+            .map(prettify_class_name)
+            .unwrap_or_else(|| "<unknown>".into());
+        let node = GcPathNode {
+            object_id: format_object_id(target_id, id_size),
+            class_name,
+            field: Some("ROOT".into()),
+            is_root: true,
+        };
+        return (vec![vec![node]], false);
+    }
+
+    // Forward multi-parent BFS: same shape as `trace_on_object_graph`, but
+    // records every parent edge that reaches a node at its established
+    // shortest depth, instead of only the first.
+    let mut queue: VecDeque<u64> = root_ids.iter().copied().collect();
+    let mut visited: HashSet<u64> = root_ids.clone();
+    let mut depths: HashMap<u64, usize> = root_ids.iter().map(|&r| (r, 0)).collect();
+    let mut parents: ParentEdges = HashMap::new();
+
+    while let Some(node) = queue.pop_front() {
+        let depth = *depths.get(&node).unwrap_or(&0);
+        if depth >= max_depth {
+            continue;
+        }
+        let Some(obj) = graph.objects.get(&node) else {
+            continue;
+        };
+        let field_names = get_field_names_for_class(graph, obj.class_id);
+        for (idx, &ref_id) in obj.references.iter().enumerate() {
+            if ref_id == 0 {
+                continue;
+            }
+            let field_name = field_names
+                .as_ref()
+                .and_then(|names| names.get(idx))
+                .and_then(|n| n.clone());
+            if visited.insert(ref_id) {
+                parents.entry(ref_id).or_default().push((node, field_name));
+                depths.insert(ref_id, depth + 1);
+                queue.push_back(ref_id);
+            } else if depths.get(&ref_id) == Some(&(depth + 1)) {
+                let entry = parents.entry(ref_id).or_default();
+                if entry.len() < ALT_PARENT_CAP && !entry.iter().any(|(p, _)| *p == node) {
+                    entry.push((node, field_name));
+                }
+            }
+        }
+    }
+
+    if !visited.contains(&target_id) {
+        return (Vec::new(), false);
+    }
+
+    build_paths_from_parents(graph, id_size, &root_ids, &parents, target_id, max_paths)
+}
+
+/// Bounded backtracking reconstruction of root→target paths from the
+/// multi-parent BFS DAG built by [`enumerate_gc_paths`]. Stops as soon as
+/// `max_paths` complete paths are found, or a safety work budget is
+/// exhausted — either case honestly sets `truncated`.
+fn build_paths_from_parents(
+    graph: &ObjectGraph,
+    id_size: usize,
+    root_ids: &HashSet<u64>,
+    parents: &ParentEdges,
+    target_id: u64,
+    max_paths: usize,
+) -> (Vec<Vec<GcPathNode>>, bool) {
+    let mut results: Vec<PathChain> = Vec::new();
+    let mut truncated = false;
+    let mut work = 0usize;
+    let mut stack: Vec<(u64, PathChain)> = vec![(target_id, vec![(target_id, None)])];
+
+    while let Some((current, chain)) = stack.pop() {
+        if results.len() >= max_paths {
+            truncated = true;
+            break;
+        }
+        work += 1;
+        if work > MAX_BACKTRACK_WORK {
+            truncated = true;
+            break;
+        }
+
+        if root_ids.contains(&current) {
+            let mut complete = chain;
+            complete.reverse();
+            results.push(complete);
+            continue;
+        }
+
+        if let Some(edges) = parents.get(&current) {
+            for (parent_id, field_name) in edges {
+                let mut new_chain = chain.clone();
+                if let Some(last) = new_chain.last_mut() {
+                    last.1 = field_name.clone();
+                }
+                new_chain.push((*parent_id, None));
+                stack.push((*parent_id, new_chain));
+            }
+        }
+        // Dead end without reaching a recorded root: drop this partial
+        // path. Should not happen given the forward BFS already proved
+        // `target_id` is reachable, but stay defensive.
+    }
+
+    let paths = results
+        .into_iter()
+        .map(|chain| chain_to_nodes(graph, id_size, root_ids, chain))
+        .collect();
+
+    (paths, truncated)
+}
+
+/// Convert a root→target chain of `(object_id, field_into_this_node)` pairs
+/// into rendered [`GcPathNode`]s, matching the field/is_root semantics used
+/// by [`trace_on_object_graph`].
+fn chain_to_nodes(
+    graph: &ObjectGraph,
+    id_size: usize,
+    root_ids: &HashSet<u64>,
+    chain: PathChain,
+) -> Vec<GcPathNode> {
+    chain
+        .iter()
+        .enumerate()
+        .map(|(idx, (obj_id, field))| {
+            let is_root = idx == 0 && root_ids.contains(obj_id);
+            let class_name = graph
+                .objects
+                .get(obj_id)
+                .and_then(|obj| graph.class_name(obj.class_id))
+                .map(prettify_class_name)
+                .unwrap_or_else(|| "<unknown>".into());
+            let resolved_field = if idx == 0 {
+                if is_root {
+                    Some("ROOT".into())
+                } else {
+                    None
+                }
+            } else {
+                field.clone()
+            };
+            GcPathNode {
+                object_id: format_object_id(*obj_id, id_size),
+                class_name,
+                field: resolved_field,
+                is_root,
+            }
+        })
+        .collect()
 }
 
 fn parse_object_id(input: &str) -> Option<u64> {
@@ -336,6 +760,8 @@ fn build_synthetic_path(
         object_id: request.object_id.clone(),
         path_length: path.len(),
         path,
+        all_paths: None,
+        truncated: false,
         provenance: vec![
             ProvenanceMarker::new(
                 ProvenanceKind::Synthetic,
@@ -466,6 +892,8 @@ impl GcGraph {
             path_length: nodes.len(),
             path: nodes,
             provenance: Vec::new(),
+            all_paths: None,
+            truncated: false,
         })
     }
 

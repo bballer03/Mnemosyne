@@ -29,6 +29,14 @@ pub struct DiffRequest {
     pub retained_change_threshold: u64,
     pub top_n: usize,
     pub retain_field_data: bool,
+    /// Leak-progression cross-reference (M10-B, opt-in, default `false`):
+    /// when `true` and `mode` is `Object`, `run_diff` additionally calls
+    /// `detect_leaks()` on the after-heap and annotates `added`/
+    /// `retained_changed` deltas whose class matches a leak suspect with
+    /// that suspect's `LeakSeverity` (`ObjectDelta.leak_severity`). Every
+    /// existing caller leaves this `false`, reproducing pre-M10-B output
+    /// byte for byte.
+    pub cross_reference_leaks: bool,
 }
 
 impl DiffRequest {
@@ -43,6 +51,7 @@ impl DiffRequest {
             retained_change_threshold: object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
             top_n: object::types::DEFAULT_OBJECT_DIFF_TOP_N,
             retain_field_data: false,
+            cross_reference_leaks: false,
         }
     }
 }
@@ -85,7 +94,7 @@ async fn run_object_diff(request: DiffRequest) -> CoreResult<HeapDiff> {
         &after_dom,
     ));
 
-    let report = object::engine::diff_object_graphs_with_limit(
+    let mut report = object::engine::diff_object_graphs_with_limit(
         &before_graph,
         &before_dom,
         &after_graph,
@@ -100,6 +109,16 @@ async fn run_object_diff(request: DiffRequest) -> CoreResult<HeapDiff> {
         },
     )
     .map_err(|error| error.to_core_error())?;
+
+    if request.cross_reference_leaks {
+        let leak_suspects = crate::analysis::detect_leaks(
+            &request.after_path,
+            crate::analysis::LeakDetectionOptions::default(),
+        )
+        .await?;
+        object::annotate_leak_progression(&mut report.added, &leak_suspects);
+        object::annotate_leak_progression(&mut report.retained_changed, &leak_suspects);
+    }
 
     diff.object_diff = Some(report);
 

@@ -31,7 +31,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted dia
 It brings total clarity to complex Java/Kotlin heap dumps by combining:
 
 - ⚡ High-performance Rust-based heap parsing
-- 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level diffing in the graph-backed analysis path
+- 🧩 Object-graph parsing plus dominator-backed retained sizes, grouped histograms, unreachable-object analysis, and class-level **and object-level** diffing in the graph-backed analysis path
 - 🧠 AI-generated explanations and heuristic fix guidance
 - 🛠 Seamless IDE integration via the Model Context Protocol (MCP)
 - 🧬 Code mapping, graph-backed investigation, and MCP workflows
@@ -51,18 +51,22 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
 - `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
 - Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `--classloaders` now also detects cross-loader duplicate classes (MAT's "Duplicate Classes" report -- the classic Tomcat/Jetty/Spring hot-redeploy leak: same class name loaded by 2+ distinct classloaders) alongside the existing single-loader `potential_leaks` heuristic, plus a bounded parent-loader ancestor chain per loader
 - `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
 - Parse summaries describe heap record categories by aggregate bytes/share/entries so the lightweight view does not imply class-level retained-size semantics
-- Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed
+- Authentic GC path finder now tries full `ObjectGraph` BFS first, then budget-limited parsing, then synthetic fallback when needed; `--all-paths [--by-class <class>] [--max-paths <n>]` enumerates every GC root path up to a shared budget instead of just the shortest one
+- `mnemosyne-cli analyze --by-referrer` ranks objects by incoming-reference count ("group by referrer"), and `mnemosyne-cli inspect <heap> --object-id <id> [--retain-field-data]` gives a focused single-object view (fields, refs in/out, dominator context) on the CLI/MCP, not just the UI
+- `analyze --threads` now resolves `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame local-variable listings (`local:` / `jni-local:` lines)
+- `mnemosyne-cli snapshot save|load|list|rm` caches a parsed object graph + dominator tree to disk (keyed by heap SHA-256), and `--snapshot <hash-or-path>` / `--refresh` on `analyze`, `leaks`, `gc-path`, `inspect`, and `query` skip the binary parse entirely on a cache hit — parse-once-query-many for repeat triage, with no flags needed at all for silent auto-discovery
 - Shared object-graph model now lives under `core::hprof/`, with `core::hprof::binary_parser` and `core::graph::dominator` providing an established graph-backed retained-size pipeline plus navigation APIs (`get_object`, `get_references`, `get_referrers`), typed field readers, and retained stack-trace metadata
 - Contextual CLI error messages now flag common wrong inputs, suggest nearby `.hprof` files when a path is missing, and surface config-fix hints for invalid TOML or bad config overrides
 
 ### 🧪 CI Regression Policies
 - `mnemosyne-cli ci-check <heap.hprof> --policy policy.toml` turns heap analysis into a first-class CI gate instead of requiring custom `jq` or Groovy glue
-- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 10 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`
+- Policy files are TOML with `[meta]`, `[defaults]`, and repeated `[[rule]]` blocks; the current surface supports 12 predicates, with 7 overview-compatible rules plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and the two-heap `object_growth_threshold` (requires `ci-check --baseline <BEFORE_HEAP>`)
 - The severity ladder is `info < warning < error < critical`; `--fail-on` picks the build-breaking threshold and defaults to `error`
 - Outputs: `text`, `json`, `junit`, and `github-actions`; exit codes: `0` clean or below threshold, `1` policy violation, `2` invalid policy, `3` unreadable heap/analyze failure, `4` explicit overview mode with a deep-only rule
 
@@ -102,14 +106,26 @@ Compatible with MCP-capable clients such as:
 - JetBrains (via MCP plugin)
 - ChatGPT Desktop
 
+- MCP workflow suite (M11): five new MCP tools (`describe_workflow`, `start_workflow`, `next_step`, `get_workflow`, `close_workflow`) drive four named, stateful triage workflows -- `triage_memory_leak`, `tune_gc` (diagnostic-only GC-root retention review), `traverse_object_graph`, and `compare_snapshots` -- so an AI agent can complete an entire investigation session without knowing the right tool-call order itself. See [docs/mcp-workflows.md](docs/mcp-workflows.md) for worked transcripts.
+
 Available MCP methods:
 - list_tools
 - parse_heap
 - analyze_heap
+- diff_heaps
 - query_heap
 - detect_leaks
 - map_to_code
 - find_gc_path
+- inspect_object
+- open_snapshot
+- list_snapshots
+- detect_classloader_leaks
+- describe_workflow
+- start_workflow
+- next_step
+- get_workflow
+- close_workflow
 - create_ai_session
 - resume_ai_session
 - get_ai_session
@@ -122,6 +138,12 @@ Call `list_tools` first if your client wants machine-readable method description
 
 `parse_heap` and `analyze_heap` now also accept an optional `mode: "auto"|"deep"|"overview"` parameter. When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only.
 
+`open_snapshot` loads a cached snapshot by SHA-256 hash or file path and returns its manifest; `list_snapshots` lists every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param that skips the HPROF parse and deserializes the cached object graph instead — an invalid, stale, or schema-mismatched key returns a structured error rather than silently falling back to a fresh parse.
+
+`detect_classloader_leaks` (params: `heap_path`) runs cross-loader duplicate-class detection standalone — a focused, cheaper single-purpose call, same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own; the extended `ClassLoaderReport`'s new `duplicate_classes`/`unique_class_count`/`ancestor_chain` fields are additive and appear automatically.
+
+`describe_workflow` (params: `kind`), `start_workflow` (params: `kind`, `heap_path`, plus kind-specific fields), `next_step` (params: `workflow_id`, `step_input`), `get_workflow` (params: `workflow_id`), and `close_workflow` (params: `workflow_id`) drive the four named workflow kinds — `triage_memory_leak`, `tune_gc`, `traverse_object_graph`, `compare_snapshots` — as small, persisted state machines over the existing tool primitives above. `describe_workflow` is read-only introspection with no side effects; `start_workflow`/`next_step` return `{ workflow_id, current_step, step_result, next_expected_input }` so a client always knows what to call next without hardcoding the sequence itself. See [docs/mcp-workflows.md](docs/mcp-workflows.md) for one full worked transcript per kind.
+
 Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 
 ---
@@ -131,11 +153,11 @@ Mnemosyne becomes a **Memory Debugging Copilot** inside your editor.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description including the browser-first UI layer, host bridge contract, desktop scaffold status, and future extension points.
 
 **Layers at a glance:**
-- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `serve`, `config`
-- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, AI insights, MCP server, report generator
-- **Browser UI** (`ui/`) — React frontend: artifact loader, triage dashboard, artifact explorer, heap explorer, leak workspace
-- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects both host bridges
-- **MCP** — 14 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop)
+- **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `snapshot`, `serve`, `config`
+- **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, snapshot cache, AI insights, MCP server, report generator
+- **Browser UI** (`ui/`) — React frontend: AI-guided landing (triage summary, NL query bar, workflow cards, recent-heaps picker), artifact loader, triage dashboard, artifact explorer (now with referrer + classloader panels), heap explorer (now with a thread view), leak workspace, and a comparison basket for object-level diffs (M14)
+- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects the two pre-M14 host bridges (the M14 comparison/workflow bridges have no Tauri native-command equivalent yet — see M16)
+- **MCP** — 24 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop), including the five-tool M11 workflow-lifecycle surface (`describe_workflow`/`start_workflow`/`next_step`/`get_workflow`/`close_workflow`)
 - **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
 ---
@@ -148,7 +170,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
 ### Browser-first dashboard and desktop scaffold
-The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, and the leak workspace route family under `/leaks/:leakId`. Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, and query-console views can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references and referrers, and the leak-workspace detail routes call bridge-backed actions. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects both host bridges, but native desktop bundles are not yet part of the tagged release pipeline.
+The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, the leak workspace route family under `/leaks/:leakId`, a `/compare` comparison basket, and an AI-guided landing page (M14). Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, query-console, and new thread-view routes can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references, referrers, and dominator context as clickable navigation chips; the GC-path view can enumerate every path instead of only the shortest; the comparison basket can run a live object-level diff; and the guided landing can drive an M11 workflow end-to-end or list cached snapshots. Every one of those live capabilities degrades to an explicit unavailable state without a connected bridge — artifact-backed panels (referrer, classloader, thread) never need one at all. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects the two pre-M14 host bridges, but native desktop bundles are not yet part of the tagged release pipeline, and the M14 comparison/workflow bridges are not yet wired into the Tauri native-command layer.
 
 ```bash
 cd ui
@@ -447,7 +469,7 @@ When `--ai` is enabled, the CLI and reports include an **AI Insights** block tha
 
 If you pass `--ai` together with `--mode overview`, Mnemosyne prints a notice and skips AI because overview mode never builds the object graph the AI path depends on.
 
-Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
+Need deeper investigation without switching tools? The same `analyze` run can now append thread-retention tables, duplicate-string groups, oversized-collection summaries, classloader leak candidates and cross-loader duplicate classes, and the largest retained instances via `--threads`, `--strings`, `--collections`, `--classloaders`, and `--top-instances`.
 
 #### Run CI regression checks
 Create a policy file with one or more rules:
@@ -481,7 +503,7 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml --fail-on error
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output heap-policy.xml
 ```
 
-`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 10 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, and `dominator_root_count`.
+`ci-check` loads a dedicated TOML policy file, resolves `--mode auto|deep|overview`, evaluates the heap, and exits with a CI-friendly status. The current policy surface supports 12 predicates: 7 overview-compatible plus deep-only `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and `object_growth_threshold` (M10-B). `object_growth_threshold` is a two-heap predicate: it requires `ci-check --baseline <BEFORE_HEAP>`, and a policy containing such a rule fails loudly (exit code 2) if `--baseline` is omitted rather than silently skipping the rule.
 
 The shipped severity ladder is `info < warning < error < critical`; `--fail-on` defaults to `error` and changes the process exit status when any violation meets or exceeds that threshold. All renderers still show every violation and skipped rule; `--fail-on` controls the exit code only.
 
@@ -650,6 +672,8 @@ Heap diff: before.hprof -> after.hprof
 
 The diff command still preserves the fast record/class summary comparison, and when both snapshots build object graphs it now also reports class-level instance, shallow-byte, and retained-byte deltas. Use it inside CI (see `docs/examples`) when you want a before/after artifact; use `mnemosyne-cli ci-check` when you want Mnemosyne itself to own the policy gate and exit code.
 
+`mnemosyne-cli diff before.hprof after.hprof --mode object` reports fingerprint-matched `added` / `removed` / `retained_changed` objects with dominator + reference chains and a `MatchQuality` collision-rate envelope; add `--cross-reference-leaks` to annotate `added`/`retained_changed` lines with `[LEAK: <severity>]` when the object's class matches a `detect_leaks()` suspect on the after-heap. Gate CI on object-level growth with `mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof` and an `object_growth_threshold` rule.
+
 ---
 
 ## 🤖 MCP Integration
@@ -729,6 +753,7 @@ Once configured, you can ask your AI assistant:
 | `detect_leaks` | Detect memory leaks with severity levels |
 | `map_to_code` | Map leaked objects to source code locations |
 | `find_gc_path` | Find path from object to GC root |
+| `detect_classloader_leaks` | Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern |
 | `create_ai_session` | Create and persist a heap-bound AI session for later follow-up |
 | `resume_ai_session` | Resume a persisted AI session by ID |
 | `get_ai_session` | Inspect compact metadata for a persisted AI session |

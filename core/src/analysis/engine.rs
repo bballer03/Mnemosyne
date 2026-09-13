@@ -1,7 +1,8 @@
 use super::ai::{generate_ai_insights_async, AiInsights};
 use super::{
-    analyze_classloaders, analyze_strings, find_top_instances, inspect_collections,
-    inspect_threads, AnalysisMode, ClassLoaderReport, CollectionReport, StringReport, ThreadReport,
+    analyze_by_referrer, analyze_classloaders, analyze_duplicate_arrays, analyze_strings,
+    find_top_instances, inspect_collections, inspect_threads, AnalysisMode, ArrayReport,
+    ClassLoaderReport, CollectionReport, ReferrerReport, StringReport, ThreadReport,
     TopInstancesReport,
 };
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
         parse_heap, parse_hprof_file_with_options, ClassDelta, ClassStat, HeapDiff, HeapParseJob,
         HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
     },
+    plugin::{AnalyzerResult, PluginRegistry},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -53,6 +55,11 @@ pub struct AnalyzeRequest {
     pub enable_strings: bool,
     pub enable_collections: bool,
     pub enable_top_instances: bool,
+    pub enable_by_referrer: bool,
+    /// Attach duplicate primitive-array content detection (M15 Slice
+    /// 15.A). ADDITIVE: default `false`, so existing `analyze` callers are
+    /// unaffected until they opt in.
+    pub enable_duplicate_arrays: bool,
     pub top_n: usize,
     pub min_collection_capacity: usize,
     pub min_duplicate_count: usize,
@@ -71,6 +78,8 @@ impl Default for AnalyzeRequest {
             enable_strings: false,
             enable_collections: false,
             enable_top_instances: false,
+            enable_by_referrer: false,
+            enable_duplicate_arrays: false,
             top_n: 10,
             min_collection_capacity: 16,
             min_duplicate_count: 2,
@@ -142,8 +151,30 @@ pub struct AnalyzeResponse {
     pub collection_report: Option<CollectionReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_report: Option<StringReport>,
+    /// Duplicate primitive-array content report (M15 Slice 15.A).
+    /// ADDITIVE: only populated when `enable_duplicate_arrays` is
+    /// requested, so today's `analyze` output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array_report: Option<ArrayReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_instances: Option<TopInstancesReport>,
+    /// Group-by-referrer ranking (M8 Slice 8.B). ADDITIVE: only populated
+    /// when `enable_by_referrer` is requested, so today's `analyze` (no
+    /// `--by-referrer`) output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referrer_report: Option<ReferrerReport>,
+    /// Output of every registered [`crate::plugin::AnalyzerPlugin`], in
+    /// registration order (M15 Slice 15.F). ADDITIVE: only populated by
+    /// [`analyze_heap_with_plugins`], never by `analyze_heap` /
+    /// `analyze_heap_with_graph` / `analyze_heap_capturing_graph` /
+    /// `analyze_heap_from_graph` (all of which pass no registry and so
+    /// always leave this empty). `skip_serializing_if = "Vec::is_empty"`
+    /// means an empty `plugin_results` is omitted from the JSON entirely,
+    /// so today's `analyze` output stays byte-identical for every existing
+    /// caller -- see `analyze_heap_back_compat_byte_identical` below,
+    /// unmodified by this slice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_results: Vec<AnalyzerResult>,
     /// Provenance markers for the response as a whole (e.g. partial / preview).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provenance: Vec<ProvenanceMarker>,
@@ -256,7 +287,112 @@ struct AnalysisArtifacts {
     dominator_tree: Option<DominatorTree>,
 }
 
-async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisArtifacts> {
+/// Tuple assembled by [`assemble_graph_backed_analysis`]: the graph-backed
+/// half of an [`AnalyzeResponse`], everything except `ai`/`elapsed`/mode
+/// bookkeeping that the caller (parse-based or snapshot-based) owns.
+type GraphBackedAssembly = (
+    GraphMetrics,
+    Vec<LeakInsight>,
+    Option<HistogramResult>,
+    Option<UnreachableSet>,
+    Option<ThreadReport>,
+    Option<ClassLoaderReport>,
+    Option<CollectionReport>,
+    Option<StringReport>,
+    Option<ArrayReport>,
+    Option<TopInstancesReport>,
+    Option<ReferrerReport>,
+    Vec<ProvenanceMarker>,
+);
+
+/// Build the graph-backed half of an `AnalyzeResponse` from an already
+/// loaded `(ObjectGraph, DominatorTree)` pair.
+///
+/// Pure extraction of `analyze_heap_internal`'s pre-existing graph-backed
+/// branch -- no behavior change for `analyze_heap`/`analyze_heap_with_graph`
+/// callers. Shared with [`analyze_heap_from_graph`] (M9 Slice 9.C), which
+/// receives an already-loaded pair from a snapshot cache instead of calling
+/// [`try_build_dominator`] itself.
+fn assemble_graph_backed_analysis(
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    summary: &HeapSummary,
+    request: &AnalyzeRequest,
+) -> GraphBackedAssembly {
+    let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+    let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+    let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+    let unreachable = Some(find_unreachable_objects(obj_graph));
+    let thread_report = request
+        .enable_threads
+        .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+    let classloader_report = request
+        .enable_classloaders
+        .then(|| analyze_classloaders(obj_graph, Some(dom)));
+    let collection_report = request
+        .enable_collections
+        .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
+    let string_report = request.enable_strings.then(|| {
+        analyze_strings(
+            obj_graph,
+            Some(dom),
+            request.top_n,
+            request.min_duplicate_count,
+        )
+    });
+    let array_report = request
+        .enable_duplicate_arrays
+        .then(|| analyze_duplicate_arrays(obj_graph, request.min_duplicate_count));
+    let top_instances = request
+        .enable_top_instances
+        .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+    let referrer_report = request
+        .enable_by_referrer
+        .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
+    // If graph-backed produced no leaks (e.g. all filtered), fall back
+    if graph_leaks.is_empty() {
+        let fallback_leaks = synthesize_leaks(summary, &request.leak_options);
+        (
+            graph_metrics,
+            fallback_leaks,
+            histogram,
+            unreachable,
+            thread_report,
+            classloader_report,
+            collection_report,
+            string_report,
+            array_report,
+            top_instances,
+            referrer_report,
+            fallback_provenance(),
+        )
+    } else {
+        (
+            graph_metrics,
+            graph_leaks,
+            histogram,
+            unreachable,
+            thread_report,
+            classloader_report,
+            collection_report,
+            string_report,
+            array_report,
+            top_instances,
+            referrer_report,
+            Vec::new(),
+        )
+    }
+}
+
+/// Core analysis pipeline. `registry` is `None` for every pre-M15.F caller
+/// (`analyze_heap`, `analyze_heap_with_graph`, `analyze_heap_capturing_graph`)
+/// and `Some` only when called from [`analyze_heap_with_plugins`] -- see
+/// that function and `AnalyzeResponse::plugin_results` for the M15 Slice
+/// 15.F plugin-runtime wiring.
+async fn analyze_heap_internal(
+    request: AnalyzeRequest,
+    registry: Option<&PluginRegistry>,
+) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
 
@@ -266,8 +402,10 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         max_objects: request.config.parser.max_objects,
     };
     let summary = parse_heap(&parse_job)?;
-    let retain_field_data =
-        request.enable_strings || request.enable_collections || request.enable_threads;
+    let retain_field_data = request.enable_strings
+        || request.enable_collections
+        || request.enable_threads
+        || request.enable_duplicate_arrays;
 
     // Attempt graph-backed analysis
     let dominator_result = try_build_dominator(&request.heap_path, retain_field_data);
@@ -281,68 +419,20 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
+        referrer_report,
         provenance,
     ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
-        let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
-        let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
-        let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
-        let unreachable = Some(find_unreachable_objects(obj_graph));
-        let thread_report = request
-            .enable_threads
-            .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
-        let classloader_report = request
-            .enable_classloaders
-            .then(|| analyze_classloaders(obj_graph, Some(dom)));
-        let collection_report = request
-            .enable_collections
-            .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
-        let string_report = request.enable_strings.then(|| {
-            analyze_strings(
-                obj_graph,
-                Some(dom),
-                request.top_n,
-                request.min_duplicate_count,
-            )
-        });
-        let top_instances = request
-            .enable_top_instances
-            .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
-        // If graph-backed produced no leaks (e.g. all filtered), fall back
-        if graph_leaks.is_empty() {
-            let fallback_leaks = synthesize_leaks(&summary, &request.leak_options);
-            (
-                graph_metrics,
-                fallback_leaks,
-                histogram,
-                unreachable,
-                thread_report,
-                classloader_report,
-                collection_report,
-                string_report,
-                top_instances,
-                fallback_provenance(),
-            )
-        } else {
-            (
-                graph_metrics,
-                graph_leaks,
-                histogram,
-                unreachable,
-                thread_report,
-                classloader_report,
-                collection_report,
-                string_report,
-                top_instances,
-                Vec::new(),
-            )
-        }
+        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request)
     } else {
         let graph = summarize_graph(&summary);
         let leaks = synthesize_leaks(&summary, &request.leak_options);
         (
             graph,
             leaks,
+            None,
+            None,
             None,
             None,
             None,
@@ -359,6 +449,20 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
     } else {
         None
+    };
+
+    // M15 Slice 15.F: run registered AnalyzerPlugins over the graph-backed
+    // pipeline's own (ObjectGraph, DominatorTree) pair. Only possible when
+    // both a registry was supplied AND graph-backed analysis (not the
+    // heuristic summary-only fallback) succeeded -- a plugin has no
+    // ObjectGraph to inspect otherwise. `registry` is `None` for every
+    // caller except `analyze_heap_with_plugins`, so this is a no-op
+    // (`Vec::new()`) for `analyze_heap`/`analyze_heap_with_graph`/
+    // `analyze_heap_capturing_graph`, preserving their byte-identical
+    // output.
+    let plugin_results = match (registry, &dominator_result) {
+        (Some(registry), Some((obj_graph, dom))) => registry.run_analyzers(obj_graph, Some(dom)),
+        _ => Vec::new(),
     };
 
     let has_graph = dominator_result.is_some();
@@ -387,7 +491,10 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
         classloader_report,
         collection_report,
         string_report,
+        array_report,
         top_instances,
+        referrer_report,
+        plugin_results,
         provenance,
     };
 
@@ -404,7 +511,44 @@ async fn analyze_heap_internal(request: AnalyzeRequest) -> CoreResult<AnalysisAr
 }
 
 pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request).await?.response)
+    Ok(analyze_heap_internal(request, None).await?.response)
+}
+
+/// Like [`analyze_heap`], but runs every [`crate::plugin::AnalyzerPlugin`]
+/// registered in `registry` over the same graph-backed pipeline and
+/// attaches their output to [`AnalyzeResponse::plugin_results`] (M15 Slice
+/// 15.F). When `registry` is empty (`PluginRegistry::new()`, the state
+/// Mnemosyne's own binaries ship in today), the returned `AnalyzeResponse`
+/// is byte-identical to what [`analyze_heap`] would return for the same
+/// request -- see `analyze_heap_with_plugins_empty_registry_byte_identical_to_analyze_heap`
+/// in this module's test suite.
+pub async fn analyze_heap_with_plugins(
+    request: AnalyzeRequest,
+    registry: &PluginRegistry,
+) -> CoreResult<AnalyzeResponse> {
+    Ok(analyze_heap_internal(request, Some(registry))
+        .await?
+        .response)
+}
+
+/// Like [`analyze_heap`], but also returns the `(ObjectGraph,
+/// DominatorTree)` pair whenever graph-backed analysis succeeded, so
+/// callers (the CLI's write-through snapshot cache, M9 Slice 9.C) can
+/// populate a snapshot cache entry from the same parse pass instead of
+/// paying for a second one. Unlike [`analyze_heap_with_graph`], this never
+/// errors when analysis falls back to the heuristic (summary-only) path --
+/// it simply returns `None` for the graph, since there is nothing to
+/// cache in that case. The returned `AnalyzeResponse` is byte-identical to
+/// what [`analyze_heap`] would return for the same request in both cases.
+pub async fn analyze_heap_capturing_graph(
+    request: AnalyzeRequest,
+) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
+    let AnalysisArtifacts {
+        response,
+        object_graph,
+        dominator_tree,
+    } = analyze_heap_internal(request, None).await?;
+    Ok((response, object_graph, dominator_tree))
 }
 
 pub async fn analyze_heap_with_graph(
@@ -414,7 +558,7 @@ pub async fn analyze_heap_with_graph(
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request).await?;
+    } = analyze_heap_internal(request, None).await?;
 
     match (object_graph, dominator_tree) {
         (Some(graph), Some(dom)) => Ok((response, graph, dom)),
@@ -422,6 +566,89 @@ pub async fn analyze_heap_with_graph(
             "analyze_heap_with_graph requires graph-backed deep analysis".into(),
         )),
     }
+}
+
+/// Build an `AnalyzeResponse` from an already-loaded `(ObjectGraph,
+/// DominatorTree)` pair instead of parsing `request.heap_path` from
+/// scratch (M9 Slice 9.C: the CLI's `--snapshot`/auto-discovery seam --
+/// see `docs/design/milestone-9-snapshot-persistence.md` §5's architecture
+/// diagram, which shows a snapshot-loaded graph feeding directly into this
+/// analysis layer instead of a fresh binary parse).
+///
+/// Still performs the cheap record-level `HeapSummary` scan (`parse_heap`):
+/// `HeapSummary` (header, record-tag stats) is deliberately not part of a
+/// snapshot payload (§6.2 of the design doc: only `ObjectGraph` /
+/// `DominatorTree` are cached, every analyzer output -- including this
+/// summary -- is re-derived on load). That scan is a streaming byte pass
+/// over the HPROF file's record tags/lengths, not the expensive part this
+/// seam skips -- the full object-graph parse plus dominator
+/// Lengauer-Tarjan computation [`try_build_dominator`] would otherwise
+/// perform on every invocation.
+pub async fn analyze_heap_from_graph(
+    request: AnalyzeRequest,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+) -> CoreResult<AnalyzeResponse> {
+    info!(heap = %request.heap_path, "starting analysis pipeline from cached snapshot graph");
+    let start = Instant::now();
+
+    let parse_job = HeapParseJob {
+        path: request.heap_path.clone(),
+        include_strings: false,
+        max_objects: request.config.parser.max_objects,
+    };
+    let summary = parse_heap(&parse_job)?;
+
+    let (
+        graph,
+        leaks,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
+        provenance,
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request);
+
+    let ai = if request.enable_ai || request.config.ai.enabled {
+        info!(model = %request.config.ai.model, "generating synthetic AI insights (from cached graph)");
+        Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
+    } else {
+        None
+    };
+
+    Ok(AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
+        summary,
+        leaks,
+        recommendations: vec![
+            "Graph-backed analysis complete. Retained sizes are computed from dominator tree."
+                .into(),
+        ],
+        elapsed: start.elapsed(),
+        graph,
+        ai,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
+        // `analyze_heap_from_graph` (the snapshot-cache seam) is not
+        // plugin-registry-aware -- see `analyze_heap_with_plugins` for the
+        // entry point that is. Named exclusion, not a silent gap: no
+        // caller of this function passes a registry today.
+        plugin_results: Vec::new(),
+        provenance,
+    })
 }
 
 /// Compare two heap snapshots and produce a structured diff of their dominant classes.
@@ -503,6 +730,73 @@ pub async fn detect_leaks(
     };
     let summary = parse_heap(&parse_job)?;
     Ok(synthesize_leaks(&summary, &options))
+}
+
+/// Graph-backed leak detection from an already-loaded `(ObjectGraph,
+/// DominatorTree)` pair (M9 Slice 9.C), mirroring [`detect_leaks`]'s
+/// graph-backed-then-heuristic-fallback shape without repeating the
+/// (now-skipped) [`try_build_dominator`] parse.
+pub fn detect_leaks_from_graph(
+    heap_path: &str,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    options: &LeakDetectionOptions,
+) -> CoreResult<Vec<LeakInsight>> {
+    info!(%heap_path, ?options, "detecting leaks from cached snapshot graph");
+
+    let graph_leaks = graph_backed_leaks(dom, obj_graph, options);
+    if !graph_leaks.is_empty() {
+        return Ok(graph_leaks);
+    }
+
+    info!(%heap_path, "graph-backed path (from cached snapshot) returned no leaks after filtering; falling back to heuristic");
+    let parse_job = HeapParseJob {
+        path: heap_path.into(),
+        include_strings: false,
+        max_objects: None,
+    };
+    let summary = parse_heap(&parse_job)?;
+    Ok(synthesize_leaks(&summary, options))
+}
+
+/// Like [`detect_leaks`], but also returns the `(ObjectGraph,
+/// DominatorTree)` pair when graph-backed detection succeeded, so callers
+/// (the CLI's write-through snapshot cache, M9 Slice 9.C) can populate a
+/// snapshot cache entry from the same parse pass instead of re-parsing.
+/// `None` in the second element means detection fell back to the
+/// heuristic (summary-only) path -- nothing to cache. The returned leak
+/// list is byte-identical to what [`detect_leaks`] would return for the
+/// same inputs.
+pub async fn detect_leaks_with_graph(
+    heap_path: &str,
+    options: LeakDetectionOptions,
+) -> CoreResult<(Vec<LeakInsight>, Option<(ObjectGraph, DominatorTree)>)> {
+    info!(%heap_path, ?options, "detecting leaks (graph-capturing)");
+
+    if let Some((obj_graph, dom)) = try_build_dominator(heap_path, false) {
+        info!(%heap_path, "graph-backed leak detection succeeded");
+        let graph_leaks = graph_backed_leaks(&dom, &obj_graph, &options);
+        if !graph_leaks.is_empty() {
+            return Ok((graph_leaks, Some((obj_graph, dom))));
+        }
+        info!(%heap_path, "graph-backed path returned no leaks after filtering; falling back to heuristic");
+        let parse_job = HeapParseJob {
+            path: heap_path.into(),
+            include_strings: false,
+            max_objects: None,
+        };
+        let summary = parse_heap(&parse_job)?;
+        return Ok((synthesize_leaks(&summary, &options), Some((obj_graph, dom))));
+    }
+
+    info!(%heap_path, "graph-backed path unavailable; using heuristic leak detection");
+    let parse_job = HeapParseJob {
+        path: heap_path.into(),
+        include_strings: false,
+        max_objects: None,
+    };
+    let summary = parse_heap(&parse_job)?;
+    Ok((synthesize_leaks(&summary, &options), None))
 }
 
 impl From<&AnalysisConfig> for LeakDetectionOptions {
@@ -1192,7 +1486,10 @@ mod tests {
             classloader_report: None,
             collection_report: None,
             string_report: None,
+            array_report: None,
             top_instances: None,
+            referrer_report: None,
+            plugin_results: Vec::new(),
             provenance: Vec::new(),
         }
     }
@@ -1235,6 +1532,56 @@ mod tests {
         assert!(!graph.objects.is_empty());
         assert!(dom.node_count() > 0);
         assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_with_plugins_empty_registry_byte_identical_to_analyze_heap() {
+        // Hard regression gate (M15 Slice 15.F): a caller that constructs
+        // `analyze_heap_with_plugins` with an empty `PluginRegistry` --
+        // the state Mnemosyne's own CLI/MCP binaries ship in today, since
+        // this milestone ships zero built-in analyzer plugins -- must get
+        // byte-identical output to plain `analyze_heap`.
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let baseline = analyze_heap(request.clone()).await.unwrap();
+
+        let registry = PluginRegistry::new();
+        let via_plugins = analyze_heap_with_plugins(request, &registry).await.unwrap();
+
+        assert!(via_plugins.plugin_results.is_empty());
+        assert_eq!(
+            normalized_analysis_bytes(&baseline),
+            normalized_analysis_bytes(&via_plugins)
+        );
+    }
+
+    #[tokio::test]
+    async fn analyze_heap_with_plugins_surfaces_registered_analyzer_output() {
+        // M15 Slice 15.F validation gate: a test-only `AnalyzerPlugin`
+        // registers and its `analyze()` output appears in a full
+        // `analyze_heap_with_plugins` pipeline run.
+        use crate::plugin::test_support::DemoLeakNameAnalyzer;
+
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let baseline = analyze_heap(request.clone()).await.unwrap();
+
+        let mut registry = PluginRegistry::new();
+        registry.register_analyzer(Box::new(DemoLeakNameAnalyzer));
+        let response = analyze_heap_with_plugins(request, &registry).await.unwrap();
+
+        assert_eq!(response.plugin_results.len(), 1);
+        assert_eq!(response.plugin_results[0].name, "demo-leak-name-analyzer");
+
+        // Every other field must match the no-plugin baseline exactly --
+        // registering an analyzer must not perturb the rest of the
+        // pipeline's output.
+        let mut without_plugin_results = response.clone();
+        without_plugin_results.plugin_results = Vec::new();
+        assert_eq!(
+            normalized_analysis_bytes(&baseline),
+            normalized_analysis_bytes(&without_plugin_results)
+        );
     }
 
     #[tokio::test]

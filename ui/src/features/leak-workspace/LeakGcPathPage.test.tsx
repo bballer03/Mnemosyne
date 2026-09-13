@@ -322,4 +322,149 @@ describe("LeakGcPathPage", () => {
 
     expect(await view.findByText(/^new\.heap\.node$/i)).toBeInTheDocument();
   });
+
+  it("renders today's single-path view unchanged when the bridge lacks findAllGcPaths (regression gate)", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    seedArtifact();
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findGcPath: async () => ({
+        object_id: "0x1000",
+        path_length: 1,
+        path: [
+          { object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true },
+        ],
+        provenance: [],
+      }),
+    };
+
+    act(() => {
+      useLeakWorkspaceStore.getState().setSelection({ objectId: "0x1000" });
+    });
+
+    const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
+      initialEntries: ["/leaks/leak-1/gc-path"],
+    });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    await view.findByText(/current object target: 0x1000/i);
+
+    expect(view.queryByLabelText(/path count/i)).toBeNull();
+    expect(view.queryByText(/path 1 of/i)).toBeNull();
+  });
+
+  it("shows a path-count selector and a multi-path list when the bridge supports findAllGcPaths", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    seedArtifact();
+    const calls: Array<{ objectId: string; maxPaths: number | undefined }> = [];
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async (objectId: string, maxPaths?: number) => {
+        calls.push({ objectId, maxPaths });
+        return {
+          object_id: "0x1000",
+          path_length: 1,
+          path: [
+            { object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true },
+          ],
+          all_paths: [
+            [{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }],
+            [
+              { object_id: "0x2000", class_name: "java.lang.Thread", field: "ROOT", is_root: true },
+              { object_id: "0x1000", class_name: "com.example.Cache", field: "entries", is_root: false },
+            ],
+          ],
+          truncated: false,
+          provenance: [],
+        };
+      },
+    };
+
+    act(() => {
+      useLeakWorkspaceStore.getState().setSelection({ objectId: "0x1000" });
+    });
+
+    const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
+      initialEntries: ["/leaks/leak-1/gc-path"],
+    });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    expect(await view.findByLabelText(/path count/i)).toBeInTheDocument();
+    expect(await view.findByText(/path 1 of 2/i)).toBeInTheDocument();
+    expect(view.getByText(/path 2 of 2/i)).toBeInTheDocument();
+    expect(view.getByText(/java\.lang\.thread/i)).toBeInTheDocument();
+    expect(calls[0]).toEqual({ objectId: "0x1000", maxPaths: 5 });
+  });
+
+  it("re-requests multi-path results with the newly selected path count", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    seedArtifact();
+    const calls: Array<number | undefined> = [];
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async (_objectId: string, maxPaths?: number) => {
+        calls.push(maxPaths);
+        return {
+          object_id: "0x1000",
+          path_length: 1,
+          path: [{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }],
+          all_paths: [[{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }]],
+          truncated: false,
+          provenance: [],
+        };
+      },
+    };
+
+    act(() => {
+      useLeakWorkspaceStore.getState().setSelection({ objectId: "0x1000" });
+    });
+
+    const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
+      initialEntries: ["/leaks/leak-1/gc-path"],
+    });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    await view.findByText(/path 1 of 1/i);
+
+    const select = view.getByLabelText(/path count/i) as HTMLSelectElement;
+    const user = userEvent.setup();
+    await user.selectOptions(select, "10");
+
+    expect(calls).toEqual([5, 10]);
+  });
+
+  it("shows a truncation notice when multi-path enumeration was capped", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    seedArtifact();
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findAllGcPaths: async () => ({
+        object_id: "0x1000",
+        path_length: 1,
+        path: [{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }],
+        all_paths: [[{ object_id: "0x1000", class_name: "com.example.Cache", field: "ROOT", is_root: true }]],
+        truncated: true,
+        provenance: [],
+      }),
+    };
+
+    act(() => {
+      useLeakWorkspaceStore.getState().setSelection({ objectId: "0x1000" });
+    });
+
+    const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
+      initialEntries: ["/leaks/leak-1/gc-path"],
+    });
+    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
+    expect(await view.findByText(/truncated/i)).toBeInTheDocument();
+  });
 });

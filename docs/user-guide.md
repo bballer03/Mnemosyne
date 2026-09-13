@@ -146,6 +146,71 @@ Choose `parse` first when you want to confirm that a dump is valid, estimate sca
 
 `auto` resolves to overview for dumps at or above 4 GiB by default, or whatever byte threshold `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD` supplies. Overview mode is streaming and honest: it reports approximate shallow sizes only, not retained sizes, dominator data, or leak suspects.
 
+### `snapshot`
+
+Use `snapshot` when you want to explicitly manage the parse-once-query-many cache instead of relying on implicit auto-caching alone. A snapshot stores an already-parsed `ObjectGraph` + `DominatorTree` pair to disk, keyed by the heap file's SHA-256 hash, so a later `analyze`/`leaks`/`gc-path`/`inspect`/`query` run can deserialize it instead of re-parsing the HPROF binary from scratch.
+
+Usage:
+
+```bash
+mnemosyne-cli snapshot save <HEAP> [--output <DIR>]
+mnemosyne-cli snapshot load <HASH_OR_PATH>
+mnemosyne-cli snapshot list
+mnemosyne-cli snapshot rm <HASH>
+```
+
+Flags:
+
+- `snapshot save`: `--output <DIR>` — override the default cache root for this save only
+- `snapshot load` / `snapshot rm`: positional `<HASH_OR_PATH>` / `<HASH>`
+
+What each subcommand does:
+
+- `save`: parses the heap dump (deep mode only — overview mode never builds an `ObjectGraph`, so there is nothing to snapshot) and atomically writes its object graph + dominator tree to the cache under `<cache-root>/<heap-sha256>.json`, then prints the manifest (hash, object count, `has_field_data`, schema version, created-at)
+- `load`: deserializes a cached snapshot by hash or direct file path and prints its manifest; it does not run any analysis on its own — pair it with `--snapshot` on another command
+- `list`: prints a table of every cached snapshot's hash, heap path, object count, created-at, and schema version
+- `rm`: deletes a cached snapshot by hash; removing a hash that doesn't exist is a loud `snapshot_not_found` error, not a silent no-op
+
+Cache location: `dirs::cache_dir()/mnemosyne` (for example `~/.cache/mnemosyne/` on Linux, `~/Library/Caches/mnemosyne/` on macOS, `%LOCALAPPDATA%\mnemosyne\` on Windows), overridable with the `MNEMOSYNE_SNAPSHOT_DIR` environment variable. Snapshots inherit the same sensitivity as the source HPROF file (they can contain retained string/field contents when `--retain-field-data` was used to build them) — treat the cache directory with the same care as your heap dumps, and `snapshot rm` when you're done with a sensitive dump.
+
+Example:
+
+```bash
+mnemosyne-cli snapshot save heap.hprof
+mnemosyne-cli snapshot list
+mnemosyne-cli analyze heap.hprof --snapshot a1b2c3d4...
+mnemosyne-cli snapshot rm a1b2c3d4...
+```
+
+Expected output pattern:
+
+```text
+Snapshot saved: a1b2c3d4e5f6...
+  Heap path: heap.hprof
+  Object count: 1234567
+  Has field data: false
+  Schema version: 1
+  Created at: 1745766000
+```
+
+`mnemosyne-cli snapshot list` with cached entries:
+
+```text
+Cached snapshots:
+  Hash      Heap Path    Objects   Created At   Schema
+  a1b2c3d4  heap.hprof   1234567   1745766000   1
+```
+
+Beyond explicit `snapshot save|load|list|rm`, every command that currently parses a heap dump directly (`analyze`, `leaks`, `gc-path`, `inspect`, `query`) also accepts additive `--snapshot <HASH_OR_PATH>` and `--refresh` flags:
+
+- no `--snapshot` and no `--refresh`: silently checks the default cache dir for a fresh snapshot matching the heap file's current SHA-256; uses it if present, otherwise parses normally and best-effort writes a new cache entry (a cache-write failure never fails your actual command, it just means no entry got cached)
+- `--snapshot <HASH_OR_PATH>`: loads exactly that cached entry instead of parsing; errors loudly (never silently falls back to a fresh parse) if the entry is missing, corrupt, schema-mismatched, or stale relative to the heap file you passed
+- `--refresh`: always re-parses the heap dump and overwrites its cache entry, even if a fresh cached snapshot already exists
+
+Exit codes (additive on `analyze`/`leaks`/`gc-path`/`inspect`/`query`, and on `snapshot load`/`snapshot rm`): `10` `snapshot_not_found` (explicit `--snapshot <key>` / `snapshot load`/`rm` key doesn't exist), `11` `snapshot_schema_mismatch` (cached snapshot's schema version doesn't match the running binary), `12` `snapshot_stale_source` (the heap file's bytes changed since the snapshot was taken), `13` `snapshot_corrupt` (the cached file failed to deserialize). These four codes only apply to *explicit* `--snapshot`/`snapshot load` usage — a cache miss during silent auto-discovery (no `--snapshot` passed) is never an error, since "nothing cached yet" is the expected first-run state.
+
+Current limitation: the only thing cached is the object graph + dominator tree. M8's analyzer outputs (referrer report, object inspections, thread frame-locals) are *not* precomputed into the snapshot — they're cheap enough to recompute from the loaded graph on every call, so caching them would only add staleness risk and file bloat for no real speed win.
+
 ### `analyze`
 
 `analyze` is the main report-generation command. It runs the graph-backed analysis pipeline when possible, can attach optional investigation reports, and is the only CLI surface that currently owns `--format` and `--output-file`.
@@ -162,6 +227,7 @@ Flags:
 - `--format text|markdown|html|json|toon`
 - `--profile overview|incident-response|ci-regression`
 - `--group-by class|package|classloader`
+- `--by-referrer` — attach a group-by-referrer report ranking objects by incoming-reference count
 - `-o, --output-file <FILE>`
 - `--ai`
 - `--threads`
@@ -173,15 +239,19 @@ Flags:
 - `--min-capacity <N>`
 - `--package <PKG>[,<PKG>...]`
 - `--leak-kind <KIND>[,<KIND>...]`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - validates the heap file
 - resolves the requested mode at the CLI boundary (`auto` by default)
 - uses the configured analysis filters plus any command-line overrides
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - in `deep`, builds the full analysis response, attempts graph-backed retained-size analysis first, and falls back honestly when needed
 - in `overview`, skips object-graph analysis entirely and renders the streaming partial summary with approximate shallow sizes only
 - renders the result in text, Markdown, HTML, JSON, or TOON
+- with `--by-referrer`: ranks objects by incoming-reference count (tiebreak retained size), listing up to 5 top referrer classes per entry, via the new `core::analysis::referrers` module (`ReferrerReport`, optional field on `AnalyzeResponse`)
 
 Profile behavior:
 
@@ -200,6 +270,7 @@ mnemosyne-cli analyze heap.hprof --group-by package --top-instances
 mnemosyne-cli analyze heap.hprof --profile incident-response --threads --strings --collections
 mnemosyne-cli analyze heap.hprof --format html --output-file heap-report.html
 mnemosyne-cli analyze heap.hprof --format json --profile ci-regression
+mnemosyne-cli analyze heap.hprof --by-referrer --top-n 10
 ```
 
 Expected output pattern in text mode:
@@ -224,6 +295,41 @@ String Analysis (... strings, ... unique):
 Collection Report (... collections):
 ```
 
+`--by-referrer` output pattern:
+
+```text
+Top referenced objects (by incoming reference count)
+-----------------------------------------------------
+Objects considered: 4213
+0x7f2a3000 com.example.SharedCache referrers=184 retained=536870912B top=[ConnectionPool(120), RequestHandler(64)]
+```
+
+`--threads` output now includes resolved frame-locals under each stack frame when `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` roots are present:
+
+```text
+Stack: pool-1-thread-3
+  at com.example.Worker.run(Worker.java:42)
+      local: 0x00001000 (com.example.Task)
+      jni-local: 0x00002000 (java.nio.ByteBuffer)
+```
+
+`--classloaders` output ships **two independent leak signals that coexist** (neither replaces the other, see [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) §3.3): the pre-existing single-loader `potential_leaks` heuristic (a loader that retains a lot but declares almost no classes of its own) and the newer cross-loader "Duplicate classes across loaders" signal, MAT's actual "Duplicate Classes" report shape and the defining pattern of the classic Tomcat/Jetty/Spring hot-redeploy leak — the same class name loaded by two or more distinct classloaders that don't know about each other. The per-loader table also gains an `Ancestors` column reporting the length of each loader's resolved parent chain (bounded walk, depth 16, cycle-guarded against adversarial/malformed HPROF data). Both new sections print only when non-empty:
+
+```text
+ClassLoader Report:
+  Loader                     Classes   Ancestors   Instances   Shallow    Retained
+  com.example.WebappLoader   142       1           8213        4.2 MB     61.8 MB
+
+Duplicate classes across loaders (2):
+  com.example.webapp.RequestHandler  loaded by 3 loaders: 0x1000, 0x2400, 0x3800
+  com.example.webapp.SessionCache    loaded by 2 loaders: 0x1000, 0x2400
+
+Potential classloader leaks:
+  com.example.WebappLoader (Retains 61.80 MB but loads only 2 classes)
+```
+
+`unique_class_count` (classes loaded by a given loader and no other, derived from the same grouping pass that builds the duplicate-classes list) is computed and available in JSON/TOON output on each `ClassLoaderInfo` entry, but is not currently rendered as its own text-table column.
+
 When you write to a file, the CLI prints a confirmation instead of dumping the report to stdout:
 
 ```text
@@ -231,6 +337,8 @@ Report (text/plain) written to heap-report.txt
 ```
 
 Overview mode renders a different banner-led report focused on top classes, instance samples, GC roots, and capped thread frames. It explicitly states that retained sizes, the dominator tree, and leak suspects are not available in that mode.
+
+See [`snapshot`](#snapshot) for the `--snapshot`/`--refresh` cache flags shared with `leaks`, `gc-path`, `inspect`, and `query`. Exit codes `10`-`13` apply only to explicit `--snapshot <key>` usage (see the `snapshot` section for the full table); a silent cache miss during auto-discovery is never an error.
 
 ### `ci-check`
 
@@ -249,10 +357,12 @@ Flags:
 - `--format text|json|junit|github-actions`
 - `--output <FILE>`
 - `--fail-on info|warning|error|critical`
+- `--baseline <BEFORE_HEAP>` (M10-B) — required only when the loaded policy contains an `object_growth_threshold` rule
 
 What it does:
 
 - loads a dedicated TOML policy file from `--policy`
+- if the policy contains an `object_growth_threshold` rule, requires `--baseline` and runs a `--mode object` diff between `--baseline` and `<HEAP>` up front, once, regardless of how many rules need it
 - resolves the requested mode at the CLI boundary (`auto` by default)
 - in `deep`, runs the full analysis path and evaluates the resulting `AnalyzeResponse`
 - in `overview`, parses the bounded-memory overview summary and evaluates the resulting `OverviewSummary`
@@ -264,7 +374,38 @@ Policy TOML shape:
 - optional `[defaults]` for default rule severity
 - repeated `[[rule]]` blocks for predicate checks
 
-The current policy surface supports 10 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, and `dominator_root_count`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+The current policy surface supports 12 predicates. Overview-compatible predicates are `total_bytes`, `total_instances`, `class_instances`, `class_bytes`, `loaded_class_count`, `gc_root_count`, and `provenance_must_not_contain`. Deep-only predicates are `leak_count`, `retained_size`, `dominator_root_count`, `classloader_leak_count`, and `object_growth_threshold`. For the full catalog and field-level schema, see [design/milestone-7-2-ci-regression-policies.md](design/milestone-7-2-ci-regression-policies.md).
+
+`classloader_leak_count` (M13) thresholds on the number of `DuplicateClassGroup` entries — the cross-loader "same class name loaded by 2+ distinct classloaders" signal, not the older single-loader `potential_leaks` heuristic (there is no predicate over `potential_leaks`). Like the other deep-only predicates, it is skipped (not errored) on overview-mode input, and also skipped if the policy is evaluated against a deep `AnalyzeResponse` that never had classloader analysis enabled — `ci-check` handles this automatically by turning on `enable_classloaders` whenever the loaded policy declares a `classloader_leak_count` rule, so no extra flag is needed:
+
+```toml
+[[rule]]
+id = "no-classloader-duplicates"
+predicate = "classloader_leak_count"
+op = "<="
+value = 0
+severity = "error"
+```
+
+This example fails the build the moment any class name is loaded by more than one classloader in the analyzed heap — the standard first gate for catching a webapp redeploy leak before it compounds across further redeploys.
+
+`object_growth_threshold` (M10-B) is the first predicate scoped to a specific class and the first genuinely **two-heap** predicate — it fails CI when a tracked object (or class of objects) grows beyond a per-class retained-size limit between `--baseline` and `<HEAP>`. It scans the object diff's `retained_changed` entries (comparing `|after_retained_bytes - before_retained_bytes|`) and `added` entries (comparing `retained_bytes`, since an added object has no "before") for every entry whose class matches the rule's `class` field — or every entry, when `class` is omitted. Multiple violating objects within one rule are reported as a single aggregate violation with a count and the worst (largest-delta) offender cited by id, not one violation per object:
+
+```toml
+[[rule]]
+id = "no-runaway-cache-growth"
+predicate = "object_growth_threshold"
+class = "com.example.CacheEntry"   # omit to apply to every tracked object
+op = "<="
+value = 10485760                   # bytes; max allowed retained-size delta per object
+severity = "error"
+```
+
+```bash
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof
+```
+
+Because this predicate cannot be evaluated without a baseline to diff against, `ci-check` refuses loudly — exit code `2`, the same family as a malformed policy file — when the loaded policy contains an `object_growth_threshold` rule and `--baseline` was not supplied. It never silently evaluates the rule with no growth data, and never silently skips it either.
 
 Severity and mode behavior:
 
@@ -279,7 +420,7 @@ Exit codes:
 
 - `0`: clean, or only violations below `--fail-on`
 - `1`: at least one violation met or exceeded `--fail-on`
-- `2`: invalid policy file or schema error
+- `2`: invalid policy file or schema error, or an `object_growth_threshold` rule with `--baseline` omitted (M10-B)
 - `3`: unreadable heap or analysis failure
 - `4`: explicit `--mode overview` with a deep-only rule
 
@@ -290,6 +431,7 @@ mnemosyne-cli ci-check heap.hprof --policy policy.toml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format json --output policy.json
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format junit --output policy.xml
 mnemosyne-cli ci-check heap.hprof --policy policy.toml --format github-actions --fail-on warning
+mnemosyne-cli ci-check heap.hprof --policy policy.toml --baseline before.hprof
 ```
 
 ### `flamegraph`
@@ -364,11 +506,14 @@ Flags:
 - `--min-severity low|medium|high|critical`
 - `--package <PKG>[,<PKG>...]`
 - `--leak-kind <KIND>[,<KIND>...]`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - loads the configured analysis filters
 - applies command-line overrides for severity, package allow-listing, and leak kinds
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - prints a compact table plus per-leak descriptions and provenance details
 
 Examples:
@@ -398,6 +543,8 @@ If nothing survives the filters, Mnemosyne prints an explicit zero-result messag
 No leak suspects detected.
 ```
 
+See [`snapshot`](#snapshot) for the shared `--snapshot`/`--refresh` cache flags and exit codes `10`-`13` (explicit `--snapshot <key>` only).
+
 ### `gc-path`
 
 Use `gc-path` when you already know a target object ID and want to see how it stays reachable from a GC root.
@@ -406,12 +553,18 @@ Usage:
 
 ```bash
 mnemosyne-cli gc-path <HEAP> --object-id <ID> [--max-depth <N>]
+mnemosyne-cli gc-path <HEAP> [--object-id <ID> | --by-class <CLASS_NAME>] --all-paths [--max-paths <N>] [--max-depth <N>]
 ```
 
 Flags:
 
-- `--object-id <ID>`
+- `--object-id <ID>` — required unless `--by-class` is used
 - `--max-depth <N>`
+- `--all-paths` — return every enumerated GC root path instead of only the shortest one
+- `--by-class <CLASS_NAME>` — find all-paths for every live instance of this class instead of a single `--object-id`; mutually exclusive with `--object-id`
+- `--max-paths <N>` — default `20`; a **shared** budget across the whole `--all-paths`/`--by-class` query, not per-path or per-instance
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
@@ -419,6 +572,8 @@ What it does:
 - prefers a full `ObjectGraph` BFS path
 - falls back to a budget-limited graph and then synthetic output when needed
 - labels fallback output through provenance markers
+- with `--all-paths`/`--by-class`: enumerates every GC root path up to the shared `--max-paths` budget instead of stopping at the first hit; the plain (no new flags) `gc-path` output is unaffected and stays byte-identical
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 
 Example:
 
@@ -435,6 +590,73 @@ GC path for 0x00001000:
 ROOT -> java.lang.Thread [0x00000011] via <direct>
 ```
 
+All-paths / by-class example:
+
+```bash
+mnemosyne-cli gc-path heap.hprof --object-id 0x00001000 --all-paths --max-paths 5
+mnemosyne-cli gc-path heap.hprof --by-class com.example.CacheEntry --all-paths --max-paths 20
+```
+
+```text
+GC root paths for 0x00001000 (3 found, not truncated):
+  Path 1 (depth 4):
+    ROOT -> java.lang.Thread [0x00000011] via <direct>
+    #1 -> com.example.RequestCache [0x00000F40] via entries
+    #2 -> com.example.CacheEntry [0x00001000] via owner
+  Path 2 (depth 5):
+    ...
+  Path 3 (depth 6):
+    ...
+```
+
+When the shared `--max-paths` budget is hit before enumeration finishes, the header instead reads `(20 found, truncated)` — the count found and the truncation state are both reported honestly rather than silently capping.
+
+Exit codes: `0` success, `8` `--object-id` not found in the heap, `9` `--by-class` matches zero live instances, `10`-`13` explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
+
+### `inspect`
+
+Use `inspect` when you want a focused, single-object view — fields, refs in/out, dominator context — without running the full `analyze` report. This is the CLI/MCP equivalent of the UI's Object Inspector pane.
+
+Usage:
+
+```bash
+mnemosyne-cli inspect <HEAP> --object-id <ID> [--retain-field-data] [--format text|json|toon]
+```
+
+Flags:
+
+- `--object-id <ID>` — required
+- `--retain-field-data` — opt in to typed field values (re-parses the heap with field data retained); without it, the `fields` section is omitted
+- `--format text|json|toon` — default `text`
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
+
+What it does:
+
+- resolves the object's shallow/retained size, dominator parent/children, references out, and referrers in via existing `ObjectGraph`/`DominatorTree` accessors — no new graph-walking logic
+- references and dominator context are structured (`object_id` + `class_name`), not baked display strings, so JSON/TOON/MCP consumers can chain the returned ids straight back into another `inspect`/`gc-path`/`query` call
+- with `--retain-field-data`: also reads and renders typed instance field values
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists; when `--retain-field-data` is also passed, a cached snapshot lacking field data is treated as a miss (falls through to a fresh field-data-retaining parse) rather than silently serving fields-less data — but an *explicit* `--snapshot <key>` always loads exactly what's cached, so a field-data-less explicit snapshot yields no `fields` section even with `--retain-field-data`
+
+Example:
+
+```bash
+mnemosyne-cli inspect heap.hprof --object-id 0x00001000 --retain-field-data
+```
+
+```text
+Object 0x00001000  (com.example.CacheEntry)
+  Shallow: 48 B   Retained: 1.20 MB
+  Dominator parent: 0x00004000 (com.example.Cache)
+  Dominator children: 2
+  References out (1): 0x00003000 (java.lang.String)
+  Referrers in (1): 0x00004000 (com.example.Cache)
+  Fields (--retain-field-data only):
+    key: com.example.Key = 0x00002000
+```
+
+Exit codes: `0` success, `8` `--object-id` not found in the heap, `10`-`13` explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
+
 ### `diff`
 
 Use `diff` to compare two snapshots and highlight aggregate change between them.
@@ -447,7 +669,15 @@ mnemosyne-cli diff before.hprof after.hprof
 
 Flags:
 
-- no diff-specific CLI flags in the current runtime
+- `--mode {class|object}` — default `class` (today's behavior, byte-identical to v0.3.0). `object` additionally runs fingerprint-based per-object identity diffing (requires deep mode on both dumps).
+- `--identity-strategy {class+retained|class+dominator|full-fingerprint}` — default `class+dominator`. Ignored when `--mode class`. `full-fingerprint` requires `--retain-field-data`.
+- `--retained-bucket-bits <u8>` — default `10` (1 KB power-of-two retained-size bucket).
+- `--retained-change-threshold <bytes>` — default `1048576`; minimum absolute retained-size delta for an object to appear in `retained_changed`.
+- `--top <n>` — default `50`; per-section cap for `added` / `removed` / `retained_changed`.
+- `--object-diff-min-retained <bytes>` — default `4096`; objects below this retained-size floor are skipped to keep memory bounded (hidden in `--help`, shown in `--help-long`).
+- `--retain-field-data` — opt in to field-level retention; required for `full-fingerprint`.
+- `--format {text|json|toon}` — default `text`.
+- `--cross-reference-leaks` (M10-B) — opt in, default off. Ignored when `--mode class`.
 
 What it does:
 
@@ -455,6 +685,8 @@ What it does:
 - prints total delta size and object-count delta
 - prints top changed classes or record categories
 - prints class-level retained deltas when both heaps build graph-backed diff context successfully
+- with `--mode object`: fingerprints objects in both dumps (HPROF ids are never used as identity — they are not stable across dumps), then reports objects present only in `after` (`added`), only in `before` (`removed`), and present in both with a retained-size delta beyond the threshold (`retained_changed`), each with a dominator-class chain and reference chain, plus a `match_quality` block reporting the fingerprint collision rate
+- with `--mode object --cross-reference-leaks`: additionally runs `detect_leaks()` against the after-heap and annotates any `added`/`retained_changed` entry whose class matches a leak suspect with that suspect's severity — connects "this object grew" with "this object grew *and* is already a flagged leak suspect." Text output appends a `[LEAK: <severity>]` suffix to matching lines; JSON/TOON carry the same data as `leak_severity` on the delta. Off by default, so pre-M10-B `diff --mode object` output is byte-identical when the flag is not passed.
 
 Example:
 
@@ -475,7 +707,32 @@ Heap diff: before.hprof -> after.hprof
     com.example.CacheEntry        +12000     10.10 -> 94.30 MB   +90.50 MB
 ```
 
-Current limitation: `diff` is still record-level plus class-level retained deltas. It does not yet provide object-identity or reference-chain diffing.
+Object-level example:
+
+```bash
+mnemosyne-cli diff before.hprof after.hprof --mode object
+```
+
+```text
+object diff (strategy=class+dominator, bucket=1KB, threshold=1MB):
+  added (3):
+    com.example.UserSession    +52428800 bytes  count=1  dom=[Server,Pool,Cache,...]
+  removed (1):
+    com.example.LegacyCache    -67108864 bytes  count=2  dom=…
+  retained_changed (5):
+    com.example.RequestMap    +12582912 bytes  count=1->1  dom=…
+  match quality: collision_rate=0.012  false_match_risk=Low  false_split_risk=Medium
+```
+
+With `--cross-reference-leaks`, an annotated line gets a suffix:
+
+```text
+    com.example.UserSession    +52428800 bytes  count=1  dom=[Server,Pool,Cache,...]  [LEAK: HIGH]
+```
+
+Exit codes: `0` diff produced, `2` I/O error, `3` heap parse error, `5` mode mismatch (e.g. `--mode object` against an overview-only dump), `6` fingerprint budget exceeded (`feature_unavailable_object_diff_too_large` — raise `--object-diff-min-retained` or use a smaller dump), `7` `full-fingerprint` requested without `--retain-field-data`.
+
+Current limitation: object-level diff is a two-snapshot comparison only (no 3+ snapshot trend tracking). `ci-check --baseline` and `diff --cross-reference-leaks` shipped in M10-B; MCP wiring for both remains open future work.
 
 ### `fix`
 
@@ -536,11 +793,13 @@ mnemosyne-cli query <HEAP> "<QUERY>"
 
 Flags:
 
-- no query-specific flags in the current runtime
+- `--snapshot <HASH_OR_PATH>` — load exactly this cached snapshot instead of parsing; errors loudly if missing/corrupt/stale/schema-mismatched
+- `--refresh` — always re-parse and overwrite the snapshot cache entry, even if a fresh one exists
 
 What it does:
 
 - builds the graph-backed query context
+- with no `--snapshot`/`--refresh`: silently auto-uses a fresh matching snapshot from the default cache dir if one exists, else parses normally and best-effort caches the result
 - parses the query string
 - prints matched column names, match count, rows, and a truncation note when `LIMIT` cuts off the result set
 
@@ -583,7 +842,7 @@ Matched: 1
 0x00001000 | 42
 ```
 
-Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields.
+Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields. Exit codes `10`-`13` apply to explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
 Current limitation: the query surface is real, but it is still smaller than a full MAT-style OQL environment. The targeted expansion now covers the highest-value predicates and projections, but multi-hop traversal, subqueries, broader set algebra, and deeper explorer semantics are still future work.
 
@@ -833,7 +1092,24 @@ mnemosyne-cli analyze heap.hprof \
   --min-capacity 32
 ```
 
-This is a good interactive workflow when you want to correlate retained-size hotspots with thread-local retention, duplicate string waste, oversized collections, and the largest individual objects.
+This is a good interactive workflow when you want to correlate retained-size hotspots with thread-local retention, duplicate string waste, oversized collections, and the largest individual objects. `--threads` output includes resolved `local:`/`jni-local:` lines under each stack frame wherever `ROOT_JAVA_FRAME`/`ROOT_JNI_LOCAL` GC roots are present.
+
+### Reachability & references
+
+Once `leaks` or `--top-instances` names a suspect, use the M8 reachability surfaces to see the full picture instead of just the shortest path.
+
+```bash
+mnemosyne-cli gc-path heap.hprof --object-id 0x00001000 --all-paths --max-paths 10
+mnemosyne-cli gc-path heap.hprof --by-class com.example.CacheEntry --all-paths --max-paths 20
+mnemosyne-cli analyze heap.hprof --by-referrer --top-n 10
+mnemosyne-cli inspect heap.hprof --object-id 0x00001000 --retain-field-data
+```
+
+Recommended practice:
+
+- use `gc-path --all-paths` when the shortest path alone doesn't explain retention, or `--by-class` when you want every reachable instance of a class merged into one query
+- use `analyze --by-referrer` to find the objects other things point at the most — a strong signal for shared caches, registries, and listener lists
+- use `inspect` for a one-shot, scriptable field-level view of a single object instead of paging through the full `analyze` report
 
 ### Flame graphs
 
@@ -1101,9 +1377,19 @@ Useful MCP methods to know up front:
 - `parse_heap`
 - `detect_leaks`
 - `analyze_heap`
+- `diff_heaps`
 - `query_heap`
 - `map_to_code`
 - `find_gc_path`
+- `inspect_object`
+- `open_snapshot`
+- `list_snapshots`
+- `detect_classloader_leaks`
+- `describe_workflow`
+- `start_workflow`
+- `next_step`
+- `get_workflow`
+- `close_workflow`
 - `create_ai_session`
 - `resume_ai_session`
 - `get_ai_session`
@@ -1113,6 +1399,27 @@ Useful MCP methods to know up front:
 - `propose_fix`
 
 `parse_heap` and `analyze_heap` both accept an optional `mode: "auto"|"deep"|"overview"` parameter. When the server resolves to overview, the response carries `"mode": "overview"` and returns the streaming partial summary instead of deep-mode object-graph data.
+
+`find_gc_path` gains optional `all_paths: boolean`, `by_class: string`, and `max_paths: number` params (default `20`) for all-paths / by-class enumeration — additive params on the existing tool, not a new tool. `analyze_heap` gains an optional `by_referrer: boolean` param that populates `referrer_report`. `inspect_object` is a new tool taking `heap_path`, `object_id`, and optional `retain_field_data`, returning an `ObjectInspection` with structured `object_id`/`class_name` refs. `diff_heaps` takes `before`, `after`, and an optional `mode: "class"|"object"` param (plus identity-strategy and budget params) for object-level diffing.
+
+`open_snapshot` (params: `key`) loads a cached snapshot by SHA-256 hash or file path and returns its `SnapshotManifest`; it does not run any analysis on its own. `list_snapshots` (no params) returns every cached manifest. `analyze_heap`, `parse_heap`, `find_gc_path`, `inspect_object`, and `query_heap` all gain an additive `snapshot: string` param: when set, the server deserializes the cached object graph instead of re-parsing `heap_path`/`path`, and an invalid, stale, or schema-mismatched key returns a structured `snapshot_not_found`/`snapshot_stale_source`/`snapshot_schema_mismatch`/`snapshot_corrupt` error rather than silently falling back to a fresh parse. `parse_heap`'s `snapshot` response is a distinctly-shaped partial object (not a real `HeapSummary`) carrying a `ProvenanceKind::Partial` marker, since a cached snapshot has no raw HPROF record-tag data to reconstruct the real summary from.
+
+`detect_classloader_leaks` (params: `heap_path`, required) runs `core::analysis::classloader::detect_duplicate_classes()` standalone and returns `Vec<DuplicateClassGroup>` — the cross-loader "Duplicate Classes" signal only, without a full `analyze_heap` call. This is a focused, cheaper single-purpose tool by design, the same rationale as `diff_heaps` existing on its own rather than folding into `analyze_heap`. `analyze_heap`'s existing `enable_classloaders` param needs no new param of its own to get the M13 signals: once set, the returned `classloader_report` automatically includes the new `duplicate_classes`, `unique_class_count` (per loader), and `ancestor_chain` (per loader) fields alongside the pre-existing `loaders` and `potential_leaks`.
+
+### 7.1 MCP workflow suite
+
+The tools above are independent, one-shot primitives. The five workflow tools — `describe_workflow`, `start_workflow`, `next_step`, `get_workflow`, `close_workflow` — add a stateful layer on top: a **workflow** is a small, named, server-persisted state machine that chains several of those same primitives into a fixed, documented sequence, so a client doesn't have to know the right call order itself. No new heap-analysis logic is introduced by this layer — every workflow step wraps an existing, already-tested primitive.
+
+Four workflow kinds ship:
+
+- **`triage_memory_leak`** — `detect` → `investigate_suspect` → `explain` → `propose_fix` → `complete`. End-to-end leak triage: find candidates, drill into the top suspect's GC-root path and referrer profile, get an AI explanation, optionally get a fix suggestion.
+- **`tune_gc`** — `root_kind_breakdown` → `thread_local_review` → `top_retainers` → `complete`. A GC-root retention review (which root kinds retain the most, which threads carry the largest thread-local footprint, where the dominator tree's top retainers sit). **Diagnostic data only** — Mnemosyne never touches a live JVM or applies a GC flag; the workflow informs a human's own manual tuning decisions.
+- **`traverse_object_graph`** — `inspect` ⇄ `choose_direction` → `complete`. A structured walk starting from one object: inspect it, list refs in/out, pick a direction to step into next, repeat. The one workflow kind with a real branch point — `choose_direction` must name an id the prior `inspect` step actually returned.
+- **`compare_snapshots`** — `resolve_snapshots` → `diff` → `complete`. Resolve two heaps (by path, or by an existing M9 snapshot key via `before_snapshot_key`/`after_snapshot_key`), run an M10 object-level diff between them, and surface the ranked suspects.
+
+Typical call shape: `describe_workflow({ kind })` to introspect a kind's step sequence with no side effects, then `start_workflow({ kind, heap_path, ... })` to create an instance and run its first step, then `next_step({ workflow_id, step_input })` repeatedly until `current_step` comes back `"complete"`. `start_workflow`/`next_step` both return `{ workflow_id, current_step, step_result, next_expected_input }`, so a client always knows what to send next without hardcoding the sequence. `get_workflow({ workflow_id })` dumps the full persisted state and step history; `close_workflow({ workflow_id })` deletes it — workflow state is **not** evicted automatically, so a long-lived client should close workflows it no longer needs. Four structured error codes cover the failure modes: `workflow_not_found`, `workflow_corrupt`, `workflow_step_input_mismatch` (the `step_input` doesn't match what the current step expects), and `workflow_already_complete`.
+
+See [docs/mcp-workflows.md](mcp-workflows.md) for one full, real, captured request/response transcript per workflow kind — this guide deliberately doesn't duplicate them here.
 
 ## 8. Output Formats
 

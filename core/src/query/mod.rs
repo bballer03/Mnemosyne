@@ -3,9 +3,10 @@ mod parser;
 mod synth;
 mod types;
 
-pub use executor::execute_query;
-pub use parser::parse_query;
+pub use executor::{execute_query, execute_query_statement};
+pub use parser::{parse_query, parse_query_statement};
 pub use types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause,
-    LogicalOp, Query, QueryError, QueryParseError, QueryResult, SelectClause, Value, WhereClause,
+    LogicalOp, Query, QueryError, QueryParseError, QueryResult, QueryStatement, SelectClause,
+    TraversalFunction, Value, WhereClause,
 };

@@ -6,6 +6,7 @@ pub mod match_quality;
 pub mod reference_chain;
 pub mod types;
 
+pub use engine::annotate_leak_progression;
 pub use fingerprint::ObjectFingerprint;
 pub use types::{
     DiffMode, IdentityStrategy, MatchQuality, ObjectDelta, ObjectDeltaKind, ObjectDiffReport,

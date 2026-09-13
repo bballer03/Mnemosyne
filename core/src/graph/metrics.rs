@@ -1,5 +1,5 @@
 use super::dominator::{DominatorTree, VIRTUAL_ROOT_ID};
-use crate::hprof::{ClassStat, HeapSummary, ObjectGraph, ObjectId, RecordStat};
+use crate::hprof::{ClassId, ClassStat, HeapSummary, ObjectGraph, ObjectId, RecordStat};
 use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::Graph;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,7 @@ pub enum HistogramGroupBy {
     Class,
     Package,
     ClassLoader,
+    Superclass,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,6 +204,85 @@ fn resolve_histogram_key(
             .get(&obj.class_id)
             .map(|class| resolve_class_loader_name(graph, class.class_loader_id))
             .unwrap_or_else(|| String::from("<unknown>")),
+        HistogramGroupBy::Superclass => {
+            if graph.classes.contains_key(&obj.class_id) {
+                resolve_superclass_key(graph, obj.class_id)
+            } else {
+                String::from("<unknown>")
+            }
+        }
+    }
+}
+
+/// Default bound for `resolve_superclass_chain`'s ancestor walk, mirroring
+/// `classloader::resolve_loader_chain`'s (M13) termination guard. Real JVM
+/// class hierarchies are shallow even in deep framework stacks, so this cap
+/// is generous headroom rather than a tight limit -- it exists purely as a
+/// guard against adversarial or malformed HPROF data (a `super_class_id`
+/// cycle), not because deep legitimate hierarchies are expected.
+const MAX_SUPERCLASS_CHAIN_DEPTH: usize = 32;
+
+/// Walks `ClassInfo.super_class_id` from `class_id`'s own superclass upward,
+/// collecting ancestor `ClassId`s in ascending generation order (index 0 is
+/// the immediate superclass). Does not include `class_id` itself. Stops at
+/// the root (`super_class_id == 0`, i.e. `java.lang.Object` or unresolved),
+/// at `max_depth` entries, or the moment a previously-visited class id would
+/// be revisited (cycle guard) -- same bounded-walk-with-cycle-guard shape as
+/// `classloader::resolve_loader_chain` (M13), applied to `super_class_id`
+/// instead of a classloader's `parent` field.
+fn resolve_superclass_chain(
+    graph: &ObjectGraph,
+    class_id: ClassId,
+    max_depth: usize,
+) -> Vec<ClassId> {
+    let mut chain = Vec::new();
+    let mut visited: HashSet<ClassId> = HashSet::new();
+    visited.insert(class_id);
+
+    let mut current = class_id;
+    while chain.len() < max_depth {
+        let Some(super_id) = graph.classes.get(&current).map(|c| c.super_class_id) else {
+            break;
+        };
+        if super_id == 0 {
+            // Reached the root: java.lang.Object (or an unresolved chain).
+            break;
+        }
+        if !visited.insert(super_id) {
+            // Cycle detected: this class id has already been visited in
+            // this walk. Terminate rather than looping until max_depth.
+            break;
+        }
+        chain.push(super_id);
+        current = super_id;
+    }
+
+    chain
+}
+
+/// Grouping key for `HistogramGroupBy::Superclass`: the *immediate*
+/// superclass of `class_id`, i.e. the nearest named ancestor level -- not
+/// the root of the hierarchy. This aggregates sibling leaf classes that
+/// share a common direct parent (MAT's stated use case: "many leaf classes
+/// share a common ancestor worth aggregating"), while avoiding the
+/// degenerate case where walking all the way to the universal root would
+/// collapse almost every class in a heap into a single `java.lang.Object`
+/// bucket. See the M15 Slice 15.B commit body for the full rationale.
+///
+/// Internally this still goes through the bounded, cycle-guarded
+/// `resolve_superclass_chain` walk (rather than reading
+/// `ClassInfo.super_class_id` directly) so a self-referential or cyclic
+/// `super_class_id` chain in adversarial/malformed HPROF data can never
+/// hang this lookup, and so a future deeper grouping mode (e.g. root
+/// superclass) can reuse the same walk.
+fn resolve_superclass_key(graph: &ObjectGraph, class_id: ClassId) -> String {
+    let chain = resolve_superclass_chain(graph, class_id, MAX_SUPERCLASS_CHAIN_DEPTH);
+    match chain.first() {
+        Some(&super_id) => graph
+            .class_name(super_id)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("<class:{super_id}>")),
+        None => String::from("<java.lang.Object>"),
     }
 }
 
@@ -388,11 +468,21 @@ mod tests {
     }
 
     fn add_class(graph: &mut ObjectGraph, class_id: u64, name: &str, class_loader_id: u64) {
+        add_class_with_super(graph, class_id, name, class_loader_id, 0);
+    }
+
+    fn add_class_with_super(
+        graph: &mut ObjectGraph,
+        class_id: u64,
+        name: &str,
+        class_loader_id: u64,
+        super_class_id: u64,
+    ) {
         graph.classes.insert(
             class_id,
             ClassInfo {
                 class_obj_id: class_id,
-                super_class_id: 0,
+                super_class_id,
                 class_loader_id,
                 instance_size: 16,
                 name: Some(name.into()),
@@ -554,6 +644,140 @@ mod tests {
         assert_eq!(histogram.total_instances, 0);
         assert_eq!(histogram.total_shallow_size, 0);
         assert!(histogram.entries.is_empty());
+    }
+
+    /// Three-level hierarchy: Root(100, super=0) <- Mid(200, super=100) <-
+    /// Leaf(300, super=200), plus a second leaf OtherLeaf(350, super=200)
+    /// sharing Mid as its immediate superclass. Proves both the per-level
+    /// walk (Leaf instances resolve to "Mid", Mid's own instance resolves to
+    /// "Root", Root's own instance resolves to the root sentinel) and the
+    /// aggregation value MAT's "group by superclass" is meant to provide:
+    /// Leaf and OtherLeaf instances are distinct classes but land in the
+    /// same "com.example.Mid" bucket because they share an immediate
+    /// superclass.
+    #[test]
+    fn histogram_groups_by_immediate_superclass_across_a_three_level_hierarchy() {
+        let mut graph = make_test_graph(
+            &[
+                (1, 300, 10, &[]), // Leaf instance
+                (2, 300, 20, &[]), // Leaf instance
+                (3, 200, 30, &[]), // Mid instance
+                (4, 100, 40, &[]), // Root instance
+                (5, 350, 5, &[]),  // OtherLeaf instance
+            ],
+            &[1, 2, 3, 4, 5],
+        );
+        add_class_with_super(&mut graph, 100, "com.example.Root", 0, 0);
+        add_class_with_super(&mut graph, 200, "com.example.Mid", 0, 100);
+        add_class_with_super(&mut graph, 300, "com.example.Leaf", 0, 200);
+        add_class_with_super(&mut graph, 350, "com.example.OtherLeaf", 0, 200);
+
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Superclass);
+
+        assert_eq!(histogram.total_instances, 5);
+        assert_eq!(histogram.total_shallow_size, 105);
+
+        let mid_group = histogram
+            .entries
+            .iter()
+            .find(|entry| entry.key == "com.example.Mid")
+            .expect("Leaf + OtherLeaf instances group under their shared immediate superclass Mid");
+        assert_eq!(mid_group.instance_count, 3); // 2 Leaf + 1 OtherLeaf
+        assert_eq!(mid_group.shallow_size, 35);
+
+        let root_group = histogram
+            .entries
+            .iter()
+            .find(|entry| entry.key == "com.example.Root")
+            .expect("Mid's own instance groups under its immediate superclass Root");
+        assert_eq!(root_group.instance_count, 1);
+        assert_eq!(root_group.shallow_size, 30);
+
+        let object_group = histogram
+            .entries
+            .iter()
+            .find(|entry| entry.key == "<java.lang.Object>")
+            .expect("Root's own instance has no named superclass (super_class_id == 0)");
+        assert_eq!(object_group.instance_count, 1);
+        assert_eq!(object_group.shallow_size, 40);
+    }
+
+    #[test]
+    fn histogram_group_by_superclass_falls_back_to_unknown_for_unresolved_class() {
+        // Object references a class_id with no corresponding ClassInfo entry.
+        let graph = make_test_graph(&[(1, 999, 10, &[])], &[1]);
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Superclass);
+
+        assert_eq!(histogram.entries.len(), 1);
+        assert_eq!(histogram.entries[0].key, "<unknown>");
+    }
+
+    /// A self-referential class (its own `super_class_id` points back at
+    /// itself) -- the simplest possible cyclic/adversarial HPROF shape.
+    /// Mirrors `classloader::resolve_loader_chain`'s own self-referential
+    /// regression test (M13): this must terminate, not infinite-loop, and
+    /// the histogram build as a whole must still complete.
+    #[test]
+    fn resolve_superclass_chain_self_referential_class_does_not_hang_and_returns_empty() {
+        let mut graph = ObjectGraph::new(8);
+        add_class_with_super(&mut graph, 100, "com.example.SelfLoopClass", 0, 100);
+
+        let chain = resolve_superclass_chain(&graph, 100, MAX_SUPERCLASS_CHAIN_DEPTH);
+
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn histogram_group_by_superclass_on_self_referential_class_does_not_hang() {
+        let mut graph = make_test_graph(&[(1, 100, 10, &[])], &[1]);
+        add_class_with_super(&mut graph, 100, "com.example.SelfLoopClass", 0, 100);
+
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Superclass);
+
+        assert_eq!(histogram.total_instances, 1);
+        assert_eq!(histogram.entries.len(), 1);
+        assert_eq!(histogram.entries[0].key, "<java.lang.Object>");
+    }
+
+    /// A longer cycle: X(100) -> Y(200) -> X(100) -> ... . Must stop after
+    /// visiting Y once, not loop until max_depth.
+    #[test]
+    fn resolve_superclass_chain_two_node_cycle_terminates_after_first_repeat() {
+        let mut graph = ObjectGraph::new(8);
+        add_class_with_super(&mut graph, 100, "com.example.X", 0, 200); // X: super Y
+        add_class_with_super(&mut graph, 200, "com.example.Y", 0, 100); // Y: super X
+
+        let chain = resolve_superclass_chain(&graph, 100, MAX_SUPERCLASS_CHAIN_DEPTH);
+
+        // X -> Y, then Y's super (X) is already visited: stop.
+        assert_eq!(chain, vec![200]);
+        assert!(
+            chain.len() < MAX_SUPERCLASS_CHAIN_DEPTH,
+            "cycle guard must terminate well before the depth bound"
+        );
+    }
+
+    /// A chain longer than `max_depth` must be truncated, not fully walked
+    /// -- proves max_depth is an independent, respected bound and not just a
+    /// fallback for the cycle guard.
+    #[test]
+    fn resolve_superclass_chain_respects_max_depth_on_a_longer_acyclic_chain() {
+        let mut graph = ObjectGraph::new(8);
+        add_class_with_super(&mut graph, 1, "com.example.Gen0", 0, 0); // root
+        add_class_with_super(&mut graph, 2, "com.example.Gen1", 0, 1);
+        add_class_with_super(&mut graph, 3, "com.example.Gen2", 0, 2);
+        add_class_with_super(&mut graph, 4, "com.example.Gen3", 0, 3);
+        add_class_with_super(&mut graph, 5, "com.example.Gen4", 0, 4);
+
+        let full_chain = resolve_superclass_chain(&graph, 5, MAX_SUPERCLASS_CHAIN_DEPTH);
+        assert_eq!(full_chain, vec![4, 3, 2, 1]);
+
+        let truncated = resolve_superclass_chain(&graph, 5, 3);
+        assert_eq!(truncated, vec![4, 3, 2]);
+        assert_eq!(truncated.len(), 3);
     }
 
     #[test]
