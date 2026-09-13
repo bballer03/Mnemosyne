@@ -168,47 +168,57 @@ core/
 
 ## Browser-First UI Layer
 
-> **Status (Apr 2026):** Shipped as M4 with the planned M6 follow-through now delivered: live object references/referrers when a bridge is present, object-to-leak cross-navigation across heap-explorer panes, and an in-repo Tauri desktop scaffold.
+> **Status (Sep 2026):** Shipped as M4, with M6's live-reference/cross-navigation/Tauri-scaffold follow-through, and now M14's UI backend-parity + AI-native redesign: every M8/M9/M10/M13 backend capability that lacked a browser surface now has one (comparison basket, object-inspector chip navigation, GC-path multi-view, referrer/classloader/thread panels, cached-snapshot picker), plus a new AI-guided landing layer built on M11's workflow suite. This section was last substantially updated at M6 and had drifted from the real M14 route/feature-area additions until this pass.
 
-The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail.
+The `ui/` directory is a browser-first React frontend built with TypeScript and Bun. It is the primary graphical interface for Mnemosyne and is independent of the Rust CLI — it reads pre-generated JSON analysis artifacts and optionally connects to a host-side bridge for live detail. Per the project's explicit "don't dumb down the product" constraint from M14's brainstorming session, the AI-guided landing is an *accelerator* layered on top of the existing power-user surface, never a replacement for it — every power route stays one click away via the persistent `TopNav`.
 
 ### Route Map
 
+Matches `ui/src/app/router.tsx` exactly.
+
 | Route | Surface | Data source |
 |-------|---------|-------------|
-| `/` | Artifact loader — drop a JSON artifact or pick a file | — |
+| `/` | AI-guided landing — artifact drop (unchanged since M4) + triage summary card, natural-language input bar, workflow cards, recent-heaps picker, persistent power-route nav (M14) | Artifact + Workflow Bridge |
 | `/dashboard` | Triage dashboard — summary strip, leak table, histogram panel, graph metrics | Artifact |
-| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail | Artifact |
+| `/artifacts/explorer` | Artifact explorer — histogram explorer, analyzer rail, bucket detail, referrer panel, classloader panel (M14) | Artifact |
+| `/compare` | Comparison basket — pick two artifacts/snapshots, ranked added/removed/retained-changed tables with a match-quality badge (M14) | Artifact (file) + Comparison Bridge |
 | `/heap-explorer/dominators` | Dominator tree browser — retained-size explorer | Artifact |
-| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail, live refs/referrers | Artifact + Bridge |
+| `/heap-explorer/object-inspector` | Object inspector — field values, dominator detail, live refs/referrers/dominator context as navigation chips (M14) | Artifact + Bridge |
 | `/heap-explorer/query-console` | OQL query console — runs `query_heap` via host bridge | Bridge |
+| `/heap-explorer/threads` | Thread explorer — per-thread stacks with per-frame local-variable tables (M14) | Artifact |
 | `/leaks/:leakId/overview` | Leak overview — suspect summary backed by artifact | Artifact |
 | `/leaks/:leakId/explain` | AI explanation — routed through host bridge when available | Bridge |
-| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall | Bridge |
+| `/leaks/:leakId/gc-path` | GC path visualizer — bridge-backed with object-target recall; multi-path list + truncation notice when the bridge supports `findAllGcPaths` (M14) | Bridge |
 | `/leaks/:leakId/source-map` | Source mapping — bridge-backed | Bridge |
 | `/leaks/:leakId/fix` | Fix suggestions — bridge-backed | Bridge |
 
 ### Feature Areas
 
+Matches the current `ui/src/features/` tree exactly.
+
 ```text
 ui/src/features/
-├── artifact-loader/     # Drop zone, artifact parsing, artifact Zustand store
-├── dashboard/           # Triage dashboard components and dashboard store
-├── artifact-explorer/   # Histogram explorer, analyzer rail, bucket detail
-├── heap-explorer/       # Dominator/object/query pages + cross-nav actions
-└── leak-workspace/      # Leak workspace layout, subpages, live-detail bridge
+├── artifact-loader/      # Drop zone, artifact parsing, artifact Zustand store; hosts the M14 guided landing + TopNav on "/"
+├── dashboard/            # Triage dashboard components and dashboard store
+├── artifact-explorer/    # Histogram explorer, analyzer rail, bucket detail, referrer panel (M14), classloader panel (M14)
+├── heap-explorer/        # Dominator/object/query/thread pages + cross-nav actions; object-inspector chip navigation (M14)
+├── leak-workspace/       # Leak workspace layout, subpages, live-detail bridge; GC-path multi-view (M14)
+├── comparison/           # M14: /compare route — picker, match-quality badge, added/removed/retained-changed tables, comparison-store.ts
+└── workflow-landing/     # M14: AI-guided landing composition — triage summary card, natural-language input bar + router, workflow cards, recent-heaps list
 ```
 
 ### Host Bridge Contract
 
-Two optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server):
+Four optional host bridges can be injected by a Tauri or Electron wrapper (or MCP-backed local server), each an independent global rather than one shared bridge, since each is scoped to a genuinely different unit of work (one loaded heap, one leak, a before/after snapshot pair, or cross-cutting workflow/snapshot-cache orchestration that doesn't fit any of those shapes):
 
-- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — provides `explainLeak`, `findGcPath`, `mapToCode`, and `proposeFix`
-- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — provides `queryHeap`, `getReferences`, and `getReferrers`
+- `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__` — `queryHeap`, `getReferences`, `getReferrers`, and (M14) `inspectObject(objectId, retainFieldData?)`
+- `window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__` — `explainLeak`, `findGcPath`, `mapToCode`, `proposeFix`, and (M14) `findAllGcPaths(objectId, maxPaths?)`
+- `window.__MNEMOSYNE_COMPARISON_BRIDGE__` (M14, new) — `diffObjects(beforeKey, afterKey, options)`, backing the `/compare` route's live-diff path (loading a precomputed `diff --mode object --format json` file remains the primary, bridge-free path)
+- `window.__MNEMOSYNE_WORKFLOW_BRIDGE__` (M14, new) — `describeWorkflow(kind)`, `startWorkflow(kind, params)`, `nextStep(workflowId, input)`, `listSnapshots()`, backing the guided landing's triage card, workflow cards, and recent-heaps list
 
-The current `tauri/` scaffold already injects both bridges via `tauri/src/bridge.ts` and backs them with native commands in `tauri/src/commands.rs`.
+The `tauri/` scaffold currently injects only the first two bridges (`tauri/src/bridge.ts` / `tauri/src/commands.rs`); the M14 comparison and workflow bridges, and the `inspectObject`/`findAllGcPaths` methods on the two original bridges, have no Tauri native-command equivalent yet — wiring them is scoped to M16 (desktop packaging) rather than this milestone, per M14's own explicit scope cap.
 
-When a bridge is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders. Artifact-backed panels always work without any bridge.
+When a bridge or a specific optional method is absent, affected panels render explicit `unavailable` states instead of synthetic placeholders — this holds for every method on every bridge, old and new alike. Artifact-backed panels (dashboard, artifact explorer including the M14 referrer/classloader panels, the M14 thread explorer) always work without any bridge at all.
 
 ### Architecture Diagram
 
@@ -236,11 +246,12 @@ flowchart TD
     end
 
     subgraph UI["Browser-First UI  (ui/)"]
-        LOADER["Artifact Loader"]
+        LOADER["Artifact Loader\n+ AI-Guided Landing (M14)"]
         DASH["Triage Dashboard"]
-        AE["Artifact Explorer"]
-        HE["Heap Explorer"]
-        LW["Leak Workspace"]
+        AE["Artifact Explorer\n+ Referrer/Classloader panels (M14)"]
+        HE["Heap Explorer\n+ Thread view (M14)"]
+        LW["Leak Workspace\n+ GC-path multi-view (M14)"]
+        CMP["Comparison Basket (M14)"]
     end
 
     subgraph External["External"]
@@ -251,10 +262,10 @@ flowchart TD
     HD -->|"hprof input"| CLI
     CLI --> Core
     Core -->|"JSON artifact\n--format json --output-file"| LOADER
-    LOADER --> DASH & AE & HE & LW
+    LOADER --> DASH & AE & HE & LW & CMP
     AI -->|"provider call"| LLM
     MCP --> MCPC
-    MCP -->|"window bridge\n(optional)"| LW & HE
+    MCP -->|"window bridge\n(optional)"| LW & HE & CMP & LOADER
 ```
 
 > **Note:** `resources/architecture-overview.svg` and `resources/architecture.svg` are pre-rendered Mermaid exports that predate the UI layer. The diagram above is the authoritative current architecture. The SVG files can be regenerated from a Mermaid source if needed for export.
@@ -605,9 +616,9 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Support for Additional Formats**: Currently focused on the standard JVM HPROF format, Mnemosyne could be extended to support other heap or memory snapshot formats. For example, Android .hprof files (which are similar but not identical), or IBM/OpenJ9 heap dumps, etc. The parser component can be augmented or new parser modules added for these formats.
 
-**Browser-First UI (shipped, M4 + M6 follow-through)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer, heap explorer (dominators, object inspector, query console), and the full leak workspace route family. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers whenever a host bridge is present.
+**Browser-First UI (shipped, M4 + M6 follow-through + M14 backend-parity/AI-native redesign)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer (with referrer and classloader panels), heap explorer (dominators, object inspector, query console, thread view), the full leak workspace route family (with GC-path multi-view), a comparison basket for object-level diffs, and an AI-guided landing page built on the M11 workflow suite. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers/dominator context (as clickable chips) whenever a host bridge is present. Every M8–M13 backend capability that previously lacked a browser surface now has one; see "Browser-First UI Layer" above for the full route map.
 
-**Desktop distribution hardening (post-M6)**: `tauri/` already wraps the shared `ui/` React frontend and injects both host bridges through native commands. The remaining follow-on work is release-grade packaging, signing, and distribution only if native desktop delivery proves worth the added complexity.
+**Desktop distribution hardening (M16, not yet started)**: `tauri/` already wraps the shared `ui/` React frontend and injects the two pre-M14 host bridges through native commands. M14 added two further bridges (comparison, workflow) and two further methods on the original two (`inspectObject`, `findAllGcPaths`) with no Tauri native-command equivalent yet — wiring those, plus release-grade packaging, signing, and distribution, is M16's scope.
 
 **Deeper JVM Integration**: In the future, Mnemosyne might integrate with live JVMs via JMX or JVMTI. Instead of requiring a heap dump file, it could connect to a running application (given proper credentials) and trigger a heap dump or even query memory structures in real-time. This would make it more of a live monitoring tool. Combined with the AI, it could act as a continuous memory assistant, not just post-mortem analysis.
 
