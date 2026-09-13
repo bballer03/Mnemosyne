@@ -9,15 +9,18 @@ use mnemosyne_core::{
     focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
     propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
-    snapshot::SnapshotStore,
     AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
     HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ParseOptions, ProvenanceMarker,
     SourceMapResult,
 };
+use mnemosyne_core::snapshot::SnapshotManifest;
+use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_desktop_session::{
+    default_snapshot_store, default_workflow_store, describe_workflow_for_session,
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
-    inspect_object_for_session, parse_identity_strategy, parse_object_id,
-    should_install_field_data_cache, DiffObjectsSessionInput,
+    inspect_object_for_session, list_snapshots_for_session, next_step_for_session,
+    parse_identity_strategy, parse_object_id, should_install_field_data_cache,
+    start_workflow_for_session, DiffObjectsSessionInput, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -436,6 +439,51 @@ pub async fn propose_fix(
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn describe_workflow(kind: String) -> Result<WorkflowDescription, String> {
+    describe_workflow_for_session(&kind)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn start_workflow(
+    kind: String,
+    heap_path: Option<String>,
+    object_id: Option<String>,
+    before_heap_path: Option<String>,
+    after_heap_path: Option<String>,
+    before_snapshot_key: Option<String>,
+    after_snapshot_key: Option<String>,
+) -> Result<Value, String> {
+    start_workflow_for_session(
+        &default_workflow_store(),
+        StartWorkflowSessionInput {
+            kind,
+            heap_path,
+            object_id,
+            before_heap_path,
+            after_heap_path,
+            before_snapshot_key,
+            after_snapshot_key,
+        },
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn next_step(workflow_id: String, input: Option<Value>) -> Result<Value, String> {
+    next_step_for_session(
+        &default_workflow_store(),
+        &workflow_id,
+        input.unwrap_or(Value::Null),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn list_snapshots() -> Result<Vec<SnapshotManifest>, String> {
+    list_snapshots_for_session(&default_snapshot_store())
+}
+
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {
     state
         .heap_path
@@ -531,27 +579,3 @@ fn prettify_class_name(raw: &str) -> String {
     raw.replace('/', ".")
 }
 
-const SNAPSHOT_DIR_ENV: &str = "MNEMOSYNE_SNAPSHOT_DIR";
-
-fn default_snapshot_store() -> SnapshotStore {
-    SnapshotStore::new(default_snapshot_store_root())
-}
-
-fn default_snapshot_store_root() -> PathBuf {
-    if let Ok(dir) = std::env::var(SNAPSHOT_DIR_ENV) {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    if let Some(mut dir) = dirs::cache_dir() {
-        dir.push("mnemosyne");
-        return dir;
-    }
-
-    let mut fallback = std::env::temp_dir();
-    fallback.push("mnemosyne");
-    fallback.push("snapshots");
-    fallback
-}

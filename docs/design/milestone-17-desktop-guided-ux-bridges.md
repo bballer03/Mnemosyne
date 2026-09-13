@@ -1,6 +1,6 @@
 # Milestone 17 — Desktop Guided UX Bridge Completion
 
-> **Status:** 🟡 In progress — Slices 17.A–17.B shipped; Slices 17.C–17.D pending.
+> **Status:** 🟡 In progress — Slices 17.A–17.C shipped; Slice 17.D pending.
 > **Owner (design):** Design Consulting Agent
 > **Owner (implementation):** Implementation Agent (per slice)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M17
@@ -23,7 +23,7 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 |---|---|---|
 | **17.A** | `inspectObject`, `findAllGcPaths` | ✅ Shipped |
 | **17.B** | `diffObjects` (comparison bridge) | ✅ Shipped |
-| **17.C** | Workflow bridge (`describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) | 🔲 Pending |
+| **17.C** | Workflow bridge (`describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) | ✅ Shipped |
 | **17.D** | Packaged-desktop integration evidence | 🔲 Pending |
 
 ### Slice 17.A — Inspector and multi-path commands
@@ -58,8 +58,19 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 
 **Smoke path (manual):** Launch the desktop app with cached snapshots, open `/compare`, enter two snapshot keys, and run live diff — the comparison basket should render ranked deltas instead of the unavailable state.
 
+### Slice 17.C — Workflow bridge
+
+**Files:** `tauri/src/commands.rs`, `tauri/src/bridge.ts`, `tauri/src/main.rs`, `tauri/session-ops/`
+
+- [x] `describe_workflow`, `start_workflow`, `next_step`, and `list_snapshots` Tauri commands map to `core::workflow::{describe,start,advance}` and `SnapshotStore::list`, mirroring MCP handler semantics (including `workflow_step_response` envelope and camelCase→snake_case param mapping for `startWorkflow`).
+- [x] Explicitly **not** wired: `getWorkflow` / `closeWorkflow` (no current `ui/src` callers).
+- [x] `bridge.ts` injects `__MNEMOSYNE_WORKFLOW_BRIDGE__` with exactly the four methods the UI calls.
+- [x] Unit tests in `tauri/session-ops/` cover describe, list, start/next round-trip on synthetic fixtures, and param validation (`cargo test --features test-fixtures` — 23/23 pass).
+
+**Smoke path (manual):** Launch the desktop app, open the guided landing — workflow cards and Recent heaps should show ready states instead of unavailable when snapshots/workflows are reachable.
+
 ## 4. Out of scope (M17)
 
-- Slices 17.C–17.D until scheduled.
+- Slice 17.D until scheduled.
 - `getWorkflow` / `closeWorkflow` (no current `ui/src` callers).
 - New analysis capability, signing credentials, auto-update.

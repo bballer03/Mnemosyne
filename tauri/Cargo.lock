@@ -2044,7 +2044,9 @@ dependencies = [
 name = "mnemosyne-desktop-session"
 version = "0.3.0"
 dependencies = [
+ "dirs 5.0.1",
  "mnemosyne-core",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

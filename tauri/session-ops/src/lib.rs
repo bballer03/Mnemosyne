@@ -3,7 +3,7 @@
 //! Kept free of `tauri` dependencies so unit tests can run on headless CI
 //! hosts without WebKit/GTK installed.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mnemosyne_core::{
     analysis::{inspect_object, ObjectInspection},
@@ -16,9 +16,11 @@ use mnemosyne_core::{
         run_diff, DiffMode, DiffRequest, DiffResult, IdentityStrategy, ObjectDiffReport,
     },
     graph::find_all_gc_paths_in_graph,
-    snapshot::SnapshotStore,
+    snapshot::{SnapshotManifest, SnapshotStore},
+    workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
     AllPathsRequest, GcPathResult,
 };
+use serde_json::{json, Value};
 
 /// Input for the M17 comparison bridge's `diffObjects` host method.
 #[derive(Debug, Clone)]
@@ -188,6 +190,174 @@ pub async fn diff_objects_for_session(
         Ok(DiffResult::Class(_)) => Err("internal error: object diff returned class result".to_string()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+const SNAPSHOT_DIR_ENV: &str = "MNEMOSYNE_SNAPSHOT_DIR";
+const WORKFLOW_DIR_ENV: &str = "MNEMOSYNE_WORKFLOW_DIR";
+
+/// Default snapshot cache root — mirrors `core::mcp::server::default_snapshot_dir`.
+pub fn default_snapshot_store_root() -> PathBuf {
+    if let Ok(dir) = std::env::var(SNAPSHOT_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("snapshots");
+    fallback
+}
+
+/// Default workflow store root — mirrors `core::mcp::server::default_workflow_dir`.
+pub fn default_workflow_store_root() -> PathBuf {
+    if let Ok(dir) = std::env::var(WORKFLOW_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::cache_dir() {
+        dir.push("mnemosyne");
+        dir.push("workflows");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("workflows");
+    fallback
+}
+
+pub fn default_snapshot_store() -> SnapshotStore {
+    SnapshotStore::new(default_snapshot_store_root())
+}
+
+pub fn default_workflow_store() -> WorkflowStore {
+    WorkflowStore::new(default_workflow_store_root())
+}
+
+/// Input for the M17 workflow bridge's `startWorkflow` host method.
+#[derive(Debug, Clone, Default)]
+pub struct StartWorkflowSessionInput {
+    pub kind: String,
+    pub heap_path: Option<String>,
+    pub object_id: Option<String>,
+    pub before_heap_path: Option<String>,
+    pub after_heap_path: Option<String>,
+    pub before_snapshot_key: Option<String>,
+    pub after_snapshot_key: Option<String>,
+}
+
+/// Parses the lowercase snake_case wire form of a workflow kind, matching
+/// `core::mcp::server::parse_workflow_kind`.
+pub fn parse_workflow_kind(kind: &str) -> Result<WorkflowKind, String> {
+    match kind {
+        "triage_memory_leak" => Ok(WorkflowKind::TriageMemoryLeak),
+        "tune_gc" => Ok(WorkflowKind::TuneGc),
+        "traverse_object_graph" => Ok(WorkflowKind::TraverseObjectGraph),
+        "compare_snapshots" => Ok(WorkflowKind::CompareSnapshots),
+        other => Err(format!(
+            "unknown workflow kind '{other}': expected one of triage_memory_leak, tune_gc, \
+             traverse_object_graph, compare_snapshots"
+        )),
+    }
+}
+
+/// Builds the `{ workflow_id, current_step, step_result, next_expected_input }`
+/// envelope shared by MCP `start_workflow`/`next_step` and the desktop bridge.
+pub fn workflow_step_response(state: &WorkflowState) -> Result<Value, String> {
+    let step_result = state
+        .step_history
+        .last()
+        .map(|record| record.output_summary.clone())
+        .unwrap_or(Value::Null);
+
+    let next_expected_input = if state.current_step == "complete" {
+        json!([])
+    } else {
+        let description = workflow::describe(state.kind).map_err(|error| error.to_string())?;
+        description
+            .steps
+            .iter()
+            .find(|step| step.name == state.current_step)
+            .map(|step| serde_json::to_value(&step.expected_input))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(|| json!([]))
+    };
+
+    Ok(json!({
+        "workflow_id": state.workflow_id,
+        "current_step": state.current_step,
+        "step_result": step_result,
+        "next_expected_input": next_expected_input,
+    }))
+}
+
+pub fn describe_workflow_for_session(kind: &str) -> Result<WorkflowDescription, String> {
+    let kind = parse_workflow_kind(kind)?;
+    workflow::describe(kind).map_err(|error| error.to_string())
+}
+
+pub async fn start_workflow_for_session(
+    store: &WorkflowStore,
+    input: StartWorkflowSessionInput,
+) -> Result<Value, String> {
+    let kind = parse_workflow_kind(&input.kind)?;
+
+    let (heap_path, initial_params) = match kind {
+        WorkflowKind::TriageMemoryLeak | WorkflowKind::TuneGc | WorkflowKind::TraverseObjectGraph => {
+            let heap_path = input.heap_path.clone().ok_or_else(|| {
+                format!(
+                    "heap_path is required for start_workflow(kind: \"{}\")",
+                    kind.as_str()
+                )
+            })?;
+            let initial_params = if kind == WorkflowKind::TraverseObjectGraph {
+                json!({ "object_id": input.object_id })
+            } else {
+                Value::Null
+            };
+            (heap_path, initial_params)
+        }
+        WorkflowKind::CompareSnapshots => (
+            String::new(),
+            json!({
+                "before_heap_path": input.before_heap_path,
+                "after_heap_path": input.after_heap_path,
+                "before_snapshot_key": input.before_snapshot_key,
+                "after_snapshot_key": input.after_snapshot_key,
+            }),
+        ),
+    };
+
+    let state = workflow::start(store, kind, heap_path, initial_params)
+        .await
+        .map_err(|error| error.to_string())?;
+    workflow_step_response(&state)
+}
+
+pub async fn next_step_for_session(
+    store: &WorkflowStore,
+    workflow_id: &str,
+    step_input: Value,
+) -> Result<Value, String> {
+    let state = workflow::advance(store, workflow_id, step_input)
+        .await
+        .map_err(|error| error.to_string())?;
+    workflow_step_response(&state)
+}
+
+pub fn list_snapshots_for_session(store: &SnapshotStore) -> Result<Vec<SnapshotManifest>, String> {
+    store.list().map_err(|error| error.to_string())
 }
 
 #[cfg(all(test, feature = "test-fixtures"))]
@@ -548,6 +718,191 @@ mod tests {
             {
                 assert!(delta.leak_severity.is_none());
             }
+        }
+    }
+
+    mod workflow_bridge {
+        use super::*;
+        use mnemosyne_core::{
+            hprof::{
+                parse_hprof_file_with_options,
+                test_fixtures::build_graph_fixture,
+                ParseOptions,
+            },
+            workflow::{WorkflowKind, WorkflowStore, WORKFLOW_SCHEMA_VERSION},
+        };
+        use std::io::Write;
+
+        fn workflow_store() -> WorkflowStore {
+            WorkflowStore::new(
+                tempfile::tempdir()
+                    .expect("temp dir must exist")
+                    .keep(),
+            )
+        }
+
+        fn write_fixture_heap() -> Result<(tempfile::NamedTempFile, String), String> {
+            let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+            file.write_all(&build_graph_fixture())
+                .map_err(|error| error.to_string())?;
+            let path = file
+                .path()
+                .to_str()
+                .expect("temp path must be valid UTF-8")
+                .to_string();
+            Ok((file, path))
+        }
+
+        #[test]
+        fn describe_workflow_returns_step_sequence_for_triage_memory_leak() {
+            let description =
+                describe_workflow_for_session("triage_memory_leak").expect("describe must succeed");
+            assert_eq!(description.kind, WorkflowKind::TriageMemoryLeak);
+            let names: Vec<&str> = description.steps.iter().map(|step| step.name.as_str()).collect();
+            assert_eq!(
+                names,
+                vec![
+                    "detect",
+                    "investigate_suspect",
+                    "explain",
+                    "propose_fix"
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_workflow_kind_rejects_unknown_labels() {
+            let error = parse_workflow_kind("not_a_real_kind").expect_err("invalid kind");
+            assert!(error.contains("unknown workflow kind"));
+        }
+
+        #[test]
+        fn list_snapshots_for_session_returns_saved_manifests() {
+            let store = SnapshotStore::new(
+                tempfile::tempdir()
+                    .expect("temp dir must exist")
+                    .keep(),
+            );
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
+                .map_err(|error| error.to_string())
+                .expect("fixture must parse");
+            let dominator = build_dominator_tree(&graph);
+            store
+                .save(&heap_path, &graph, &dominator)
+                .expect("snapshot must save");
+
+            let manifests = list_snapshots_for_session(&store).expect("list must succeed");
+            assert_eq!(manifests.len(), 1);
+            assert_eq!(manifests[0].heap_path, heap_path);
+            assert_eq!(manifests[0].object_count, graph.object_count());
+        }
+
+        #[test]
+        fn workflow_step_response_includes_next_expected_input_for_in_progress_state() {
+            let state = WorkflowState {
+                schema_version: WORKFLOW_SCHEMA_VERSION,
+                workflow_id: "wf-test".into(),
+                kind: WorkflowKind::TriageMemoryLeak,
+                created_at: "1700000000".into(),
+                updated_at: "1700000000".into(),
+                heap_path: "heap.hprof".into(),
+                current_step: "investigate_suspect".into(),
+                step_history: vec![],
+                context: json!({}),
+            };
+
+            let response = workflow_step_response(&state).expect("response must build");
+            assert_eq!(response.get("workflow_id"), Some(&json!("wf-test")));
+            assert_eq!(response.get("current_step"), Some(&json!("investigate_suspect")));
+            assert!(response
+                .get("next_expected_input")
+                .and_then(Value::as_array)
+                .is_some_and(|params| !params.is_empty()));
+        }
+
+        #[tokio::test]
+        async fn start_workflow_for_session_runs_detect_step_on_fixture_heap() {
+            let store = workflow_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+
+            let response = start_workflow_for_session(
+                &store,
+                StartWorkflowSessionInput {
+                    kind: "triage_memory_leak".into(),
+                    heap_path: Some(heap_path),
+                    ..StartWorkflowSessionInput::default()
+                },
+            )
+            .await
+            .expect("start must succeed");
+
+            assert_eq!(
+                response.get("current_step"),
+                Some(&json!("investigate_suspect"))
+            );
+            let leaks = response
+                .pointer("/step_result/leaks")
+                .and_then(Value::as_array)
+                .expect("detect step should return leaks");
+            assert!(!leaks.is_empty(), "fixture heap should surface at least one leak");
+        }
+
+        #[tokio::test]
+        async fn next_step_for_session_advances_investigate_suspect_step() {
+            let store = workflow_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+
+            let start = start_workflow_for_session(
+                &store,
+                StartWorkflowSessionInput {
+                    kind: "triage_memory_leak".into(),
+                    heap_path: Some(heap_path),
+                    ..StartWorkflowSessionInput::default()
+                },
+            )
+            .await
+            .expect("start must succeed");
+
+            let workflow_id = start
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .expect("workflow_id")
+                .to_string();
+            let leak_id = start
+                .pointer("/step_result/leaks/0/id")
+                .and_then(Value::as_str)
+                .expect("leak id")
+                .to_string();
+
+            let step = next_step_for_session(
+                &store,
+                &workflow_id,
+                json!({ "leak_id": leak_id }),
+            )
+            .await
+            .expect("next step must succeed");
+
+            assert_eq!(step.get("current_step"), Some(&json!("explain")));
+        }
+
+        #[test]
+        fn start_workflow_for_session_requires_heap_path_for_single_heap_kinds() {
+            let store = workflow_store();
+            let error = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(start_workflow_for_session(
+                    &store,
+                    StartWorkflowSessionInput {
+                        kind: "tune_gc".into(),
+                        ..StartWorkflowSessionInput::default()
+                    },
+                ))
+                .expect_err("missing heap path must fail");
+
+            assert!(error.contains("heap_path is required"));
         }
     }
 }

@@ -21,6 +21,10 @@ fn main() {
             commands::find_gc_path,
             commands::map_to_code,
             commands::propose_fix,
+            commands::describe_workflow,
+            commands::start_workflow,
+            commands::next_step,
+            commands::list_snapshots,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

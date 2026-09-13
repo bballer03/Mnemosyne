@@ -28,4 +28,20 @@ if (isTauri) {
   hostWindow.__MNEMOSYNE_COMPARISON_BRIDGE__ = {
     diffObjects: (input) => invoke("diff_objects", { input }),
   };
+
+  hostWindow.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+    describeWorkflow: (kind) => invoke("describe_workflow", { kind }),
+    startWorkflow: (kind, params) =>
+      invoke("start_workflow", {
+        kind,
+        heapPath: params?.heapPath,
+        objectId: params?.objectId,
+        beforeHeapPath: params?.beforeHeapPath,
+        afterHeapPath: params?.afterHeapPath,
+        beforeSnapshotKey: params?.beforeSnapshotKey,
+        afterSnapshotKey: params?.afterSnapshotKey,
+      }),
+    nextStep: (workflowId, input) => invoke("next_step", { workflowId, input }),
+    listSnapshots: () => invoke("list_snapshots"),
+  };
 }

@@ -7,7 +7,9 @@ license = "Apache-2.0"
 
 [dependencies]
 mnemosyne-core = { path = "../../core" }
+serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
+dirs = "5"
 
 [dev-dependencies]
 tempfile = "3"
