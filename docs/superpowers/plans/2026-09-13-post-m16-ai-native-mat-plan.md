@@ -89,15 +89,58 @@ cd ui && bun run lint
 **Product outcome:** A desktop user with valid heap inputs can use every M14 live surface without switching to a browser mock, MCP client, or CLI.
 
 **In scope:**
-- Native Tauri commands and TypeScript injection for `inspectObject` and `findAllGcPaths`.
-- The dedicated comparison bridge's `diffObjects`.
-- The workflow bridge's `describeWorkflow`, `startWorkflow`, `nextStep`, and `listSnapshots`; add `getWorkflow`/`closeWorkflow` only if the existing UI lifecycle requires them.
+- Native Tauri commands and TypeScript injection for the heap explorer's `inspectObject`, the leak workspace's `findAllGcPaths`, and the comparison bridge's `diffObjects`.
+- Exactly the four workflow methods the current UI calls: `describeWorkflow`, `startWorkflow`, `nextStep`, and `listSnapshots`.
 - Contract normalization at the bridge boundary only; Rust response truth remains unchanged.
 - Synthetic-fixture command tests plus a packaged-desktop smoke path.
 
 **Out of scope:**
 - New analyzers, new workflow kinds, M15 UI panels, signing credentials, auto-update, or bridge API redesign.
+- Tauri `getWorkflow` and `closeWorkflow` methods. MCP keeps those lifecycle tools, but no code under `ui/src` calls or declares either method, so they are not part of M17's desktop bridge contract.
 - Pretending browser-only artifact views are live Tauri commands.
+
+**Required Tauri bridge interface (exact):**
+
+```ts
+window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__.inspectObject(
+  objectId: string,
+  retainFieldData?: boolean,
+): Promise<unknown>;
+
+window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__.findAllGcPaths(
+  objectId: string,
+  maxPaths?: number,
+): Promise<unknown>;
+
+window.__MNEMOSYNE_COMPARISON_BRIDGE__.diffObjects(input: {
+  beforeKey: string;
+  afterKey: string;
+  strategy?: "ClassRetained" | "ClassDominator" | "FullFingerprint";
+  topN?: number;
+}): Promise<unknown>;
+
+window.__MNEMOSYNE_WORKFLOW_BRIDGE__.describeWorkflow(
+  kind: "triage_memory_leak" | "tune_gc" | "traverse_object_graph" | "compare_snapshots",
+): Promise<unknown>;
+window.__MNEMOSYNE_WORKFLOW_BRIDGE__.startWorkflow(
+  kind: "triage_memory_leak" | "tune_gc" | "traverse_object_graph" | "compare_snapshots",
+  params?: {
+    heapPath?: string;
+    objectId?: string;
+    beforeHeapPath?: string;
+    afterHeapPath?: string;
+    beforeSnapshotKey?: string;
+    afterSnapshotKey?: string;
+  },
+): Promise<unknown>;
+window.__MNEMOSYNE_WORKFLOW_BRIDGE__.nextStep(
+  workflowId: string,
+  input?: unknown,
+): Promise<unknown>;
+window.__MNEMOSYNE_WORKFLOW_BRIDGE__.listSnapshots(): Promise<unknown>;
+```
+
+These camelCase signatures are the host interface consumed by `ui/src`; each must invoke a native Tauri command and return the existing snake_case Rust wire payload expected by the current UI parsers. Do not add aliases, fold methods into another bridge, or substitute MCP-only availability for the desktop injection.
 
 ### Slice 17.A — Inspector and multi-path commands
 
@@ -139,7 +182,7 @@ cd ui && bun run lint
 - Path access expansion — use Tauri's existing local-file validation and never pass paths to a shell.
 
 **Acceptance gates:**
-- All M14 bridge methods present in the desktop injection and backed by native commands.
+- The complete set of newly required M14 methods is exactly `inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, and `listSnapshots`; the packaged desktop injects and natively backs all seven without removing existing bridge methods. `getWorkflow` and `closeWorkflow` are explicitly not required because the current UI neither declares nor calls them.
 - Valid fixture calls render results; invalid and overview-incompatible calls render structured errors.
 - Existing browser fallback tests, Tauri checks, Rust gates, and UI gates pass.
 - STATUS/README still say unsigned and platform-unverified wherever evidence is absent.
@@ -194,7 +237,32 @@ cd ui && bun run lint
 
 - [ ] Expose dominator, class-hierarchy, and GC-root-path rooting and SVG/folded/JSON formats.
 - [ ] Reuse deep-mode analysis and return structured overview-mode unavailability.
-- [ ] Enforce response/artifact budgets and avoid logging rendered heap labels.
+- [ ] Implement the managed-artifact contract below, including bounded retrieval and cleanup, and avoid logging rendered heap labels.
+
+**Flamegraph managed-artifact contract (required):**
+
+- The `generate_flamegraph` MCP schema accepts `heap_path`, an optional snapshot key, `root`, `format`, `min_fraction`, `title`, `max_frames`, and `mode`, but no caller-selected output path. Defaults match the existing CLI: `root=dominator`, `format=svg`, `min_fraction=0.001`, `max_frames=5000`, and `mode=auto`; only deep-resolved requests can render.
+- Every success persists one artifact and returns a cryptographically random, path-independent opaque ID with at least 128 bits of entropy, never a local path:
+
+  ```json
+  {
+    "artifact_id": "<opaque id>",
+    "format": "svg | folded-stack | json",
+    "media_type": "image/svg+xml | text/plain | application/json",
+    "byte_length": 123,
+    "sha256": "<hex digest>",
+    "created_at": "<RFC3339 UTC>",
+    "expires_at": "<RFC3339 UTC>",
+    "delivery": "inline | managed",
+    "content_base64": "<present only when delivery=inline>"
+  }
+  ```
+
+- The storage root is `MNEMOSYNE_ARTIFACT_DIR` when set to a non-empty value; otherwise use `dirs::cache_dir()/mnemosyne/artifacts`, falling back to `std::env::temp_dir()/mnemosyne/artifacts`. IDs resolve only beneath that root, files are created with owner-only permissions where supported, and neither responses nor logs expose the resolved path.
+- The rendered-byte hard limit is 16 MiB (`16_777_216` bytes). Render through a counting temporary writer and atomically publish only after the limit and digest checks pass. A larger render deletes the temporary file and returns `artifact_size_limit_exceeded` with structured `limit_bytes`, `observed_bytes`, and `format` details; it must not return a partial artifact or ID.
+- Artifacts up to and including 256 KiB (`262_144` rendered bytes) use `delivery=inline` and include base64 content while still receiving an ID. Larger artifacts use `delivery=managed` with no content field, avoiding an unbounded MCP response.
+- Register `read_artifact(artifact_id, offset_bytes?, max_bytes?)`; defaults are offset `0` and `max_bytes=262_144`, and `max_bytes` may not exceed 256 KiB. It returns `{ artifact_id, offset_bytes, next_offset_bytes, eof, content_base64 }`, so every managed artifact can be retrieved in bounded chunks. Register `delete_artifact(artifact_id)` for immediate disposal. The existing CLI `flamegraph -o/--output` remains the direct CLI retrieval/export path and does not use this managed store.
+- TTL is fixed at 24 hours from `created_at`. On MCP startup and before generate/read operations, best-effort cleanup removes expired artifact files and manifests. Reading an expired artifact deletes it and returns `artifact_expired`; an unknown or deleted ID returns `artifact_not_found`. Cleanup failures are reported without disclosing paths and do not make expired artifacts readable.
 
 ### Slice 18.F — Agent-loop transcripts and docs
 
@@ -212,6 +280,7 @@ cd ui && bun run lint
 **Acceptance gates:**
 - `list_tools` publishes complete schemas for all new/additive fields.
 - An MCP-only integration test completes policy gate → baseline growth → annotated diff → snapshot lifecycle → flamegraph.
+- Flamegraph contract tests cover inline and managed returns, chunked retrieval, explicit deletion, 24-hour expiry cleanup, path/ID traversal rejection, and `artifact_size_limit_exceeded` with no committed partial file.
 - Omitted additive parameters preserve prior responses.
 - Full Rust gates pass; docs include real captured exchanges.
 
