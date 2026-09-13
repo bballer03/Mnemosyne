@@ -781,6 +781,8 @@ struct DiffHeapsParams {
     object_diff_min_retained: u64,
     #[serde(default)]
     retain_field_data: bool,
+    #[serde(default)]
+    cross_reference_leaks: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1426,7 +1428,8 @@ fn tool_catalog() -> Value {
                     { "name": "retained_change_threshold", "type": "number", "required": false, "default": 1048576, "description": "Minimum |retained delta| in bytes for inclusion in retained_changed; default 1048576." },
                     { "name": "top_n", "type": "number", "required": false, "default": 50, "description": "Per-section result cap; default 50." },
                     { "name": "object_diff_min_retained", "type": "number", "required": false, "default": 4096, "description": "Skip objects whose retained size is below this floor; default 4096." },
-                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "Required when identity_strategy='full-fingerprint'." }
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "Required when identity_strategy='full-fingerprint'." },
+                    { "name": "cross_reference_leaks", "type": "boolean", "required": false, "default": false, "description": "Cross-reference added/retained_changed object deltas against after-heap leak suspects (object mode only)." }
                 ],
                 "output_schema": "HeapDiff (existing) extended with optional object_diff: ObjectDiffReport"
             },
@@ -1870,10 +1873,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 retained_change_threshold: params.retained_change_threshold,
                 top_n: params.top_n,
                 retain_field_data: params.retain_field_data,
-                // M10-B's --cross-reference-leaks / DiffRequest.cross_reference_leaks
-                // is CLI-first (design doc §3 "Out"); MCP wiring is deferred, so this
-                // handler always leaves it false pending a future slice.
-                cross_reference_leaks: false,
+                cross_reference_leaks: params.cross_reference_leaks,
             })
             .await?
             {
@@ -3423,6 +3423,13 @@ mod tests {
                     "required": false,
                     "default": false,
                     "description": "Required when identity_strategy='full-fingerprint'."
+                },
+                {
+                    "name": "cross_reference_leaks",
+                    "type": "boolean",
+                    "required": false,
+                    "default": false,
+                    "description": "Cross-reference added/retained_changed object deltas against after-heap leak suspects (object mode only)."
                 }
             ]))
         );
@@ -3479,6 +3486,70 @@ mod tests {
 
         assert_eq!(result, expected);
         assert!(result.get("object_diff").is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_cross_reference_leaks_defaults_off() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(
+            &heap_path,
+            &heap_path,
+            json!({ "mode": "object" }),
+        )
+        .await
+        .expect("diff_heaps object mode should succeed");
+
+        let object_diff = result
+            .get("object_diff")
+            .expect("object mode should include object_diff");
+
+        for section in ["added", "retained_changed"] {
+            if let Some(deltas) = object_diff.get(section).and_then(Value::as_array) {
+                for delta in deltas {
+                    assert!(
+                        delta.get("leak_severity").is_none(),
+                        "{section} deltas should not be leak-annotated when cross_reference_leaks is omitted"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_cross_reference_leaks_wires_to_diff_request() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(
+            &heap_path,
+            &heap_path,
+            json!({ "mode": "object", "cross_reference_leaks": true }),
+        )
+        .await
+        .expect("diff_heaps with cross_reference_leaks should succeed");
+        let expected = match crate::diff::run_diff(crate::diff::DiffRequest {
+            before_path: heap_path.clone(),
+            after_path: heap_path.clone(),
+            mode: crate::diff::DiffMode::Object,
+            identity_strategy: crate::diff::IdentityStrategy::ClassDominator,
+            retained_bucket_bits: 10,
+            min_retained_bytes: crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+            retained_change_threshold:
+                crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+            top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+            retain_field_data: false,
+            cross_reference_leaks: true,
+        })
+        .await
+        .expect("direct object diff with cross_reference_leaks should succeed")
+        {
+            crate::diff::DiffResult::Class(_) => panic!("expected object diff"),
+            crate::diff::DiffResult::Object(diff) => serde_json::to_value(diff).unwrap(),
+        };
+
+        assert_eq!(result, expected);
     }
 
     #[tokio::test(flavor = "current_thread")]
