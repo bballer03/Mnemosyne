@@ -69,7 +69,7 @@ cd ui && bun run lint
 
 ## Sequencing
 
-1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ ✅ shipped
+1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ 🟡 shipped with caveats (17.A–17.C ✅; 17.D GUI smoke → M21)
 2. **M18 — MCP Agent and IDE Loop Completion** ← next
 3. **M19 — Guided Analysis and Investigation Continuity**
 4. **M20 — Bounded MAT Migration Polish**
@@ -83,7 +83,7 @@ cd ui && bun run lint
 
 ## M17 — Desktop Guided UX Bridge Completion
 
-**Status:** ✅ Shipped (command-layer evidence; packaged GUI smoke deferred to M21)
+**Status:** 🟡 Shipped with caveats — 17.A–17.C command/bridge wiring shipped; 17.D partial (session-ops 24/24 pass; packaged GUI smoke → M21)
 **Why now:** M16 distributes the M14 UI, but the desktop host injects only the two pre-M14 bridges. The shipped desktop therefore advertises guided and power surfaces that deliberately render unavailable. This is the most direct usefulness gap and reuses already-tested core behavior.
 
 **Product outcome:** A desktop user with valid heap inputs can use every M14 live surface without switching to a browser mock, MCP client, or CLI.

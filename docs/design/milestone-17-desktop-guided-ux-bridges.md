@@ -1,6 +1,6 @@
 # Milestone 17 — Desktop Guided UX Bridge Completion
 
-> **Status:** ✅ Shipped — Slices 17.A–17.D complete. Command wiring evidenced by `tauri/session-ops/` unit tests (24/24 pass). Packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK dependency gap); M21 remains the gate for per-platform launch evidence.
+> **Status:** 🟡 Shipped with caveats — Slices **17.A–17.C** shipped (command/bridge wiring). Slice **17.D** partial: command-layer evidence only (`tauri/session-ops/` 24/24 pass); packaged-desktop GUI smoke deferred to **M21** (WebKitGTK/GTK deps absent on this WSL host; per-platform launch evidence not captured).
 > **Owner (design):** Design Consulting Agent
 > **Owner (implementation):** Implementation Agent (per slice)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M17
@@ -24,7 +24,7 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 | **17.A** | `inspectObject`, `findAllGcPaths` | ✅ Shipped |
 | **17.B** | `diffObjects` (comparison bridge) | ✅ Shipped |
 | **17.C** | Workflow bridge (`describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) | ✅ Shipped |
-| **17.D** | Packaged-desktop integration evidence | ✅ Shipped (command-layer evidence; GUI smoke deferred) |
+| **17.D** | Packaged-desktop integration evidence | 🟡 Partial — command-layer tests pass; packaged GUI smoke → M21 |
 
 ### Slice 17.A — Inspector and multi-path commands
 
@@ -69,16 +69,16 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 
 **Smoke path (manual):** Launch the desktop app, open the guided landing — workflow cards and Recent heaps should show ready states instead of unavailable when snapshots/workflows are reachable.
 
-### Slice 17.D — Desktop integration evidence
+### Slice 17.D — Desktop integration evidence (🟡 partial → M21)
 
 **Files:** `tauri/session-ops/`, STATUS/CHANGELOG/roadmap/plan closeout docs, `.superpowers/sdd/reports/task-m17d-report.md`
 
 - [x] All seven required M14 bridge methods are injected in `tauri/src/bridge.ts` and backed by native Tauri commands: `inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`. Pre-M14 bridge methods remain unchanged.
 - [x] `cargo test --features test-fixtures` in `tauri/session-ops/` — **24/24 pass** — covers inspector retain-field-data and malformed-id cases (17.A), snapshot-key and heap-path diff resolution (17.B), and workflow describe/start/next plus `list_snapshots` (17.C).
 - [x] Browser-without-bridge behavior unchanged: M14 UI probes optional bridge methods and renders explicit unavailable states when absent (no new UI code in M17).
-- [ ] Packaged-desktop GUI smoke (launch Tauri, exercise Object Inspector, GC-path multi-path, `/compare`, guided landing) — **not run on this WSL host**; WebKitGTK/GTK bundler deps are absent here. Per-platform launch evidence remains M21 scope.
+- [ ] Packaged-desktop GUI smoke (launch Tauri, exercise Object Inspector, GC-path multi-path, `/compare`, guided landing) — **not run on this WSL host**; WebKitGTK/GTK bundler deps are absent here. **Deferred to M21** — this slice is not complete until per-platform launch evidence is captured.
 
-**Evidence summary:** Session-ops unit tests prove command wiring against `core` synthetic fixtures. Full end-to-end packaged-desktop smoke is honestly deferred to a host with Tauri bundler deps (Windows launch-tested under M16; macOS/Linux not launch-tested).
+**Evidence summary:** Session-ops unit tests prove command wiring against `core` synthetic fixtures (17.A–C scope). Full end-to-end packaged-desktop smoke remains open under M21 (Windows launch-tested under M16 only; macOS/Linux not launch-tested).
 
 ## 4. Out of scope (M17)
 

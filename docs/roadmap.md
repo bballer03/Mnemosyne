@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-14 (M17 desktop bridge completion closeout)
+> **Last updated:** 2026-09-14 (M17 shipped with caveats — 17.D GUI smoke → M21)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
@@ -279,13 +279,13 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** R1 (no signing credentials in this environment) — mitigated by conditional CI wiring + documented unsigned default. R2 (OS security warnings on unsigned builds) — mitigated by README/SECURITY.md workarounds. R3 (asymmetric launch testing) — documented per platform above.
 - **Estimated slice count:** 4 shipped (16.A–16.D).
 
-### M17 — Desktop Guided UX Bridge Completion — ✅ Shipped
+### M17 — Desktop Guided UX Bridge Completion — 🟡 Shipped with caveats
 
-- **Status:** ✅ **Shipped** — [design doc](design/milestone-17-desktop-guided-ux-bridges.md); [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md). All seven required M14 bridge methods (`inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) are injected in `tauri/src/bridge.ts` and backed by native Tauri commands over existing `mnemosyne_core` behavior. **Evidence:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 24/24 pass. **Honest gap:** packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence remains M21.
-- **Goal:** Wire M14's live bridge capabilities into the Tauri desktop using existing core behavior — achieved for all four capability groups (inspector, multi-path GC, comparison, workflow/snapshots).
+- **Status:** 🟡 **Shipped with caveats** — [design doc](design/milestone-17-desktop-guided-ux-bridges.md); [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md). Slices **17.A–17.C** shipped: all seven required M14 bridge methods (`inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) are injected in `tauri/src/bridge.ts` and backed by native Tauri commands over existing `mnemosyne_core` behavior. **Evidence:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 24/24 pass. Slice **17.D partial:** command-layer tests and docs closeout only — packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence deferred to **M21**.
+- **Goal:** Wire M14's live bridge capabilities into the Tauri desktop using existing core behavior — achieved at the command/bridge layer for all four capability groups (inspector, multi-path GC, comparison, workflow/snapshots); end-to-end packaged-desktop GUI verification remains open.
 - **Why it mattered:** M16 distributed the M14 UI, but pre-M17 the desktop host injected only the two legacy bridges, forcing honest unavailable states on guided and power surfaces.
 - **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. `getWorkflow`/`closeWorkflow` explicitly not wired (no `ui/src` callers). Browser-without-bridge fallback unchanged.
-- **Slices shipped:** 17.A inspector/all-paths; 17.B object comparison; 17.C workflow/snapshot commands; 17.D command-layer evidence + docs closeout (GUI smoke deferred).
+- **Slices:** 17.A ✅ inspector/all-paths; 17.B ✅ object comparison; 17.C ✅ workflow/snapshot commands; 17.D 🟡 partial (command-layer evidence only; GUI smoke → M21).
 
 ### M18 — MCP Agent and IDE Loop Completion — 🔲 Pending
 
@@ -350,7 +350,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ## 6. Recommended Post-M16 Sequence — **M17 Desktop Guided UX Bridge Completion**
 
-**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16, and **M17** are shipped. M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. M18+ items below are 🔲 candidates, not shipped.
+**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16 shipped; **M17 shipped with caveats** (17.A–17.C command/bridge wiring ✅; 17.D packaged GUI smoke → M21). M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. M18+ items below are 🔲 candidates, not shipped.
 
 **Recommendation:** Schedule **M18** next, then M19–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
 
@@ -364,7 +364,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 **Recommended sequencing (current):**
 
-1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ — ✅ shipped; M14 bridge methods wired in Tauri (command-layer evidence; GUI launch evidence → M21).
+1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ — 🟡 shipped with caveats; 17.A–17.C bridge wiring ✅ (`tauri/session-ops/` 24/24); 17.D packaged GUI smoke → M21.
 2. **M18 — MCP Agent and IDE Loop Completion** — policy/baseline, leak cross-reference, snapshots, flamegraphs.
 3. **M19 — Guided Analysis and Investigation Continuity** — M15 UI, classloader workflow, bounded conversation depth.
 4. **M20 — Bounded MAT Migration Polish** — multi-class `FROM`, capped multi-hop `OBJECTS`, operator polish.
