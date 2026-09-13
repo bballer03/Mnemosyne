@@ -301,7 +301,8 @@ jobs:
             echo "${IDENTITIES}" \
               | grep 'Developer ID Application' \
               | head -1 \
-              | awk -F'"' '{print $2}'
+              | awk -F'"' '{print $2}' \
+              || true
           )"
           if [[ -n "${CERT_ID}" ]]; then
             echo "signing_enabled=true" >> "${GITHUB_OUTPUT}"
