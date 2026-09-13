@@ -267,10 +267,10 @@ jobs:
           set -euo pipefail
 
           if [[ -n "${APPLE_CERTIFICATE:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${KEYCHAIN_PASSWORD:-}" ]]; then
-            echo "enabled=true" >> "${GITHUB_OUTPUT}"
-            echo "M16 16.B: macOS code signing + Apple-ID notarization ENABLED — all required Apple secrets present."
+            echo "secrets_present=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple signing/notarization secrets present — will validate Developer ID Application certificate after import."
           else
-            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "secrets_present=false" >> "${GITHUB_OUTPUT}"
             echo "M16 16.B: Apple signing/notarization secrets NOT configured."
             echo "Required when enabling (Apple-ID path): APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,"
             echo "APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD."
@@ -279,7 +279,8 @@ jobs:
           fi
 
       - name: Import Apple Developer certificate
-        if: ${{ runner.os == 'macOS' && steps.mac-signing.outputs.enabled == 'true' }}
+        if: ${{ runner.os == 'macOS' && steps.mac-signing.outputs.secrets_present == 'true' }}
+        id: mac-cert
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -294,32 +295,42 @@ jobs:
           security set-keychain-settings -t 3600 -u build.keychain
           security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+
+          IDENTITIES="$(security find-identity -v -p codesigning build.keychain)"
           CERT_ID="$(
-            security find-identity -v -p codesigning build.keychain \
-              | grep -E 'Developer ID Application|Apple Development' \
+            echo "${IDENTITIES}" \
+              | grep 'Developer ID Application' \
               | head -1 \
               | awk -F'"' '{print $2}'
           )"
-          if [[ -z "${CERT_ID}" ]]; then
-            echo "Failed to resolve Apple signing identity from imported certificate" >&2
+          if [[ -n "${CERT_ID}" ]]; then
+            echo "signing_enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "${GITHUB_ENV}"
+            echo "M16 16.B: macOS code signing + Apple-ID notarization ENABLED — Developer ID Application identity: ${CERT_ID}"
+          elif echo "${IDENTITIES}" | grep -q 'Apple Development'; then
+            echo "signing_enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple Development certificate detected — NOT valid for release notarization." >&2
+            echo "Direct distribution requires a Developer ID Application certificate." >&2
+            echo "Shipping UNSIGNED macOS bundle (.dmg/.app)." >&2
+            echo "macOS Gatekeeper will block on first open — use Right-click → Open. See SECURITY.md." >&2
+          else
+            echo "Failed to resolve Developer ID Application signing identity from imported certificate" >&2
             exit 1
           fi
-          echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "${GITHUB_ENV}"
-          echo "Imported Apple signing identity: ${CERT_ID}"
 
       - name: Build Tauri bundle
         id: tauri-build
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple env vars are consumed by tauri-cli only when mac-signing ran above.
+          # Apple env vars are consumed by tauri-cli only when mac-cert validated Developer ID Application.
           # Windows signing uses bundle.windows.* injected into tauri.conf.json after PFX import.
-          APPLE_CERTIFICATE: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ steps.mac-signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ steps.mac-signing.outputs.enabled == 'true' && env.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_CERTIFICATE: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && env.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: tauri
           args: ${{ matrix.tauri_args }}
