@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    RwLock,
+    Mutex, RwLock,
 };
 
 use mnemosyne_core::config::AppConfig;
@@ -12,6 +12,9 @@ use mnemosyne_core::hprof::ObjectGraph;
 /// multiple frontend queries can read concurrently while
 /// load/unload operations acquire exclusive access.
 pub struct HeapSession {
+    /// Serializes session mutation (load/unload and field-data cache install)
+    /// so epoch/path checks cannot interleave with cache writes.
+    pub session_mutation: Mutex<()>,
     pub graph: RwLock<Option<ObjectGraph>>,
     /// Lazily populated when `inspect_object` is called with
     /// `retain_field_data: true` against a lean session graph.
@@ -26,6 +29,7 @@ pub struct HeapSession {
 impl HeapSession {
     pub fn new() -> Self {
         Self {
+            session_mutation: Mutex::new(()),
             graph: RwLock::new(None),
             field_data_graph: RwLock::new(None),
             session_epoch: AtomicU64::new(0),

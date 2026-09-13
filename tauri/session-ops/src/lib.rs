@@ -41,6 +41,13 @@ pub fn graph_has_field_data(graph: &mnemosyne_core::hprof::ObjectGraph) -> bool 
         .any(|object| !object.field_data.is_empty())
 }
 
+/// Session coordinates captured before an out-of-lock field-data reparse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldDataCacheCapture {
+    pub epoch: u64,
+    pub heap_path: String,
+}
+
 /// Returns true when an in-flight field-data reparse may still be cached for
 /// the session that requested it (epoch unchanged and heap path still loaded).
 pub fn should_install_field_data_cache(
@@ -50,6 +57,30 @@ pub fn should_install_field_data_cache(
     current_heap_path: Option<&str>,
 ) -> bool {
     current_epoch == capture_epoch && current_heap_path == Some(capture_heap_path)
+}
+
+/// Install a field-data graph only when the live session still matches
+/// `capture`. Callers must hold the same session-mutation lock used by
+/// `load_heap` / `unload_heap` so epoch/path cannot change between the
+/// re-verify and the cache write.
+pub fn install_field_data_cache_if_still_current(
+    capture: &FieldDataCacheCapture,
+    current_epoch: u64,
+    current_heap_path: Option<&str>,
+    field_data_graph: &mut Option<mnemosyne_core::hprof::ObjectGraph>,
+    parsed_graph: mnemosyne_core::hprof::ObjectGraph,
+) -> bool {
+    if should_install_field_data_cache(
+        capture.epoch,
+        current_epoch,
+        &capture.heap_path,
+        current_heap_path,
+    ) {
+        *field_data_graph = Some(parsed_graph);
+        true
+    } else {
+        false
+    }
 }
 
 pub fn inspect_object_for_session(
@@ -410,6 +441,45 @@ mod tests {
             Some("/tmp/b.hprof"),
         ));
         assert!(!should_install_field_data_cache(3, 3, "/tmp/a.hprof", None));
+    }
+
+    #[test]
+    fn install_field_data_cache_if_still_current_writes_only_on_match() {
+        let capture = FieldDataCacheCapture {
+            epoch: 3,
+            heap_path: "/tmp/a.hprof".to_string(),
+        };
+        let graph = graph_fixture();
+        let mut slot: Option<mnemosyne_core::hprof::ObjectGraph> = None;
+
+        assert!(install_field_data_cache_if_still_current(
+            &capture,
+            3,
+            Some("/tmp/a.hprof"),
+            &mut slot,
+            graph.clone(),
+        ));
+        assert!(slot.is_some());
+
+        let mut stale_slot = Some(graph_fixture());
+        assert!(!install_field_data_cache_if_still_current(
+            &capture,
+            4,
+            Some("/tmp/a.hprof"),
+            &mut stale_slot,
+            graph.clone(),
+        ));
+        assert!(stale_slot.is_some(), "epoch mismatch must not overwrite cache");
+
+        let mut path_slot = Some(graph_fixture());
+        assert!(!install_field_data_cache_if_still_current(
+            &capture,
+            3,
+            Some("/tmp/b.hprof"),
+            &mut path_slot,
+            graph,
+        ));
+        assert!(path_slot.is_some(), "heap path mismatch must not overwrite cache");
     }
 
     #[test]

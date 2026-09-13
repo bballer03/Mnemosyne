@@ -18,9 +18,10 @@ use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_desktop_session::{
     default_snapshot_store, default_workflow_store, describe_workflow_for_session,
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
-    inspect_object_for_session, list_snapshots_for_session, next_step_for_session,
-    parse_identity_strategy, parse_object_id, should_install_field_data_cache,
-    start_workflow_for_session, DiffObjectsSessionInput, StartWorkflowSessionInput,
+    install_field_data_cache_if_still_current, inspect_object_for_session,
+    list_snapshots_for_session, next_step_for_session, parse_identity_strategy,
+    parse_object_id, start_workflow_for_session, DiffObjectsSessionInput,
+    FieldDataCacheCapture, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,6 +114,10 @@ pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<He
         gc_root_count: graph.gc_roots.len(),
     };
 
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
     *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
@@ -123,6 +128,10 @@ pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<He
 
 #[tauri::command]
 pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
     let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
     if graph.is_none() {
         return Err(NO_HEAP_LOADED.to_string());
@@ -266,8 +275,10 @@ pub async fn inspect_object(
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let retain_field_data = retain_field_data.unwrap_or(false);
-    let session_epoch = state.session_epoch.load(Ordering::Acquire);
-    let heap_path_for_cache = heap_path.clone();
+    let cache_capture = FieldDataCacheCapture {
+        epoch: state.session_epoch.load(Ordering::Acquire),
+        heap_path: heap_path.clone(),
+    };
     let cached_field_graph = if retain_field_data && !graph_has_field_data(&graph) {
         state
             .field_data_graph
@@ -311,6 +322,10 @@ pub async fn inspect_object(
     .map_err(|error| error.to_string())??;
 
     if let Some(field_graph) = refreshed_field_graph {
+        let _session = state
+            .session_mutation
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
         let current_epoch = state.session_epoch.load(Ordering::Acquire);
         let current_heap_path = state
             .heap_path
@@ -318,17 +333,17 @@ pub async fn inspect_object(
             .map_err(|_| LOCK_ERROR.to_string())?
             .as_deref()
             .map(str::to_string);
-        if should_install_field_data_cache(
-            session_epoch,
+        let mut field_data_graph = state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        install_field_data_cache_if_still_current(
+            &cache_capture,
             current_epoch,
-            &heap_path_for_cache,
             current_heap_path.as_deref(),
-        ) {
-            *state
-                .field_data_graph
-                .write()
-                .map_err(|_| LOCK_ERROR.to_string())? = Some(field_graph);
-        }
+            &mut field_data_graph,
+            field_graph,
+        );
     }
 
     Ok(inspection)
