@@ -8,16 +8,22 @@ use mnemosyne_core::{
     build_dominator_tree, graph::find_all_gc_paths_in_graph, AllPathsRequest, GcPathResult,
 };
 
+pub fn graph_has_field_data(graph: &mnemosyne_core::hprof::ObjectGraph) -> bool {
+    graph
+        .objects
+        .values()
+        .any(|object| !object.field_data.is_empty())
+}
+
 pub fn inspect_object_for_session(
     graph: &mnemosyne_core::hprof::ObjectGraph,
     heap_path: &str,
     object_id: &str,
     retain_field_data: bool,
 ) -> Result<ObjectInspection, String> {
-    let target_id = parse_object_id(object_id)?;
-    if !graph.objects.contains_key(&target_id) {
-        return Err(inspect_object_id_not_found(object_id, heap_path));
-    }
+    let target_id = parse_inspect_object_id(object_id)
+        .filter(|id| graph.objects.contains_key(id))
+        .ok_or_else(|| inspect_object_id_not_found(object_id, heap_path))?;
 
     let dominator = build_dominator_tree(graph);
     inspect_object(graph, Some(&dominator), target_id, retain_field_data)
@@ -49,28 +55,37 @@ pub fn inspect_object_id_not_found(object_id: &str, heap_path: &str) -> String {
     )
 }
 
-pub fn parse_object_id(input: &str) -> Result<u64, String> {
+/// Parse an inspect-supplied object id (`0x...` hex or bare decimal), mirroring
+/// MCP/CLI semantics: malformed ids are treated as not-found by callers.
+pub fn parse_inspect_object_id(input: &str) -> Option<u64> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err("Object id must not be empty".to_string());
+        return None;
     }
 
     if let Some(hex) = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
     {
-        return u64::from_str_radix(hex, 16)
-            .map_err(|_| format!("Invalid object id '{trimmed}'"));
+        return u64::from_str_radix(hex, 16).ok();
     }
 
     if trimmed.chars().any(|character| matches!(character, 'A'..='F' | 'a'..='f')) {
-        return u64::from_str_radix(trimmed.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("Invalid object id '{trimmed}'"));
+        return u64::from_str_radix(trimmed, 16).ok();
     }
 
-    trimmed
-        .parse::<u64>()
-        .map_err(|_| format!("Invalid object id '{trimmed}'"))
+    trimmed.parse::<u64>().ok()
+}
+
+pub fn parse_object_id(input: &str) -> Result<u64, String> {
+    parse_inspect_object_id(input).ok_or_else(|| {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            "Object id must not be empty".to_string()
+        } else {
+            format!("Invalid object id '{trimmed}'")
+        }
+    })
 }
 
 #[cfg(all(test, feature = "test-fixtures"))]
@@ -161,5 +176,30 @@ mod tests {
             .expect("core inspect must succeed")
             .fields
             .is_none());
+    }
+
+    #[test]
+    fn inspect_object_for_session_retain_field_data_populates_fields_when_graph_retained() {
+        let bytes = build_graph_fixture();
+        let graph =
+            parse_hprof_file_with_options_from_bytes(&bytes, true).expect("fixture must parse");
+        let inspection = inspect_object_for_session(&graph, "/tmp/heap.hprof", "0x1000", true)
+            .expect("known object must inspect");
+
+        let fields = inspection.fields.expect("fields must be present");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "entries");
+    }
+
+    #[test]
+    fn inspect_object_for_session_malformed_id_matches_core_not_found_error() {
+        let graph = graph_fixture();
+        let error = inspect_object_for_session(&graph, "/tmp/heap.hprof", "not-an-id", false)
+            .expect_err("malformed object id must fail");
+
+        assert_eq!(
+            error,
+            "inspect_object_id_not_found: object id 'not-an-id' was not found in heap dump '/tmp/heap.hprof'"
+        );
     }
 }

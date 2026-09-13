@@ -2,14 +2,17 @@ use std::path::PathBuf;
 
 use mnemosyne_core::{
     analysis::{analyze_heap, validate_leak_id, ObjectInspection},
-    focus_leaks, generate_ai_insights_async, parse_hprof_file, propose_fix_with_config,
+    focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
+    propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
     AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
-    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ProvenanceMarker, SourceMapResult,
+    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ParseOptions, ProvenanceMarker,
+    SourceMapResult,
 };
 
 use mnemosyne_desktop_session::{
-    find_all_gc_paths_for_session, inspect_object_for_session, parse_object_id,
+    find_all_gc_paths_for_session, graph_has_field_data, inspect_object_for_session,
+    parse_object_id,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -93,6 +96,7 @@ pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<He
     };
 
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
+    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
     *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
     Ok(summary)
@@ -106,6 +110,7 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
     }
 
     *graph = None;
+    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
     *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = None;
 
     Ok(())
@@ -240,17 +245,57 @@ pub async fn inspect_object(
 ) -> Result<ObjectInspection, String> {
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
+    let retain_field_data = retain_field_data.unwrap_or(false);
+    let cached_field_graph = if retain_field_data && !graph_has_field_data(&graph) {
+        state
+            .field_data_graph
+            .read()
+            .map_err(|_| LOCK_ERROR.to_string())?
+            .clone()
+    } else {
+        None
+    };
 
-    spawn_blocking(move || {
+    let (inspection, refreshed_field_graph) = spawn_blocking(move || {
+        let (inspect_graph, refreshed_field_graph) =
+            if retain_field_data && !graph_has_field_data(&graph) {
+                if let Some(cached) =
+                    cached_field_graph.filter(|cached| graph_has_field_data(cached))
+                {
+                    (cached, None)
+                } else {
+                    let reloaded = parse_hprof_file_with_options(
+                        &heap_path,
+                        ParseOptions {
+                            retain_field_data: true,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                    (reloaded.clone(), Some(reloaded))
+                }
+            } else {
+                (graph, None)
+            };
+
         inspect_object_for_session(
-            &graph,
+            &inspect_graph,
             &heap_path,
             &object_id,
-            retain_field_data.unwrap_or(false),
+            retain_field_data,
         )
+        .map(|inspection| (inspection, refreshed_field_graph))
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+
+    if let Some(field_graph) = refreshed_field_graph {
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = Some(field_graph);
+    }
+
+    Ok(inspection)
 }
 
 #[tauri::command(rename_all = "camelCase")]

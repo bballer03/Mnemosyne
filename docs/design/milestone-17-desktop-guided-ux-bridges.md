@@ -37,6 +37,16 @@ See [post-M16 product plan excerpt](../../.superpowers/sdd/briefs/task-m17-plan-
 
 **Smoke path (manual):** Launch the desktop app, `load_heap` on a known fixture, open Object Inspector and Leak GC Path pages — dominator chips and multi-path enumeration should render instead of unavailable states.
 
+#### Slice 17.A implementation report (Terra review fixes)
+
+**Findings addressed:**
+
+1. **`retainFieldData` never populated fields** — `load_heap` parsed with default `retain_field_data: false`, so `inspect_object(..., retainFieldData=true)` could never surface instance fields. Fix: when `retain_field_data` is requested and the session graph has no retained field bytes, `inspect_object` re-parses the loaded heap with `ParseOptions { retain_field_data: true }` and caches the result in `HeapSession.field_data_graph` (lean session graph unchanged for other commands). Matches CLI/MCP semantics: caller flag gates the fields section; graph must actually carry field bytes.
+
+2. **Malformed object ids returned ad-hoc errors** — `parse_object_id` surfaced `"Invalid object id '…'"` on inspect paths. Fix: `inspect_object_for_session` now uses `parse_inspect_object_id` (mirroring MCP/CLI) and maps parse failures to `inspect_object_id_not_found: object id '…' was not found in heap dump '…'`.
+
+**Verification:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 7/7 pass (includes new retain-field-data and malformed-id cases).
+
 ## 4. Out of scope (M17)
 
 - Slices 17.B–17.D until scheduled.
