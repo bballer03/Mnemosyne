@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-04-26 (post-v0.3.0 Tech PM refresh)
+> **Last updated:** 2026-09-13 (post-M16 desktop-packaging closeout)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
@@ -37,7 +37,7 @@ Every milestone proposal in this document MUST either close a parity gap that is
 | AI | ✅ Shipped | Rules / stub / provider modes, CLI `chat`, persisted MCP sessions, redaction + audit |
 | MCP | ✅ Shipped | 14 methods, `list_tools`, `error_details`, session lifecycle, mode-aware |
 | UI | ✅ Shipped | Browser-first React: triage / artifact / heap / leak workspace |
-| Desktop | ⚠️ Scaffold | Tauri shell with native commands; no signed release artifacts |
+| Desktop | 🟡 Shipped (unsigned default) | Tauri v2 installers built in tagged-release CI (`.msi`/`.exe`, `.dmg`/`.app`, `.deb`/`.AppImage`/`.rpm`); signing conditional-on-secrets — **no signing credentials configured today, so default artifacts are unsigned**; desktop bundles ship on **post-M16 tags only** (not historical `v0.3.0`) |
 | Distribution | ✅ Full | GitHub Releases (5 targets), GHCR, Homebrew, source |
 | Testing | ✅ Solid | 448 Rust tests + UI suite |
 | Scale credibility | 🟡 Partial | Deep validated ~2 GB; overview survives 6.47 GB on WSL; **native-Linux + MAT + 10 GiB rerun still pending (M7-5)** |
@@ -263,19 +263,21 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Risks / dependencies:** OQL scope bounded to the named §4.1 list — mitigated. Plugin runtime limited to Phase 2 per §3.3 binding decision — mitigated.
 - **Estimated slice count:** 7 shipped (15.A–15.G).
 
-### M16 — Desktop Packaging & Distribution (Adoption)
+### M16 — Desktop Packaging & Distribution (Adoption) — ✅ Shipped (unsigned default)
 
-- **Status:** 🔲 Pending — design doc to be authored.
+- **Status:** ✅ **Shipped with documented caveats** — design doc [milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md), slices 16.A–16.C (implementation) + 16.D (documentation sync, this pass). **Do not claim signed or notarized releases exist** until release CI signing secrets are configured and a release notes that fact explicitly.
 - **Theme:** Ship Mnemosyne as a downloadable, installable desktop application (parity with how users obtain and run Eclipse MAT today), not just a CLI binary + optional dev-mode Tauri shell.
 - **Goal:** A user can download one installer per platform (Windows/macOS/Linux), run it, and get the full M14 GUI without installing Rust, Node, or building from source — absorbing the deferred B7 backlog item as this milestone's actual scope.
-- **Scope:**
-  - Harden the existing `tauri/` scaffold (already wraps the shared `ui/` build and injects host bridges) into a release-grade build: signed installers where platform tooling requires it, auto-update story (or an explicit documented decision to skip auto-update for v1), and inclusion in the tagged-release pipeline alongside the existing 5-target CLI archives / GHCR / Homebrew channels.
-  - Bundle the M14 UI (this milestone depends on M14 having shipped a GUI worth bundling — sequencing note, not a hard blocker on individual M14 slices).
-- **Out of scope:** New native commands beyond what `tauri/src/commands.rs` already exposes (`load_heap`, `query_heap`, `get_references`/`get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, `propose_fix` — extend only if M14 UI work surfaces a gap). Auto-update infrastructure unless scoped in explicitly during design.
-- **Why now / strategic rationale:** User-requested for adoption — "for easy adoption we could also package and make this downloadable with gui like eclipse mat." The scaffold already exists (M6); this is release-hardening, not new architecture, matching the "adoption-data dependent" B7 backlog note this roadmap already carried.
-- **Success criteria:** A signed (or documented-as-unsigned-with-rationale) installer exists per target platform, downloadable from GitHub Releases alongside the CLI archives, launches the M14 GUI, and loads/analyzes a real heap dump end-to-end without any local Rust/Node toolchain.
-- **Risks / dependencies:** Code-signing requires platform-specific credentials/certificates this environment may not have — flag early in design rather than discovering it mid-slice, same "check the environment before promising the milestone" discipline M12 already established when it turned out to be blocked here. Depends on M14 shipping a GUI worth packaging.
-- **Estimated slice count:** 4–6 slices.
+- **Delivered scope (as shipped; signing is conditional-on-secrets — see note):**
+  - **CI release-pipeline integration (Slice 16.A):** `.github/workflows/release.yml` gains a `build-desktop` matrix job (Windows/macOS/Linux) that runs `cargo tauri build`, uploads per-target bundle artifacts, and attaches them to the same tagged GitHub Release as the existing 5-target CLI archives. Desktop bundles appear on **post-M16 tags only** — historical `v0.3.0` and earlier CLI-only releases have no desktop installers.
+  - **Conditional code-signing + auto-update decision (Slice 16.B):** signing steps are wired but **no-op loudly** when secrets are absent. **Windows:** Authenticode via `WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD` (optional `WINDOWS_TIMESTAMP_URL`); CI derives the cert thumbprint and injects `bundle.windows.*` into `tauri.conf.json` before build when secrets are present. **macOS:** requires `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `KEYCHAIN_PASSWORD` for signing + notarization. **Linux:** unsigned by design. **Current default:** no signing secrets configured in CI → all desktop artifacts ship **unsigned**. **Auto-update:** explicitly **skipped for v1** — no Tauri updater plugin; users re-download from GitHub Releases. Documented in `SECURITY.md` and README Desktop app section.
+  - **Installation docs + Homebrew Cask evaluation (Slice 16.C):** README gains a "Desktop app (GUI)" subsection (download pattern, per-platform install steps, SmartScreen/Gatekeeper workarounds for unsigned builds). Homebrew **Cask deferred for v1** — GitHub Releases remains the sole desktop distribution channel; existing `HomebrewFormula/mnemosyne.rb` stays CLI-only. `tauri/Cargo.toml` version synced to `0.3.0`.
+- **Not shipped (explicit non-goals, per design doc §4/§6):** Actual code-signing certificates/accounts (organizational decision outside this milestone). In-app auto-update infrastructure. Homebrew Cask / winget / Flatpak / Snap. New Tauri native commands for M14's comparison/workflow bridges or `inspectObject`/`findAllGcPaths` — those UI surfaces still degrade to explicit unavailable states in the desktop shell (same as pre-M16).
+- **Platform verification asymmetry (honest):** Windows builds were launch-tested locally (`.msi`/`.exe` produced). macOS/Linux installer builds are CI-verified (artifact upload succeeds) but not launch-tested in the executing environment — same R3 discipline as the design doc.
+- **Why now / strategic rationale:** User-requested for adoption. M14 shipped a GUI worth bundling; M16 hardens the existing M6 Tauri scaffold into the tagged-release pipeline rather than inventing new architecture.
+- **Success criteria (met with caveats):** Installers build per OS family in CI and attach to tagged releases alongside CLI archives. Signing is conditional-on-secrets with loud unsigned fallback and user-facing SmartScreen/Gatekeeper documentation. Auto-update decision recorded (skip v1). README accurately describes the unsigned default — no signed/notarized claims.
+- **Risks / dependencies:** R1 (no signing credentials in this environment) — mitigated by conditional CI wiring + documented unsigned default. R2 (OS security warnings on unsigned builds) — mitigated by README/SECURITY.md workarounds. R3 (asymmetric launch testing) — documented per platform above.
+- **Estimated slice count:** 4 shipped (16.A–16.D).
 
 ### Other backlog items (lower priority — not proposed as standalone M8+)
 
@@ -294,7 +296,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ## 6. Recommended Next Milestone — **M14 UI Backend-Parity & AI-Native Redesign**
 
-**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, M14, and now **M15** are all shipped as of this update — the sequencing below this note is now history, preserved for the record. M12 remains blocked (no native-Linux + Eclipse MAT reference workstation available in the executing environment). With M15's backend-parity closeout done, the active recommendation moves to **M16** (desktop packaging, which depends on M14 having shipped a GUI worth bundling — it now has).
+**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, M14, M15, and now **M16** are all shipped as of this update — the sequencing below this note is now history, preserved for the record. M12 remains blocked (no native-Linux + Eclipse MAT reference workstation available in the executing environment). M16 shipped with documented caveats: desktop installers build in tagged-release CI but **default unsigned** (no signing secrets configured); desktop bundles appear on post-M16 tags only, not historical `v0.3.0`.
 
 **Recommendation (historical, at the time M14 was scheduled):** Schedule **M14 — UI Backend-Parity & AI-Native Redesign** as the active next milestone, followed by M15 (MAT backend parity completion) and M16 (desktop packaging).
 
@@ -306,8 +308,8 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 **Recommended sequencing (current):**
 
-1. **M16** — Desktop Packaging & Distribution (active — M14 GUI and M15 backend both shipped)
-2. **M12** — Reference-workstation rerun (blocked on environment; can run in parallel when hardware is available)
+1. **M12** — Reference-workstation rerun (blocked on environment; can run in parallel when hardware is available)
+2. **Configure release CI signing secrets** (optional follow-up) — enables signed Windows Authenticode and macOS notarization on future tagged releases; until then desktop installers remain unsigned by default
 
 **Historical sequencing (M8–M13 era, completed):**
 
@@ -319,6 +321,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 6. ~~M13~~ — Classloader explorer — ✅ shipped
 7. ~~M14~~ — UI backend-parity & AI-native redesign — ✅ shipped
 8. ~~M15~~ — MAT backend parity completion — ✅ shipped
+9. ~~M16~~ — Desktop packaging & distribution — ✅ shipped (unsigned default; post-M16 tags only)
 
 ---
 
@@ -371,7 +374,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | Object-identity heuristics in M10 will be approximate | Honesty contract risk if growth-detection looks more authoritative than it is | Mandatory `ProvenanceKind::Partial` markers; documented false-positive bounds |
 | M9 snapshot format churn | Re-versioning a shipped on-disk format is expensive | Land M9 **after** M8 so the format includes the new analyzers from day one |
 | Provider-specific AI quality drift | Multi-provider UX can erode trust | Strict wire contracts; provider tests; rules fallback always available |
-| Desktop hardening could consume bandwidth | Native packaging is not the credibility blocker | Keep B7 deferred until adoption data justifies |
+| Desktop installers ship unsigned by default | SmartScreen/Gatekeeper warnings may read as "broken" to new users | README + SECURITY.md document workarounds; signing secrets enable conditional CI signing on future releases |
 | Differentiator dilution | Adding parity-only features without preserving provenance / MCP / overview-aware error paths would erode the moat | **Roadmap-wide invariant** in §0; every M8+ milestone must extend or preserve at least one differentiator |
 | Rare HPROF edge cases on new real-world heaps | Parser correctness risk grows with broader fixture variety | Property-based testing (B2) folded into M8 hardening |
 
@@ -402,7 +405,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M13 Classloader Explorer** | [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) | ✅ Shipped (slices 13.A–13.C implementation, 13.D doc-sync) |
 | **M14 UI Backend-Parity & AI-Native Redesign** | [design/milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md) | ✅ Shipped (slices 14.A–14.D implementation, 14.E visual-consistency + doc-sync) |
 | **M15 MAT Backend Parity Completion** | [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) | ✅ Shipped (slices 15.A–15.F implementation, 15.G doc-sync) |
-| **M16 Desktop Packaging & Distribution** | _to be authored_ | ⏳ Pending |
+| **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
 
 ---
 

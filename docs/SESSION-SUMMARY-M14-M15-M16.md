@@ -36,8 +36,9 @@ interface must sit on top of it, not replace it.
    multi-class `FROM`, and deep nesting, to keep the query engine's attack surface and complexity
    bounded.
 5. **Desktop packaging (M16)** hardens the existing `tauri/` scaffold into a CI-built installer
-   pipeline rather than a from-scratch rewrite. Code-signing is explicitly out of scope for now —
-   this sandbox has no signing credentials, flagged up front rather than discovered mid-slice.
+   pipeline rather than a from-scratch rewrite. Code-signing is **conditional-on-secrets** — CI
+   wiring ships, but no signing credentials are configured today, so default artifacts are
+   **unsigned**. Auto-update skipped for v1. Homebrew Cask deferred.
 
 ## Roadmap additions
 
@@ -74,14 +75,15 @@ merge — never trusting the agent's self-reported numbers.
 | 15.F | Phase 2 static plugin/extension runtime (`AnalyzerPlugin`, `ReportFormatterPlugin`, `PluginRegistry`) |
 | 15.G | Documentation sync — M15 marked shipped across roadmap/STATUS/CHANGELOG/README/ARCHITECTURE/user-guide/plugin design doc |
 
-**M16 — Desktop packaging (1/4 slices complete; 16.B-D remaining)**
+**M16 — Desktop packaging (4/4 slices complete)**
 | Slice | What |
 |---|---|
-| 16.A | Tauri installer builds wired into the release pipeline (produced a real local `.msi`/`.exe`) |
-| 16.B-D | **Not started** |
+| 16.A | Tauri installer builds wired into the release pipeline (`build-desktop` CI job; local `.msi`/`.exe` launch-tested on Windows) |
+| 16.B | Conditional code-signing (Windows thumbprint wiring; macOS full Apple secret set; loud unsigned fallback); auto-update **skipped for v1** |
+| 16.C | README Desktop app install docs; Homebrew Cask deferred; `tauri/Cargo.toml` synced to `0.3.0` |
+| 16.D | Documentation sync — M16 marked shipped (unsigned default) across roadmap/STATUS/CHANGELOG/ARCHITECTURE/design doc |
 
-Current `main` tip: `75fee0f`. Rust test suite: 807 passing. UI test suite: 285 passing.
-clippy/fmt/tsc all clean at time of writing.
+**M16 caveats (honest):** no signing credentials in CI today → default unsigned artifacts; desktop bundles on post-M16 tags only (not historical `v0.3.0`); macOS/Linux CI build-verified, Windows launch-tested; M14 comparison/workflow bridges still unwired in Tauri.
 
 ## Notable incidents / lessons learned
 
@@ -104,13 +106,9 @@ clippy/fmt/tsc all clean at time of writing.
 
 ## What remains
 
-- M16.B-D (desktop packaging: code signing strategy, auto-update, multi-platform installer
-  verification).
-- Environment permanently blocks: no Eclipse MAT available in this sandbox for side-by-side
-  comparison, no native Linux target (affects M12, pre-existing), no code-signing credentials
-  (M16 R1).
-
-## Process note
-
-Per explicit instruction, autonomous dispatch stops here — no further slices (16.B-D) were
-started after this document. Resume by picking up M16 from `docs/design/milestone-16-desktop-packaging.md`.
+- **M12** — reference-workstation benchmark rerun (blocked: no native-Linux + Eclipse MAT hardware).
+- **Optional M16 follow-up** — configure release CI signing secrets for signed/notarized desktop
+  artifacts on future tags; wire M14 comparison/workflow bridges into `tauri/src/commands.rs`.
+- Environment permanently blocks: no Eclipse MAT for side-by-side comparison, no native Linux
+  target (M12), no code-signing credentials configured (M16 ships unsigned by default until
+  secrets are added).

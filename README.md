@@ -900,7 +900,7 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
 - M7 is shipped: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks remains 🟡 partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 shipped on 2026-04-26
-- M8, M9, M10, M10-B, M11, M13, M14, and M15 are shipped post-v0.3.0; **M16** (desktop packaging) is the active next milestone; M12 (reference-workstation benchmark rerun) remains blocked on environment
+- M8, M9, M10, M10-B, M11, M13, M14, M15, and **M16** (desktop packaging, unsigned default) are shipped post-v0.3.0; M12 (reference-workstation benchmark rerun) remains blocked on environment
 
 ---
 

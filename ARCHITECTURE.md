@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last Updated:** April 26, 2026
+> **Last Updated:** September 13, 2026
 > **Version:** 0.3.0 (alpha)  
 > **[← Back to README](README.md)**
 
@@ -76,11 +76,11 @@ By meeting these goals, Mnemosyne helps engineers identify memory leaks, underst
 
 ### M6 closeout delivered
 - **Browser UI follow-through:** The Object Inspector can request live references/referrers through `window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__`, heap explorer routes resolve selected objects back to leak IDs for cross-navigation into the leak workspace, and the shared frontend now covers the artifact loader, triage dashboard, artifact explorer, heap explorer, and leak workspace.
-- **Desktop scaffold:** `tauri/` now wraps the shared `ui/` build, injects both host bridges, and exposes native commands for `load_heap`, `unload_heap`, `query_heap`, `get_references`, `get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, and `propose_fix`.
+- **Desktop app (M16):** `tauri/` wraps the shared `ui/` build, injects both pre-M14 host bridges, and exposes native commands for `load_heap`, `unload_heap`, `query_heap`, `get_references`, `get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, and `propose_fix`. Tagged-release CI (`build-desktop` job) builds and attaches Tauri installers (`.msi`/`.exe`, `.dmg`, `.deb`/`.AppImage`/`.rpm`) to GitHub Releases on post-M16 tags — **unsigned by default** until release signing secrets are configured; no in-app auto-updater in v1. M14's comparison/workflow bridges and `inspectObject`/`findAllGcPaths` still have no Tauri native-command wiring.
 - **Ecosystem/docs:** The repo now includes the user guide, troubleshooting guide, benchmark comparison doc, CI integration guides, example projects, and the plugin/extension system design reference.
 
 ### Still in progress (post-M6 follow-on)
-- **Desktop distribution hardening:** The Tauri shell cargo-checks cleanly and bundles the shared frontend, but it is not yet part of the tagged release/distribution pipeline.
+- **Desktop signing + M14 bridge wiring (optional follow-up):** M16 ships tagged-release Tauri installers via CI, but default artifacts are unsigned (no signing secrets configured). M14 comparison/workflow bridges and `inspectObject`/`findAllGcPaths` still lack Tauri native commands.
 - **Post-M5 AI follow-through (narrower scope):** Broader conversation/exploration semantics, native local-provider transports beyond OpenAI-compatible endpoints, and streaming only if the current request/response transport proves insufficient.
 - **Broader ecosystem follow-through:** docs.rs publication, external community hosting, and apples-to-apples benchmark reruns against external tools remain optional future work rather than hidden incomplete milestone scope.
 
@@ -619,7 +619,7 @@ While the current design of Mnemosyne provides a robust foundation for JVM heap 
 
 **Browser-First UI (shipped, M4 + M6 follow-through + M14 backend-parity/AI-native redesign)**: The `ui/` React frontend now ships artifact-backed triage, artifact explorer (with referrer and classloader panels), heap explorer (dominators, object inspector, query console, thread view), the full leak workspace route family (with GC-path multi-view), a comparison basket for object-level diffs, and an AI-guided landing page built on the M11 workflow suite. Heap explorer panes resolve selected objects back to leak IDs for cross-navigation, and the Object Inspector can drill into live references/referrers/dominator context (as clickable chips) whenever a host bridge is present. Every M8–M13 backend capability that previously lacked a browser surface now has one; see "Browser-First UI Layer" above for the full route map.
 
-**Desktop distribution hardening (M16, not yet started)**: `tauri/` already wraps the shared `ui/` React frontend and injects the two pre-M14 host bridges through native commands. M14 added two further bridges (comparison, workflow) and two further methods on the original two (`inspectObject`, `findAllGcPaths`) with no Tauri native-command equivalent yet — wiring those, plus release-grade packaging, signing, and distribution, is M16's scope.
+**Desktop distribution (M16, shipped with caveats)**: `tauri/` wraps the shared `ui/` React frontend and injects the two pre-M14 host bridges through native commands. M16 adds tagged-release CI packaging (`build-desktop` job) — installers attach to post-M16 GitHub Releases, **unsigned by default** until signing secrets are configured, no in-app auto-updater in v1. M14's two further bridges (comparison, workflow) and `inspectObject`/`findAllGcPaths` on the original two still have no Tauri native-command equivalent — optional follow-up wiring.
 
 **Deeper JVM Integration**: In the future, Mnemosyne might integrate with live JVMs via JMX or JVMTI. Instead of requiring a heap dump file, it could connect to a running application (given proper credentials) and trigger a heap dump or even query memory structures in real-time. This would make it more of a live monitoring tool. Combined with the AI, it could act as a continuous memory assistant, not just post-mortem analysis.
 
