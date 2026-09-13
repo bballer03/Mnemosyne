@@ -9,6 +9,8 @@ if (isTauri) {
     queryHeap: (input) => invoke("query_heap", { input }),
     getReferences: (objectId) => invoke("get_references", { objectId }),
     getReferrers: (objectId) => invoke("get_referrers", { objectId }),
+    inspectObject: (objectId, retainFieldData) =>
+      invoke("inspect_object", { objectId, retainFieldData }),
   };
 
   hostWindow.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
@@ -17,6 +19,8 @@ if (isTauri) {
     },
     explainLeak: (input) => invoke("explain_leak", input),
     findGcPath: (input) => invoke("find_gc_path", input),
+    findAllGcPaths: (objectId, maxPaths) =>
+      invoke("find_all_gc_paths", { objectId, maxPaths }),
     mapToCode: (input) => invoke("map_to_code", input),
     proposeFix: (input) => invoke("propose_fix", input),
   };

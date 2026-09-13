@@ -15,6 +15,8 @@ fn main() {
             commands::get_referrers,
             commands::query_heap,
             commands::explain_leak,
+            commands::inspect_object,
+            commands::find_all_gc_paths,
             commands::find_gc_path,
             commands::map_to_code,
             commands::propose_fix,

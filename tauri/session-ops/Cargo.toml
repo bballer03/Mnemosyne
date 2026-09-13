@@ -1,0 +1,15 @@
+[package]
+name = "mnemosyne-desktop-session"
+version = "0.3.0"
+edition = "2021"
+description = "Session-scoped heap operations for the Mnemosyne desktop shell"
+license = "Apache-2.0"
+
+[dependencies]
+mnemosyne-core = { path = "../../core" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+test-fixtures = ["mnemosyne-core/test-fixtures"]

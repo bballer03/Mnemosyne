@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
 use mnemosyne_core::{
-    analysis::{analyze_heap, validate_leak_id},
+    analysis::{analyze_heap, validate_leak_id, ObjectInspection},
     focus_leaks, generate_ai_insights_async, parse_hprof_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
-    FixRequest, FixResponse, FixStyle, GcPathRequest, HistogramGroupBy, LeakDetectionOptions,
-    MapToCodeRequest, ProvenanceMarker, SourceMapResult,
+    AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
+    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ProvenanceMarker, SourceMapResult,
+};
+
+use mnemosyne_desktop_session::{
+    find_all_gc_paths_for_session, inspect_object_for_session, parse_object_id,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -229,6 +233,45 @@ pub async fn explain_leak(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn inspect_object(
+    object_id: String,
+    retain_field_data: Option<bool>,
+    state: State<'_, HeapSession>,
+) -> Result<ObjectInspection, String> {
+    let graph = require_loaded_graph(&state)?;
+    let heap_path = require_loaded_heap_path(&state)?;
+
+    spawn_blocking(move || {
+        inspect_object_for_session(
+            &graph,
+            &heap_path,
+            &object_id,
+            retain_field_data.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn find_all_gc_paths(
+    object_id: String,
+    max_paths: Option<usize>,
+    state: State<'_, HeapSession>,
+) -> Result<GcPathResult, String> {
+    ensure_loaded_heap_matches(&state, None)?;
+    let graph = require_loaded_graph(&state)?;
+    let heap_path = require_loaded_heap_path(&state)?;
+    let max_paths = max_paths.unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS);
+
+    spawn_blocking(move || {
+        find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn find_gc_path(
     object_id: String,
     heap_path: String,
@@ -292,6 +335,15 @@ pub async fn propose_fix(
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {
+    state
+        .heap_path
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| NO_HEAP_LOADED.to_string())
 }
 
 fn require_loaded_graph(state: &State<'_, HeapSession>) -> Result<mnemosyne_core::hprof::ObjectGraph, String> {
@@ -369,30 +421,6 @@ fn query_cell_to_value(cell: CellValue, id_size: usize) -> Value {
         CellValue::Bool(value) => Value::Bool(value),
         CellValue::Null => Value::Null,
     }
-}
-
-fn parse_object_id(input: &str) -> Result<u64, String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err("Object id must not be empty".to_string());
-    }
-
-    if let Some(hex) = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        return u64::from_str_radix(hex, 16)
-            .map_err(|_| format!("Invalid object id '{trimmed}'"));
-    }
-
-    if trimmed.chars().any(|character| matches!(character, 'A'..='F' | 'a'..='f')) {
-        return u64::from_str_radix(trimmed.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("Invalid object id '{trimmed}'"));
-    }
-
-    trimmed
-        .parse::<u64>()
-        .map_err(|_| format!("Invalid object id '{trimmed}'"))
 }
 
 fn format_object_id(object_id: u64, id_size: usize) -> String {
