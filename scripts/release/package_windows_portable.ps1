@@ -11,9 +11,16 @@ $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$exe = Get-ChildItem -Path $SourceDir -Recurse -Filter "Mnemosyne.exe" | Select-Object -First 1
+$exe = Get-ChildItem -Path $SourceDir -Recurse -Filter "Mnemosyne.exe" -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -notmatch 'setup' } |
+  Select-Object -First 1
 if (-not $exe) {
-  Write-Error "Mnemosyne.exe not found under $SourceDir"
+  # Cargo [[bin]] name is mnemosyne-desktop; Tauri productName is Mnemosyne.
+  $exe = Get-ChildItem -Path $SourceDir -Recurse -Filter "mnemosyne-desktop.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+}
+if (-not $exe) {
+  Write-Error "Mnemosyne.exe / mnemosyne-desktop.exe not found under $SourceDir"
   exit 1
 }
 
