@@ -1030,6 +1030,8 @@ fn execute_query_supports_instanceof_filters_on_instance_fields() {
     assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
 }
 
+// MAT SELECT Clause OBJECTS (corpus `objects-one-hop`):
+// https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
 #[test]
 fn objects_projection_returns_referenced_target() {
     let graph = build_objects_projection_graph();
@@ -1050,6 +1052,7 @@ fn objects_projection_returns_referenced_target() {
     );
 }
 
+// MAT OBJECTS skips null projections (corpus `objects-null-field-omitted`).
 #[test]
 fn objects_projection_omits_rows_with_null_field() {
     let graph = build_objects_projection_graph();
@@ -1076,6 +1079,8 @@ fn objects_projection_omits_rows_with_unresolved_target() {
     assert!(result.rows.is_empty());
 }
 
+// MAT SELECT Clause without DISTINCT OBJECTS retains duplicate targets
+// (corpus `objects-duplicate-targets`).
 #[test]
 fn objects_projection_keeps_duplicates_when_multiple_sources_share_target() {
     let graph = build_objects_projection_graph();
@@ -1197,6 +1202,8 @@ fn objects_projection_on_primitive_field_returns_clear_error() {
     assert!(error.to_string().contains("object-reference"));
 }
 
+// MAT-referenced multi-hop OBJECTS (corpus `objects-two-hop` / `objects-three-hop`).
+// NON-EQUIVALENCY companions: four-hop reject, cycle omit, missing-field error.
 #[test]
 fn objects_projection_two_hop_returns_final_referent() {
     let graph = build_multi_hop_objects_graph();
@@ -2557,6 +2564,11 @@ fn union_right_side_limit_bounds_its_own_contribution_before_merge() {
 }
 
 // M22 Slice 22.B: bounded multi-class `FROM`.
+//
+// MAT refs: FROM Clause multi-class addresses/ids + BNF FromItem list
+// (see docs/design/milestone-22-bounded-mat-oql-polish.md and corpus
+// `multi-class-from-two-literals`). List-size reject / LIMIT truncation are
+// NON-EQUIVALENCY Mnemosyne bounds (`limit-budget-exhaustion`).
 
 fn build_multi_class_from_graph() -> ObjectGraph {
     let mut graph = ObjectGraph::new(8);

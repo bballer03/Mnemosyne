@@ -250,6 +250,14 @@ fn parse_query_still_rejects_trailing_union_keyword() {
 }
 
 // M22 Slice 22.B: bounded multi-class `FROM`.
+//
+// MAT refs (equivalency-eligible intent — corpus id `multi-class-from-two-literals`):
+// - FROM Clause — "by the object addresses of more than one class"
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html
+// - BNF FromItem comma-separated ObjectAddress / ObjectId
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/bnfofoql.html
+// Syntax delta: MAT uses class object addresses/ids; Mnemosyne accepts quoted
+// class-name patterns with the same multi-source union + ID-dedup intent.
 
 #[test]
 fn parse_query_supports_two_literal_class_patterns() {
@@ -320,6 +328,14 @@ fn parse_query_rejects_empty_class_pattern_entry() {
 }
 
 // M22 Slice 22.C: bounded multi-hop `SELECT OBJECTS`.
+//
+// MAT refs (equivalency-eligible for 1–3 hops — corpus ids `objects-*-hop`):
+// - SELECT Clause — "Flatten select items into an object list" (OBJECTS)
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
+// - FROM Clause example: SELECT OBJECTS s.value FROM java.lang.String s
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html
+// NON-EQUIVALENCY: four-hop rejection is a Mnemosyne hop cap (corpus id
+// `objects-four-hop-reject`), not a MAT handbook claim.
 
 #[test]
 fn parse_query_supports_two_hop_objects_field_path() {

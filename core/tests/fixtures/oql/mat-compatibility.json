@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "corpus": "m22.a-mat-compatibility",
+  "mat_help_baseline": "Eclipse Memory Analyzer OQL help (help.eclipse.org latest)",
+  "honesty": "Only cases with equivalency=mat-referenced may close a MAT compatibility-matrix row. Cases labeled non-equivalency are Mnemosyne bounds or syntax deltas and must not support equivalency claims.",
+  "cases": [
+    {
+      "id": "multi-class-from-two-literals",
+      "category": "multi-class-from",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "FROM Clause — by the object addresses of more than one class",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html"
+        },
+        {
+          "section": "BNF — FromItem with comma-separated ObjectAddress/ObjectId",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/bnfofoql.html"
+        }
+      ],
+      "syntax_note": "MAT documents comma-separated class object addresses/ids. Mnemosyne ships comma-separated quoted class-name patterns with the same multi-source union + ID-dedup intent.",
+      "query": "SELECT @objectId FROM \"com.example.User\", \"com.example.Admin\"",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "multi_class",
+        "min_matched": 3,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-one-hop",
+      "category": "objects-hops",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — Flatten select items into an object list (OBJECTS)",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        },
+        {
+          "section": "FROM Clause — sub select with SELECT OBJECTS s.value",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html"
+        }
+      ],
+      "query": "SELECT OBJECTS n.parent FROM \"com.example.Node\" WHERE count = 1",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "objects_projection",
+        "min_matched": 1,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-two-hop",
+      "category": "objects-hops",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — OBJECTS field/expression projection",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "query": "SELECT OBJECTS n.parent.link FROM \"com.example.Node\" WHERE count = 1",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "multi_hop",
+        "min_matched": 1,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-three-hop",
+      "category": "objects-hops",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — OBJECTS field/expression projection",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "query": "SELECT OBJECTS n.parent.link.target FROM \"com.example.Node\" WHERE count = 1",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "multi_hop",
+        "min_matched": 1,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-four-hop-reject",
+      "category": "objects-hop-limit",
+      "status": "shipped",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Mnemosyne hard-caps SELECT OBJECTS field hops at 3. MAT OQL help does not document this hop bound; this case freezes the Mnemosyne grammar boundary only.",
+      "mat_refs": [],
+      "query": "SELECT OBJECTS n.parent.link.target.extra FROM \"com.example.Node\"",
+      "expect": {
+        "parse": "error",
+        "error_contains": "multi-hop OBJECTS exceeds limit",
+        "result_budget": "n/a"
+      }
+    },
+    {
+      "id": "objects-duplicate-targets",
+      "category": "duplicates",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — without DISTINCT OBJECTS, duplicate class rows are retained",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "syntax_note": "MAT documents that OBJECTS without DISTINCT keeps duplicate rows when many sources map to the same target. Mnemosyne matches that non-DISTINCT duplicate retention for SELECT OBJECTS.",
+      "query": "SELECT OBJECTS n.parent FROM \"com.example.Node\" WHERE count >= 3 AND count < 5",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "objects_projection",
+        "min_matched": 2,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-null-field-omitted",
+      "category": "null-missing",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause / OBJECTS — null field projections are skipped (no fabricated rows)",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "query": "SELECT OBJECTS n.parent FROM \"com.example.Node\" WHERE depth = 10",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "objects_projection",
+        "exact_matched": 0,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "objects-missing-field-error",
+      "category": "null-missing",
+      "status": "shipped",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Structured missing-field error is a Mnemosyne contract; MAT GUI behavior may differ. Does not close an equivalency matrix row.",
+      "mat_refs": [],
+      "query": "SELECT OBJECTS n.missing FROM \"com.example.Node\"",
+      "expect": {
+        "parse": "ok",
+        "execute": "error",
+        "fixture": "objects_projection",
+        "error_contains": "missing",
+        "result_budget": "n/a"
+      }
+    },
+    {
+      "id": "objects-cycle-omits-row",
+      "category": "cycles",
+      "status": "shipped",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Cycle-safe hop traversal with row omission is a Mnemosyne safety bound; not a recorded MAT golden result. Non-equivalency.",
+      "mat_refs": [],
+      "query": "SELECT OBJECTS n.parent.link FROM \"com.example.Node\" WHERE count = 1",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "multi_hop_cycle",
+        "exact_matched": 0,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "limit-budget-exhaustion",
+      "category": "budget-exhaustion",
+      "status": "shipped",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Explicit LIMIT truncation is a Mnemosyne result budget. MAT OQL BNF does not define LIMIT; this case does not support MAT equivalency claims.",
+      "mat_refs": [],
+      "query": "SELECT @objectId FROM \"com.example.User\", \"com.example.Admin\" LIMIT 2",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "multi_class",
+        "exact_matched": 2,
+        "truncated": true,
+        "result_budget": "LIMIT 2"
+      }
+    },
+    {
+      "id": "unsupported-eval",
+      "category": "unsupported-syntax",
+      "status": "unsupported",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Named M22 gap: eval(...) / Java expression execution remains explicitly unsupported.",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — Expressions (experimental); Mnemosyne does not ship eval",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "query": "SELECT eval(s.@objectId + 1) FROM java.lang.String s",
+      "expect": {
+        "parse": "error",
+        "result_budget": "n/a"
+      }
+    }
+  ]
+}

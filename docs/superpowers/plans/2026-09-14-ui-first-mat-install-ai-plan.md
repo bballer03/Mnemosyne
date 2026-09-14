@@ -450,9 +450,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Every case defines parse/execute/error outcome and result budget.
 - No customer query or heap value is committed.
 
-- [ ] Add a corpus runner test that initially fails on the M22-targeted cases only.
-- [ ] Record at least multi-class `FROM`, one-to-three-hop `OBJECTS`, four-hop rejection, duplicate targets, null/missing fields, cycles, and budget exhaustion.
-- [ ] Freeze grammar boundaries from corpus evidence.
+- [x] Add a corpus runner test that initially fails on the M22-targeted cases only.
+- [x] Record at least multi-class `FROM`, one-to-three-hop `OBJECTS`, four-hop rejection, duplicate targets, null/missing fields, cycles, and budget exhaustion.
+- [x] Freeze grammar boundaries from corpus evidence.
 - [ ] Request a Terra review focused on representativeness and hidden unbounded semantics.
 
 ### Slice 22.B — Add bounded multi-class `FROM`
