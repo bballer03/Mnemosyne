@@ -72,7 +72,7 @@ describe("LeakWorkspaceLayout", () => {
       { initialEntries: ["/leaks/leak-1"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText("loader")).toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe("LeakWorkspaceLayout", () => {
       { initialEntries: ["/leaks/leak-404/overview"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /leak workspace/i })).toBeInTheDocument();
     expect(view.getByRole("navigation", { name: /leak workspace modes/i })).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe("LeakWorkspaceLayout", () => {
       { initialEntries: ["/leaks/leak-1"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/overview placeholder/i)).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/leaks/leak-1/overview");
@@ -219,7 +219,7 @@ describe("LeakWorkspaceLayout", () => {
     });
 
     const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/dependency readiness/i)).toBeInTheDocument();
     expect(view.getByRole("heading", { name: /leak workspace/i })).toBeInTheDocument();
@@ -331,7 +331,7 @@ describe("LeakWorkspaceLayout", () => {
       { initialEntries: ["/leaks/leak id%2Fwith spaces%3Fx=1/overview"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("link", { name: /overview/i }).getAttribute("href")).toBe(
       "/leaks/leak%20id%2Fwith%20spaces%3Fx%3D1/overview",
@@ -389,7 +389,7 @@ describe("LeakWorkspaceLayout", () => {
       { initialEntries: ["/leaks/leak-1/overview"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /leak workspace/i })).toBeInTheDocument();
     expect(view.getByText(/com\.example\.Cache/i)).toBeInTheDocument();
@@ -442,7 +442,7 @@ describe("LeakWorkspaceLayout", () => {
     });
 
     const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await view.findByRole("heading", { name: /overview/i });
 
@@ -501,7 +501,7 @@ describe("LeakWorkspaceLayout", () => {
     });
 
     const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await view.findByRole("heading", { name: /overview/i });
 
@@ -535,7 +535,7 @@ describe("LeakWorkspaceLayout", () => {
     });
 
     const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByRole("button", { name: /reuse 0x1000/i })).toBeInTheDocument();
 

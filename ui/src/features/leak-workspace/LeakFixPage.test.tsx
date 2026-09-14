@@ -89,7 +89,7 @@ describe("LeakFixPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/fix", element: <LeakFixPage /> }], {
       initialEntries: ["/leaks/leak-1/fix"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/fix proposal unavailable: local fix bridge is unavailable\./i)).toBeInTheDocument();
   });
@@ -100,7 +100,7 @@ describe("LeakFixPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/fix", element: <LeakFixPage /> }], {
       initialEntries: ["/leaks/leak-1/fix"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/fix proposal unavailable: required local context is missing\./i)).toBeInTheDocument();
   });
@@ -133,7 +133,7 @@ describe("LeakFixPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/fix", element: <LeakFixPage /> }], {
       initialEntries: ["/leaks/leak-1/fix"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/target file: d:\/repo\/src\/main\/java\/com\/example\/cache\.java/i)).toBeInTheDocument();
     expect(view.queryByText(/fallback: provider-backed generation was unavailable/i)).not.toBeInTheDocument();
@@ -168,7 +168,7 @@ describe("LeakFixPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/fix", element: <LeakFixPage /> }], {
       initialEntries: ["/leaks/leak-1/fix"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/fallback: provider-backed generation was unavailable, showing heuristic guidance\./i)).toBeInTheDocument();
   });
@@ -202,7 +202,7 @@ describe("LeakFixPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/fix", element: <LeakFixPage /> }], {
       initialEntries: ["/leaks/leak-1/fix"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/fallback: provider-backed generation was unavailable, showing heuristic guidance\./i)).toBeInTheDocument();
 

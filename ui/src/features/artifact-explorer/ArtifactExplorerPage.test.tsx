@@ -177,7 +177,7 @@ describe("ArtifactExplorerPage", () => {
 
   it("redirects back to the loader when no artifact is loaded", () => {
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /load analysis artifact/i })).toBeInTheDocument();
   });
@@ -186,7 +186,7 @@ describe("ArtifactExplorerPage", () => {
     seedArtifactWithHistogram();
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     expect(view.getByRole("heading", { name: /artifact explorer/i })).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("ArtifactExplorerPage", () => {
     seedArtifactWithHistogram();
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     await user.type(view.getByLabelText(/search histogram/i), "concurrent");
@@ -214,7 +214,7 @@ describe("ArtifactExplorerPage", () => {
     seedArtifactWithHistogram();
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     await user.click(histogramRegion.getByRole("button", { name: /select java\.util\.concurrent\.ConcurrentHashMap/i }));
@@ -228,7 +228,7 @@ describe("ArtifactExplorerPage", () => {
     seedArtifactWithoutHistogram();
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/histogram data is absent from this artifact/i)).toBeInTheDocument();
   });
@@ -249,7 +249,7 @@ describe("ArtifactExplorerPage", () => {
     });
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const analyzerRail = within(view.getByRole("complementary", { name: /analyzer rail/i }));
 
     expect(analyzerRail.getByText(/artifact recommendations/i)).toBeInTheDocument();
@@ -264,7 +264,7 @@ describe("ArtifactExplorerPage", () => {
     seedArtifactWithHistogram();
 
     const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
     const detailRegion = within(view.getByRole("complementary", { name: /selected bucket detail/i }));
 

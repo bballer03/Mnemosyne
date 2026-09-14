@@ -159,10 +159,6 @@ export const routes: RouteObject[] = [
   },
 ];
 
-const future = {
-  v7_startTransition: true,
-};
-
 /**
  * Create the data router once per app mount — never at module scope.
  *
@@ -177,5 +173,5 @@ const future = {
  */
 export function AppRouter() {
   const [router] = useState(() => createBrowserRouter(routes));
-  return <RouterProvider router={router} future={future} />;
+  return <RouterProvider router={router} />;
 }

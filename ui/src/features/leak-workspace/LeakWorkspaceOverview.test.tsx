@@ -102,7 +102,7 @@ describe("LeakWorkspaceOverview", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/overview", element: <LeakWorkspaceOverview /> }], {
       initialEntries: ["/leaks/leak-1/overview"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /overview/i })).toBeInTheDocument();
     expect(view.getByText(/cache retains request objects/i)).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe("LeakWorkspaceOverview", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/overview", element: <LeakWorkspaceOverview /> }], {
       initialEntries: ["/leaks/leak-1/overview"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/gc path unavailable until an object target is present/i)).toBeInTheDocument();
   });
@@ -137,7 +137,7 @@ describe("LeakWorkspaceOverview", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/overview", element: <LeakWorkspaceOverview /> }], {
       initialEntries: ["/leaks/leak-1/overview"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/object target: missing/i)).toBeInTheDocument();
     expect(view.getByText(/project root: missing/i)).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe("LeakWorkspaceOverview", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/overview", element: <LeakWorkspaceOverview /> }], {
       initialEntries: ["/leaks/leak-1/overview"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/project root: present/i)).toBeInTheDocument();
     expect(view.getByText(/object target: present/i)).toBeInTheDocument();
@@ -184,7 +184,7 @@ describe("LeakWorkspaceOverview", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/overview", element: <LeakWorkspaceOverview /> }], {
       initialEntries: ["/leaks/leak-1/overview"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/bridge: ready/i)).toBeInTheDocument();
     expect(view.getByText(/provider: ready/i)).toBeInTheDocument();
@@ -194,7 +194,7 @@ describe("LeakWorkspaceOverview", () => {
     seedArtifact();
 
     const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByRole("heading", { name: /overview/i })).toBeInTheDocument();
     expect(view.getByText(/dependency readiness/i)).toBeInTheDocument();

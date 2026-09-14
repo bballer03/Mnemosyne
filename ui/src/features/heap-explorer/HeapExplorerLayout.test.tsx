@@ -78,7 +78,7 @@ describe("HeapExplorerLayout", () => {
 
   it("redirects heap explorer route access back to the loader when no artifact is loaded", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(router.state.location.pathname).toBe("/");
@@ -95,7 +95,7 @@ describe("HeapExplorerLayout", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByRole("heading", { name: /heap explorer/i })).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe("HeapExplorerLayout", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), {
       initialEntries: ["/heap-explorer/object-inspector?objectId=0xcafebabe"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getAllByText(/0xcafebabe/i).length).toBeGreaterThan(0);
@@ -139,7 +139,7 @@ describe("HeapExplorerLayout", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), {
       initialEntries: ["/heap-explorer/object-inspector?objectId=0xdoesnotexist"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByText(/no object selected/i)).toBeInTheDocument();
@@ -164,7 +164,7 @@ describe("HeapExplorerLayout", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), {
       initialEntries: ["/heap-explorer/dominators?objectId=0xdoesnotexist"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByText(/no object selected/i)).toBeInTheDocument();
@@ -199,7 +199,7 @@ describe("HeapExplorerLayout", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), {
       initialEntries: ["/heap-explorer/dominators?objectId=0xcafebabe"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByRole("button", { name: /select com\.example\.workqueue 0xcafebabe/i }).getAttribute("aria-pressed")).toBe(
@@ -236,7 +236,7 @@ describe("HeapExplorerLayout", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
     const layoutSection = page.getByLabelText(/mode rail/i).parentElement;
 
@@ -254,7 +254,7 @@ describe("HeapExplorerLayout", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/object-inspector"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
     const heapExplorerLink = page.getByRole("link", { name: /^heap explorer$/i });
     const dashboardLink = page.getByRole("link", { name: /^dashboard$/i });
@@ -288,7 +288,7 @@ describe("HeapExplorerLayout", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/object-inspector"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getAllByText(/artifact-only row/i)).toHaveLength(2);

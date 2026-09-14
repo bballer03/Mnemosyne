@@ -16,17 +16,15 @@ function minimalArtifact(name: string): AnalysisArtifact {
       heapPath: name,
       totalObjects: 10,
       totalRecords: 10,
-      totalBytes: 100,
-      classes: [],
+      totalSizeBytes: 100,
       generatedAt: "2026-09-15T00:00:00Z",
-      header: null,
-      recordStats: [],
     },
     leaks: [],
     recommendations: [],
-    elapsed: { secs: 0, nanos: 0 },
-    graph: { nodeCount: 1, edgeCount: 0, dominators: [] },
-  } as AnalysisArtifact;
+    elapsedSeconds: 0,
+    graph: { nodeCount: 1, edgeCount: 0, dominatorCount: 0, dominators: [] },
+    provenance: [],
+  };
 }
 
 afterEach(() => {

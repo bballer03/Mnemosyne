@@ -98,7 +98,7 @@ describe("HeapThreadsPage", () => {
     seedArtifact();
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/threads"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByRole("link", { name: /open object inspector/i })).toHaveAttribute(
@@ -115,14 +115,14 @@ describe("HeapThreadsPage", () => {
     seedArtifact();
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("link", { name: /^threads$/i })).toHaveAttribute("href", "/heap-explorer/threads");
   });
 
   it("redirects to the artifact loader when no artifact is loaded", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/threads"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /load analysis artifact/i })).toBeInTheDocument();
   });
