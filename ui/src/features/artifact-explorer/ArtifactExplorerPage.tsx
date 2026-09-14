@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-client";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
@@ -22,12 +23,31 @@ export function ArtifactExplorerPage() {
   const [selectedHistogramKey, setSelectedHistogramKey] = useState<string | undefined>(
     artifact?.histogram?.entries[0]?.key,
   );
+  const [liveHistogram, setLiveHistogram] = useState<HistogramResultView | undefined>();
+  const [histogramSource, setHistogramSource] = useState<"artifact" | "live">("artifact");
 
   useEffect(() => {
     setSelectedHistogramKey(artifact?.histogram?.entries[0]?.key);
+    setLiveHistogram(undefined);
+    setHistogramSource("artifact");
   }, [artifact]);
 
-  if (!artifact) {
+  const explorerArtifact = useMemo(() => {
+    if (!artifact) {
+      return undefined;
+    }
+
+    if (!liveHistogram) {
+      return artifact;
+    }
+
+    return {
+      ...artifact,
+      histogram: liveHistogram,
+    };
+  }, [artifact, liveHistogram]);
+
+  if (!artifact || !explorerArtifact) {
     return <Navigate to="/" replace />;
   }
 
@@ -71,12 +91,18 @@ export function ArtifactExplorerPage() {
         <section aria-label="Histogram explorer" style={panelStyle}>
           <HistogramExplorerPanel
             artifact={artifact}
+            liveHistogram={liveHistogram}
+            histogramSource={histogramSource}
+            onLiveHistogramChange={(histogram, source) => {
+              setLiveHistogram(histogram);
+              setHistogramSource(source);
+            }}
             selectedKey={selectedHistogramKey}
             onSelectKey={setSelectedHistogramKey}
           />
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>
-          <SelectedBucketDetail artifact={artifact} selectedKey={selectedHistogramKey} />
+          <SelectedBucketDetail artifact={explorerArtifact} selectedKey={selectedHistogramKey} />
         </aside>
       </section>
 

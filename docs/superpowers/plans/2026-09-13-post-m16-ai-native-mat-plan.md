@@ -313,10 +313,10 @@ These camelCase signatures are the host interface consumed by `ui/src`; each mus
 
 ### Slice 19.B — Superclass regroup control
 
-- [ ] Add a superclass option to the existing histogram grouping interaction.
-- [ ] Add an optional `regroupHistogram(groupBy)` host method backed by MCP `analyze_heap.histogram_group_by`, and wire the same adapter into Tauri without duplicating grouping logic.
-- [ ] Clearly label a live regroup versus a precomputed artifact grouping.
-- [ ] Keep the list flat in this slice; do not imply a hierarchy tree.
+- [x] Add a superclass option to the existing histogram grouping interaction.
+- [x] Add an optional `regroupHistogram(groupBy)` host method backed by MCP `analyze_heap.histogram_group_by`, and wire the same adapter into Tauri without duplicating grouping logic.
+- [x] Clearly label a live regroup versus a precomputed artifact grouping.
+- [x] Keep the list flat in this slice; do not imply a hierarchy tree.
 
 ### Slice 19.C — Static plugin findings panel
 

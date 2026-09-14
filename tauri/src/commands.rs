@@ -11,7 +11,7 @@ use mnemosyne_core::{
     query::{execute_query, parse_query, CellValue},
     AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
     HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ParseOptions, ProvenanceMarker,
-    SourceMapResult,
+    SourceMapResult, HistogramResult,
 };
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
@@ -20,8 +20,8 @@ use mnemosyne_desktop_session::{
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
     install_field_data_cache_if_still_current, inspect_object_for_session,
     list_snapshots_for_session, next_step_for_session, parse_identity_strategy,
-    parse_object_id, start_workflow_for_session, DiffObjectsSessionInput,
-    FieldDataCacheCapture, StartWorkflowSessionInput,
+    parse_object_id, regroup_histogram_for_session, start_workflow_for_session,
+    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -221,6 +221,17 @@ pub async fn query_heap(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn regroup_histogram(
+    group_by: String,
+    state: State<'_, HeapSession>,
+) -> Result<HistogramResult, String> {
+    let graph = require_loaded_graph(&state)?;
+    spawn_blocking(move || regroup_histogram_for_session(&graph, &group_by))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -11,6 +11,7 @@ if (isTauri) {
     getReferrers: (objectId) => invoke("get_referrers", { objectId }),
     inspectObject: (objectId, retainFieldData) =>
       invoke("inspect_object", { objectId, retainFieldData }),
+    regroupHistogram: (groupBy) => invoke("regroup_histogram", { groupBy }),
   };
 
   hostWindow.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {

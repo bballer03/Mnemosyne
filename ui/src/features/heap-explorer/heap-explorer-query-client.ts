@@ -61,7 +61,52 @@ export type HeapExplorerHostBridge = {
   getReferences?: (objectId: string) => Promise<unknown>;
   getReferrers?: (objectId: string) => Promise<unknown>;
   inspectObject?: (objectId: string, retainFieldData?: boolean) => Promise<unknown>;
+  /** M19.B — live flat regroup via session graph / MCP analyze_heap.histogram_group_by. */
+  regroupHistogram?: (groupBy: string) => Promise<unknown>;
 };
+
+export type HistogramGroupByMode = "class" | "package" | "class_loader" | "superclass";
+
+export type HistogramResultView = {
+  groupBy: string;
+  entries: Array<{
+    key: string;
+    instanceCount: number;
+    shallowSize: number;
+    retainedSize: number;
+  }>;
+  totalInstances: number;
+  totalShallowSize: number;
+};
+
+export const HISTOGRAM_GROUP_BY_OPTIONS: Array<{ value: HistogramGroupByMode; label: string }> = [
+  { value: "class", label: "Class" },
+  { value: "package", label: "Package" },
+  { value: "class_loader", label: "Class loader" },
+  { value: "superclass", label: "Superclass" },
+];
+
+export function normalizeHistogramGroupBy(raw: string | undefined): HistogramGroupByMode | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "classloader") {
+    return "class_loader";
+  }
+
+  if (
+    normalized === "class" ||
+    normalized === "package" ||
+    normalized === "class_loader" ||
+    normalized === "superclass"
+  ) {
+    return normalized;
+  }
+
+  return undefined;
+}
 
 declare global {
   interface Window {
@@ -293,6 +338,61 @@ export function isReferrersAvailable(): boolean {
 
 export function isInspectObjectAvailable(): boolean {
   return Boolean(getHeapExplorerBridge()?.inspectObject);
+}
+
+export function isRegroupHistogramAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.regroupHistogram);
+}
+
+export function parseHistogramResult(raw: unknown): HistogramResultView {
+  if (!isRecord(raw)) {
+    throw new TypeError("Invalid histogram regroup payload: expected an object.");
+  }
+
+  const entries = raw.entries;
+  if (!Array.isArray(entries)) {
+    throw new TypeError("Invalid histogram regroup payload: expected entries to be an array.");
+  }
+
+  return {
+    groupBy: readString(raw.group_by, "group_by"),
+    totalInstances: readNumber(raw.total_instances, "total_instances"),
+    totalShallowSize: readNumber(raw.total_shallow_size, "total_shallow_size"),
+    entries: entries.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new TypeError(`Invalid histogram regroup payload: expected entries[${index}] to be an object.`);
+      }
+
+      return {
+        key: readString(entry.key, `entries[${index}].key`),
+        instanceCount: readNumber(entry.instance_count, `entries[${index}].instance_count`),
+        shallowSize: readNumber(entry.shallow_size, `entries[${index}].shallow_size`),
+        retainedSize: readNumber(entry.retained_size, `entries[${index}].retained_size`),
+      };
+    }),
+  };
+}
+
+export async function regroupHistogram(groupBy: string) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.regroupHistogram) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.regroupHistogram(groupBy);
+
+    return {
+      status: "ready" as const,
+      data: parseHistogramResult(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown histogram regroup failure.",
+    };
+  }
 }
 
 export async function runHeapQuery(input: HeapQueryInput) {

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use mnemosyne_core::{
     analysis::{inspect_object, ObjectInspection},
-    build_dominator_tree,
+    build_dominator_tree, build_histogram,
     diff::{
         object::types::{
             DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES, DEFAULT_OBJECT_DIFF_TOP_N,
@@ -18,7 +18,7 @@ use mnemosyne_core::{
     graph::find_all_gc_paths_in_graph,
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, GcPathResult,
+    AllPathsRequest, GcPathResult, HistogramGroupBy, HistogramResult,
 };
 use serde_json::{json, Value};
 
@@ -164,6 +164,33 @@ pub fn parse_identity_strategy(raw: &str) -> Result<IdentityStrategy, String> {
         "FullFingerprint" => Ok(IdentityStrategy::FullFingerprint),
         other => Err(format!("Invalid identity strategy '{other}'")),
     }
+}
+
+/// Parse MCP/CLI-style `histogram_group_by` strings (`class_loader` preferred;
+/// `classloader` accepted as a CLI alias).
+pub fn parse_histogram_group_by(raw: &str) -> Result<HistogramGroupBy, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "class" => Ok(HistogramGroupBy::Class),
+        "package" => Ok(HistogramGroupBy::Package),
+        "class_loader" | "classloader" => Ok(HistogramGroupBy::ClassLoader),
+        "superclass" => Ok(HistogramGroupBy::Superclass),
+        other => Err(format!(
+            "Invalid histogram group_by '{other}'. Expected class, package, class_loader, or superclass."
+        )),
+    }
+}
+
+/// Rebuild a flat grouped histogram for the loaded session graph.
+///
+/// Uses the same `build_histogram` path as MCP `analyze_heap.histogram_group_by`
+/// without re-running the full analyze pipeline.
+pub fn regroup_histogram_for_session(
+    graph: &mnemosyne_core::hprof::ObjectGraph,
+    group_by: &str,
+) -> Result<HistogramResult, String> {
+    let group_by = parse_histogram_group_by(group_by)?;
+    let dominator = build_dominator_tree(graph);
+    Ok(build_histogram(graph, &dominator, group_by))
 }
 
 /// Resolve a snapshot key (SHA-256 hash) or direct heap file path to the
@@ -418,6 +445,34 @@ mod tests {
             },
         )
         .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn parse_histogram_group_by_accepts_mcp_and_cli_aliases() {
+        assert_eq!(
+            parse_histogram_group_by("superclass").unwrap(),
+            HistogramGroupBy::Superclass
+        );
+        assert_eq!(
+            parse_histogram_group_by("class_loader").unwrap(),
+            HistogramGroupBy::ClassLoader
+        );
+        assert_eq!(
+            parse_histogram_group_by("classloader").unwrap(),
+            HistogramGroupBy::ClassLoader
+        );
+        let error = parse_histogram_group_by("not-a-mode").expect_err("invalid");
+        assert!(error.contains("Invalid histogram group_by"));
+    }
+
+    #[test]
+    fn regroup_histogram_for_session_returns_superclass_groups() {
+        let graph = graph_fixture();
+        let histogram = regroup_histogram_for_session(&graph, "superclass")
+            .expect("superclass regroup must succeed");
+        assert_eq!(histogram.group_by, HistogramGroupBy::Superclass);
+        assert!(!histogram.entries.is_empty());
+        assert!(histogram.total_instances > 0);
     }
 
     #[test]
