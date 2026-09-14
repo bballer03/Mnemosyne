@@ -46,11 +46,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Duplicate primitive arrays already have `AnalysisArtifact.arrayReport`, `DuplicateArrayPanel`, and focused tests.
 - Static plugin findings already have `AnalysisArtifact.pluginResults`, `PluginFindingsPanel`, sanitization, and focused tests.
 - Live superclass regroup already uses `regroupHistogram` in browser/Tauri and labels live versus precomputed results.
-- `unique_class_count` is already parsed and displayed in `ClassloaderExplorerPanel` as “Loaded / unique classes.” The UI slice below improves MAT-like readability and regression coverage; it does not add a new analyzer or field.
+- `unique_class_count` / `loaded_class_count` are distinct sortable columns in `ClassloaderExplorerPanel` (20.E; shipped in `9af0f47`).
 - `classloader_leak`, shared 12/32 history, M18 policy/snapshot/flamegraph MCP tools, and agent-loop transcripts are shipped.
-- The desktop still opens on a JSON-only artifact loader. `load_heap` exists in Rust but is not exposed by a first-run `.hprof` picker or a complete React analysis flow.
-- Detailed UI views are still missing for shipped string, collection, top-instance, and unreachable-object reports; the current Analyzer Rail only summarizes them.
-- Policy evaluation and managed flamegraph generation are shipped backend capabilities without dedicated React/Tauri workspaces.
+- Desktop first-run “Open heap dump” + sanitized analyze → artifact flow is shipped (20.B–C; `9af0f47`, `f6c627c`); JSON artifact import remains available beside it.
+- Detailed string, collection, top-instance, and unreachable panels are shipped with Analyzer Rail anchors (20.D; `6dbabb6`).
+- Policy, snapshot (list/save/remove/**open**), and flamegraph workbenches are shipped (20.F–G; open landed in `352b3d5`). Snapshot open is **not** deferred.
 
 ## Product-Level Acceptance
 
@@ -91,11 +91,12 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Routes use MAT-like investigation concepts without copying Eclipse trademarks or assets.
 - Every power route is reachable from every workbench page through one stable shell.
 
-- [ ] Write a route/navigation test that expects persistent access to Overview, Histogram, Dominators, Inspector, OQL, Threads, Classloaders, Compare, Policies, Snapshots, and Flamegraphs.
-- [ ] Run `cd ui && bun test src/app/TopNav.test.tsx`; verify the new cross-route expectations fail.
-- [ ] Define the workbench route map and capability ledger from current wire contracts, explicitly marking already-shipped M19 surfaces.
-- [ ] Add the smallest shared workbench shell that avoids duplicate accessible labels and preserves existing deep links.
-- [ ] Run the focused route tests, then `cd ui && bun run test && bun run lint`.
+- [x] Write a route/navigation test that expects persistent access to Overview, Histogram, Dominators, Inspector, OQL, Threads, Classloaders, Compare, Policies, Snapshots, and Flamegraphs. (`9af0f47` TopNav)
+- [x] Run `cd ui && bun test src/app/TopNav.test.tsx`; verify the new cross-route expectations fail. (TDD before `9af0f47`)
+- [x] Define the workbench route map and capability ledger from current wire contracts, explicitly marking already-shipped M19 surfaces. (`6669d2a` matrix; design doc path not created as a separate file)
+- [x] Add the smallest shared workbench shell that avoids duplicate accessible labels and preserves existing deep links. (`9af0f47` routes/placeholders → later workbench pages)
+- [x] Run the focused route tests. (`TopNav.test.tsx`)
+- [ ] Run full `cd ui && bun run test && bun run lint` as a single 20.A gate re-run. (Not re-claimed here; see 20.H)
 - [ ] Request a Terra review focused on route regressions, accessibility, and accidental backend scope.
 
 ### Slice 20.B — Add desktop “Open heap dump” first-run flow
@@ -122,13 +123,14 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Cancel is neutral, malformed/non-HPROF input is actionable, and React receives only the filename plus opaque source ID.
 - Only the official Tauri dialog plugin receives file-system picker permission.
 
-- [ ] Add client tests for selected, cancelled, unavailable, wrong-extension, and invoke-error outcomes.
-- [ ] Run the focused tests and confirm failures because no desktop picker client exists.
-- [ ] Add the official Tauri v2 dialog plugin through the package managers and grant only `dialog:allow-open` to the main window.
-- [ ] Implement the typed picker client and connect selection to `load_heap`.
-- [ ] Add first-run loading, success summary, cancel, and error UI states without removing JSON import.
-- [ ] Run focused UI tests, Tauri checks, session-ops tests, and full UI gates.
-- [ ] Request a Terra review focused on path handling, permissions, browser fallback, and sensitive logging.
+- [x] Add client tests for selected, cancelled, unavailable, wrong-extension, and invoke-error outcomes. (`9af0f47`, cancel/select follow-up in `1a6227f`)
+- [x] Run the focused tests and confirm failures because no desktop picker client exists. (TDD before `9af0f47`)
+- [x] Add the official Tauri v2 dialog plugin through the package managers and grant only `dialog:allow-open` to the main window. (`9af0f47`)
+- [x] Implement the typed picker client and connect selection to `load_heap`. (`9af0f47` opaque `sourceId`)
+- [x] Add first-run loading, success summary, cancel, and error UI states without removing JSON import. (`9af0f47`, `1a6227f`)
+- [x] Run focused UI tests and command-layer Tauri/session-ops checks for the picker path.
+- [ ] Re-run full UI / workspace gates as a single 20.B closeout. (Not re-claimed here; see 20.H)
+- [ ] Request a Terra review focused on path handling, permissions, browser fallback, and sensitive logging. (Path findings later closed in `1a6227f` / `9ca7a1b`; dedicated 20.B Terra gate not separately recorded)
 
 ### Slice 20.C — Run shipped analysis from the loaded desktop heap
 
@@ -158,13 +160,14 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Deep-only options are disabled or return structured unavailable state in overview mode.
 - “Incident response” defaults enable a bounded useful set while “Custom” exposes shipped options.
 
-- [ ] Add command contract tests comparing native output with direct core analysis on the same synthetic fixture.
-- [ ] Add React tests for default, custom, overview-disabled controls, running, success, and structured error states.
-- [ ] Observe focused test failures before adding the bridge method.
-- [ ] Add one async Tauri command over the existing analysis API and preserve raw snake_case response serialization.
-- [ ] Parse the result through `parseAnalysisArtifact`, store it, and navigate to Overview on success.
-- [ ] Run focused Rust/UI tests and full applicable gates.
-- [ ] Request a Terra review focused on duplicate parsing, mode semantics, and wire-shape drift.
+- [x] Add command contract / client tests for sanitized desktop analysis by opaque `sourceId`. (`f6c627c`, covered in `desktop-heap-client.test.ts`)
+- [x] Add React tests for picker → analyze success/error and related loader states. (`ArtifactLoaderPage` / client tests with `f6c627c`, `1a6227f`)
+- [x] Observe focused test failures before adding the bridge method. (TDD before `f6c627c`)
+- [x] Add one async Tauri command over the existing analysis API and preserve raw snake_case response serialization. (`f6c627c` `run_desktop_analysis` / capturing-graph lifecycle)
+- [x] Parse the result through `parseAnalysisArtifact`, store it, and navigate to Overview on success. (`f6c627c`; path redaction hardened in `1a6227f`)
+- [x] Run focused Rust/UI tests for the analyze path.
+- [ ] Re-run full applicable workspace / UI / Tauri gates as a single 20.C closeout. (Not re-claimed here; see 20.H)
+- [ ] Request a Terra review focused on duplicate parsing, mode semantics, and wire-shape drift. (Important path/deep-link findings closed in `1a6227f`; dedicated 20.C Terra gate not separately recorded)
 
 ### Slice 20.D — Add missing detailed analyzer panels
 
@@ -186,11 +189,12 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Object IDs deep-link to the shipped Inspector when present.
 - Absent, present-empty, partial, and populated artifacts remain visually distinct.
 
-- [ ] Write one focused panel test per report using actual snake_case parser fixtures.
-- [ ] Confirm each test fails because the detailed component is absent.
-- [ ] Implement present/empty/absent projections with bounded initial rows and explicit expansion.
-- [ ] Wire Analyzer Rail cards to their detail anchors without adding analyzer calls.
-- [ ] Run focused tests and full UI gates.
+- [x] Write one focused panel test per report using actual snake_case parser fixtures. (`6dbabb6`)
+- [x] Confirm each test fails because the detailed component is absent. (TDD before `6dbabb6`)
+- [x] Implement present/empty/absent projections with bounded initial rows and explicit expansion. (`6dbabb6`)
+- [x] Wire Analyzer Rail cards to their detail anchors without adding analyzer calls. (`6dbabb6`; object deep-links in `1a6227f`)
+- [x] Run focused panel tests.
+- [ ] Re-run full UI gates as a single 20.D closeout. (Not re-claimed here; see 20.H)
 - [ ] Request a Terra review focused on data fidelity, large-list rendering, and untrusted text.
 
 ### Slice 20.E — Clarify classloader counts and add MAT-like investigation navigation
@@ -208,11 +212,12 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Duplicate-class rows link to the relevant loader/object investigation where IDs are available.
 - Back/forward investigation context is URL-driven; no second heap graph is held in React.
 
-- [ ] Extend classloader tests to assert separate Loaded Classes and Unique Classes headers, values, sorting, and pre-M13 fallback.
-- [ ] Add breadcrumb tests covering histogram → object → GC path and classloader → object transitions.
-- [ ] Observe failures against the current combined “Loaded / unique classes” cell and route layouts.
-- [ ] Split the presentation columns and add URL-derived breadcrumbs/history links.
-- [ ] Run focused and full UI gates.
+- [x] Extend classloader tests to assert separate Loaded Classes and Unique Classes headers, values, sorting, and pre-M13 fallback. (`9af0f47` column split)
+- [x] Add breadcrumb tests covering histogram → object → GC path and classloader → object transitions. (`5af03f9`; import-path fix `281bcc5`)
+- [x] Observe failures against the current combined “Loaded / unique classes” cell and route layouts. (TDD before `9af0f47` / `5af03f9`)
+- [x] Split the presentation columns and add URL-derived breadcrumbs/history links. (`9af0f47`, `5af03f9`)
+- [x] Run focused UI gates for classloader + breadcrumbs.
+- [ ] Re-run full UI gates as a single 20.E closeout. (Not re-claimed here; see 20.H)
 - [ ] Request a Terra review focused on the fact that this is presentation closure, not a reimplementation of `unique_class_count`.
 
 ### Slice 20.F — Add the policy-check workbench
@@ -271,11 +276,10 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 
 - [x] Add thin native adapters over shipped store/flamegraph functions.
 - [x] Render bounded SVG safely via object URL (never injected HTML) and revoke on replacement/unmount.
-- [x] Snapshot save/list/remove UI with confirm-on-remove; key-only deletion scope in session-ops.
+- [x] Snapshot save/list/remove/open UI with confirm-on-remove; key-only deletion scope in session-ops (`352b3d5` open).
 - [x] Run focused UI gates (snapshot + flamegraph page tests); session-ops `cargo check` green.
 - [x] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits. (Important findings closed in `9ca7a1b`.)
 - [ ] Native flamegraph 16 MiB / overview unavailability parity tests still thin (rely on core/MCP).
-- [ ] Snapshot “open” (load graph into session from key) still deferred.
 
 ### Slice 20.H — UI parity closure and visual evidence
 
