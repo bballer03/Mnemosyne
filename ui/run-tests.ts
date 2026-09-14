@@ -52,15 +52,18 @@ const testBatches = [
     "src/features/heap-explorer/HeapThreadsPage.test.tsx",
   ],
   [
-    // TopNav uses a stub route tree (not production `routes`). Other suites
-    // in this batch are bridge/unit-light; keep InvestigationAssistant in the
-    // next process — mounting even a minimal assistant tree after heavy
-    // workflow cards has hung CI historically.
+    // Bridge/unit-light files only — keep card mounts out of this process.
     "src/app/TopNav.test.tsx",
     "src/features/assistant/assistant-bridge-client.test.ts",
     "src/features/workflow-landing/workflow-bridge-client.test.ts",
     "src/features/workflow-landing/natural-language-router.test.ts",
+  ],
+  [
+    // WorkflowCard alone: after TopNav/assistant-bridge in one process, CI
+    // hung here ~67s then SIGTERM (exit 143) with zero card tests printed.
     "src/features/workflow-landing/WorkflowCard.test.tsx",
+  ],
+  [
     "src/features/workflow-landing/TriageSummaryCard.test.tsx",
     "src/features/workflow-landing/WorkflowCards.test.tsx",
   ],
@@ -91,10 +94,28 @@ const testBatches = [
 for (const batch of testBatches) {
   const result = spawnSync(bunExecutable, ["test", ...batch, "--max-concurrency=1"], {
     stdio: "inherit",
+    // Fail the gate instead of sitting until the GitHub runner SIGTERMs the job
+    // (seen as exit 143 / "operation was canceled" with no failing assertion).
+    timeout: 120_000,
+    killSignal: "SIGTERM",
   });
+
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    console.error(
+      `UI test batch timed out after 120s (likely hang/OOM). Batch:\n${batch.join("\n")}`,
+    );
+    process.exit(1);
+  }
 
   if (typeof result.status === "number" && result.status !== 0) {
     process.exit(result.status);
+  }
+
+  if (result.signal) {
+    console.error(
+      `UI test batch terminated by signal ${result.signal}. Batch:\n${batch.join("\n")}`,
+    );
+    process.exit(1);
   }
 
   if (result.error) {

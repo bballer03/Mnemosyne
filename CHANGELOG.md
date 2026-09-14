@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions: pin newer checkout / artifact / Docker Buildx / softprops-gh-release / rust-cache action SHAs (Node 24-ready where applicable).
 - Docker builder base: `rust:1.97-bookworm`.
 - Cargo.lock refresh; `inferno` pin relaxed to `0.12` in core.
-- UI deps: zustand 5, jsdom 29, and current patch/minor bumps for TanStack / Vite 5 / testing libs. Tailwind 4, Vite 8 / `@vitejs/plugin-react` 6, and React 19 types remain deferred (breaking / peer mismatches; track with M24 / 0.5).
+- UI deps: zustand 5 and current patch/minor bumps for TanStack / Vite 5 / testing libs. **jsdom stays on 24** (29 correlated with multi-GB bun RSS / CI SIGTERM). Tailwind 4, Vite 8 / `@vitejs/plugin-react` 6, and React 19 types remain deferred (breaking / peer mismatches; track with M24 / 0.5).
 - Workspace / Tauri / Homebrew versions bump to `0.4.3`. Homebrew SHA-256 placeholders until archives publish.
 
 ## [0.4.2] - 2026-09-14
