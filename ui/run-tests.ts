@@ -52,22 +52,26 @@ const testBatches = [
     "src/features/heap-explorer/HeapThreadsPage.test.tsx",
   ],
   [
-    // New batch for M14 Slice 14.D (AI-guided landing + workflow cards +
-    // persistent top-nav). Kept separate from the batches above rather than
-    // appended to one of them -- per this repo's own OOM precedent (see the
-    // comment on the batch above, from Slice 14.C), several of these suites
-    // mount the full `routes` tree via `createMemoryRouter`/`RouterProvider`
-    // (`TopNav.test.tsx`'s reachability tests walk every power route), which
-    // is exactly the kind of heavy React-Router rendering that has
-    // previously tipped a combined batch into a V8 OOM.
+    // Bridge/unit-light files only — keep card mounts out of this process.
     "src/app/TopNav.test.tsx",
     "src/features/assistant/assistant-bridge-client.test.ts",
-    "src/features/assistant/InvestigationAssistantPage.test.tsx",
     "src/features/workflow-landing/workflow-bridge-client.test.ts",
     "src/features/workflow-landing/natural-language-router.test.ts",
+  ],
+  [
+    // WorkflowCard alone: after TopNav/assistant-bridge in one process, CI
+    // hung here ~67s then SIGTERM (exit 143) with zero card tests printed.
     "src/features/workflow-landing/WorkflowCard.test.tsx",
+  ],
+  [
     "src/features/workflow-landing/TriageSummaryCard.test.tsx",
     "src/features/workflow-landing/WorkflowCards.test.tsx",
+  ],
+  [
+    // InvestigationAssistant used to import production `routes` and OOM WSL/CI
+    // when batched after TopNav. Keep it in a fresh process even with the
+    // minimal assistantRoutes() fixture.
+    "src/features/assistant/InvestigationAssistantPage.test.tsx",
   ],
   [
     // Split from the batch above: on CI (Bun 1.4.x) NaturalLanguageInputBar
@@ -90,10 +94,28 @@ const testBatches = [
 for (const batch of testBatches) {
   const result = spawnSync(bunExecutable, ["test", ...batch, "--max-concurrency=1"], {
     stdio: "inherit",
+    // Fail the gate instead of sitting until the GitHub runner SIGTERMs the job
+    // (seen as exit 143 / "operation was canceled" with no failing assertion).
+    timeout: 120_000,
+    killSignal: "SIGTERM",
   });
+
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    console.error(
+      `UI test batch timed out after 120s (likely hang/OOM). Batch:\n${batch.join("\n")}`,
+    );
+    process.exit(1);
+  }
 
   if (typeof result.status === "number" && result.status !== 0) {
     process.exit(result.status);
+  }
+
+  if (result.signal) {
+    console.error(
+      `UI test batch terminated by signal ${result.signal}. Batch:\n${batch.join("\n")}`,
+    );
+    process.exit(1);
   }
 
   if (result.error) {

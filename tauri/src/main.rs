@@ -1,11 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod logging;
 mod state;
 
 use state::HeapSession;
 
 fn main() {
+    logging::init();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting Mnemosyne desktop"
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(HeapSession::new())
@@ -42,6 +49,7 @@ fn main() {
             commands::save_snapshot,
             commands::remove_snapshot,
             commands::open_snapshot,
+            commands::get_desktop_log_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

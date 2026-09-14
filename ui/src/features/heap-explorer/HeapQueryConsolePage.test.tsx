@@ -5,7 +5,7 @@ import { act, cleanup, render, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 function createArtifactFixture() {
@@ -97,7 +97,7 @@ describe("HeapQueryConsolePage", () => {
   it("shows an unavailable state when no query bridge exists", () => {
     seedArtifactWithDominators();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -107,7 +107,7 @@ describe("HeapQueryConsolePage", () => {
   it("renders cross-navigation actions alongside the unavailable state", () => {
     seedArtifactWithDominators();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -130,7 +130,7 @@ describe("HeapQueryConsolePage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -150,7 +150,7 @@ describe("HeapQueryConsolePage", () => {
       }),
     };
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/query-console"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 

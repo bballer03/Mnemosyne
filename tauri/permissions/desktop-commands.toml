@@ -34,4 +34,5 @@ commands.allow = [
   "save_snapshot",
   "remove_snapshot",
   "open_snapshot",
+  "get_desktop_log_path",
 ]

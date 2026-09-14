@@ -3,7 +3,7 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
-import { pickHeapFile, runDesktopAnalysis } from "./desktop-heap-client";
+import { pickHeapFile, runDesktopAnalysis, getDesktopLogPath } from "./desktop-heap-client";
 import { formatHostError } from "../../host/format-host-error";
 import { rememberDesktopHeapSource } from "./desktop-heap-session";
 import { parseAnalysisArtifact } from "../../lib/analysis-types";
@@ -89,8 +89,9 @@ export function ArtifactLoaderPage() {
   } = useArtifactStore();
   const resetDashboardState = useDashboardStore((state) => state.reset);
   const [isLoading, setIsLoading] = useState(false);
-  const [isOpeningHeap, setIsOpeningHeap] = useState(false);
+  const [heapOpenPhase, setHeapOpenPhase] = useState<"idle" | "picking" | "analyzing">("idle");
   const [desktopHeapMessage, setDesktopHeapMessage] = useState<string | undefined>();
+  const [desktopLogPath, setDesktopLogPath] = useState<string | undefined>();
   const [isCompactLayout, setIsCompactLayout] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 980 : false,
   );
@@ -116,6 +117,26 @@ export function ArtifactLoaderPage() {
     window.addEventListener("resize", handleResize);
 
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getDesktopLogPath()
+      .then((path) => {
+        if (!cancelled && path) {
+          setDesktopLogPath(path);
+          setStatusLines((current) => [
+            `[${formatTimestamp(new Date())}] desktop log: ${path}`,
+            ...current,
+          ]);
+        }
+      })
+      .catch(() => {
+        // Browser / missing bridge — leave unset.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleFile(file: File) {
@@ -170,7 +191,7 @@ export function ArtifactLoaderPage() {
 
   async function handleOpenHeapDump() {
     setDesktopHeapMessage(undefined);
-    setIsOpeningHeap(true);
+    setHeapOpenPhase("picking");
     setStatusLines((current) => [
       `[${formatTimestamp(new Date())}] opening heap dump picker`,
       ...current,
@@ -204,9 +225,10 @@ export function ArtifactLoaderPage() {
         return;
       }
 
+      setHeapOpenPhase("analyzing");
       setStatusLines((current) => [
         `[${formatTimestamp(new Date())}] heap selected: ${picked.displayName}`,
-        `[${formatTimestamp(new Date())}] running incident-response analysis`,
+        `[${formatTimestamp(new Date())}] running lean first-open analysis (histogram, leaks, classloaders, top instances)`,
         ...current,
       ]);
       rememberDesktopHeapSource(picked.sourceId, picked.displayName);
@@ -214,6 +236,13 @@ export function ArtifactLoaderPage() {
       const raw = await runDesktopAnalysis({
         sourceId: picked.sourceId,
         mode: "incident",
+        enableClassloaders: true,
+        enableTopInstances: true,
+        enableThreads: false,
+        enableStrings: false,
+        enableCollections: false,
+        enableByReferrer: false,
+        enableDuplicateArrays: false,
       });
       const artifact = parseAnalysisArtifact(raw);
       const loadedAt = new Date();
@@ -242,7 +271,7 @@ export function ArtifactLoaderPage() {
         ...current,
       ]);
     } finally {
-      setIsOpeningHeap(false);
+      setHeapOpenPhase("idle");
     }
   }
 
@@ -345,7 +374,7 @@ export function ArtifactLoaderPage() {
                 onClick={() => {
                   void handleOpenHeapDump();
                 }}
-                disabled={isOpeningHeap || isLoading}
+                disabled={heapOpenPhase !== "idle" || isLoading}
                 style={{
                   justifySelf: "start",
                   border: "1px solid #38bdf8",
@@ -353,10 +382,14 @@ export function ArtifactLoaderPage() {
                   background: "rgba(56, 189, 248, 0.12)",
                   color: "#e0f2fe",
                   padding: "0.55rem 1rem",
-                  cursor: isOpeningHeap || isLoading ? "wait" : "pointer",
+                  cursor: heapOpenPhase !== "idle" || isLoading ? "wait" : "pointer",
                 }}
               >
-                {isOpeningHeap ? "Opening…" : "Open heap dump"}
+                {heapOpenPhase === "picking"
+                  ? "Opening…"
+                  : heapOpenPhase === "analyzing"
+                    ? "Analyzing…"
+                    : "Open heap dump"}
               </button>
               {desktopHeapMessage ? (
                 <p role="status" style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.6 }}>
@@ -414,8 +447,19 @@ export function ArtifactLoaderPage() {
               ))}
             </div>
             <p style={{ margin: "0.55rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
-              Recent host errors also appear here. In the desktop app, open DevTools (Right-click →
-              Inspect, or F12) for the full console log under <code>[mnemosyne]</code>.
+              Recent host errors also appear here. Desktop: DevTools (F12) for{" "}
+              <code>[mnemosyne]</code>
+              {desktopLogPath ? (
+                <>
+                  ; host file log: <code>{desktopLogPath}</code>
+                </>
+              ) : (
+                <>
+                  {" "}
+                  (host file log under LocalAppData/mnemosyne/logs when running in the desktop app)
+                </>
+              )}
+              .
             </p>
 
             {artifact ? (

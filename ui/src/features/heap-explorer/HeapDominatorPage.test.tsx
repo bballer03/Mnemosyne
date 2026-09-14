@@ -5,7 +5,7 @@ import { act, cleanup, render, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 function createArtifactFixture() {
@@ -90,7 +90,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -113,7 +113,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -148,7 +148,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -174,7 +174,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
 
@@ -218,7 +218,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
     const firstRow = page.getByRole("button", { name: /select com\.example\.firstartifactonly/i });
@@ -273,7 +273,7 @@ describe("HeapDominatorPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/heap-explorer/dominators"] });
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const page = within(view.container);
     const duplicateButtons = page.getAllByRole("button", { name: /select com\.example\.duplicateartifactrow/i });

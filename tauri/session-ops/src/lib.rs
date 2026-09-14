@@ -1713,7 +1713,7 @@ mod tests {
         use mnemosyne_core::{
             config::AiMode,
             hprof::test_fixtures::build_graph_fixture,
-            mcp::session::{DEFAULT_SESSION_HISTORY, HARD_MAX_SESSION_HISTORY, McpSessionStore},
+            mcp::session::{McpSessionStore, DEFAULT_SESSION_HISTORY, HARD_MAX_SESSION_HISTORY},
             AppConfig,
         };
         use std::io::Write;
@@ -1726,10 +1726,7 @@ mod tests {
             let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
             file.write_all(&build_graph_fixture())
                 .map_err(|error| error.to_string())?;
-            let path = file
-                .path()
-                .to_string_lossy()
-                .into_owned();
+            let path = file.path().to_string_lossy().into_owned();
             Ok((file, path))
         }
 
@@ -1762,7 +1759,10 @@ mod tests {
                 !payload.contains(&absolute_marker),
                 "create payload must not leak absolute heap path"
             );
-            assert!(created.get("display_name").and_then(Value::as_str).is_some());
+            assert!(created
+                .get("display_name")
+                .and_then(Value::as_str)
+                .is_some());
             assert_eq!(
                 created.get("history_max_turns"),
                 Some(&json!(DEFAULT_SESSION_HISTORY))
@@ -1792,10 +1792,7 @@ mod tests {
 
             let closed =
                 close_ai_session_for_session(&store, &session_id).expect("close must succeed");
-            assert_eq!(
-                closed,
-                json!({ "session_id": session_id, "closed": true })
-            );
+            assert_eq!(closed, json!({ "session_id": session_id, "closed": true }));
             let missing = get_ai_session_for_session(&store, &session_id)
                 .expect_err("closed session must be gone");
             assert!(
@@ -1812,13 +1809,10 @@ mod tests {
             config.ai.enabled = true;
             config.ai.mode = AiMode::Rules;
 
-            let created = create_ai_session_for_session(
-                &store,
-                &config,
-                CreateAiSessionInput { heap_path },
-            )
-            .await
-            .expect("create");
+            let created =
+                create_ai_session_for_session(&store, &config, CreateAiSessionInput { heap_path })
+                    .await
+                    .expect("create");
             let session_id = created
                 .get("session_id")
                 .and_then(Value::as_str)
@@ -1826,15 +1820,9 @@ mod tests {
                 .to_string();
 
             for i in 0..(DEFAULT_SESSION_HISTORY + 1) {
-                chat_session_for_session(
-                    &store,
-                    &config,
-                    &session_id,
-                    &format!("turn-{i}"),
-                    None,
-                )
-                .await
-                .expect("chat turn");
+                chat_session_for_session(&store, &config, &session_id, &format!("turn-{i}"), None)
+                    .await
+                    .expect("chat turn");
             }
 
             let resumed = resume_ai_session_for_session(&store, &session_id).expect("resume");
@@ -1858,13 +1846,10 @@ mod tests {
             config.ai.mode = AiMode::Rules;
             config.ai.sessions.history_max_turns = Some(100);
 
-            let created = create_ai_session_for_session(
-                &store,
-                &config,
-                CreateAiSessionInput { heap_path },
-            )
-            .await
-            .expect("create");
+            let created =
+                create_ai_session_for_session(&store, &config, CreateAiSessionInput { heap_path })
+                    .await
+                    .expect("create");
             let session_id = created
                 .get("session_id")
                 .and_then(Value::as_str)
@@ -1872,15 +1857,9 @@ mod tests {
                 .to_string();
 
             for i in 0..(HARD_MAX_SESSION_HISTORY + 3) {
-                chat_session_for_session(
-                    &store,
-                    &config,
-                    &session_id,
-                    &format!("hard-{i}"),
-                    None,
-                )
-                .await
-                .expect("chat turn");
+                chat_session_for_session(&store, &config, &session_id, &format!("hard-{i}"), None)
+                    .await
+                    .expect("chat turn");
             }
 
             let resumed = resume_ai_session_for_session(&store, &session_id).expect("resume");
@@ -1902,13 +1881,10 @@ mod tests {
             // Ensure the env var is unset so provider mode fails honestly.
             std::env::remove_var("MNEMOSYNE_TEST_MISSING_AI_KEY");
 
-            let created = create_ai_session_for_session(
-                &store,
-                &config,
-                CreateAiSessionInput { heap_path },
-            )
-            .await
-            .expect("create");
+            let created =
+                create_ai_session_for_session(&store, &config, CreateAiSessionInput { heap_path })
+                    .await
+                    .expect("create");
             let session_id = created
                 .get("session_id")
                 .and_then(Value::as_str)
@@ -1944,13 +1920,10 @@ mod tests {
             config.ai.enabled = true;
             config.ai.mode = AiMode::Rules;
 
-            let created = create_ai_session_for_session(
-                &store,
-                &config,
-                CreateAiSessionInput { heap_path },
-            )
-            .await
-            .expect("create");
+            let created =
+                create_ai_session_for_session(&store, &config, CreateAiSessionInput { heap_path })
+                    .await
+                    .expect("create");
             let session_id = created
                 .get("session_id")
                 .and_then(Value::as_str)
@@ -2014,7 +1987,9 @@ mod tests {
                     history: Vec::new(),
                 },
             };
-            store.save(&session).expect("save into configured directory");
+            store
+                .save(&session)
+                .expect("save into configured directory");
             assert!(dir.path().join("mcp-test-store.json").exists());
         }
     }

@@ -32,7 +32,8 @@ type NavItem = {
   label: string;
 };
 
-const POWER_ROUTES: NavItem[] = [
+/** Exported for tests — keep nav contract in one place. */
+export const POWER_ROUTES: NavItem[] = [
   { to: "/", label: "Home" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/artifacts/explorer", label: "Artifact Explorer" },
