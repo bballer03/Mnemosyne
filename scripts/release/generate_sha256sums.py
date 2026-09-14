@@ -59,6 +59,8 @@ def sha256_file(path: Path) -> str:
 
 def _looks_desktop(name: str) -> bool:
     lower = name.lower()
+    if lower.startswith("mnemosyne-cli-"):
+        return False
     if not (name.startswith("Mnemosyne") or name.startswith("mnemosyne")):
         return False
     return any(token in lower for token in _DESKTOP_TOKENS) or lower.endswith(".zip")
