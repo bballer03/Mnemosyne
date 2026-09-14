@@ -9,10 +9,11 @@ type AnalyzerRailProps = {
 type AnalyzerCardProps = {
   title: string;
   state: "present" | "empty" | "absent";
+  href?: string;
   children: ReactNode;
 };
 
-function AnalyzerCard({ title, state, children }: AnalyzerCardProps) {
+function AnalyzerCard({ title, state, href, children }: AnalyzerCardProps) {
   return (
     <section
       style={{
@@ -25,7 +26,13 @@ function AnalyzerCard({ title, state, children }: AnalyzerCardProps) {
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "start" }}>
-        <strong>{title}</strong>
+        {href ? (
+          <a href={href} style={{ color: "inherit", textDecoration: "none", fontWeight: 700 }}>
+            {title}
+          </a>
+        ) : (
+          <strong>{title}</strong>
+        )}
         <span
           style={{
             color: state === "present" ? "#86efac" : state === "empty" ? "#facc15" : "#94a3b8",
@@ -95,7 +102,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
           : "No artifact recommendations were included in this snapshot."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="String Deduplication" state={stringState}>
+      <AnalyzerCard title="String Deduplication" state={stringState} href="#string-analysis">
         {stringState === "present"
           ? `${artifact.stringReport?.duplicateGroups.length ?? 0} duplicate groups with ${artifact.stringReport?.totalDuplicateWaste ?? 0} bytes of duplicate waste.`
           : stringState === "empty"
@@ -103,7 +110,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
             : "String analysis was not serialized into this artifact."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="Duplicate Arrays" state={arrayState}>
+      <AnalyzerCard title="Duplicate Arrays" state={arrayState} href="#duplicate-arrays">
         {arrayState === "present"
           ? `${artifact.arrayReport?.duplicateGroups.length ?? 0} duplicate groups wasting ${artifact.arrayReport?.totalDuplicateWaste ?? 0} bytes across ${artifact.arrayReport?.totalArrays ?? 0} arrays.`
           : arrayState === "empty"
@@ -111,7 +118,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
             : "Duplicate-array analysis was not serialized into this artifact."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="Collections" state={collectionState}>
+      <AnalyzerCard title="Collections" state={collectionState} href="#collections">
         {collectionState === "present"
           ? `${artifact.collectionReport?.oversizedCollections.length ?? 0} oversized collections across ${artifact.collectionReport?.totalCollections ?? 0} inspected collections.`
           : collectionState === "empty"
@@ -119,7 +126,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
             : "Collection analysis is not available in this artifact."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="Top Instances" state={topInstancesState}>
+      <AnalyzerCard title="Top Instances" state={topInstancesState} href="#top-instances">
         {topInstancesState === "present"
           ? `${artifact.topInstances?.instances.length ?? 0} ranked instances out of ${artifact.topInstances?.totalCount ?? 0} total objects.`
           : topInstancesState === "empty"
@@ -127,7 +134,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
             : "Top-instance analysis is not available in this artifact."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="Classloaders" state={classloaderState}>
+      <AnalyzerCard title="Classloaders" state={classloaderState} href="#classloader-explorer">
         {classloaderState === "present"
           ? `${artifact.classloaderReport?.loaders.length ?? 0} loaders tracked with ${artifact.classloaderReport?.potentialLeaks.length ?? 0} potential leak candidates.`
           : classloaderState === "empty"
@@ -135,7 +142,7 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
             : "Classloader analysis is not available in this artifact."}
       </AnalyzerCard>
 
-      <AnalyzerCard title="Unreachable Summary" state={unreachableState}>
+      <AnalyzerCard title="Unreachable Summary" state={unreachableState} href="#unreachable-objects">
         {unreachableState === "present"
           ? `${artifact.unreachable?.totalCount ?? 0} unreachable objects totaling ${artifact.unreachable?.totalShallowSize ?? 0} shallow bytes.`
           : unreachableState === "empty"

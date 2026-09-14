@@ -6,11 +6,15 @@ import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-c
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
+import { CollectionAnalysisPanel } from "./components/CollectionAnalysisPanel";
 import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
 import { HistogramExplorerPanel } from "./components/HistogramExplorerPanel";
 import { PluginFindingsPanel } from "./components/PluginFindingsPanel";
 import { ReferrerPanel } from "./components/ReferrerPanel";
 import { SelectedBucketDetail } from "./components/SelectedBucketDetail";
+import { StringAnalysisPanel } from "./components/StringAnalysisPanel";
+import { TopInstancesPanel } from "./components/TopInstancesPanel";
+import { UnreachableObjectsPanel } from "./components/UnreachableObjectsPanel";
 
 const panelStyle = {
   border: "1px solid #1e293b",
@@ -118,13 +122,45 @@ export function ArtifactExplorerPage() {
         <section aria-label="Referrer panel" style={panelStyle}>
           <ReferrerPanel artifact={artifact} />
         </section>
-        <section aria-label="Classloader explorer panel" style={panelStyle}>
+        <section id="classloader-explorer" aria-label="Classloader explorer panel" style={panelStyle}>
           <ClassloaderExplorerPanel artifact={artifact} />
         </section>
       </section>
 
-      <section aria-label="Duplicate array panel" style={panelStyle}>
-        <DuplicateArrayPanel artifact={artifact} />
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "1rem",
+          alignItems: "start",
+        }}
+      >
+        <section id="string-analysis" aria-label="String analysis panel" style={panelStyle}>
+          <StringAnalysisPanel artifact={artifact} />
+        </section>
+        <section id="duplicate-arrays" aria-label="Duplicate array panel" style={panelStyle}>
+          <DuplicateArrayPanel artifact={artifact} />
+        </section>
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "1rem",
+          alignItems: "start",
+        }}
+      >
+        <section id="collections" aria-label="Collection analysis panel" style={panelStyle}>
+          <CollectionAnalysisPanel artifact={artifact} />
+        </section>
+        <section id="top-instances" aria-label="Top instances panel" style={panelStyle}>
+          <TopInstancesPanel artifact={artifact} />
+        </section>
+      </section>
+
+      <section id="unreachable-objects" aria-label="Unreachable objects panel" style={panelStyle}>
+        <UnreachableObjectsPanel artifact={artifact} />
       </section>
 
       <section aria-label="Static plugin findings panel" style={panelStyle}>

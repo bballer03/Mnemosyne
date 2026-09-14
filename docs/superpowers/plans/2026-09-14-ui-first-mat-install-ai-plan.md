@@ -114,12 +114,12 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Modify: `ui/src/features/artifact-loader/ArtifactLoaderPage.test.tsx`
 
 **Interfaces:**
-- Produces: `pickHeapFile(): Promise<{ status: "selected"; path: string } | { status: "cancelled" } | { status: "unavailable" }>`
-- Consumes: existing native `load_heap(path)` command after explicit selection.
+- Produces: `pickHeapFile(): Promise<{ status: "selected"; sourceId: string; displayName: string } | { status: "cancelled" } | { status: "unavailable" }>`; `sourceId` is opaque to React.
+- The native layer retains and validates the selected canonical path. React must never receive, persist, render, or log an absolute heap path.
 
 **Acceptance gates:**
 - Desktop first run offers “Open heap dump” for `.hprof` and `.bin`; browser mode retains JSON artifact import.
-- Cancel is neutral, malformed/non-HPROF input is actionable, and the selected absolute path is not persisted or logged by React.
+- Cancel is neutral, malformed/non-HPROF input is actionable, and React receives only the filename plus opaque source ID.
 - Only the official Tauri dialog plugin receives file-system picker permission.
 
 - [ ] Add client tests for selected, cancelled, unavailable, wrong-extension, and invoke-error outcomes.
@@ -147,12 +147,14 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Modify: `ui/src/lib/analysis-types.test.ts`
 
 **Interfaces:**
-- Produces: `runAnalysis(input: DesktopAnalysisInput): Promise<unknown>`.
+- Produces: `runAnalysis(input: DesktopAnalysisInput): Promise<DesktopAnalysisResult>`, where the input references the opaque selected `sourceId`, never a path.
+- Rust owns one session graph lifecycle: running analysis must parse/build at most one graph, atomically replace the prior session only on success, and release superseded graphs. The design gate must specify progress, cancellation/unload behavior, and the deep-mode memory/error boundary.
+- The UI receives a sanitized artifact projection compatible with `parseAnalysisArtifact`; it must omit/redact `summary.heap_path` and all other local absolute paths.
 - `DesktopAnalysisInput` carries only shipped options: mode, histogram grouping, classloaders, threads, strings, collections, top instances, referrers, duplicate arrays, `topN`, and minimum collection capacity.
 - Rust command calls existing core analysis entry points; it does not reproduce analyzer logic.
 
 **Acceptance gates:**
-- A selected heap can produce the same `AnalyzeResponse` shape consumed by JSON import.
+- A selected heap produces a sanitized artifact projection with the same analysis fields consumed by JSON import, without exposing its local path.
 - Deep-only options are disabled or return structured unavailable state in overview mode.
 - “Incident response” defaults enable a bounded useful set while “Custom” exposes shipped options.
 
@@ -337,6 +339,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - The zip contains `Mnemosyne.exe`, license/readme material, version metadata, and no installer requirement.
 - On first run, the app opens the M20 heap picker; missing WebView2 produces an actionable message or the documented bootstrap path.
 - Existing MSI/NSIS assets may remain, but the portable zip is the primary Windows “unzip and click” asset.
+- CI and native-host evidence verify the primary zip launches on a clean supported Windows image with its WebView runtime available. If that cannot be guaranteed without a prerequisite, label the zip “portable with WebView2 prerequisite” and do not describe it as the primary unzip-and-click path.
 
 - [ ] Add archive-manifest tests before packaging logic.
 - [ ] Build the unbundled release executable in CI and package only required runtime files.
@@ -442,7 +445,8 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Modify: `docs/roadmap.md`
 
 **Acceptance gates:**
-- Corpus cases are synthetic and classify shipped, M22-targeted, and explicitly unsupported syntax.
+- Each corpus case is synthetic, versioned, and linked to a recorded Eclipse MAT version/reference result or explicitly labeled Mnemosyne-only. Only MAT-referenced cases may close a compatibility-matrix row or support a MAT-equivalency claim.
+- Corpus cases classify shipped, M22-targeted, and explicitly unsupported syntax.
 - Every case defines parse/execute/error outcome and result budget.
 - No customer query or heap value is committed.
 
