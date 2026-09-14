@@ -142,6 +142,9 @@ const future = {
  * `{ routes }` therefore pinned two full app trees for the process lifetime.
  * Combined with TopNav tests that remounted/navigated the real tree, that
  * drove ~14GB RSS and crashed WSL / CI.
+ *
+ * Tests must not `createMemoryRouter(routes)`. Use the minimal trees in
+ * `ui/src/test/app-route-trees.tsx` instead.
  */
 export function AppRouter() {
   const [router] = useState(() => createBrowserRouter(routes));
