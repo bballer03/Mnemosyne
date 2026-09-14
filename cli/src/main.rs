@@ -3237,7 +3237,7 @@ fn short_hash(hash: &str) -> String {
 
 fn base_table() -> Table {
     let mut table = Table::new();
-    table.load_preset(ASCII_BORDERS_ONLY_CONDENSED);
+    table.load_style(ASCII_BORDERS_ONLY_CONDENSED);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table
 }

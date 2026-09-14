@@ -14,7 +14,7 @@ categories.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-comfy-table = "7.1"
+comfy-table = "8"
 console.workspace = true
 indicatif.workspace = true
 mnemosyne-core = { path = "../core", version = "0.4.3" }

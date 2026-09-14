@@ -43,13 +43,13 @@
 
 | Crate | Pin today | Latest stable | Notes |
 |---|---|---|---|
-| `clap` | 4.5 | **4.6.7** | minor bump available |
-| `tokio` | 1.52 (workspace) / 1 (tauri) | **1.53.1** | bump workspace pin |
-| `toml` | 0.8 | **1.1.6** | **major** |
-| `reqwest` | 0.12 | **0.13.5** | **major** |
-| `dirs` | 6 (workspace) / 5 (tauri) | **7.0.0** | **major**; unify tauri → workspace |
-| `comfy-table` | 7.1 | **8.0.0** | **major** |
-| `serde_yaml` | 0.9 | 0.9.34+**deprecated** | migrate off deprecated crate (candidate: `serde_yml` — verify before switch) |
+| `clap` | 4.6 | **4.6.7** | current |
+| `tokio` | 1.53 (workspace) / 1 (tauri) | **1.53.1** | current workspace pin |
+| `toml` | 1.1.6 | **1.1.6** | current |
+| `reqwest` | 0.13.5 | **0.13.5** | current |
+| `dirs` | 7 (workspace and tauri) | **7.0.0** | current |
+| `comfy-table` | 8 | **8.0.0** | current |
+| `serde_yaml` | 0.9 | 0.9.34+**deprecated** | **Exception (2026-09-15, owner: M32):** retain 0.9 for this slice; replacement migration requires separate compatibility work. |
 | `anyhow` | 1.0 | 1.0.104 | caret already allows |
 | `console` | 0.16 | 0.16.6 | caret |
 | `indicatif` | 0.18 | 0.18.6 | caret |
