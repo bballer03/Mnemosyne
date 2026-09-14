@@ -1,6 +1,6 @@
 # Milestone 21 — Eclipse-Style Portable Installability
 
-> **Status:** 🟡 Partial — **21.A–E** command/docs layer largely shipped (ditto macOS zip, secret inspect, unsigned checksum provenance, Info.plist/ELF structural probe warn mode, README frozen primary names). **21.F** native launch + strict fail-closed still open. **Not claimed:** GUI smoke or clean-image WebView2 proof.
+> **Status:** 🟡 Partial — **21.A–E** command/docs shipped; release CI **fail-closes** on missing/misnamed primaries, checksum gaps, zip secrets, and structural Info.plist/ELF probe failures. **21.F** native launch matrix + live workflow dry-run still open. **Not claimed:** GUI smoke or clean-image WebView2 proof. Evidence: [docs/evidence/m21-portable-installability.md](../evidence/m21-portable-installability.md).
 > **Parent plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) (M21)
 > **Last updated:** 2026-09-14
 
@@ -110,11 +110,12 @@ The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-li
 
 ## Remaining M21 gaps (not closed here)
 
-- Fail the release job when required frozen primaries / checksums are absent (strict gate — 21.F).
-- Native-host launch matrix + evidence doc (21.F); no WSL launch claim.
-- Fail-closed structural probe (today warn mode) + codesign/notarization truthfulness in manifest.
+- Native-host launch matrix rows (evidence table started in [m21-portable-installability.md](../evidence/m21-portable-installability.md)); no WSL launch claim.
+- Live GitHub Actions release dry-run at a tagged workflow revision.
+- Codesign/notarization truthfulness fields in the asset manifest from observed results.
 - Signed/attested checksums (Sigstore/GPG) — provenance fields today are informational only.
 - First-run screenshots from synthetic fixtures.
+- Terra/Sol milestone closeout.
 
 ## Non-goals
 

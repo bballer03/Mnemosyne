@@ -19,7 +19,7 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
 | Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | SVG via blob URL; root selector (`2dbe4f8`); 16 MiB / overview-unavailability UI parity tests still thin (rely on core/MCP) |
 | Portable Windows zip | release CI script | **partial** | Labeled WebView2 prerequisite; clean-image unzip evidence **not proven** (M21) |
-| Desktop asset name/integrity verify | `verify_*` + `generate_sha256sums` + `inspect_*` + `probe_*` + `normalize_*` | **partial** | Unsigned desktop SHA256SUMS + secret inspect + Info.plist/ELF structural probe (warn); **not** strict name gate or launch proof |
+| Desktop asset name/integrity verify | `verify_*` + `generate_sha256sums` + `inspect_*` + `probe_*` + `normalize_*` | **partial** | Release CI fail-closes on names/checksums/secrets/structure; unsigned checksums; **not** launch proof |
 | macOS app zip / Linux AppImage names | `normalize_*` + `probe_*` + `release.yml` | **partial** | Frozen names + ditto zip + ELF/Info.plist probes; native launch **not proven** |
 | Bounded OQL MAT corpus | core query tests | **partial** | Handbook-linked `documentation-referenced` cases only; **no** recorded MAT golden results yet — cannot close equivalency matrix rows |
 | Multi-class `FROM` | core query | **shipped** | M22.B — max 8 patterns, ID dedup (`4d477c6`) |

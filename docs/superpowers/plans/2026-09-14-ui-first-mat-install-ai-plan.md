@@ -328,7 +328,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Write verifier tests for complete, missing, duplicate, and misnamed asset sets. (`scripts/tests/test_verify_desktop_assets.py`)
 - [x] Run the tests and observe failure because no manifest verifier exists. (TDD red then green in same WSL-safe pass; tests cover missing/duplicate/misnamed.)
 - [x] Define required names for Windows portable zip, macOS app zip/dmg, and Linux AppImage. (frozen table in `docs/design/milestone-21-eclipse-style-installability.md`)
-- [x] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (`scripts/release/generate_sha256sums.py` → `dist/SHA256SUMS` + `asset-manifest.json` on desktop files; warn-mode `verify_desktop_assets.py --allow-warnings`. **Strict fail-closed gate still open** until 21.C/D name normalization.)
+- [x] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (`generate_sha256sums.py` → `dist/SHA256SUMS` + `asset-manifest.json`; release job now fail-closes via `verify_desktop_assets.py --require-checksums`)
 - [x] Run verifier tests against a synthetic `dist/`.
 - [ ] Request a Terra review focused on release failure modes and artifact provenance.
 
@@ -350,7 +350,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Build the unbundled release executable in CI and package only required runtime files.
 - [x] Verify the archive contains no secrets or build paths. (`inspect_desktop_archives.py` in release CI; fail-closed). **Still open:** executable version ↔ tag match on native hosts.
 - [x] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
-- [x] Run the asset verifier. (CI warn mode via `--allow-warnings` after SHA256SUMS generation; not fail-closed / not launch proof)
+- [x] Run the asset verifier. (CI **fail-closed** names + `--require-checksums` after SHA256SUMS; **not** launch proof)
 - [ ] Request a Terra review focused on true portability and hidden runtime assumptions.
 
 ### Slice 21.C — Publish a macOS app path
@@ -368,9 +368,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 
 - [x] Add app-bundle manifest tests. (`scripts/tests/test_probe_desktop_bundles.py` — Info.plist + executable presence on synthetic zips)
 - [x] Zip the built `.app` with a tool that preserves bundle metadata. (`ditto -c -k --sequesterRsrc --keepParent` required on macOS runners; Python `zipfile` refused for release after Terra Critical; wired in `release.yml`. **Not** launch-tested; deeper codesign/notarization truthfulness still open.)
-- [x] Verify `Info.plist` version/identifier and executable presence. (`probe_desktop_bundles.py` structural probe in release CI warn mode; version mismatch recorded as finding when ShortVersionString present)
+- [x] Verify `Info.plist` version/identifier and executable presence. (`probe_desktop_bundles.py` structural probe fail-closed when present; version mismatch recorded as finding when ShortVersionString present)
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
-- [x] Run the asset verifier. (CI warn-mode after in-place normalize; frozen macOS app-zip names produced when `.app` exists — not fail-closed / not launch proof)
+- [x] Run the asset verifier. (CI fail-closed after in-place normalize; not launch proof)
 - [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
 
 ### Slice 21.D — Make AppImage the primary portable Linux path
@@ -387,10 +387,10 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - `.deb`/`.rpm` remain optional alternatives; docs state WebKit/runtime constraints honestly.
 
 - [x] Add asset-manifest tests for both architectures and an explicitly unsupported runner case. (`test_probe_desktop_bundles.py` covers x86_64 vs aarch64 ELF mismatch; missing assets skipped by probe — name gate remains verifier)
-- [x] Verify AppImage output exists, is executable, and reports expected architecture. (`probe_desktop_bundles.py` ELF e_machine + mode bits; warn mode in CI; mode may be FS-limited on some hosts)
+- [x] Verify AppImage output exists, is executable, and reports expected architecture. (`probe_desktop_bundles.py` ELF e_machine + mode bits; fail-closed when present; mode may be FS-limited on some hosts)
 - [x] Normalize the asset name before release upload. (`normalize_desktop_assets.py`: Tauri `Mnemosyne_<ver>_{amd64,aarch64,arm64}.AppImage` → frozen `Mnemosyne-<ver>-linux-{x86_64,aarch64}.AppImage`; build job `--out-dir dist-normalized` + release job `--in-place`. **Not** launch-tested.)
 - [x] Do not call a build launch-tested unless it runs on a matching native host.
-- [x] Run the asset verifier. (CI warn-mode after normalize; not fail-closed / not launch proof)
+- [x] Run the asset verifier. (CI fail-closed after normalize; not launch proof)
 - [ ] Request a Terra review focused on architecture correctness and runtime dependencies.
 
 ### Slice 21.E — Rewrite installation and first-run documentation

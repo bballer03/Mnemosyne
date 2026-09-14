@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- M21.B/C/D release CI honesty: `scripts/release/generate_sha256sums.py` emits unsigned desktop-scope `SHA256SUMS` + `asset-manifest.json` (`launch_tested: false`, `signed: false`, optional CI provenance); `inspect_desktop_archives.py` fail-closes on credential/build-path zip members; `probe_desktop_bundles.py` checks Info.plist / AppImage ELF arch in warn mode; `verify_desktop_assets.py --allow-warnings` on tagged releases. Does **not** claim native GUI launch proof or fail-closed frozen-name gating.
+- M21.B–F release CI honesty: unsigned desktop-scope `SHA256SUMS` + provenance manifest; `inspect_desktop_archives.py` + `probe_desktop_bundles.py` + `verify_desktop_assets.py --require-checksums` **fail-close** the release job on secrets, structural gaps, missing/misnamed primaries, or checksum errors. Does **not** claim native GUI launch proof (see [docs/evidence/m21-portable-installability.md](docs/evidence/m21-portable-installability.md)).
 - M21.C macOS app zip: `normalize_desktop_assets.py` requires Apple `ditto` for release zips (Python `zipfile` refused; `--allow-unsafe-python-zip` for synthetic tests only).
 - M21.E README / user-guide lead with frozen primary portable asset names; `scripts/tests/test_m21_docs_consistency.py` guards the phrases.
 

@@ -491,26 +491,25 @@ jobs:
           echo "dist/ after normalize (basenames; not launch proof):"
           find dist -type f | sed 's|.*/||' | sort
 
-      # M21.B/C/D — Checksums + archive inspect + warn-mode name verify.
+      # M21.B–F — Checksums + archive inspect + fail-closed name/checksum verify.
       # Emits unsigned desktop-scope SHA256SUMS (+ asset-manifest provenance).
-      # Verifier still uses --allow-warnings until a strict fail-closed gate (21.F)
-      # and native-host evidence land. Green here ≠ GUI launch-tested.
+      # Missing/misnamed primaries or checksum gaps fail the release job.
+      # Structural probe is also fail-closed for *present* macOS/AppImage assets.
+      # Green here ≠ GUI launch-tested (native hosts still required for 21.F launch rows).
 
       - name: Inspect desktop zip archives for secrets
         run: |
           set -euo pipefail
           python3 scripts/release/inspect_desktop_archives.py --dist dist
 
-      - name: Probe macOS/AppImage structure (warn mode)
+      - name: Probe macOS/AppImage structure (fail-closed when present)
         env:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
         run: |
           set -euo pipefail
-          # Structural only (Info.plist / ELF arch). Soft until 21.F fail-closed + native launch.
           python3 scripts/release/probe_desktop_bundles.py \
             --dist dist \
-            --version "${TAG_VERSION}" \
-            --allow-warnings
+            --version "${TAG_VERSION}"
 
       - name: Generate desktop SHA256SUMS
         env:
@@ -526,17 +525,16 @@ jobs:
           echo "SHA256SUMS (unsigned desktop-heuristic; not launch proof):"
           cat dist/SHA256SUMS
 
-      - name: Verify desktop assets (warn mode)
+      - name: Verify desktop assets (fail-closed names + checksums)
         env:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
         run: |
           set -euo pipefail
-          # Warn-only until strict gate + native launch matrix (21.F). Normalize
-          # should produce frozen AppImage/macOS names when builds succeeded.
           python3 scripts/release/verify_desktop_assets.py \
             --dist dist \
             --version "${TAG_VERSION}" \
-            --allow-warnings
+            --require-checksums
+          echo "Name/checksum gate passed (not launch-tested)."
 
       - name: Resolve release notes path
         id: notes

@@ -9,10 +9,11 @@
 | Item | Evidence |
 | --- | --- |
 | Desktop asset verifier | `7ced971` — `scripts/release/verify_desktop_assets.py` + synthetic tests |
-| SHA256SUMS + warn-mode verify in CI | `3ad3ba2` |
+| SHA256SUMS + verify in CI | `3ad3ba2` warn-mode → tip **fail-closed** `--require-checksums` |
 | Frozen macOS/AppImage name normalization | `b7bc663` |
 | ditto-only macOS zip + unsigned provenance + zip secret inspect | `9477e35` |
-| Info.plist / AppImage ELF structural probe + README frozen names | tip — `probe_desktop_bundles.py` + docs consistency test |
+| Info.plist / AppImage ELF structural probe + README frozen names | `0a5292d` |
+| Fail-closed name/checksum/structure release gate | tip — still ≠ native launch; see `m21-portable-installability.md` |
 | M22.D Unique Classes CLI + hierarchy gate | `175a6ce`, Terra cycle fix `f004efd` |
 | OQL corpus honesty relabel | `f004efd` — handbook cases are `documentation-referenced` only |
 
