@@ -1,6 +1,6 @@
 # Dependency currency inventory (registry-verified)
 
-**Date:** 2026-09-15  
+**Date:** 2026-09-15 (M32.A applied: React 19.3 / RR 7.18 / Vite 8.3)  
 **Sources of truth:** [npmjs.com](https://www.npmjs.com) `dist-tags.latest`, [crates.io](https://crates.io) `max_stable_version`, Docker Hub `library/rust` tags, GitHub Releases for Actions.  
 **Program home:** [UI → MAT maturity roadmap](../superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) § **M32 Dependency & toolchain currency**  
 **Open Dependabot majors (superseded by M32):** [#50](https://github.com/bballer03/Mnemosyne/pull/50) `@types/react` 19, [#51](https://github.com/bballer03/Mnemosyne/pull/51) `@vitejs/plugin-react` 6, [#52](https://github.com/bballer03/Mnemosyne/pull/52) `tailwindcss` 4.
