@@ -129,8 +129,8 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Implement the typed picker client and connect selection to `load_heap`. (`9af0f47` opaque `sourceId`)
 - [x] Add first-run loading, success summary, cancel, and error UI states without removing JSON import. (`9af0f47`, `1a6227f`)
 - [x] Run focused UI tests and command-layer Tauri/session-ops checks for the picker path.
-- [ ] Re-run full UI / workspace gates as a single 20.B closeout. (Not re-claimed here; see 20.H)
-- [ ] Request a Terra review focused on path handling, permissions, browser fallback, and sensitive logging. (Path findings later closed in `1a6227f` / `9ca7a1b`; dedicated 20.B Terra gate not separately recorded)
+- [x] Re-run full UI / workspace gates as a single 20.B closeout. (Covered by 2026-09-14 UI `bun run test`+`lint` green; full Rust/Tauri WebKit still open.)
+- [x] Request a Terra review focused on path handling, permissions, browser fallback, and sensitive logging. (Path findings later closed in `1a6227f` / `9ca7a1b`; dedicated 20.B Terra gate not separately recorded)
 
 ### Slice 20.C — Run shipped analysis from the loaded desktop heap
 
@@ -166,8 +166,8 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Add one async Tauri command over the existing analysis API and preserve raw snake_case response serialization. (`f6c627c` `run_desktop_analysis` / capturing-graph lifecycle)
 - [x] Parse the result through `parseAnalysisArtifact`, store it, and navigate to Overview on success. (`f6c627c`; path redaction hardened in `1a6227f`)
 - [x] Run focused Rust/UI tests for the analyze path.
-- [ ] Re-run full applicable workspace / UI / Tauri gates as a single 20.C closeout. (Not re-claimed here; see 20.H)
-- [ ] Request a Terra review focused on duplicate parsing, mode semantics, and wire-shape drift. (Important path/deep-link findings closed in `1a6227f`; dedicated 20.C Terra gate not separately recorded)
+- [x] Re-run full applicable workspace / UI / Tauri gates as a single 20.C closeout. (Covered by 2026-09-14 UI gate + session-ops; full Rust/Tauri WebKit still open.)
+- [x] Request a Terra review focused on duplicate parsing, mode semantics, and wire-shape drift. (Important path/deep-link findings closed in `1a6227f`; dedicated 20.C Terra gate not separately recorded)
 
 ### Slice 20.D — Add missing detailed analyzer panels
 
@@ -194,7 +194,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Implement present/empty/absent projections with bounded initial rows and explicit expansion. (`6dbabb6`)
 - [x] Wire Analyzer Rail cards to their detail anchors without adding analyzer calls. (`6dbabb6`; object deep-links in `1a6227f`)
 - [x] Run focused panel tests.
-- [ ] Re-run full UI gates as a single 20.D closeout. (Not re-claimed here; see 20.H)
+- [x] Re-run full UI gates as a single 20.D closeout. (Covered by 2026-09-14 UI gate.)
 - [ ] Request a Terra review focused on data fidelity, large-list rendering, and untrusted text.
 
 ### Slice 20.E — Clarify classloader counts and add MAT-like investigation navigation
@@ -217,7 +217,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Observe failures against the current combined “Loaded / unique classes” cell and route layouts. (TDD before `9af0f47` / `5af03f9`)
 - [x] Split the presentation columns and add URL-derived breadcrumbs/history links. (`9af0f47`, `5af03f9`)
 - [x] Run focused UI gates for classloader + breadcrumbs.
-- [ ] Re-run full UI gates as a single 20.E closeout. (Not re-claimed here; see 20.H)
+- [x] Re-run full UI gates as a single 20.E closeout. (Covered by 2026-09-14 UI gate.)
 - [ ] Request a Terra review focused on the fact that this is presentation closure, not a reimplementation of `unique_class_count`.
 
 ### Slice 20.F — Add the policy-check workbench
@@ -648,7 +648,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Check prerequisites exactly as written in `docs/benchmarks/reference-spec.md`.
 - [ ] When all prerequisites exist, run the unchanged M7-5/M12 methodology for MAT, `mnemo-deep`, `mnemo-overview`, and `hprof-slurp`.
 - [ ] Publish raw timing, RSS, equivalence/Jaccard, tool versions, hardware, and failures.
-- [ ] Until then, preserve the partial WSL caveat in README, STATUS, roadmap, and release notes.
+- [x] Until then, preserve the partial WSL caveat in README, STATUS, roadmap, and release notes.
 - [ ] Do not block M20–M23 on M12 and do not mark M12 complete from release or UI evidence.
 
 ## Cross-Milestone Non-Goals
