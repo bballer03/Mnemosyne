@@ -1,6 +1,10 @@
 # Functional Status
 
+<<<<<<< HEAD
 _Last updated: 2026-09-14 (v0.4.0 shipped; Track A desktop bridge injection in progress; **M24 Continuous Heap Investigation** is the next UI product milestone — see [docs/superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md](docs/superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md))_
+=======
+_Last updated: 2026-09-14 (v0.4.0 published: CLI + desktop assets + GHCR; Homebrew SHAs filled; native launch / MAT golden / Sol closeouts still open — see docs/evidence/m21-m22-remaining.md)_
+>>>>>>> origin/main
 
 This document captures where the current alpha build stands versus the roadmap described in `README.md` and `ARCHITECTURE.md`. Use it to see what already works, what is partially there, and which gaps remain before we can call the heap analyzer "functionally complete".
 
