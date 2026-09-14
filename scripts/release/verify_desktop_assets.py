@@ -28,13 +28,14 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-CHECKSUM_CANDIDATES = ("SHA256SUMS", "SHA256SUMS.txt", "checksums.sha256")
+CHECKSUM_CANDIDATES = ("SHA256SUMS", "SHA256SUMS.txt", "SHA256SUMS.desktop", "checksums.sha256")
 
 # Files that are expected alongside assets and never treated as misnamed.
 IGNORE_BASENAMES = frozenset(
     {
         "SHA256SUMS",
         "SHA256SUMS.txt",
+        "SHA256SUMS.desktop",
         "checksums.sha256",
         "asset-manifest.json",
         ".gitkeep",

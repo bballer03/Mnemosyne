@@ -1,6 +1,6 @@
 # Milestone 21 — Eclipse-Style Portable Installability
 
-> **Status:** 🟡 Partial — Slice **21.A** asset-name freeze + WSL-safe verifier shipped; **21.B** Windows portable zip + checksums/warn-mode verify; **21.C/D** `normalize_desktop_assets.py` maps Tauri AppImage/DMG names → frozen names and zips `Mnemosyne.app` when present (wired in `release.yml`). Verifier still **warn mode** (not fail-closed). **Not claimed:** native Windows/macOS/Linux launch matrix, strict checksum/manifest gate on every release, or GUI smoke.
+> **Status:** 🟡 Partial — **21.A** verifier; **21.B** Windows portable + unsigned desktop `SHA256SUMS`/manifest provenance + zip secret inspect; **21.C/D** normalize AppImage/DMG + **ditto-only** macOS `.app` zip (Python zipfile refused for release). Verifier still **warn mode**. **Not claimed:** native launch matrix, strict fail-closed gate, or GUI smoke.
 > **Parent plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) (M21)
 > **Last updated:** 2026-09-14
 
@@ -29,7 +29,7 @@ Release assets support download → unzip/mount → double-click without a JVM o
 | Windows MSI / NSIS | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe` | (unchanged Tauri names) |
 | Linux deb / rpm | `Mnemosyne_<version>_amd64.deb` / `_arm64.deb`, `Mnemosyne-<version>-1.x86_64.rpm` / `.aarch64.rpm` | (unchanged) |
 
-`scripts/release/normalize_desktop_assets.py` renames AppImage + DMG sources above and, when `--macos-arch` is set, zips `Mnemosyne.app` → the frozen macOS app zip. Transitional Tauri AppImage/DMG basenames remain **allowed** by the verifier if a normalize miss leaves them on disk.
+`scripts/release/normalize_desktop_assets.py` renames AppImage + DMG sources above and, when `--macos-arch` is set, zips `Mnemosyne.app` → the frozen macOS app zip **via Apple `ditto -c -k --sequesterRsrc --keepParent`**. Python `zipfile` is refused unless `--allow-unsafe-python-zip` (synthetic tests only). Transitional Tauri AppImage/DMG basenames remain **allowed** by the verifier if a normalize miss leaves them on disk.
 
 ## Verifier (WSL-safe)
 
@@ -63,7 +63,7 @@ python3 scripts/release/normalize_desktop_assets.py \
   --in-place
 ```
 
-Checksum generation (desktop-like files only; no launch claim):
+Checksum generation (desktop-heuristic scope; unsigned; no launch claim):
 
 ```bash
 python3 scripts/release/generate_sha256sums.py \
@@ -73,29 +73,36 @@ python3 scripts/release/generate_sha256sums.py \
   --manifest auto
 ```
 
+Archive member inspect (credential / absolute build-path denylist; fail-closed in CI):
+
+```bash
+python3 scripts/release/inspect_desktop_archives.py --dist dist
+```
+
 Tests (synthetic trees only — no GUI launch):
 
 ```bash
 python3 scripts/tests/test_verify_desktop_assets.py
 python3 scripts/tests/test_generate_sha256sums.py
 python3 scripts/tests/test_normalize_desktop_assets.py
+python3 scripts/tests/test_inspect_desktop_archives.py
 ```
 
-The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required). With `--allow-warnings`, findings are printed but exit status stays 0.
+The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required). With `--allow-warnings`, findings are printed but exit status stays 0. `SHA256SUMS` header comments + `asset-manifest.json` declare `scope=desktop-heuristic`, `signed: false`, and optional CI provenance fields — not a Sigstore attestation.
 
 ## Packaging honesty already on this branch
 
 - `scripts/release/package_windows_portable.ps1` builds `Mnemosyne-<version>-windows-x64-portable.zip` and labels it **portable with WebView2 prerequisite**.
-- `scripts/release/normalize_desktop_assets.py` + `release.yml` normalize AppImage/DMG names and produce macOS app zips when `.app` exists after Tauri build.
-- `release.yml` generates desktop `SHA256SUMS` + `asset-manifest.json` and runs warn-mode verify before attaching `dist/*` to the GitHub Release.
-- Docs already state WSL cannot prove packaged GUI smoke.
+- `scripts/release/normalize_desktop_assets.py` + `release.yml` normalize AppImage/DMG names; macOS app zips use **ditto** on macOS runners.
+- `release.yml` runs zip secret inspect, generates unsigned desktop `SHA256SUMS` + provenance manifest, and warn-mode verify before attaching `dist/*` to the GitHub Release.
+- Docs already state WSL cannot prove packaged GUI smoke. See [docs/evidence/m21-m22-remaining.md](../evidence/m21-m22-remaining.md).
 
 ## Remaining M21 gaps (not closed here)
 
 - Fail the release job when required frozen primaries / checksums are absent (strict gate — 21.F).
 - Native-host launch matrix + evidence doc (21.F); no WSL launch claim.
 - Full macOS bundle integrity checks (Info.plist / executable bits) and AppImage arch metadata probes beyond rename.
-- Docs polish / Terra reviews per plan slices 21.B–21.F.
+- Signed/attested checksums (Sigstore/GPG) — provenance fields today are informational only.
 
 ## Non-goals
 

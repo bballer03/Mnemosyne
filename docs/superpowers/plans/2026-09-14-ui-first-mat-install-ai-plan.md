@@ -346,9 +346,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Existing MSI/NSIS assets may remain, but the portable zip is the primary Windows “unzip and click” asset.
 - CI and native-host evidence verify the primary zip launches on a clean supported Windows image with its WebView runtime available. If that cannot be guaranteed without a prerequisite, label the zip “portable with WebView2 prerequisite” and do not describe it as the primary unzip-and-click path.
 
-- [ ] Add archive-manifest tests before packaging logic.
+- [x] Add archive-manifest tests before packaging logic. (`scripts/tests/test_inspect_desktop_archives.py` + `test_generate_sha256sums.py` provenance/scope asserts)
 - [x] Build the unbundled release executable in CI and package only required runtime files.
-- [ ] Verify the executable version matches the tag and the archive contains no secrets or build paths.
+- [x] Verify the archive contains no secrets or build paths. (`inspect_desktop_archives.py` in release CI; fail-closed). **Still open:** executable version ↔ tag match on native hosts.
 - [x] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
 - [x] Run the asset verifier. (CI warn mode via `--allow-warnings` after SHA256SUMS generation; not fail-closed / not launch proof)
 - [ ] Request a Terra review focused on true portability and hidden runtime assumptions.
@@ -367,7 +367,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Signing/notarization status is written into the asset manifest from observed codesign results.
 
 - [ ] Add app-bundle manifest tests.
-- [x] Zip the built `.app` with a tool that preserves bundle metadata. (`normalize_desktop_assets.py` zips `Mnemosyne.app` → frozen `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` when `--macos-arch` is set; wired in `release.yml` after Tauri build. **Not** launch-tested; deeper Info.plist/executable-bit checks still open.)
+- [x] Zip the built `.app` with a tool that preserves bundle metadata. (`ditto -c -k --sequesterRsrc --keepParent` required on macOS runners; Python `zipfile` refused for release after Terra Critical; wired in `release.yml`. **Not** launch-tested; deeper Info.plist/executable-bit checks still open.)
 - [ ] Verify `Info.plist` version/identifier and executable presence.
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
 - [x] Run the asset verifier. (CI warn-mode after in-place normalize; frozen macOS app-zip names produced when `.app` exists — not fail-closed / not launch proof)

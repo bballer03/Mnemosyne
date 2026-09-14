@@ -71,8 +71,13 @@ class GenerateSha256SumsTests(unittest.TestCase):
             self.assertIn(name, sums)
             manifest = json.loads((dist / "asset-manifest.json").read_text(encoding="utf-8"))
             self.assertFalse(manifest["launch_tested"])
+            self.assertFalse(manifest["signed"])
+            self.assertEqual(manifest["scope"], "desktop-heuristic")
+            self.assertIn("provenance", manifest)
             self.assertEqual(manifest["version"], VERSION)
             self.assertEqual(manifest["files"][0]["name"], name)
+            self.assertTrue(sums.lstrip().startswith("#"))
+            self.assertIn("scope=desktop-heuristic", sums)
 
 
 if __name__ == "__main__":

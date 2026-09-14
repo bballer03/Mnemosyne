@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Normalize Tauri desktop artifact names to M21 frozen names (21.C / 21.D).
 
-WSL-safe: renames/copies/zips on disk only. Does not launch apps or claim GUI smoke.
+WSL-safe: renames/copies on disk only. Does not launch apps or claim GUI smoke.
+
+macOS .app → frozen zip: production path requires Apple `ditto -c -k --sequesterRsrc
+--keepParent` so bundle metadata/symlinks survive. Python zipfile is refused unless
+`--allow-unsafe-python-zip` (synthetic tests only; damaged bundles are expected).
 
 Frozen primaries (required by verify_desktop_assets.py):
   Mnemosyne-<version>-macos-aarch64-app.zip
@@ -24,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -100,18 +105,64 @@ def _find_app_bundles(root: Path) -> list[Path]:
     return sorted(apps)
 
 
-def _zip_app_bundle(app_dir: Path, dest_zip: Path) -> None:
-    """Zip .app preserving relative paths under the bundle root (Contents/...)."""
+def _zip_app_bundle_ditto(app_dir: Path, dest_zip: Path) -> None:
+    """Zip .app with Apple ditto (preserves symlinks + resource forks / bundle meta)."""
+    ditto = shutil.which("ditto")
+    if ditto is None:
+        raise FileNotFoundError(
+            "ditto not found on PATH; macOS app zip requires "
+            "`ditto -c -k --sequesterRsrc --keepParent` on a macOS host"
+        )
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
     if dest_zip.exists():
         dest_zip.unlink()
-    # zipfile stores files; we prefix with Mnemosyne.app/ so unzip yields a bundle.
+    # ditto creates the archive with the .app as the top-level entry (--keepParent).
+    subprocess.run(
+        [
+            ditto,
+            "-c",
+            "-k",
+            "--sequesterRsrc",
+            "--keepParent",
+            str(app_dir),
+            str(dest_zip),
+        ],
+        check=True,
+    )
+
+
+def _zip_app_bundle_python_unsafe(app_dir: Path, dest_zip: Path) -> None:
+    """Synthetic-only zip via zipfile. Damages real macOS bundles — never for release."""
+    dest_zip.parent.mkdir(parents=True, exist_ok=True)
+    if dest_zip.exists():
+        dest_zip.unlink()
     prefix = app_dir.name
     with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(app_dir.rglob("*")):
             if path.is_file():
                 arcname = str(Path(prefix) / path.relative_to(app_dir))
                 zf.write(path, arcname=arcname)
+
+
+def _zip_app_bundle(
+    app_dir: Path,
+    dest_zip: Path,
+    *,
+    allow_unsafe_python_zip: bool = False,
+) -> str:
+    """Zip .app → dest. Returns backend tag: ditto | unsafe_python_zip."""
+    ditto = shutil.which("ditto")
+    if ditto is not None:
+        _zip_app_bundle_ditto(app_dir, dest_zip)
+        return "ditto"
+    if allow_unsafe_python_zip:
+        _zip_app_bundle_python_unsafe(app_dir, dest_zip)
+        return "unsafe_python_zip"
+    raise RuntimeError(
+        "refusing Python zipfile for Mnemosyne.app — it drops macOS symlinks/bundle "
+        "metadata. Run on macOS with `ditto` available, or pass "
+        "--allow-unsafe-python-zip only for synthetic tests (not release)."
+    )
 
 
 def _place(src: Path, dest: Path, *, in_place: bool, dry_run: bool) -> str:
@@ -142,6 +193,7 @@ def normalize_desktop_assets(
     macos_arch: str | None = None,
     in_place: bool = False,
     dry_run: bool = False,
+    allow_unsafe_python_zip: bool = False,
 ) -> NormalizeResult:
     result = NormalizeResult(version=version)
     rename_map = tauri_rename_map(version)
@@ -220,16 +272,20 @@ def normalize_desktop_assets(
                 )
             else:
                 try:
-                    _zip_app_bundle(app, dest_zip)
+                    backend = _zip_app_bundle(
+                        app,
+                        dest_zip,
+                        allow_unsafe_python_zip=allow_unsafe_python_zip,
+                    )
                     result.actions.append(
                         NormalizeAction(
                             "zip_app",
                             str(app),
                             str(dest_zip),
-                            f"macos-arch={macos_arch}",
+                            f"macos-arch={macos_arch}; backend={backend}",
                         )
                     )
-                except OSError as exc:
+                except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
                     result.errors.append(f"zip {app} → {dest_zip}: {exc}")
 
     # 3) Optional: copy already-frozen files from search_root into out_dir.
@@ -303,6 +359,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Rename under --dist instead of copying to --out-dir",
     )
+    parser.add_argument(
+        "--allow-unsafe-python-zip",
+        action="store_true",
+        help=(
+            "Allow Python zipfile fallback when ditto is absent "
+            "(synthetic tests only; never for release)"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions only")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args(argv)
@@ -315,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         macos_arch=args.macos_arch,
         in_place=args.in_place,
         dry_run=args.dry_run,
+        allow_unsafe_python_zip=args.allow_unsafe_python_zip,
     )
 
     if args.json:

@@ -76,7 +76,24 @@ class NormalizeDesktopAssetsTests(unittest.TestCase):
             self.assertTrue(result.ok, nda.format_report(result))
             self.assertTrue((dist / f"Mnemosyne-{VERSION}-macos-x64.dmg").is_file())
 
-    def test_zip_macos_app_to_out_dir(self) -> None:
+    def test_zip_macos_app_refuses_python_without_flag(self) -> None:
+        """Without ditto, production path must refuse Python zipfile."""
+        if nda.shutil.which("ditto") is not None:
+            self.skipTest("ditto present; refuse-path not exercised")
+        with tempfile.TemporaryDirectory() as tmp:
+            search = Path(tmp) / "target"
+            _fake_app(search)
+            out = Path(tmp) / "out"
+            result = nda.normalize_desktop_assets(
+                VERSION,
+                search_root=search,
+                out_dir=out,
+                macos_arch="aarch64",
+            )
+            self.assertFalse(result.ok)
+            self.assertTrue(any("ditto" in e.lower() or "python zipfile" in e.lower() for e in result.errors))
+
+    def test_zip_macos_app_to_out_dir_unsafe_python_for_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             search = Path(tmp) / "target"
             app = _fake_app(search)
@@ -86,6 +103,7 @@ class NormalizeDesktopAssetsTests(unittest.TestCase):
                 search_root=search,
                 out_dir=out,
                 macos_arch="aarch64",
+                allow_unsafe_python_zip=True,
             )
             self.assertTrue(result.ok, nda.format_report(result))
             dest = out / f"Mnemosyne-{VERSION}-macos-aarch64-app.zip"
@@ -97,6 +115,9 @@ class NormalizeDesktopAssetsTests(unittest.TestCase):
                 names,
             )
             self.assertTrue(app.is_dir())  # source bundle left intact when copying
+            self.assertTrue(
+                any("backend=" in a.detail for a in result.actions if a.kind == "zip_app")
+            )
 
     def test_copy_mode_leaves_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

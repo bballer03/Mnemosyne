@@ -340,7 +340,8 @@ jobs:
           # archives publish to, via artifactPaths + upload-artifact.
 
       # M21.C/D — map Tauri output names → frozen primaries (AppImage, macOS app zip)
-      # and frozen fallback DMGs. WSL-safe rename/zip only; not launch-tested.
+      # and frozen fallback DMGs. macOS zip uses ditto only (no Python zipfile).
+      # Not launch-tested.
       - name: Normalize desktop asset names
         env:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
@@ -353,6 +354,10 @@ jobs:
             aarch64-apple-darwin) arch_args=(--macos-arch aarch64) ;;
             x86_64-apple-darwin) arch_args=(--macos-arch x64) ;;
           esac
+          if [[ "${#arch_args[@]}" -gt 0 ]] && ! command -v ditto >/dev/null 2>&1; then
+            echo "error: ditto required to zip Mnemosyne.app on macOS runners" >&2
+            exit 1
+          fi
           python3 scripts/release/normalize_desktop_assets.py \
             --version "${TAG_VERSION}" \
             --search-root tauri/target \
@@ -486,10 +491,15 @@ jobs:
           echo "dist/ after normalize (basenames; not launch proof):"
           find dist -type f | sed 's|.*/||' | sort
 
-      # M21.B/C/D — Checksums + warn-mode name verify (WSL-safe; not launch proof).
-      # Emits SHA256SUMS (+ asset-manifest.json) for desktop-like files in dist/.
+      # M21.B/C/D — Checksums + archive inspect + warn-mode name verify.
+      # Emits unsigned desktop-scope SHA256SUMS (+ asset-manifest provenance).
       # Verifier still uses --allow-warnings until a strict fail-closed gate (21.F)
       # and native-host evidence land. Green here ≠ GUI launch-tested.
+
+      - name: Inspect desktop zip archives for secrets
+        run: |
+          set -euo pipefail
+          python3 scripts/release/inspect_desktop_archives.py --dist dist
 
       - name: Generate desktop SHA256SUMS
         env:
@@ -502,7 +512,7 @@ jobs:
             --version "${TAG_VERSION}" \
             --output dist/SHA256SUMS \
             --manifest auto
-          echo "SHA256SUMS (desktop artifacts; not launch proof):"
+          echo "SHA256SUMS (unsigned desktop-heuristic; not launch proof):"
           cat dist/SHA256SUMS
 
       - name: Verify desktop assets (warn mode)
