@@ -6,10 +6,10 @@ class Mnemosyne < Formula
 
   if Hardware::CPU.arm?
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-aarch64-apple-darwin.tar.gz"
-    sha256 "PLACEHOLDER — compute after release archives are built"
+    sha256 "e0d3b076a2dbdda6d8c6ff82aa130781855ee518def0b4bb9892b8ead37f7a21"
   else
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-x86_64-apple-darwin.tar.gz"
-    sha256 "PLACEHOLDER — compute after release archives are built"
+    sha256 "72cd96021d3356fe83c9d606b3f02dd78715fcc3a84dc43ecb00541e5d808f01"
   end
 
   def install
