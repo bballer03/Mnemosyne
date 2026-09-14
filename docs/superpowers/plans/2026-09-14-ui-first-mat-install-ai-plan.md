@@ -470,11 +470,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Objects are deduplicated by object ID before ordering and final limit.
 - Existing single-class AST serialization and output remain compatible.
 
-- [ ] Add parser/executor tests for two literals, mixed patterns, duplicate matches, empty entries, and list-size limit.
-- [ ] Run focused tests and observe the targeted failures.
-- [ ] Extend AST/parser minimally and reuse the current class resolver.
-- [ ] Execute union/dedup under existing row/work budgets.
-- [ ] Run query, CLI, MCP, and corpus tests.
+- [x] Add parser/executor tests for two literals, mixed patterns, duplicate matches, empty entries, and list-size limit.
+- [x] Run focused tests and observe the targeted failures.
+- [x] Extend AST/parser minimally and reuse the current class resolver.
+- [x] Execute union/dedup under existing row/work budgets.
+- [x] Run query, CLI, MCP, and corpus tests.
 - [ ] Request a Terra review focused on ambiguity, compatibility, and work limits.
 
 ### Slice 22.C — Add one-to-three-hop `OBJECTS`

@@ -16,7 +16,9 @@ Status as of 2026-09-14 on `sync/m15g-m16bcd`. Legend: **shipped** | **partial**
 | Policies (`ci_check`) | MCP/core | **planned** | Route stub → M20.F |
 | Flamegraphs | core managed artifacts | **planned** | Route stub → M20.G |
 | Portable Windows zip | release CI script | **partial** | Labeled WebView2 prerequisite |
-| Bounded OQL MAT corpus | — | **planned** | M22 after UI/install |
+| Bounded OQL MAT corpus | — | **planned** | M22.A; MAT-referenced cases only close matrix rows |
+| Multi-class `FROM` | core query | **shipped** | M22.B — max 8 patterns, ID dedup (`4d477c6`) |
+| Multi-hop `OBJECTS` | — | **planned** | M22.C (1–3 hop; reject 4+) |
 | AI-first surfaces | MCP/chat | **planned** | M23 last |
 
 Install goal: unzip → double-click → app opens (no JVM). Windows portable zip is primary once CI publishes it; WebView2 remains a documented prerequisite until proven on a clean image.
