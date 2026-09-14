@@ -425,18 +425,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ matrix.target }}
-          # Do not use join(artifactPaths, '\n') — in GHA expressions '\n' is literal
-          # backslash-n, and embedding a real newline inside ${{ }} breaks workflow YAML.
-          # Globs + dist-normalized cover Tauri outputs and M21 frozen renames.
-          path: |
-            tauri/target/**/bundle/msi/*.msi
-            tauri/target/**/bundle/nsis/*-setup.exe
-            tauri/target/**/bundle/dmg/*.dmg
-            tauri/target/**/bundle/macos/*.app
-            tauri/target/**/bundle/appimage/*.AppImage
-            tauri/target/**/bundle/deb/*.deb
-            tauri/target/**/bundle/rpm/*.rpm
-            dist-normalized/*
+          # Upload only normalized frozen/fallback names. Uploading raw Tauri
+          # globs *and* dist-normalized caused duplicate frozen basenames after
+          # the release job's in-place normalize (SHA256SUMS refuse).
+          path: dist-normalized/*
           if-no-files-found: error
 
   docker:

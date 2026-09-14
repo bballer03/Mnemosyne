@@ -90,6 +90,11 @@ def tauri_rename_map(version: str) -> dict[str, str]:
         # tauri-action artifactPaths join fails.
         f"Mnemosyne_{version}_x64_en-US.msi": f"Mnemosyne_{version}_x64_en-US.msi",
         f"Mnemosyne_{version}_x64-setup.exe": f"Mnemosyne_{version}_x64-setup.exe",
+        # Linux managed installers (allowed fallbacks; not portable primaries)
+        f"Mnemosyne_{version}_amd64.deb": f"Mnemosyne_{version}_amd64.deb",
+        f"Mnemosyne_{version}_arm64.deb": f"Mnemosyne_{version}_arm64.deb",
+        f"Mnemosyne-{version}-1.x86_64.rpm": f"Mnemosyne-{version}-1.x86_64.rpm",
+        f"Mnemosyne-{version}-1.aarch64.rpm": f"Mnemosyne-{version}-1.aarch64.rpm",
     }
 
 
