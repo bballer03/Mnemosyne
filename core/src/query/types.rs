@@ -39,10 +39,18 @@ pub struct FromClause {
     pub instanceof: bool,
 }
 
+/// Maximum class patterns in a comma-separated `FROM` list (M22 Slice 22.B).
+pub const MAX_MULTI_CLASS_FROM_LIST_SIZE: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassPattern {
     Exact(String),
     Glob(String),
+    /// Comma-separated class patterns in `FROM "a", "b", ...` (M22 Slice 22.B).
+    /// Single-class queries keep `Exact`/`Glob` for backward-compatible serialization.
+    /// Each entry reuses the same exact/glob resolution as a standalone `FROM`; the
+    /// executor unions matched object ids and deduplicates before ordering/limit.
+    Multi(Vec<ClassPattern>),
     /// A traversal function producing an explicit object-id set instead of
     /// matching by class name. Slots into the same `FromClause.class_pattern`
     /// extension point as `Exact`/`Glob` rather than introducing a parallel

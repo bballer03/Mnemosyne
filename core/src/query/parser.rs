@@ -1,6 +1,7 @@
 use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
     QueryParseError, QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE,
 };
 use regex::Regex;
 
@@ -129,16 +130,50 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let pattern = self.parse_quoted_string()?;
-        let class_pattern = if pattern.contains('*') {
-            ClassPattern::Glob(pattern)
-        } else {
-            ClassPattern::Exact(pattern)
-        };
+        let class_pattern = self.parse_class_pattern_list()?;
 
         Ok(FromClause {
             class_pattern,
             instanceof,
+        })
+    }
+
+    /// Parses one quoted class pattern, then any comma-separated siblings
+    /// (M22 Slice 22.B). A lone pattern stays `Exact`/`Glob` for compatible
+    /// serialization; two or more collapse into `ClassPattern::Multi`.
+    fn parse_class_pattern_list(&mut self) -> Result<ClassPattern, QueryParseError> {
+        let mut patterns = vec![self.parse_single_quoted_class_pattern()?];
+
+        loop {
+            self.skip_ws();
+            if !self.consume_char(',') {
+                break;
+            }
+            self.skip_ws();
+            patterns.push(self.parse_single_quoted_class_pattern()?);
+            if patterns.len() > MAX_MULTI_CLASS_FROM_LIST_SIZE {
+                return Err(self.error(format!(
+                    "multi-class FROM list exceeds limit of {MAX_MULTI_CLASS_FROM_LIST_SIZE} class patterns"
+                )));
+            }
+        }
+
+        Ok(if patterns.len() == 1 {
+            patterns.into_iter().next().expect("one pattern")
+        } else {
+            ClassPattern::Multi(patterns)
+        })
+    }
+
+    fn parse_single_quoted_class_pattern(&mut self) -> Result<ClassPattern, QueryParseError> {
+        let pattern = self.parse_quoted_string()?;
+        if pattern.is_empty() {
+            return Err(self.error("expected non-empty quoted class pattern"));
+        }
+        Ok(if pattern.contains('*') {
+            ClassPattern::Glob(pattern)
+        } else {
+            ClassPattern::Exact(pattern)
         })
     }
 

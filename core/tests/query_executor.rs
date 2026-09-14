@@ -2348,3 +2348,195 @@ fn union_right_side_limit_bounds_its_own_contribution_before_merge() {
     // this would instead return all 7 users.
     assert_eq!(ids, vec![0x2000, 0x2001, 0x2002]);
 }
+
+// M22 Slice 22.B: bounded multi-class `FROM`.
+
+fn build_multi_class_from_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        3,
+        1,
+        "com.example.User",
+        vec![
+            FieldDescriptor {
+                name: Some("name".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("kind".into()),
+                field_type: field_types::INT,
+            },
+        ],
+    );
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Admin",
+        vec![FieldDescriptor {
+            name: Some("level".into()),
+            field_type: field_types::INT,
+        }],
+    );
+    add_class(&mut graph, 5, 1, "com.example.Other", Vec::new());
+
+    add_user_object(&mut graph, 0x3000, 0, 1);
+    add_user_object(&mut graph, 0x3001, 0, 2);
+
+    graph.objects.insert(
+        0x3100,
+        HeapObject {
+            id: 0x3100,
+            class_id: 4,
+            shallow_size: 24,
+            references: Vec::new(),
+            field_data: int_field_bytes(9),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x3100,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph.objects.insert(
+        0x3200,
+        HeapObject {
+            id: 0x3200,
+            class_id: 5,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x3200,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph
+}
+
+#[test]
+fn multi_class_from_returns_objects_from_two_literal_classes() {
+    let graph = build_multi_class_from_graph();
+    let query = parse_query(
+        r#"SELECT @objectId, @className FROM "com.example.User", "com.example.Admin""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001, 0x3100]);
+    assert_eq!(result.total_matched, 3);
+}
+
+#[test]
+fn multi_class_from_supports_mixed_exact_and_glob_patterns() {
+    let graph = build_multi_class_from_graph();
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.Admin", "com.example.*""#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001, 0x3100, 0x3200]);
+}
+
+#[test]
+fn multi_class_from_deduplicates_objects_matched_by_multiple_patterns() {
+    let graph = build_multi_class_from_graph();
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User", "com.example.*" WHERE kind = 1"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000]);
+    assert_eq!(result.total_matched, 1);
+}
+
+#[test]
+fn multi_class_from_applies_limit_after_deduplication() {
+    let graph = build_multi_class_from_graph();
+    let query = parse_query(
+        r#"SELECT @objectId FROM "com.example.User", "com.example.Admin" LIMIT 2"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001]);
+    assert_eq!(result.total_matched, 2);
+    assert!(result.truncated);
+}
+
+#[test]
+fn multi_class_from_rejects_programmatic_list_over_limit() {
+    use mnemosyne_core::query::{ClassPattern, FromClause, Query, SelectClause};
+
+    let patterns = (0..9)
+        .map(|idx| ClassPattern::Exact(format!("com.example.Class{idx}")))
+        .collect();
+    let query = Query {
+        select: SelectClause::All,
+        from: FromClause {
+            class_pattern: ClassPattern::Multi(patterns),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+
+    let graph = build_multi_class_from_graph();
+    let error = execute_query(&query, &graph, None).expect_err("over-limit list should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-class FROM list exceeds limit"),
+        "unexpected error: {error}"
+    );
+}

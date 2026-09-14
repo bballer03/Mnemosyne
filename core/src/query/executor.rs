@@ -2,6 +2,7 @@ use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
     QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
@@ -208,22 +209,21 @@ fn resolve_matched_ids_at_depth(
             Ok(ids)
         }
         ClassPattern::Exact(_) | ClassPattern::Glob(_) => {
-            let mut ids = Vec::new();
-            for (&object_id, object) in &graph.objects {
-                if !matches_class_pattern(
-                    graph,
-                    object.class_id,
-                    &query.from.class_pattern,
-                    query.from.instanceof,
-                ) {
-                    continue;
-                }
-                if !matches_filter(query, graph, dominator, object_id, regexes)? {
-                    continue;
-                }
-                ids.push(object_id);
+            resolve_class_pattern_candidates(
+                graph,
+                dominator,
+                query,
+                std::slice::from_ref(&query.from.class_pattern),
+                regexes,
+            )
+        }
+        ClassPattern::Multi(patterns) => {
+            if patterns.len() > MAX_MULTI_CLASS_FROM_LIST_SIZE {
+                return Err(QueryError::Unsupported(format!(
+                    "multi-class FROM list exceeds limit of {MAX_MULTI_CLASS_FROM_LIST_SIZE} class patterns"
+                )));
             }
-            Ok(ids)
+            resolve_class_pattern_candidates(graph, dominator, query, patterns, regexes)
         }
     }
 }
@@ -653,6 +653,39 @@ fn resolve_dominator_chain(
     chain
 }
 
+/// Resolves one or more class-name patterns to a deduplicated object-id set.
+/// Each pattern uses the same `matches_class_pattern` path as a standalone
+/// single-class `FROM`; when multiple patterns match the same object, it
+/// appears once (M22 Slice 22.B).
+fn resolve_class_pattern_candidates(
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    query: &Query,
+    patterns: &[ClassPattern],
+    regexes: &[Option<Regex>],
+) -> Result<Vec<ObjectId>, QueryError> {
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+    let mut ids = Vec::new();
+
+    for pattern in patterns {
+        for (&object_id, object) in &graph.objects {
+            if seen.contains(&object_id) {
+                continue;
+            }
+            if !matches_class_pattern(graph, object.class_id, pattern, query.from.instanceof) {
+                continue;
+            }
+            if !matches_filter(query, graph, dominator, object_id, regexes)? {
+                continue;
+            }
+            seen.insert(object_id);
+            ids.push(object_id);
+        }
+    }
+
+    Ok(ids)
+}
+
 fn matches_class_pattern(
     graph: &ObjectGraph,
     class_id: u64,
@@ -697,6 +730,7 @@ fn class_name_matches(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern
         // pattern to match against, so these arms always return `false`.
         ClassPattern::Traversal(_) => false,
         ClassPattern::Subquery(_) => false,
+        ClassPattern::Multi(_) => false,
     }
 }
 
