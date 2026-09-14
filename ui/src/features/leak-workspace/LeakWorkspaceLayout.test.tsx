@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryRouter, Navigate, Route, Routes, createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { leakWorkspaceRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { LeakWorkspaceLayout } from "./LeakWorkspaceLayout";
@@ -218,7 +218,7 @@ describe("LeakWorkspaceLayout", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/leaks/leak-1"] });
+    const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     expect(await view.findByText(/dependency readiness/i)).toBeInTheDocument();
@@ -441,7 +441,7 @@ describe("LeakWorkspaceLayout", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/leaks/leak-1/overview"] });
+    const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     await view.findByRole("heading", { name: /overview/i });
@@ -500,7 +500,7 @@ describe("LeakWorkspaceLayout", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/leaks/leak-1/overview"] });
+    const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     await view.findByRole("heading", { name: /overview/i });
@@ -534,7 +534,7 @@ describe("LeakWorkspaceLayout", () => {
       useLeakWorkspaceStore.getState().setSelection({ objectId: undefined });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/leaks/leak-1/overview"] });
+    const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1/overview"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     expect(await view.findByRole("button", { name: /reuse 0x1000/i })).toBeInTheDocument();

@@ -52,22 +52,23 @@ const testBatches = [
     "src/features/heap-explorer/HeapThreadsPage.test.tsx",
   ],
   [
-    // New batch for M14 Slice 14.D (AI-guided landing + workflow cards +
-    // persistent top-nav). Kept separate from the batches above rather than
-    // appended to one of them -- per this repo's own OOM precedent (see the
-    // comment on the batch above, from Slice 14.C), several of these suites
-    // mount the full `routes` tree via `createMemoryRouter`/`RouterProvider`
-    // (`TopNav.test.tsx`'s reachability tests walk every power route), which
-    // is exactly the kind of heavy React-Router rendering that has
-    // previously tipped a combined batch into a V8 OOM.
+    // TopNav uses a stub route tree (not production `routes`). Other suites
+    // in this batch are bridge/unit-light; keep InvestigationAssistant in the
+    // next process — mounting even a minimal assistant tree after heavy
+    // workflow cards has hung CI historically.
     "src/app/TopNav.test.tsx",
     "src/features/assistant/assistant-bridge-client.test.ts",
-    "src/features/assistant/InvestigationAssistantPage.test.tsx",
     "src/features/workflow-landing/workflow-bridge-client.test.ts",
     "src/features/workflow-landing/natural-language-router.test.ts",
     "src/features/workflow-landing/WorkflowCard.test.tsx",
     "src/features/workflow-landing/TriageSummaryCard.test.tsx",
     "src/features/workflow-landing/WorkflowCards.test.tsx",
+  ],
+  [
+    // InvestigationAssistant used to import production `routes` and OOM WSL/CI
+    // when batched after TopNav. Keep it in a fresh process even with the
+    // minimal assistantRoutes() fixture.
+    "src/features/assistant/InvestigationAssistantPage.test.tsx",
   ],
   [
     // Split from the batch above: on CI (Bun 1.4.x) NaturalLanguageInputBar

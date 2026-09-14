@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { assistantRoutes } from "../../test/app-route-trees";
 import { rememberDesktopHeapSource, clearRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { DEFAULT_HISTORY_MAX_TURNS } from "./assistant-bridge-client";
@@ -75,7 +75,7 @@ describe("InvestigationAssistantPage", () => {
     seedArtifact();
     rememberDesktopHeapSource("src-opaque", "fixture.hprof");
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /investigation session/i })).toBeInTheDocument();
@@ -102,7 +102,7 @@ describe("InvestigationAssistantPage", () => {
     const user = userEvent.setup();
     seedArtifact();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     await user.click(view.getByRole("button", { name: /check provider availability/i }));
@@ -140,7 +140,7 @@ describe("InvestigationAssistantPage", () => {
       },
     };
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     await user.click(view.getByRole("button", { name: /check provider availability/i }));
@@ -174,7 +174,7 @@ describe("InvestigationAssistantPage", () => {
       },
     };
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     await user.type(view.getByLabelText(/ask a follow-up/i), "Still recoverable?");
@@ -192,7 +192,7 @@ describe("InvestigationAssistantPage", () => {
     const user = userEvent.setup();
     seedArtifact();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     const select = view.getByLabelText(/focus leak/i);
@@ -210,7 +210,7 @@ describe("InvestigationAssistantPage", () => {
     const user = userEvent.setup();
     seedArtifact();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
     for (let i = 0; i < DEFAULT_HISTORY_MAX_TURNS + 1; i++) {
@@ -233,7 +233,7 @@ describe("InvestigationAssistantPage", () => {
   it("exposes deterministic deep links to workbench power views", () => {
     seedArtifact();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
     const links = view.getByRole("navigation", { name: /deterministic workbench links/i });
 

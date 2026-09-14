@@ -4,7 +4,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { leakWorkspaceRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { LeakWorkspaceOverview } from "./LeakWorkspaceOverview";
@@ -193,7 +193,7 @@ describe("LeakWorkspaceOverview", () => {
   it("uses the exported app routes to render the overview route replacement", async () => {
     seedArtifact();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/leaks/leak-1"] });
+    const router = createMemoryRouter(leakWorkspaceRoutes(), { initialEntries: ["/leaks/leak-1"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     expect(await view.findByRole("heading", { name: /overview/i })).toBeInTheDocument();

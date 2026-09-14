@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { dashboardRoutes } from "../../test/app-route-trees";
 import { ArtifactLoaderPage } from "../artifact-loader/ArtifactLoaderPage";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { LeakWorkspaceLayout } from "../leak-workspace/LeakWorkspaceLayout";
@@ -368,7 +368,7 @@ describe("DashboardPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/dashboard"] });
+    const router = createMemoryRouter(dashboardRoutes(), { initialEntries: ["/dashboard"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     await user.click(view.getByRole("link", { name: /artifact explorer/i }));
@@ -388,7 +388,7 @@ describe("DashboardPage", () => {
       });
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/dashboard"] });
+    const router = createMemoryRouter(dashboardRoutes(), { initialEntries: ["/dashboard"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     await user.click(view.getByRole("link", { name: /heap explorer/i }));

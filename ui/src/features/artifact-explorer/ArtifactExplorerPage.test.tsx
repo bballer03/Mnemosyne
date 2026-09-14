@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
-import { routes } from "../../app/router";
+import { artifactExplorerRoutes } from "../../test/app-route-trees";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
@@ -176,7 +176,7 @@ describe("ArtifactExplorerPage", () => {
   });
 
   it("redirects back to the loader when no artifact is loaded", () => {
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     expect(view.getByRole("heading", { name: /load analysis artifact/i })).toBeInTheDocument();
@@ -185,7 +185,7 @@ describe("ArtifactExplorerPage", () => {
   it("renders all histogram rows with retained and shallow comparisons", () => {
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
@@ -199,7 +199,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
@@ -213,7 +213,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
@@ -227,7 +227,7 @@ describe("ArtifactExplorerPage", () => {
   it("shows an explicit histogram-absent state when the artifact has no histogram", () => {
     seedArtifactWithoutHistogram();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
 
     expect(view.getByText(/histogram data is absent from this artifact/i)).toBeInTheDocument();
@@ -248,7 +248,7 @@ describe("ArtifactExplorerPage", () => {
       }));
     });
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const analyzerRail = within(view.getByRole("complementary", { name: /analyzer rail/i }));
 
@@ -263,7 +263,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(routes, { initialEntries: ["/artifacts/explorer"] });
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
     const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
     const detailRegion = within(view.getByRole("complementary", { name: /selected bucket detail/i }));
