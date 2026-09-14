@@ -1,6 +1,6 @@
 # Functional Status
 
-_Last updated: 2026-09-14 (loop continuing; remaining host-blocked items in [docs/evidence/m21-m22-remaining.md](docs/evidence/m21-m22-remaining.md))_
+_Last updated: 2026-09-14 (UI gate green after App/AnalyzerRail test fixes; M21 command-layer Terra Approved; native launch still open)_
 
 This document captures where the current alpha build stands versus the roadmap described in `README.md` and `ARCHITECTURE.md`. Use it to see what already works, what is partially there, and which gaps remain before we can call the heap analyzer "functionally complete".
 

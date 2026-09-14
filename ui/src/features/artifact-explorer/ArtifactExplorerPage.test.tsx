@@ -254,7 +254,9 @@ describe("ArtifactExplorerPage", () => {
 
     expect(analyzerRail.getByText(/artifact recommendations/i)).toBeInTheDocument();
     expect(analyzerRail.getByText(/string deduplication/i)).toBeInTheDocument();
-    expect(analyzerRail.getByText(/section_absent/i)).toBeInTheDocument();
+    // Several optional sections are absent on this seed (top instances cleared above, plus others).
+    expect(analyzerRail.getAllByText(/section_absent/i).length).toBeGreaterThanOrEqual(1);
+    expect(analyzerRail.getByText(/top instances/i)).toBeInTheDocument();
   });
 
   it("updates the selected bucket detail from the chosen histogram row", async () => {

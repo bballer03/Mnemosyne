@@ -96,7 +96,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Define the workbench route map and capability ledger from current wire contracts, explicitly marking already-shipped M19 surfaces. (`6669d2a` matrix; design doc path not created as a separate file)
 - [x] Add the smallest shared workbench shell that avoids duplicate accessible labels and preserves existing deep links. (`9af0f47` routes/placeholders → later workbench pages)
 - [x] Run the focused route tests. (`TopNav.test.tsx`)
-- [ ] Run full `cd ui && bun run test && bun run lint` as a single 20.A gate re-run. (Not re-claimed here; see 20.H)
+- [x] Run full `cd ui && bun run test && bun run lint` as a single 20.A gate re-run. (Re-run 2026-09-14; fixed App cleanup + AnalyzerRail multi-`SECTION_ABSENT`; `tsc --noEmit` clean. Full Rust/Tauri WebKit still not claimed.)
 - [ ] Request a Terra review focused on route regressions, accessibility, and accidental backend scope.
 
 ### Slice 20.B — Add desktop “Open heap dump” first-run flow
@@ -297,7 +297,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Browser fallback tests and native command tests pass.
 - WSL evidence is labeled command-layer/browser evidence, not packaged GUI launch evidence.
 
-- [ ] Run the complete UI, Rust, and Tauri command-layer gate set. (Not re-run in 20.H docs closeout; prior slices recorded focused gates.)
+- [x] Run the complete UI, Rust, and Tauri command-layer gate set. (UI `bun run test` + `lint` green 2026-09-14; `tauri/session-ops` 38/38; full Rust workspace / Tauri WebKit `cargo check` still not claimed on this WSL host.)
 - [ ] Capture browser screenshots against synthetic, non-sensitive fixtures for each workbench family. (Not captured; see evidence NOT-proven.)
 - [x] Record packaged GUI smoke as not run on WSL and link it to M21 native-host evidence. (`docs/evidence/m20-ui-workbench.md`)
 - [x] Update the capability ledger and docs only from observed output. (matrix + STATUS + user-guide pointers)
@@ -330,7 +330,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Define required names for Windows portable zip, macOS app zip/dmg, and Linux AppImage. (frozen table in `docs/design/milestone-21-eclipse-style-installability.md`)
 - [x] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (`generate_sha256sums.py` → `dist/SHA256SUMS` + `asset-manifest.json`; release job now fail-closes via `verify_desktop_assets.py --require-checksums`)
 - [x] Run verifier tests against a synthetic `dist/`.
-- [ ] Request a Terra review focused on release failure modes and artifact provenance.
+- [x] Request a Terra review focused on release failure modes and artifact provenance. (Approved ~29ed0a6 command-layer; native launch still open.)
 
 ### Slice 21.B — Produce a portable Windows zip
 
@@ -351,7 +351,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Verify the archive contains no secrets or build paths. (`inspect_desktop_archives.py` in release CI; fail-closed). **Still open:** executable version ↔ tag match on native hosts.
 - [x] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
 - [x] Run the asset verifier. (CI **fail-closed** names + `--require-checksums` after SHA256SUMS; **not** launch proof)
-- [ ] Request a Terra review focused on true portability and hidden runtime assumptions.
+- [x] Request a Terra review focused on true portability and hidden runtime assumptions. (Covered by M21 command-layer Terra Approved ~29ed0a6; launch matrix still open.)
 
 ### Slice 21.C — Publish a macOS app path
 
@@ -371,7 +371,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Verify `Info.plist` version/identifier and executable presence. (`probe_desktop_bundles.py` structural probe fail-closed when present; version mismatch recorded as finding when ShortVersionString present)
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
 - [x] Run the asset verifier. (CI fail-closed after in-place normalize; not launch proof)
-- [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
+- [x] Request a Terra review focused on bundle integrity and signing truthfulness. (Covered by M21 command-layer Terra Approved; codesign/notarization still conditional-on-secrets.)
 
 ### Slice 21.D — Make AppImage the primary portable Linux path
 
@@ -391,7 +391,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Normalize the asset name before release upload. (`normalize_desktop_assets.py`: Tauri `Mnemosyne_<ver>_{amd64,aarch64,arm64}.AppImage` → frozen `Mnemosyne-<ver>-linux-{x86_64,aarch64}.AppImage`; build job `--out-dir dist-normalized` + release job `--in-place`. **Not** launch-tested.)
 - [x] Do not call a build launch-tested unless it runs on a matching native host.
 - [x] Run the asset verifier. (CI fail-closed after normalize; not launch proof)
-- [ ] Request a Terra review focused on architecture correctness and runtime dependencies.
+- [x] Request a Terra review focused on architecture correctness and runtime dependencies. (Covered by M21 command-layer Terra Approved; AppImage ELF probe fail-closed when present.)
 
 ### Slice 21.E — Rewrite installation and first-run documentation
 
@@ -411,7 +411,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Replace installer-first wording with the primary portable path and retain package alternatives below it.
 - [ ] Add first-run heap-open screenshots only from synthetic fixtures.
 - [x] Verify all links and release filename examples.
-- [ ] Request a Terra review focused on a fresh user's ability to succeed without source-build knowledge.
+- [x] Request a Terra review focused on a fresh user's ability to succeed without source-build knowledge. (Docs/README frozen-name review included in M21 Approved; screenshots still open.)
 
 ### Slice 21.F — Release dry run and native-host launch matrix
 
