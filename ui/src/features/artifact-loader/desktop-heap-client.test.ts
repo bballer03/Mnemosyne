@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   loadHeapFromSource,
   pickHeapFile,
+  runDesktopAnalysis,
   type PickHeapFileResult,
 } from "./desktop-heap-client";
 
@@ -29,12 +30,18 @@ describe("desktop-heap-client", () => {
       loadHeapFromSource: async () => {
         throw new Error("unused");
       },
+      runDesktopAnalysis: async () => {
+        throw new Error("unused");
+      },
     };
     await expect(pickHeapFile()).resolves.toEqual(selected);
 
     window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
       pickHeapFile: async () => ({ status: "cancelled" }),
       loadHeapFromSource: async () => {
+        throw new Error("unused");
+      },
+      runDesktopAnalysis: async () => {
         throw new Error("unused");
       },
     };
@@ -51,12 +58,32 @@ describe("desktop-heap-client", () => {
         classCount: 2,
         gcRootCount: 1,
       }),
+      runDesktopAnalysis: async () => {
+        throw new Error("unused");
+      },
     };
 
     const summary = await loadHeapFromSource("src-opaque");
     expect(summary.displayName).toBe("fixture.hprof");
     expect(summary.sourceId).toBe("src-opaque");
     expect(JSON.stringify(summary)).not.toContain("/");
+  });
+
+  it("runs desktop analysis by opaque source id and returns sanitized payload", async () => {
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      pickHeapFile: async () => ({ status: "cancelled" }),
+      loadHeapFromSource: async () => {
+        throw new Error("unused");
+      },
+      runDesktopAnalysis: async (input) => ({
+        summary: { heap_path: "fixture.hprof", total_objects: 3 },
+        sourceId: input.sourceId,
+      }),
+    };
+
+    const artifact = await runDesktopAnalysis({ sourceId: "src-opaque", mode: "incident" });
+    expect(JSON.stringify(artifact)).toContain("fixture.hprof");
+    expect(JSON.stringify(artifact)).not.toMatch(/[/\\]tmp[/\\]/i);
   });
 
   it("rejects load when the bridge is unavailable", async () => {

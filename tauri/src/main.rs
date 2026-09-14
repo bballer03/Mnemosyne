@@ -12,6 +12,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::pick_heap_file,
             commands::load_heap_from_source,
+            commands::run_desktop_analysis,
             commands::load_heap,
             commands::unload_heap,
             commands::get_references,

@@ -4,7 +4,9 @@ use std::{
 };
 
 use mnemosyne_core::{
-    analysis::{analyze_heap, validate_leak_id, ObjectInspection},
+    analysis::{
+        analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest, ObjectInspection,
+    },
     diff::ObjectDiffReport,
     focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
     propose_fix_with_config,
@@ -72,6 +74,129 @@ fn display_name_for_path(path: &str) -> String {
 fn is_supported_heap_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".hprof") || lower.ends_with(".bin")
+}
+
+fn sanitize_analyze_response_value(mut value: Value, display_name: &str) -> Value {
+    if let Some(summary) = value.get_mut("summary").and_then(|summary| summary.as_object_mut()) {
+        summary.insert("heap_path".to_string(), Value::String(display_name.to_string()));
+    }
+    value
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopAnalysisInput {
+    source_id: String,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    enable_classloaders: Option<bool>,
+    #[serde(default)]
+    enable_threads: Option<bool>,
+    #[serde(default)]
+    enable_strings: Option<bool>,
+    #[serde(default)]
+    enable_collections: Option<bool>,
+    #[serde(default)]
+    enable_top_instances: Option<bool>,
+    #[serde(default)]
+    enable_by_referrer: Option<bool>,
+    #[serde(default)]
+    enable_duplicate_arrays: Option<bool>,
+    #[serde(default)]
+    top_n: Option<usize>,
+    #[serde(default)]
+    min_collection_capacity: Option<usize>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn run_desktop_analysis(
+    input: DesktopAnalysisInput,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+
+    let display_name = display_name_for_path(&path);
+    let mode = input.mode.as_deref().unwrap_or("incident");
+    if mode.eq_ignore_ascii_case("overview") {
+        return Err(
+            "Overview-only desktop analysis is not wired yet; use incident or custom deep analysis."
+                .to_string(),
+        );
+    }
+
+    // Incident-response defaults: useful bounded set without AI.
+    let enable_classloaders = input.enable_classloaders.unwrap_or(true);
+    let enable_threads = input.enable_threads.unwrap_or(true);
+    let enable_strings = input.enable_strings.unwrap_or(true);
+    let enable_collections = input.enable_collections.unwrap_or(true);
+    let enable_top_instances = input.enable_top_instances.unwrap_or(true);
+    let enable_by_referrer = input.enable_by_referrer.unwrap_or(true);
+    let enable_duplicate_arrays = input.enable_duplicate_arrays.unwrap_or(true);
+    let top_n = input.top_n.unwrap_or(25);
+    let min_collection_capacity = input.min_collection_capacity.unwrap_or(16);
+
+    let config = state
+        .config
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone();
+
+    // Clear any previously loaded graph before analysis so we never retain two
+    // object graphs for the same desktop session (Terra 20.C lifecycle gate).
+    {
+        let _session = state
+            .session_mutation
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        state.bump_session_epoch();
+        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+    }
+
+    let request = AnalyzeRequest {
+        heap_path: path.clone(),
+        config,
+        leak_options: LeakDetectionOptions::default(),
+        enable_ai: false,
+        histogram_group_by: HistogramGroupBy::Class,
+        enable_classloaders,
+        enable_threads,
+        enable_strings,
+        enable_collections,
+        enable_top_instances,
+        enable_by_referrer,
+        enable_duplicate_arrays,
+        top_n,
+        min_collection_capacity,
+        min_duplicate_count: 2,
+    };
+
+    let (response, object_graph, _dominator) = analyze_heap_capturing_graph(request)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    state.bump_session_epoch();
+    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = object_graph;
+    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+
+    let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
+    Ok(sanitize_analyze_response_value(raw, &display_name))
 }
 
 #[derive(Debug, Deserialize)]

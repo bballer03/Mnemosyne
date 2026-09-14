@@ -8,6 +8,7 @@ if (isTauri) {
   hostWindow.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
     pickHeapFile: () => invoke("pick_heap_file"),
     loadHeapFromSource: (sourceId) => invoke("load_heap_from_source", { sourceId }),
+    runDesktopAnalysis: (input) => invoke("run_desktop_analysis", { input }),
   };
 
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {

@@ -3,7 +3,8 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
-import { loadHeapFromSource, pickHeapFile } from "./desktop-heap-client";
+import { pickHeapFile, runDesktopAnalysis } from "./desktop-heap-client";
+import { parseAnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "./use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { GuidedLanding } from "../workflow-landing/GuidedLanding";
@@ -194,13 +195,32 @@ export function ArtifactLoaderPage() {
         return;
       }
 
-      const summary = await loadHeapFromSource(picked.sourceId);
+      setStatusLines((current) => [
+        `[${formatTimestamp(new Date())}] heap selected: ${picked.displayName}`,
+        `[${formatTimestamp(new Date())}] running incident-response analysis`,
+        ...current,
+      ]);
+
+      const raw = await runDesktopAnalysis({
+        sourceId: picked.sourceId,
+        mode: "incident",
+      });
+      const artifact = parseAnalysisArtifact(raw);
+      const loadedAt = new Date();
+      setArtifact(picked.displayName, artifact);
+      resetDashboardState();
+      setShouldNavigateToDashboard(true);
+      addRecentLoad({
+        fileName: picked.displayName,
+        sizeLabel: `${artifact.summary.totalObjects.toLocaleString()} objects`,
+        loadedAtLabel: formatTimestamp(loadedAt),
+        heapPath: artifact.summary.heapPath,
+      });
       setDesktopHeapMessage(
-        `Loaded ${summary.displayName}: ${summary.objectCount.toLocaleString()} objects, ${summary.classCount.toLocaleString()} classes. Run analysis from desktop controls next (M20.C).`,
+        `Analyzed ${picked.displayName}: ${artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
       );
       setStatusLines((current) => [
-        `[${formatTimestamp(new Date())}] heap loaded: ${summary.displayName}`,
-        `[${formatTimestamp(new Date())}] objects=${summary.objectCount} classes=${summary.classCount}`,
+        `[${formatTimestamp(loadedAt)}] desktop analysis ready: ${picked.displayName}`,
         ...current,
       ]);
     } catch (error) {

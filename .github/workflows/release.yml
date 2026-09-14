@@ -347,6 +347,36 @@ jobs:
             ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '\n') }}
           if-no-files-found: error
 
+      - name: Package Windows portable zip
+        if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${{ needs.validate-version.outputs.tag_version }}"
+          # Prefer the release output tree; the packaging script searches recursively for Mnemosyne.exe.
+          $candidates = @(
+            "tauri/target/release",
+            "tauri/target/x86_64-pc-windows-msvc/release"
+          )
+          $source = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $source) {
+            Write-Error "No Tauri release output directory found for portable packaging"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path dist-portable | Out-Null
+          & .\scripts\release\package_windows_portable.ps1 `
+            -Version $version `
+            -SourceDir $source `
+            -OutDir dist-portable
+
+      - name: Upload Windows portable zip
+        if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-windows-portable
+          path: dist-portable/Mnemosyne-*-windows-x64-portable.zip
+          if-no-files-found: error
+
   docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest

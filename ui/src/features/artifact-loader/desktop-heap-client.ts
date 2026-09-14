@@ -11,9 +11,24 @@ export type HeapLoadSummary = {
   gcRootCount: number;
 };
 
+export type DesktopAnalysisInput = {
+  sourceId: string;
+  mode?: "incident" | "custom" | "overview";
+  enableClassloaders?: boolean;
+  enableThreads?: boolean;
+  enableStrings?: boolean;
+  enableCollections?: boolean;
+  enableTopInstances?: boolean;
+  enableByReferrer?: boolean;
+  enableDuplicateArrays?: boolean;
+  topN?: number;
+  minCollectionCapacity?: number;
+};
+
 type DesktopHeapBridge = {
   pickHeapFile: () => Promise<PickHeapFileResult>;
   loadHeapFromSource: (sourceId: string) => Promise<HeapLoadSummary>;
+  runDesktopAnalysis: (input: DesktopAnalysisInput) => Promise<unknown>;
 };
 
 declare global {
@@ -46,4 +61,13 @@ export async function loadHeapFromSource(sourceId: string): Promise<HeapLoadSumm
   }
 
   return bridge.loadHeapFromSource(sourceId);
+}
+
+export async function runDesktopAnalysis(input: DesktopAnalysisInput): Promise<unknown> {
+  const bridge = getDesktopHeapBridge();
+  if (!bridge) {
+    throw new Error("Desktop analysis is unavailable in this environment.");
+  }
+
+  return bridge.runDesktopAnalysis(input);
 }
