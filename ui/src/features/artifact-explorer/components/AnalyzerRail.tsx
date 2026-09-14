@@ -74,6 +74,11 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
       ? "present"
       : "empty"
     : "absent";
+  const pluginState = artifact.pluginResults
+    ? artifact.pluginResults.some((plugin) => plugin.findings.length > 0)
+      ? "present"
+      : "empty"
+    : "absent";
 
   return (
     <div style={{ display: "grid", gap: "0.85rem" }}>
@@ -136,6 +141,14 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
           : unreachableState === "empty"
             ? "Unreachable-object analysis is present but reports zero unreachable objects."
             : "Unreachable-object analysis is not available in this artifact."}
+      </AnalyzerCard>
+
+      <AnalyzerCard title="Static Plugins" state={pluginState}>
+        {pluginState === "present"
+          ? `${artifact.pluginResults?.length ?? 0} plugin result${(artifact.pluginResults?.length ?? 0) === 1 ? "" : "s"} with findings.`
+          : pluginState === "empty"
+            ? "Plugin results are present but contain no findings."
+            : "Static plugin findings were not serialized into this artifact."}
       </AnalyzerCard>
     </div>
   );

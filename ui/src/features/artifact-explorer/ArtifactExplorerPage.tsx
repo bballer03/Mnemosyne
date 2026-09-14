@@ -8,6 +8,7 @@ import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
 import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
 import { HistogramExplorerPanel } from "./components/HistogramExplorerPanel";
+import { PluginFindingsPanel } from "./components/PluginFindingsPanel";
 import { ReferrerPanel } from "./components/ReferrerPanel";
 import { SelectedBucketDetail } from "./components/SelectedBucketDetail";
 
@@ -124,6 +125,10 @@ export function ArtifactExplorerPage() {
 
       <section aria-label="Duplicate array panel" style={panelStyle}>
         <DuplicateArrayPanel artifact={artifact} />
+      </section>
+
+      <section aria-label="Static plugin findings panel" style={panelStyle}>
+        <PluginFindingsPanel artifact={artifact} />
       </section>
     </main>
   );

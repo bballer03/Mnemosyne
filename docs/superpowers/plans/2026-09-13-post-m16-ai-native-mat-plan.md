@@ -320,9 +320,9 @@ These camelCase signatures are the host interface consumed by `ui/src`; each mus
 
 ### Slice 19.C — Static plugin findings panel
 
-- [ ] Type and render existing `plugin_results` as provenance-bearing findings.
-- [ ] Treat plugin name/formatter data as untrusted display text.
-- [ ] Preserve a clean absence state for standard builds with no registered plugins.
+- [x] Type and render existing `plugin_results` as provenance-bearing findings.
+- [x] Treat plugin name/formatter data as untrusted display text.
+- [x] Preserve a clean absence state for standard builds with no registered plugins.
 
 ### Slice 19.D — Classloader workflow core
 

@@ -786,4 +786,40 @@ describe("parseAnalysisArtifact", () => {
     const parsed = parseAnalysisArtifact(buildArtifactWithOptionalAnalyzers());
     expect(parsed.arrayReport).toBeUndefined();
   });
+
+  it("parses plugin_results findings and sanitizes display text (M19.C)", () => {
+    const parsed = parseAnalysisArtifact({
+      ...buildArtifactWithOptionalAnalyzers(),
+      plugin_results: [
+        {
+          name: "demo\u0000-plugin",
+          findings: [
+            {
+              summary: "leak\u0007 hint",
+              severity: "warning",
+              detail: "see Holder.CACHE",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.pluginResults).toEqual([
+      {
+        name: "demo-plugin",
+        findings: [
+          {
+            summary: "leak hint",
+            severity: "warning",
+            detail: "see Holder.CACHE",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves pluginResults undefined when plugin_results is omitted", () => {
+    const parsed = parseAnalysisArtifact(buildArtifactWithOptionalAnalyzers());
+    expect(parsed.pluginResults).toBeUndefined();
+  });
 });

@@ -200,6 +200,19 @@ export type AnalysisArtifact = {
   };
   referrerReport?: ReferrerReport;
   threadReport?: ThreadReport;
+  /**
+   * M15/M19: static analyzer plugin findings (`plugin_results` in JSON).
+   * Absent on standard builds with an empty registry (field omitted when empty).
+   * Plugin name and finding text are untrusted display strings.
+   */
+  pluginResults?: Array<{
+    name: string;
+    findings: Array<{
+      summary: string;
+      severity: string;
+      detail?: string;
+    }>;
+  }>;
   provenance: ArtifactProvenanceMarker[];
 };
 
@@ -424,6 +437,62 @@ function parseArrayReportSection(
       "array_report.total_duplicate_waste",
     ),
   };
+}
+
+/** Treat plugin-authored strings as untrusted display text (strip controls). */
+export function sanitizePluginDisplayText(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").slice(0, 4000);
+}
+
+function parsePluginResultsSection(
+  value: unknown,
+): NonNullable<AnalysisArtifact["pluginResults"]> {
+  const entries = readArray(value, "plugin_results");
+
+  return entries.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(
+        `Invalid Mnemosyne analysis artifact: expected plugin_results[${index}] to be an object`,
+      );
+    }
+
+    const findings = readArray(entry.findings, `plugin_results[${index}].findings`);
+
+    return {
+      name: sanitizePluginDisplayText(
+        readString(entry.name, `plugin_results[${index}].name`),
+      ),
+      findings: findings.map((finding, findingIndex) => {
+        if (!isRecord(finding)) {
+          throw new Error(
+            `Invalid Mnemosyne analysis artifact: expected plugin_results[${index}].findings[${findingIndex}] to be an object`,
+          );
+        }
+
+        return {
+          summary: sanitizePluginDisplayText(
+            readString(
+              finding.summary,
+              `plugin_results[${index}].findings[${findingIndex}].summary`,
+            ),
+          ),
+          severity: sanitizePluginDisplayText(
+            readString(
+              finding.severity,
+              `plugin_results[${index}].findings[${findingIndex}].severity`,
+            ),
+          ),
+          detail: (() => {
+            const detail = readOptionalString(
+              finding.detail,
+              `plugin_results[${index}].findings[${findingIndex}].detail`,
+            );
+            return detail === undefined ? undefined : sanitizePluginDisplayText(detail);
+          })(),
+        };
+      }),
+    };
+  });
 }
 
 function parseStringReportSection(
@@ -987,6 +1056,10 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     "thread_report",
     parseThreadReportSection,
   );
+  const pluginResults =
+    input.plugin_results === undefined
+      ? undefined
+      : parsePluginResultsSection(input.plugin_results);
 
   return {
     summary: {
@@ -1037,6 +1110,7 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     classloaderReport,
     referrerReport,
     threadReport,
+    pluginResults,
     provenance: readProvenanceMarkers(input.provenance, "provenance"),
   };
 }
