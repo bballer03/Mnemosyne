@@ -293,8 +293,14 @@ fn finalize_query_result(
     mut matched_ids: Vec<ObjectId>,
     columns: Vec<String>,
 ) -> Result<QueryResult, QueryError> {
-    if let SelectClause::Objects(field) = select {
-        return execute_objects_projection(limit, graph, field, matched_ids, columns);
+    match select {
+        SelectClause::Objects(field) => {
+            return execute_objects_projection(limit, graph, field, matched_ids, columns, false);
+        }
+        SelectClause::DistinctObjects(field) => {
+            return execute_objects_projection(limit, graph, field, matched_ids, columns, true);
+        }
+        SelectClause::All | SelectClause::Fields(_) => {}
     }
 
     let total_before_limit = matched_ids.len();
@@ -319,7 +325,9 @@ fn projected_columns(select: &SelectClause) -> Vec<String> {
     match select {
         SelectClause::All => vec!["@objectId".into(), "@className".into()],
         SelectClause::Fields(fields) => fields.iter().map(field_label).collect(),
-        SelectClause::Objects(_) => vec!["@objectId".into(), "@className".into()],
+        SelectClause::Objects(_) | SelectClause::DistinctObjects(_) => {
+            vec!["@objectId".into(), "@className".into()]
+        }
     }
 }
 
@@ -348,7 +356,10 @@ fn validate_supported_query(
             ));
         }
 
-        if matches!(query.select, SelectClause::Objects(_)) {
+        if matches!(
+            query.select,
+            SelectClause::Objects(_) | SelectClause::DistinctObjects(_)
+        ) {
             return Err(QueryError::feature_unavailable_in_overview_mode(
                 "OBJECTS",
                 OBJECTS_OVERVIEW_HINT,
@@ -458,7 +469,9 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
     match select {
         SelectClause::All => false,
         SelectClause::Fields(fields) => fields.contains(&FieldRef::BuiltIn(built_in)),
-        SelectClause::Objects(field) => *field == FieldRef::BuiltIn(built_in),
+        SelectClause::Objects(field) | SelectClause::DistinctObjects(field) => {
+            *field == FieldRef::BuiltIn(built_in)
+        }
     }
 }
 
@@ -468,14 +481,22 @@ fn execute_objects_projection(
     field: &FieldRef,
     matched_ids: Vec<ObjectId>,
     columns: Vec<String>,
+    distinct: bool,
 ) -> Result<QueryResult, QueryError> {
     let mut rows = Vec::with_capacity(matched_ids.len());
+    let mut seen_targets: HashSet<ObjectId> = HashSet::new();
 
     for object_id in matched_ids {
         // Match MAT-style OBJECTS behavior: null and dangling refs do not emit a row.
         let Some(target_id) = resolve_objects_projection_target(field, graph, object_id)? else {
             continue;
         };
+
+        // DISTINCT OBJECTS: collapse duplicate projected targets by object id
+        // (MAT "Select unique objects"), preserving first-seen order.
+        if distinct && !seen_targets.insert(target_id) {
+            continue;
+        }
 
         rows.push(project_row(&SelectClause::All, graph, None, target_id));
     }
@@ -1143,7 +1164,7 @@ fn project_row(
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],
         SelectClause::Fields(fields) => fields.clone(),
-        SelectClause::Objects(_) => vec![
+        SelectClause::Objects(_) | SelectClause::DistinctObjects(_) => vec![
             FieldRef::BuiltIn(BuiltInField::ObjectId),
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],

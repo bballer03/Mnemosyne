@@ -93,6 +93,18 @@ impl<'a> Parser<'a> {
 
     fn parse_select_clause(&mut self) -> Result<SelectClause, QueryParseError> {
         self.skip_ws();
+        if self.consume_keyword("DISTINCT") {
+            if !self.consume_keyword("OBJECTS") {
+                return Err(self.error(
+                    "DISTINCT is only supported with OBJECTS projection \
+                     (SELECT DISTINCT OBJECTS ...); \
+                     SELECT DISTINCT * / field lists are unsupported",
+                ));
+            }
+            let field = self.parse_field_ref()?;
+            validate_objects_field_hops(&field)?;
+            return Ok(SelectClause::DistinctObjects(field));
+        }
         if self.consume_char('*') {
             return Ok(SelectClause::All);
         }

@@ -13,7 +13,15 @@ pub struct Query {
 pub enum SelectClause {
     All,
     Fields(Vec<FieldRef>),
+    /// `SELECT OBJECTS <field>` — project referenced objects; duplicate
+    /// targets are retained (MAT SELECT Clause without DISTINCT).
     Objects(FieldRef),
+    /// `SELECT DISTINCT OBJECTS <field>` — same projection as [`Objects`],
+    /// but collapse duplicate target object ids while preserving first-seen
+    /// order (MAT SELECT Clause "Select unique objects" / DISTINCT OBJECTS).
+    /// Bounded: DISTINCT is only accepted with OBJECTS, not `SELECT DISTINCT *`
+    /// or field lists — matching the hop/multi-class style of explicit bounds.
+    DistinctObjects(FieldRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1108,6 +1108,57 @@ fn objects_projection_keeps_duplicates_when_multiple_sources_share_target() {
     );
 }
 
+// MAT SELECT Clause DISTINCT OBJECTS collapses duplicate projected targets
+// (corpus `objects-distinct-duplicate-collapse`).
+#[test]
+fn distinct_objects_projection_collapses_duplicate_targets() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE count >= 3 AND count < 5"#,
+    )
+    .expect("DISTINCT OBJECTS should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x2300),
+            CellValue::Str("com.example.ParentNode".into()),
+        ]]
+    );
+}
+
+#[test]
+fn distinct_objects_projection_preserves_first_seen_unique_order() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    // depth > 5 matches nodes with parents 0x2300 (twice) then 0x2400.
+    let query = parse_query(
+        r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE depth > 5"#,
+    )
+    .expect("DISTINCT OBJECTS should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2400),
+                CellValue::Str("com.example.OtherParent".into()),
+            ],
+        ]
+    );
+}
+
 #[test]
 fn objects_projection_combined_with_where_filter() {
     let graph = build_objects_projection_graph();

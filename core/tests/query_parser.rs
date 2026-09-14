@@ -377,6 +377,62 @@ fn parse_query_rejects_four_hop_objects_field_path() {
     );
 }
 
+// M22: bounded `SELECT DISTINCT OBJECTS` (OBJECTS-only; not DISTINCT * / fields).
+// MAT SELECT Clause — "Select unique objects" / DISTINCT OBJECTS:
+// https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
+
+#[test]
+fn parse_query_supports_distinct_objects() {
+    let query = parse_query(r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node""#)
+        .expect("DISTINCT OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::DistinctObjects(FieldRef::InstanceField("n.parent".into()))
+    );
+}
+
+#[test]
+fn parse_query_supports_distinct_objects_multi_hop_within_cap() {
+    let query =
+        parse_query(r#"SELECT DISTINCT OBJECTS n.parent.link FROM "com.example.Node""#)
+            .expect("DISTINCT OBJECTS multi-hop within cap should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::DistinctObjects(FieldRef::InstanceField("n.parent.link".into()))
+    );
+}
+
+#[test]
+fn parse_query_rejects_distinct_without_objects() {
+    let error = parse_query(r#"SELECT DISTINCT * FROM "com.example.Node""#)
+        .expect_err("DISTINCT * should be rejected as out of bound");
+
+    assert!(
+        error.to_string().contains("DISTINCT is only supported with OBJECTS"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_rejects_four_hop_distinct_objects_field_path() {
+    let hop_chain = (1..=MAX_OBJECTS_FIELD_HOPS + 1)
+        .map(|idx| format!("hop{idx}"))
+        .collect::<Vec<_>>()
+        .join(".");
+    let query_text = format!(r#"SELECT DISTINCT OBJECTS n.{hop_chain} FROM "com.example.Node""#);
+    let error =
+        parse_query(&query_text).expect_err("four-hop DISTINCT OBJECTS should fail at parse time");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
+        "unexpected parse error: {error}"
+    );
+}
+
 #[test]
 fn parse_query_rejects_multi_class_from_list_over_limit() {
     let patterns = (0..=MAX_MULTI_CLASS_FROM_LIST_SIZE)

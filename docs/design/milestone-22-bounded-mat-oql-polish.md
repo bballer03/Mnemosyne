@@ -41,5 +41,5 @@ Only **MAT-referenced** corpus cases may close a compatibility-matrix row or sup
 
 ## Shipped vs open
 
-- **Shipped:** 22.B multi-class `FROM`, 22.C 1–3 hop `OBJECTS` (+ 4-hop reject).
-- **Open / unsupported (named gaps):** `eval(...)`, arbitrary-depth recursion, Java/JS execution, live attach, unbounded hop chains.
+- **Shipped:** 22.B multi-class `FROM`, 22.C 1–3 hop `OBJECTS` (+ 4-hop reject), bounded `SELECT DISTINCT OBJECTS` (OBJECTS-only; `SELECT DISTINCT *` rejected).
+- **Open / unsupported (named gaps):** `eval(...)`, arbitrary-depth recursion, Java/JS execution, live attach, unbounded hop chains, general `SELECT DISTINCT *` / field-list DISTINCT.

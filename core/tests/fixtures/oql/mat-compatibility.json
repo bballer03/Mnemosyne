@@ -129,6 +129,41 @@
       }
     },
     {
+      "id": "objects-distinct-duplicate-collapse",
+      "category": "distinct-objects",
+      "status": "shipped",
+      "equivalency": "mat-referenced",
+      "mat_refs": [
+        {
+          "section": "SELECT Clause — Select unique objects (DISTINCT OBJECTS)",
+          "url": "https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html"
+        }
+      ],
+      "syntax_note": "MAT DISTINCT OBJECTS collapses duplicate projected targets by object identity. Mnemosyne ships the same collapse for SELECT DISTINCT OBJECTS only; SELECT DISTINCT * / field lists remain unsupported (named bound).",
+      "query": "SELECT DISTINCT OBJECTS n.parent FROM \"com.example.Node\" WHERE count >= 3 AND count < 5",
+      "expect": {
+        "parse": "ok",
+        "execute": "ok",
+        "fixture": "objects_projection",
+        "exact_matched": 1,
+        "result_budget": "unbounded unless LIMIT present"
+      }
+    },
+    {
+      "id": "distinct-without-objects-reject",
+      "category": "distinct-objects",
+      "status": "shipped",
+      "equivalency": "non-equivalency",
+      "non_equivalency_reason": "Mnemosyne bounds DISTINCT to OBJECTS projection only (SELECT DISTINCT * / field lists rejected). MAT supports broader DISTINCT; this case freezes the Mnemosyne grammar boundary and must not support equivalency claims.",
+      "mat_refs": [],
+      "query": "SELECT DISTINCT * FROM \"com.example.Node\"",
+      "expect": {
+        "parse": "error",
+        "error_contains": "DISTINCT is only supported with OBJECTS",
+        "result_budget": "n/a"
+      }
+    },
+    {
       "id": "objects-null-field-omitted",
       "category": "null-missing",
       "status": "shipped",
