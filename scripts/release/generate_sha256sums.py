@@ -107,10 +107,19 @@ def generate_sha256sums(
 
     dupes = {name: paths for name, paths in by_basename.items() if len(paths) > 1}
     if dupes:
-        detail = "; ".join(
-            f"{name} ({len(paths)} copies)" for name, paths in sorted(dupes.items())
-        )
-        raise ValueError(f"duplicate basenames under dist/; refuse ambiguous SHA256SUMS: {detail}")
+        ambiguous: list[str] = []
+        for name, paths in sorted(dupes.items()):
+            digests = {sha256_file(path) for path in paths}
+            if len(digests) == 1:
+                # Identical content from overlapping upload/normalize paths — keep one.
+                by_basename[name] = [paths[0]]
+                continue
+            ambiguous.append(f"{name} ({len(paths)} copies, diverging digests)")
+        if ambiguous:
+            detail = "; ".join(ambiguous)
+            raise ValueError(
+                f"duplicate basenames under dist/; refuse ambiguous SHA256SUMS: {detail}"
+            )
 
     mapping: dict[str, str] = {}
     lines: list[str] = []
