@@ -1,10 +1,12 @@
 # Milestone 23 — AI-First Guided Investigation Polish
 
-**Status:** in progress — Slice **23.B** desktop workflow get/close/resume  
+**Status:** in progress — Slice **23.D** evidence/docs closeout (final Terra/Sol verdict pending)  
 **Plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) § M23  
 **Branch:** `sync/m15g-m16bcd`  
 **Design gate (23.A):** READY — React-only composition over shipped artifact / workflow / AI-session contracts; no new analyzer or AI provider.  
-**Design gate (23.B):** READY — thin desktop adapters over shipped `WorkflowStore::load`/`remove` (MCP `get_workflow`/`close_workflow` semantics); resume UI on `WorkflowCard`; no new workflow kinds.
+**Design gate (23.B):** READY — thin desktop adapters over shipped `WorkflowStore::load`/`remove` (MCP `get_workflow`/`close_workflow` semantics); resume UI on `WorkflowCard`; no new workflow kinds.  
+**Design gate (23.C):** READY — thin Tauri create/resume/get/close/`chatSession` over shipped MCP AI-session behavior; rules fallback; no streaming.  
+**Evidence (23.D):** [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md) — synthetic scenario + NOT-proven WSL GUI / live provider.
 
 ## Objective
 

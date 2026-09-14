@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-14 (M17 shipped with caveats — 17.D GUI smoke → M21)
+> **Last updated:** 2026-09-14 (UI-first M23 guided-investigation evidence closeout pending Terra/Sol; M17 17.D GUI smoke → M21)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
@@ -350,7 +350,7 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ## 6. Recommended Post-M16 Sequence — **M17 Desktop Guided UX Bridge Completion**
 
-**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16 shipped; **M17 shipped with caveats** (17.A–17.C command/bridge wiring ✅; 17.D packaged GUI smoke → M21). M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. M18+ items below are 🔲 candidates, not shipped.
+**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16 shipped; **M17 shipped with caveats** (17.A–17.C command/bridge wiring ✅; 17.D packaged GUI smoke → M21). M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. Parallel **UI-first plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) renumbers post-M19 product work as M20 workbench / M21 portable install / M22 bounded OQL / **M23 AI-first guided investigation** (slices 23.A–C shipped; 23.D evidence note recorded; final Terra/Sol verdict pending — see [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md)). Do not confuse that M23 with the older conditional “Extension Runtime” M23 row below. Legacy M18+ candidate rows remain in this document for history; treat STATUS + the UI-first plan as runtime truth for the active worktree.
 
 **Recommendation:** Schedule **M18** next, then M19–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
 
@@ -472,6 +472,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M14 UI Backend-Parity & AI-Native Redesign** | [design/milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md) | ✅ Shipped (slices 14.A–14.D implementation, 14.E visual-consistency + doc-sync) |
 | **M15 MAT Backend Parity Completion** | [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) | ✅ Shipped (slices 15.A–15.F implementation, 15.G doc-sync) |
 | **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
+| **M23 AI-First Guided Investigation (UI-first plan)** | [design/milestone-23-ai-first-guided-investigation.md](design/milestone-23-ai-first-guided-investigation.md), [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md) | 🟡 Slices 23.A–C shipped; 23.D evidence recorded; Terra/Sol final verdict pending |
 
 ---
 

@@ -567,9 +567,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Observe failures before assistant workspace implementation.
 - [x] Compose existing workflow and AI-session contracts; add no analyzer.
 - [x] Run focused UI gates (`bun test` on assistant + TopNav); full `bun run test` still hits a **pre-existing** ArtifactExplorer `section_absent` multi-match failure unrelated to 23.A. `bun run lint` (`tsc --noEmit`) clean.
-- [ ] Request a Terra review focused on fact/AI separation and context bounds.
+- [x] Request a Terra review focused on fact/AI separation and context bounds. (Important findings closed in `22ff57b`; milestone-final Terra still open under 23.D.)
 
-**23.A shipped (partial vertical slice):** design doc READY; `/assistant` Investigation session workspace with rules-mode default, fact/AI visual separation + provenance, basename/`sourceId` opacity, 12/32 history helpers, provider-unavailable probe, TopNav link. **Still open inside 23.A:** live workflow id/step binding into the session panel; Terra review.
+**23.A shipped (partial vertical slice):** design doc READY; `/assistant` Investigation session workspace with rules-mode default, fact/AI visual separation + provenance, basename/`sourceId` opacity, 12/32 history helpers, provider-unavailable probe, TopNav link. **Still open inside 23.A:** live workflow id/step binding into the session panel.
 
 ### Slice 23.B — Expose shipped workflow continuity in desktop
 
@@ -607,11 +607,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Provider errors/timeouts render machine-readable recovery guidance; rules mode remains available.
 - The UI shows exactly what summary/focus metadata can be sent and never prints an API key.
 
-- [ ] Add tests for 12/32 boundaries, timeout, provider error, redaction notice, focus switch, and rules fallback.
-- [ ] Observe failures before native session adapters.
-- [ ] Add thin create/resume/get/close/chat adapters over existing AI session behavior.
-- [ ] Keep transport request/response; do not add streaming absent measured abandonment/timeout evidence.
-- [ ] Run focused and full Rust/UI/Tauri gates.
+- [x] Add tests for 12/32 boundaries, timeout, provider error, redaction notice, focus switch, and rules fallback.
+- [x] Observe failures before native session adapters.
+- [x] Add thin create/resume/get/close/chat adapters over existing AI session behavior.
+- [x] Keep transport request/response; do not add streaming absent measured abandonment/timeout evidence.
+- [x] Run focused and full Rust/UI/Tauri gates. (session-ops `--features test-fixtures` green incl. AI session bridge; focused assistant UI + TopNav green; full `cargo check --manifest-path tauri/Cargo.toml` blocked on WSL missing WebKitGTK — same host constraint as M20/M21.)
 - [ ] Request a Terra review focused on redaction, secrets, and bounded retention.
 
 ### Slice 23.D — AI-first usability evidence and closeout
@@ -628,10 +628,10 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - AI-off and provider-failure scenarios remain fully useful.
 - No claim implies AI replaces MAT-equivalent analysis.
 
-- [ ] Capture deterministic, rules-mode, and provider-failure transcripts using synthetic data.
-- [ ] Verify every assistant action has a power-view route or an explicit unsupported state.
-- [ ] Run full Rust/UI/Tauri gates.
-- [ ] Run `gitnexus_detect_changes(scope: "all")`.
+- [x] Capture deterministic, rules-mode, and provider-failure transcripts using synthetic data.
+- [x] Verify every assistant action has a power-view route or an explicit unsupported state.
+- [ ] Run full Rust/UI/Tauri gates. (Focused assistant + session-ops gates green this closeout; full workspace / full UI / Tauri `cargo check` **not** claimed — WebKitGTK blocked; pre-existing ArtifactExplorer failure remains.)
+- [x] Run `gitnexus_detect_changes(scope: "all")`. (CLI run on this worktree; docs/evidence closeout — no analyzer symbol overlap claimed.)
 - [ ] Request final Terra milestone review; Sol records the M23 closeout verdict.
 
 ---
