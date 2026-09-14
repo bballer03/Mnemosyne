@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { AnalysisArtifact } from "../../../lib/analysis-types";
 import {
@@ -9,6 +9,11 @@ import {
   type HistogramGroupByMode,
   type HistogramResultView,
 } from "../../heap-explorer/heap-explorer-query-client";
+import {
+  buildHierarchyForest,
+  supportsDeterministicParentRelation,
+  type HierarchyNode,
+} from "./histogram-hierarchy";
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -41,6 +46,8 @@ type HistogramExplorerPanelProps = {
   histogramSource?: "artifact" | "live";
 };
 
+type HistogramEntryView = NonNullable<HistogramResultView["entries"]>[number];
+
 export function HistogramExplorerPanel({
   artifact,
   selectedKey,
@@ -52,6 +59,7 @@ export function HistogramExplorerPanel({
   const [searchText, setSearchText] = useState("");
   const [regroupError, setRegroupError] = useState<string | undefined>();
   const [regroupBusy, setRegroupBusy] = useState(false);
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(() => new Set());
   const regroupAvailable = isRegroupHistogramAvailable();
 
   const activeHistogram = liveHistogram ?? artifact.histogram;
@@ -73,6 +81,19 @@ export function HistogramExplorerPanel({
         return right.retainedSize - left.retainedSize || right.shallowSize - left.shallowSize || left.key.localeCompare(right.key);
       });
   }, [activeHistogram, searchText]);
+
+  const hierarchySupported = supportsDeterministicParentRelation(
+    activeHistogram?.groupBy,
+    filteredEntries,
+  );
+
+  const hierarchyForest = useMemo(() => {
+    if (!hierarchySupported) {
+      return [];
+    }
+
+    return buildHierarchyForest(filteredEntries);
+  }, [filteredEntries, hierarchySupported]);
 
   useEffect(() => {
     if (!activeHistogram) {
@@ -124,6 +145,18 @@ export function HistogramExplorerPanel({
     onLiveHistogramChange?.(result.data, "live");
   }
 
+  function toggleCollapsed(key: string) {
+    setCollapsedKeys((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
   if (!activeHistogram) {
     return (
       <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -151,6 +184,12 @@ export function HistogramExplorerPanel({
     histogramSource === "live"
       ? "Live regroup (session heap)"
       : "Precomputed artifact grouping";
+  const isSuperclass = selectedGroupBy === "superclass";
+  const presentationLabel = hierarchySupported
+    ? "Deterministic parent hierarchy (expand/collapse)"
+    : isSuperclass
+      ? "Flat superclass list — no parent relation in returned data"
+      : `Flat retained and shallow comparison across ${activeHistogram.groupBy} buckets`;
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
@@ -158,8 +197,7 @@ export function HistogramExplorerPanel({
         <div style={{ display: "grid", gap: "0.35rem" }}>
           <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram Explorer</h2>
           <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
-            Flat retained and shallow comparison across {activeHistogram.groupBy} buckets. Live regroup
-            does not imply a superclass tree.
+            {presentationLabel}. Live regroup does not invent superclass ancestry from flat keys.
           </p>
         </div>
         <div style={{ display: "grid", gap: "0.25rem", textAlign: "right" }}>
@@ -191,7 +229,7 @@ export function HistogramExplorerPanel({
           {HISTOGRAM_GROUP_BY_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
-              {option.value === "superclass" ? " (flat list)" : ""}
+              {option.value === "superclass" && !hierarchySupported ? " (flat list)" : ""}
             </option>
           ))}
         </select>
@@ -226,80 +264,203 @@ export function HistogramExplorerPanel({
         <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
           No histogram buckets match the current search.
         </p>
+      ) : hierarchySupported ? (
+        <div style={{ display: "grid", gap: "0.75rem" }} aria-label="Superclass hierarchy">
+          <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
+            Retained vs shallow (parent-linked hierarchy)
+          </div>
+          {hierarchyForest.map((node) => (
+            <HierarchyEntryButton
+              key={node.entry.key}
+              node={node}
+              depth={0}
+              maxRetainedSize={maxRetainedSize}
+              selectedKey={selectedKey}
+              collapsedKeys={collapsedKeys}
+              onToggleCollapsed={toggleCollapsed}
+              onSelectKey={onSelectKey}
+            />
+          ))}
+        </div>
       ) : (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>Retained vs shallow</div>
-          {filteredEntries.map((entry) => {
-            const retainedWidth = maxRetainedSize > 0 ? Math.max((entry.retainedSize / maxRetainedSize) * 100, 8) : 0;
-            const shallowWidth = maxRetainedSize > 0 ? Math.max((entry.shallowSize / maxRetainedSize) * 100, 4) : 0;
-            const isSelected = entry.key === selectedKey;
-
-            return (
-              <button
-                key={entry.key}
-                type="button"
-                aria-pressed={isSelected}
-                aria-label={`Select ${entry.key}`}
-                onClick={() => onSelectKey(entry.key)}
-                style={{
-                  display: "grid",
-                  gap: "0.65rem",
-                  textAlign: "left",
-                  borderRadius: 16,
-                  border: isSelected ? "1px solid #38bdf8" : "1px solid #1e293b",
-                  background: isSelected ? "rgba(14, 116, 144, 0.18)" : "rgba(2, 6, 23, 0.75)",
-                  padding: "0.9rem",
-                  color: "#e2e8f0",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
-                  <strong style={{ overflowWrap: "anywhere" }}>{entry.key}</strong>
-                  <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
-                    {entry.instanceCount.toLocaleString()} instances
-                  </span>
-                </div>
-
-                <div style={{ display: "grid", gap: "0.35rem" }}>
-                  <div style={{ display: "grid", gap: "0.25rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
-                      <span>Retained</span>
-                      <span>{formatBytes(entry.retainedSize)}</span>
-                    </div>
-                    <div style={{ height: 10, borderRadius: 999, background: "rgba(30, 41, 59, 0.9)", overflow: "hidden" }}>
-                      <div
-                        style={{
-                          width: `${retainedWidth}%`,
-                          height: "100%",
-                          borderRadius: 999,
-                          background: "linear-gradient(90deg, #38bdf8, #67e8f9)",
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.25rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
-                      <span>Shallow</span>
-                      <span>{formatBytes(entry.shallowSize)}</span>
-                    </div>
-                    <div style={{ height: 10, borderRadius: 999, background: "rgba(30, 41, 59, 0.9)", overflow: "hidden" }}>
-                      <div
-                        style={{
-                          width: `${shallowWidth}%`,
-                          height: "100%",
-                          borderRadius: 999,
-                          background: "linear-gradient(90deg, #22c55e, #86efac)",
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+          {filteredEntries.map((entry) => (
+            <HistogramEntryButton
+              key={entry.key}
+              entry={entry}
+              maxRetainedSize={maxRetainedSize}
+              isSelected={entry.key === selectedKey}
+              onSelectKey={onSelectKey}
+            />
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+function HistogramEntryButton({
+  entry,
+  maxRetainedSize,
+  isSelected,
+  onSelectKey,
+  depth = 0,
+  expandControl,
+}: {
+  entry: HistogramEntryView;
+  maxRetainedSize: number;
+  isSelected: boolean;
+  onSelectKey: (key: string | undefined) => void;
+  depth?: number;
+  expandControl?: ReactNode;
+}) {
+  const retainedWidth = maxRetainedSize > 0 ? Math.max((entry.retainedSize / maxRetainedSize) * 100, 8) : 0;
+  const shallowWidth = maxRetainedSize > 0 ? Math.max((entry.shallowSize / maxRetainedSize) * 100, 4) : 0;
+
+  return (
+    <button
+      type="button"
+      aria-pressed={isSelected}
+      aria-label={`Select ${entry.key}`}
+      onClick={() => onSelectKey(entry.key)}
+      style={{
+        display: "grid",
+        gap: "0.65rem",
+        textAlign: "left",
+        borderRadius: 16,
+        border: isSelected ? "1px solid #38bdf8" : "1px solid #1e293b",
+        background: isSelected ? "rgba(14, 116, 144, 0.18)" : "rgba(2, 6, 23, 0.75)",
+        padding: "0.9rem",
+        paddingLeft: `${0.9 + depth * 0.85}rem`,
+        color: "#e2e8f0",
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "start", minWidth: 0 }}>
+          {expandControl}
+          <strong style={{ overflowWrap: "anywhere" }}>{entry.key}</strong>
+        </div>
+        <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
+          {entry.instanceCount.toLocaleString()} instances
+        </span>
+      </div>
+
+      <div style={{ display: "grid", gap: "0.35rem" }}>
+        <div style={{ display: "grid", gap: "0.25rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
+            <span>Retained</span>
+            <span>{formatBytes(entry.retainedSize)}</span>
+          </div>
+          <div style={{ height: 10, borderRadius: 999, background: "rgba(30, 41, 59, 0.9)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${retainedWidth}%`,
+                height: "100%",
+                borderRadius: 999,
+                background: "linear-gradient(90deg, #38bdf8, #67e8f9)",
+              }}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: "0.25rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
+            <span>Shallow</span>
+            <span>{formatBytes(entry.shallowSize)}</span>
+          </div>
+          <div style={{ height: 10, borderRadius: 999, background: "rgba(30, 41, 59, 0.9)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${shallowWidth}%`,
+                height: "100%",
+                borderRadius: 999,
+                background: "linear-gradient(90deg, #22c55e, #86efac)",
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function HierarchyEntryButton({
+  node,
+  depth,
+  maxRetainedSize,
+  selectedKey,
+  collapsedKeys,
+  onToggleCollapsed,
+  onSelectKey,
+}: {
+  node: HierarchyNode<HistogramEntryView>;
+  depth: number;
+  maxRetainedSize: number;
+  selectedKey?: string;
+  collapsedKeys: Set<string>;
+  onToggleCollapsed: (key: string) => void;
+  onSelectKey: (key: string | undefined) => void;
+}) {
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsedKeys.has(node.entry.key);
+
+  const expandControl = hasChildren ? (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-expanded={!isCollapsed}
+      aria-label={isCollapsed ? `Expand ${node.entry.key}` : `Collapse ${node.entry.key}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleCollapsed(node.entry.key);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggleCollapsed(node.entry.key);
+        }
+      }}
+      style={{
+        color: "#38bdf8",
+        fontSize: "0.85rem",
+        lineHeight: 1.2,
+        userSelect: "none",
+        flexShrink: 0,
+      }}
+    >
+      {isCollapsed ? "▸" : "▾"}
+    </span>
+  ) : (
+    <span aria-hidden="true" style={{ width: "0.85rem", flexShrink: 0 }} />
+  );
+
+  return (
+    <>
+      <HistogramEntryButton
+        entry={node.entry}
+        maxRetainedSize={maxRetainedSize}
+        isSelected={node.entry.key === selectedKey}
+        onSelectKey={onSelectKey}
+        depth={depth}
+        expandControl={expandControl}
+      />
+      {hasChildren && !isCollapsed
+        ? node.children.map((child) => (
+            <HierarchyEntryButton
+              key={child.entry.key}
+              node={child}
+              depth={depth + 1}
+              maxRetainedSize={maxRetainedSize}
+              selectedKey={selectedKey}
+              collapsedKeys={collapsedKeys}
+              onToggleCollapsed={onToggleCollapsed}
+              onSelectKey={onSelectKey}
+            />
+          ))
+        : null}
+    </>
   );
 }

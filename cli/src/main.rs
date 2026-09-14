@@ -3137,6 +3137,9 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
     table.set_header(vec![
         header_cell("Loader", CellAlignment::Left),
         header_cell("Classes", CellAlignment::Right),
+        // M22.D: render already-computed `unique_class_count` — presentation only,
+        // no new analysis path.
+        header_cell("Unique Classes", CellAlignment::Right),
         header_cell("Ancestors", CellAlignment::Right),
         header_cell("Instances", CellAlignment::Right),
         header_cell("Shallow", CellAlignment::Right),
@@ -3148,6 +3151,7 @@ fn build_classloader_table(report: &mnemosyne_core::analysis::ClassLoaderReport)
         table.add_row(vec![
             Cell::new(class_cell.display).set_alignment(CellAlignment::Left),
             right_cell(loader.loaded_class_count),
+            right_cell(loader.unique_class_count),
             right_cell(loader.ancestor_chain.len()),
             right_cell(loader.instance_count),
             right_cell(format_megabytes(loader.total_shallow_bytes)),

@@ -1,6 +1,6 @@
 # Milestone 22 — Bounded MAT OQL and Operator Polish
 
-**Status:** in progress (Slice 22.A corpus first slice; 22.B/22.C shipped)  
+**Status:** in progress (22.A–22.D shipped; 22.E corpus closeout open)  
 **Plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) § M22  
 **Branch:** `sync/m15g-m16bcd`
 
@@ -41,5 +41,5 @@ Only **MAT-referenced** corpus cases may close a compatibility-matrix row or sup
 
 ## Shipped vs open
 
-- **Shipped:** 22.B multi-class `FROM`, 22.C 1–3 hop `OBJECTS` (+ 4-hop reject), bounded `SELECT DISTINCT OBJECTS` (OBJECTS-only; `SELECT DISTINCT *` rejected).
-- **Open / unsupported (named gaps):** `eval(...)`, arbitrary-depth recursion, Java/JS execution, live attach, unbounded hop chains, general `SELECT DISTINCT *` / field-list DISTINCT.
+- **Shipped:** 22.B multi-class `FROM`, 22.C 1–3 hop `OBJECTS` (+ 4-hop reject), bounded `SELECT DISTINCT OBJECTS` (OBJECTS-only; `SELECT DISTINCT *` rejected), 22.D CLI Unique Classes column + honest superclass hierarchy gate (flat by default).
+- **Open / unsupported (named gaps):** `eval(...)`, arbitrary-depth recursion, Java/JS execution, live attach, unbounded hop chains, general `SELECT DISTINCT *` / field-list DISTINCT, MAT-like collapsible superclass tree without an explicit parent relation in returned histogram data.

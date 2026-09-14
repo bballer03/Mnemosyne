@@ -74,6 +74,11 @@ export type HistogramResultView = {
     instanceCount: number;
     shallowSize: number;
     retainedSize: number;
+    /**
+     * Optional explicit parent bucket key. Present only when a host payload
+     * supplies a deterministic parent relation — never inferred from flat keys.
+     */
+    parentKey?: string;
   }>;
   totalInstances: number;
   totalShallowSize: number;
@@ -363,11 +368,18 @@ export function parseHistogramResult(raw: unknown): HistogramResultView {
         throw new TypeError(`Invalid histogram regroup payload: expected entries[${index}] to be an object.`);
       }
 
+      const parentRaw = entry.parent_key ?? entry.parentKey;
+      const parentKey =
+        typeof parentRaw === "string" && parentRaw.trim().length > 0
+          ? parentRaw.trim()
+          : undefined;
+
       return {
         key: readString(entry.key, `entries[${index}].key`),
         instanceCount: readNumber(entry.instance_count, `entries[${index}].instance_count`),
         shallowSize: readNumber(entry.shallow_size, `entries[${index}].shallow_size`),
         retainedSize: readNumber(entry.retained_size, `entries[${index}].retained_size`),
+        ...(parentKey ? { parentKey } : {}),
       };
     }),
   };

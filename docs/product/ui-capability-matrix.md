@@ -9,10 +9,11 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Open heap dump (`.hprof`/`.bin`) | Tauri dialog + opaque `sourceId` | **shipped** | Absolute path never enters React (`9af0f47`) |
 | Desktop analyze → artifact | `analyze_heap_capturing_graph` | **shipped** | Incident defaults; path redacted in JSON (`f6c627c`) |
 | JSON artifact import | parser | **shipped** | Browser path; remains available beside desktop open |
-| Histogram / regroup | core + session-ops | **shipped** | Live regroup on desktop |
+| Histogram / regroup | core + session-ops | **shipped** | Live flat regroup on desktop; superclass stays flat unless payload carries explicit parent links |
+| Superclass collapsible tree | (no parent contract on regroup) | **open** | M22.D: expand/collapse only when returned entries include resolvable `parentKey`; current regroup/artifact payloads do not — no invented ancestry |
 | Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes |
 | Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
-| Duplicate arrays / plugins / classloaders | artifact sections | **shipped** | Loaded vs unique columns split; breadcrumbs (`5af03f9`) |
+| Duplicate arrays / plugins / classloaders | artifact sections + CLI | **shipped** | UI Loaded vs Unique (`5af03f9`); CLI Unique Classes column from existing `unique_class_count` (M22.D) |
 | Compare / leak workspace | bridges | **shipped** | |
 | Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove; basename in UI; open installs graph + opaque `sourceId` (`2dbe4f8`, `352b3d5`) |
 | Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |

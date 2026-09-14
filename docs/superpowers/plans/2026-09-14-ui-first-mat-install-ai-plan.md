@@ -517,11 +517,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Superclass hierarchy is a UI-only projection over returned grouped data and never claims exact ancestry when only flat keys exist.
 - Flat fallback and provenance remain visible.
 
-- [ ] Add a failing CLI assertion for a Unique Classes column.
-- [ ] Add UI tests for expand/collapse only when the returned data supports a deterministic parent relation.
-- [ ] Render the CLI field without changing analysis.
-- [ ] Ship hierarchy projection only if the design gate proves no new traversal/contract is needed; otherwise retain the existing flat superclass regroup and record the matrix row as open.
-- [ ] Run focused and full applicable gates.
+- [x] Add a failing CLI assertion for a Unique Classes column.
+- [x] Add UI tests for expand/collapse only when the returned data supports a deterministic parent relation.
+- [x] Render the CLI field without changing analysis.
+- [x] Ship hierarchy projection only if the design gate proves no new traversal/contract is needed; otherwise retain the existing flat superclass regroup and record the matrix row as open. (Gate: flat keys only → keep flat; expand/collapse gated on explicit resolvable `parentKey`; matrix row **open** for MAT-like tree.)
+- [x] Run focused and full applicable gates. (`classloader_cli` Unique Classes + histogram hierarchy UI tests green)
 - [ ] Request a Terra review focused on misleading hierarchy claims.
 
 ### Slice 22.E — Publish measured parity movement

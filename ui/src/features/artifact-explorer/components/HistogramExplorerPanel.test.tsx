@@ -98,4 +98,75 @@ describe("HistogramExplorerPanel", () => {
     expect(view.getByRole("alert")).toHaveTextContent(/regroupHistogram/i);
     expect(view.getAllByText(/precomputed artifact grouping/i).length).toBeGreaterThan(0);
   });
+
+  it("keeps flat superclass regroup when returned data has no parent relation", () => {
+    const view = render(
+      <HistogramExplorerPanel
+        artifact={buildArtifact()}
+        selectedKey="java.lang.Object"
+        onSelectKey={() => undefined}
+        histogramSource="live"
+        liveHistogram={{
+          groupBy: "superclass",
+          totalInstances: 2,
+          totalShallowSize: 32,
+          entries: [
+            { key: "java.lang.Object", instanceCount: 1, shallowSize: 16, retainedSize: 48 },
+            { key: "java.util.AbstractList", instanceCount: 1, shallowSize: 16, retainedSize: 32 },
+          ],
+        }}
+      />,
+    );
+
+    expect(view.getByText(/flat superclass list/i)).toBeTruthy();
+    expect(view.queryByLabelText("Superclass hierarchy")).toBeNull();
+    expect(view.queryByLabelText(/Expand /i)).toBeNull();
+    expect(view.queryByLabelText(/Collapse /i)).toBeNull();
+    const select = view.getByLabelText("Histogram group by") as HTMLSelectElement;
+    expect([...select.options].find((option) => option.value === "superclass")?.textContent).toMatch(
+      /flat list/i,
+    );
+  });
+
+  it("offers expand/collapse only when returned data supplies deterministic parentKey links", () => {
+    const view = render(
+      <HistogramExplorerPanel
+        artifact={buildArtifact()}
+        selectedKey="java.lang.Object"
+        onSelectKey={() => undefined}
+        histogramSource="live"
+        liveHistogram={{
+          groupBy: "superclass",
+          totalInstances: 3,
+          totalShallowSize: 48,
+          entries: [
+            { key: "java.lang.Object", instanceCount: 1, shallowSize: 16, retainedSize: 80 },
+            {
+              key: "java.util.AbstractList",
+              parentKey: "java.lang.Object",
+              instanceCount: 1,
+              shallowSize: 16,
+              retainedSize: 48,
+            },
+            {
+              key: "java.util.ArrayList",
+              parentKey: "java.util.AbstractList",
+              instanceCount: 1,
+              shallowSize: 16,
+              retainedSize: 16,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(view.getByLabelText("Superclass hierarchy")).toBeTruthy();
+    expect(view.getByText(/deterministic parent hierarchy/i)).toBeTruthy();
+    const collapse = view.getByLabelText("Collapse java.lang.Object");
+    fireEvent.click(collapse);
+    expect(view.getByLabelText("Expand java.lang.Object")).toBeTruthy();
+    expect(view.queryByLabelText("Select java.util.ArrayList")).toBeNull();
+    fireEvent.click(view.getByLabelText("Expand java.lang.Object"));
+    expect(view.getByLabelText("Select java.util.ArrayList")).toBeTruthy();
+  });
 });
