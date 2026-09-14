@@ -4,7 +4,10 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
 
-import { clearRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
+import {
+  clearRememberedDesktopHeapSource,
+  rememberDesktopHeapSource,
+} from "../artifact-loader/desktop-heap-session";
 import { FlamegraphPage } from "./FlamegraphPage";
 
 describe("FlamegraphPage", () => {
@@ -26,6 +29,31 @@ describe("FlamegraphPage", () => {
     await waitFor(() => {
       expect(view.getByRole("status")).toHaveTextContent(/desktop host bridge/i);
     });
+  });
+
+  it("surfaces overview-mode unavailability from the host without rendering SVG", async () => {
+    rememberDesktopHeapSource("src-1", "fixture.hprof");
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      generateFlamegraph: async () => {
+        throw new Error(
+          "feature_unavailable_in_overview_mode: generate_flamegraph requires deep mode",
+        );
+      },
+    };
+
+    const view = render(
+      <MemoryRouter>
+        <FlamegraphPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(view.getByRole("button", { name: /generate svg/i }));
+
+    await waitFor(() => {
+      expect(view.getByRole("status")).toHaveTextContent(/feature_unavailable_in_overview_mode/i);
+    });
+    expect(view.queryByRole("img", { name: /retained-size flamegraph/i })).toBeNull();
+    expect(view.container.querySelector("svg")).toBeNull();
   });
 
   it("renders SVG via an object URL image, never as injected HTML", async () => {

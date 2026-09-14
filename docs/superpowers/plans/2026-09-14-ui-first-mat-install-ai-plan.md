@@ -246,7 +246,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Run focused UI gates (policy page tests).
 - [x] Request a Terra review focused on policy semantics and false-green states.
 - [ ] Add native parity tests against the existing M18 policy path (remaining).
-- [ ] Expand React tests for baseline-required, malformed policy, and overview mismatch (partial: unavailable + skip-vs-pass covered).
+- [x] Expand React tests for baseline-required, malformed policy, and overview mismatch / incomplete evaluation (unavailable + skip-vs-pass + structured errors).
 
 ### Slice 20.G — Add snapshot management and retained-size flamegraph workspaces
 
@@ -279,6 +279,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Snapshot save/list/remove/open UI with confirm-on-remove; key-only deletion scope in session-ops (`352b3d5` open).
 - [x] Run focused UI gates (snapshot + flamegraph page tests); session-ops `cargo check` green.
 - [x] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits. (Important findings closed in `9ca7a1b`.)
+- [x] React surfaces overview/unavailable host errors without injecting SVG HTML (thin bridge-mock coverage).
 - [ ] Native flamegraph 16 MiB / overview unavailability parity tests still thin (rely on core/MCP).
 
 ### Slice 20.H — UI parity closure and visual evidence
