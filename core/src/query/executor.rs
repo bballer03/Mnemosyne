@@ -2,7 +2,7 @@ use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
     QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
-    MAX_MULTI_CLASS_FROM_LIST_SIZE,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
@@ -504,7 +504,61 @@ fn resolve_objects_projection_target(
         ));
     };
 
-    let field_name = normalize_objects_field_name(path)?;
+    let hop_fields = parse_objects_field_hops(path)?;
+    let mut current_id = object_id;
+    let mut visited: HashSet<ObjectId> = HashSet::new();
+    visited.insert(object_id);
+
+    for field_name in hop_fields {
+        let Some(next_id) = resolve_objects_single_hop(graph, current_id, field_name)? else {
+            return Ok(None);
+        };
+        if !visited.insert(next_id) {
+            return Ok(None);
+        }
+        current_id = next_id;
+    }
+
+    Ok(Some(current_id))
+}
+
+/// Parses an `OBJECTS` field path into 1–3 hop field names. A lone
+/// identifier is one hop; when two or more dot-separated segments are
+/// present the first is treated as the MAT-style alias prefix (`n` in
+/// `n.parent`) and the remainder are the hop chain -- matching the
+/// single-hop behavior this slice extends rather than introducing.
+fn parse_objects_field_hops(path: &str) -> Result<Vec<&str>, QueryError> {
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    if segments.is_empty() {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires a non-empty instance field expression".into(),
+        ));
+    }
+
+    let hops = if segments.len() == 1 {
+        vec![segments[0]]
+    } else {
+        segments[1..].to_vec()
+    };
+
+    if hops.len() > MAX_OBJECTS_FIELD_HOPS {
+        return Err(QueryError::Unsupported(format!(
+            "multi-hop OBJECTS exceeds limit of {MAX_OBJECTS_FIELD_HOPS} field hops: '{path}'"
+        )));
+    }
+
+    Ok(hops)
+}
+
+fn resolve_objects_single_hop(
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+    field_name: &str,
+) -> Result<Option<ObjectId>, QueryError> {
     let Some(object) = graph.get_object(object_id) else {
         return Ok(None);
     };
@@ -535,21 +589,6 @@ fn resolve_objects_projection_target(
         ))),
         None => Err(QueryError::Unsupported(format!(
             "OBJECTS field '{field_name}' could not be read from class '{class_name}'"
-        ))),
-    }
-}
-
-fn normalize_objects_field_name(path: &str) -> Result<&str, QueryError> {
-    let segments: Vec<&str> = path
-        .split('.')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-
-    match segments.as_slice() {
-        [field_name] => Ok(field_name),
-        [_, field_name] => Ok(field_name),
-        _ => Err(QueryError::NotImplemented(format!(
-            "multi-hop OBJECTS not yet supported: '{path}'"
         ))),
     }
 }

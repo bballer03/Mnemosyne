@@ -1,7 +1,7 @@
 use mnemosyne_core::query::{
     parse_query, parse_query_statement, BuiltInField, ClassPattern, ComparisonOp, Condition,
     FieldRef, FromClause, Query, QueryStatement, SelectClause, Value, WhereClause,
-    MAX_MULTI_CLASS_FROM_LIST_SIZE,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 
 #[test]
@@ -315,6 +315,48 @@ fn parse_query_rejects_empty_class_pattern_entry() {
 
     assert!(
         error.to_string().contains("non-empty"),
+        "unexpected parse error: {error}"
+    );
+}
+
+// M22 Slice 22.C: bounded multi-hop `SELECT OBJECTS`.
+
+#[test]
+fn parse_query_supports_two_hop_objects_field_path() {
+    let query = parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node""#)
+        .expect("two-hop OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::Objects(FieldRef::InstanceField("n.parent.link".into()))
+    );
+}
+
+#[test]
+fn parse_query_supports_three_hop_objects_field_path() {
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node""#)
+            .expect("three-hop OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::Objects(FieldRef::InstanceField("n.parent.link.target".into()))
+    );
+}
+
+#[test]
+fn parse_query_rejects_four_hop_objects_field_path() {
+    let hop_chain = (1..=MAX_OBJECTS_FIELD_HOPS + 1)
+        .map(|idx| format!("hop{idx}"))
+        .collect::<Vec<_>>()
+        .join(".");
+    let query_text = format!(r#"SELECT OBJECTS n.{hop_chain} FROM "com.example.Node""#);
+    let error = parse_query(&query_text).expect_err("four-hop OBJECTS should fail at parse time");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
         "unexpected parse error: {error}"
     );
 }

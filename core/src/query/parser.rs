@@ -1,7 +1,7 @@
 use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
     QueryParseError, QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
-    MAX_MULTI_CLASS_FROM_LIST_SIZE,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 use regex::Regex;
 
@@ -97,7 +97,9 @@ impl<'a> Parser<'a> {
             return Ok(SelectClause::All);
         }
         if self.consume_keyword("OBJECTS") {
-            return Ok(SelectClause::Objects(self.parse_field_ref()?));
+            let field = self.parse_field_ref()?;
+            validate_objects_field_hops(&field)?;
+            return Ok(SelectClause::Objects(field));
         }
 
         let mut fields = vec![self.parse_field_ref()?];
@@ -532,6 +534,33 @@ impl<'a> Parser<'a> {
 
 fn ch_len(ch: char) -> usize {
     ch.len_utf8()
+}
+
+/// Rejects `SELECT OBJECTS` field paths longer than
+/// `MAX_OBJECTS_FIELD_HOPS` at parse time (M22 Slice 22.C). Uses the same
+/// alias-prefix convention as the executor's `parse_objects_field_hops`.
+fn validate_objects_field_hops(field: &FieldRef) -> Result<(), QueryParseError> {
+    let FieldRef::InstanceField(path) = field else {
+        return Ok(());
+    };
+
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let hop_count = match segments.as_slice() {
+        [] => 0,
+        [_] => 1,
+        [_, hops @ ..] => hops.len(),
+    };
+
+    if hop_count > MAX_OBJECTS_FIELD_HOPS {
+        return Err(QueryParseError::new(format!(
+            "multi-hop OBJECTS exceeds limit of {MAX_OBJECTS_FIELD_HOPS} field hops: '{path}'"
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

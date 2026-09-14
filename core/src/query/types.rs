@@ -42,6 +42,12 @@ pub struct FromClause {
 /// Maximum class patterns in a comma-separated `FROM` list (M22 Slice 22.B).
 pub const MAX_MULTI_CLASS_FROM_LIST_SIZE: usize = 8;
 
+/// Maximum object-reference field hops in `SELECT OBJECTS` (M22 Slice 22.C).
+/// A path such as `n.parent.link.target` traverses three hops after the
+/// optional alias prefix; a fourth hop is rejected with a structured limit
+/// error at parse time and, defense-in-depth, at execution time.
+pub const MAX_OBJECTS_FIELD_HOPS: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassPattern {
     Exact(String),

@@ -315,6 +315,108 @@ fn build_objects_projection_graph() -> ObjectGraph {
     graph
 }
 
+fn build_multi_hop_objects_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        2,
+        1,
+        "com.example.ParentNode",
+        vec![FieldDescriptor {
+            name: Some("link".into()),
+            field_type: field_types::OBJECT,
+        }],
+    );
+    add_class(
+        &mut graph,
+        7,
+        1,
+        "com.example.Link",
+        vec![FieldDescriptor {
+            name: Some("target".into()),
+            field_type: field_types::OBJECT,
+        }],
+    );
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Node",
+        vec![
+            FieldDescriptor {
+                name: Some("parent".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("depth".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("count".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("payload".into()),
+                field_type: field_types::OBJECT,
+            },
+        ],
+    );
+    add_class(&mut graph, 6, 1, "com.example.Payload", Vec::new());
+
+    graph.objects.insert(
+        0x2100,
+        HeapObject {
+            id: 0x2100,
+            class_id: 2,
+            shallow_size: 16,
+            references: vec![0x7000],
+            field_data: object_ref_bytes(0x7000),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x2100,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph.objects.insert(
+        0x2300,
+        HeapObject {
+            id: 0x2300,
+            class_id: 2,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: object_ref_bytes(0),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x2300,
+        root_type: GcRootType::StickyClass,
+    });
+
+    add_projection_payload(&mut graph, 0x6100, 64);
+
+    graph.objects.insert(
+        0x7000,
+        HeapObject {
+            id: 0x7000,
+            class_id: 7,
+            shallow_size: 16,
+            references: vec![0x6100],
+            field_data: object_ref_bytes(0x6100),
+            kind: ObjectKind::Instance,
+        },
+    );
+
+    add_projection_node(&mut graph, 0x4100, 4, 0x2100, 4, 1, 0x6100);
+    add_projection_node(&mut graph, 0x4300, 4, 0x2300, 8, 3, 0);
+
+    graph
+}
+
 fn add_owner_object(graph: &mut ObjectGraph, object_id: ObjectId, class_id: ObjectId) {
     graph.objects.insert(
         object_id,
@@ -1096,17 +1198,122 @@ fn objects_projection_on_primitive_field_returns_clear_error() {
 }
 
 #[test]
-fn objects_projection_multi_hop_returns_not_supported_error() {
-    let graph = build_objects_projection_graph();
+fn objects_projection_two_hop_returns_final_referent() {
+    let graph = build_multi_hop_objects_graph();
     let dominator = build_dominator_tree(&graph);
-    let query = parse_query(r#"SELECT OBJECTS n.parent.parent FROM "com.example.Node""#)
+    let query = parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#)
         .expect("query should parse");
 
-    let error = execute_query(&query, &graph, Some(&dominator))
-        .expect_err("multi-hop OBJECTS should be deferred cleanly");
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
 
-    assert!(error.to_string().contains("multi-hop OBJECTS"));
-    assert!(error.to_string().contains("not yet supported"));
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x7000),
+            CellValue::Str("com.example.Link".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_three_hop_returns_final_referent() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node" WHERE count = 1"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x6100),
+            CellValue::Str("com.example.Payload".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_four_hop_returns_structured_limit_error() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let parse_error = parse_query(
+        r#"SELECT OBJECTS n.parent.link.target.extra FROM "com.example.Node""#,
+    )
+    .expect_err("four-hop OBJECTS should fail at parse time");
+
+    assert!(
+        parse_error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit")
+    );
+
+    use mnemosyne_core::query::{
+        FieldRef, FromClause, Query, SelectClause, MAX_OBJECTS_FIELD_HOPS,
+    };
+
+    let built = Query {
+        select: SelectClause::Objects(FieldRef::InstanceField(
+            "n.parent.link.target.extra".into(),
+        )),
+        from: FromClause {
+            class_pattern: mnemosyne_core::query::ClassPattern::Exact("com.example.Node".into()),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+    let error = execute_query(&built, &graph, Some(&dominator))
+        .expect_err("executor should reject over-limit OBJECTS paths");
+
+    assert!(error.to_string().contains("multi-hop OBJECTS exceeds limit"));
+    assert!(error.to_string().contains(&MAX_OBJECTS_FIELD_HOPS.to_string()));
+}
+
+#[test]
+fn objects_projection_omits_rows_when_multi_hop_hits_null_ref() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE @objectId = 17152"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_omits_rows_when_multi_hop_hits_cycle() {
+    let mut graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // ParentNode.link -> self creates a cycle on the second hop.
+    graph
+        .objects
+        .get_mut(&0x2100)
+        .expect("parent fixture")
+        .field_data = object_ref_bytes(0x2100);
+    graph
+        .objects
+        .get_mut(&0x2100)
+        .expect("parent fixture")
+        .references = vec![0x2100];
+
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
 }
 
 #[test]
