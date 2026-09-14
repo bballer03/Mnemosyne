@@ -76,17 +76,18 @@ class ProbeDesktopBundlesTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(any(f.kind == "appimage_arch" for f in result.findings))
 
-    def test_appimage_arch_ok(self) -> None:
+    def test_appimage_mode_optional(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dist = Path(tmp) / "dist"
             dist.mkdir()
-            path = dist / f"Mnemosyne-{VERSION}-linux-aarch64.AppImage"
-            path.write_bytes(_elf(pdb.EM_AARCH64))
-            path.chmod(0o755)
-            result = pdb.probe_desktop_bundles(dist, VERSION)
-            # mode check may warn on some filesystems; filter to arch only for this assert
-            arch_findings = [f for f in result.findings if f.kind.startswith("appimage_arch")]
-            self.assertEqual(arch_findings, [])
+            path = dist / f"Mnemosyne-{VERSION}-linux-x86_64.AppImage"
+            path.write_bytes(_elf(pdb.EM_X86_64))
+            path.chmod(0o644)
+            soft = pdb.probe_desktop_bundles(dist, VERSION, require_executable_bit=False)
+            self.assertTrue(soft.ok, pdb.format_report(soft))
+            hard = pdb.probe_desktop_bundles(dist, VERSION, require_executable_bit=True)
+            self.assertFalse(hard.ok)
+            self.assertTrue(any(f.kind == "appimage_mode" for f in hard.findings))
 
 
 if __name__ == "__main__":

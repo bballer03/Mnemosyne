@@ -12,7 +12,7 @@
 | Normalize Tauri → frozen | configured | AppImage/DMG rename; ditto macOS zip |
 | SHA256SUMS + manifest | configured | unsigned; `launch_tested: false` |
 | Zip secret/build-path inspect | fail-closed | `inspect_desktop_archives.py` |
-| Info.plist / AppImage ELF probe | fail-closed when present | `probe_desktop_bundles.py` |
+| Info.plist / AppImage ELF probe | fail-closed when present | `probe_desktop_bundles.py` (ELF arch only after download; executable bit opt-in) |
 | Name + checksum release gate | fail-closed | `verify_desktop_assets.py --require-checksums` |
 | Docs consistency | green | `test_m21_docs_consistency.py` |
 

@@ -140,7 +140,12 @@ def _elf_machine(path: Path) -> int | None:
     return struct.unpack_from("<H", header, 18)[0]
 
 
-def probe_appimage(path: Path, *, expected_arch: str) -> list[ProbeFinding]:
+def probe_appimage(
+    path: Path,
+    *,
+    expected_arch: str,
+    require_executable_bit: bool = False,
+) -> list[ProbeFinding]:
     findings: list[ProbeFinding] = []
     machine = _elf_machine(path)
     if machine is None:
@@ -159,29 +164,35 @@ def probe_appimage(path: Path, *, expected_arch: str) -> list[ProbeFinding]:
             )
         )
 
-    # Executable bit is best-effort (Windows/WSL mounts may not preserve mode).
-    try:
-        mode = path.stat().st_mode
-        if (mode & 0o111) == 0:
-            findings.append(
-                ProbeFinding(
-                    path.name,
-                    "appimage_mode",
-                    f"file mode {oct(mode)} has no execute bits (may be host/fs limitation)",
+    # GitHub Actions upload-artifact/download-artifact often strips execute bits.
+    # Only fail on mode when explicitly required (native/local packaging trees).
+    if require_executable_bit:
+        try:
+            mode = path.stat().st_mode
+            if (mode & 0o111) == 0:
+                findings.append(
+                    ProbeFinding(
+                        path.name,
+                        "appimage_mode",
+                        f"file mode {oct(mode)} has no execute bits",
+                    )
                 )
-            )
-    except OSError as exc:
-        findings.append(ProbeFinding(path.name, "appimage_mode", str(exc)))
+        except OSError as exc:
+            findings.append(ProbeFinding(path.name, "appimage_mode", str(exc)))
     return findings
 
 
-def probe_desktop_bundles(dist: Path, version: str) -> ProbeResult:
+def probe_desktop_bundles(
+    dist: Path,
+    version: str,
+    *,
+    require_executable_bit: bool = False,
+) -> ProbeResult:
     result = ProbeResult()
     if not dist.is_dir():
         result.findings.append(ProbeFinding(str(dist), "missing", "dist is not a directory"))
         return result
 
-    checks: list[tuple[Path, str]] = []
     mapping = {
         f"Mnemosyne-{version}-macos-aarch64-app.zip": ("macos", None),
         f"Mnemosyne-{version}-macos-x64-app.zip": ("macos", None),
@@ -197,8 +208,13 @@ def probe_desktop_bundles(dist: Path, version: str) -> ProbeResult:
             result.findings.extend(probe_macos_app_zip(path, expected_version=version))
         else:
             assert arch is not None
-            result.findings.extend(probe_appimage(path, expected_arch=arch))
-        checks.append((path, kind))
+            result.findings.extend(
+                probe_appimage(
+                    path,
+                    expected_arch=arch,
+                    require_executable_bit=require_executable_bit,
+                )
+            )
 
     return result
 
@@ -222,12 +238,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-warnings",
         action="store_true",
-        help="Print findings but exit 0 (CI soft gate until 21.F)",
+        help="Print findings but exit 0 (soft gate)",
+    )
+    parser.add_argument(
+        "--require-executable-bit",
+        action="store_true",
+        help=(
+            "Fail when AppImage lacks execute bits "
+            "(skip by default: GitHub artifact download often strips mode)"
+        ),
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
-    result = probe_desktop_bundles(args.dist, args.version)
+    result = probe_desktop_bundles(
+        args.dist,
+        args.version,
+        require_executable_bit=args.require_executable_bit,
+    )
     if args.json:
         print(
             json.dumps(
