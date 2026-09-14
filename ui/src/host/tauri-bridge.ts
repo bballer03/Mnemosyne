@@ -6,6 +6,7 @@
  * No-ops in browser / Vitest so browser-first flows stay honest.
  */
 import { formatHostError } from "./format-host-error";
+import type { PickHeapFileResult } from "../features/artifact-loader/desktop-heap-client";
 
 export function isTauriRuntime(): boolean {
   return typeof globalThis !== "undefined" && "__TAURI_INTERNALS__" in globalThis;
@@ -28,13 +29,19 @@ async function invokeOrThrow<T>(
 }
 
 /** Accept camelCase (current) or snake_case (v0.4.1 regression) pick payloads. */
-export function normalizePickHeapFileResult(raw: unknown): unknown {
+export function normalizePickHeapFileResult(raw: unknown): PickHeapFileResult {
   if (!raw || typeof raw !== "object") {
-    return raw;
+    throw new Error("Heap picker returned an unexpected result.");
   }
   const record = raw as Record<string, unknown>;
+  if (record.status === "cancelled") {
+    return { status: "cancelled" };
+  }
+  if (record.status === "unavailable") {
+    return { status: "unavailable" };
+  }
   if (record.status !== "selected") {
-    return raw;
+    throw new Error(`Heap picker returned an unknown status: ${String(record.status)}`);
   }
   const sourceId =
     (typeof record.sourceId === "string" && record.sourceId) ||
