@@ -457,7 +457,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Add a corpus runner test that initially fails on the M22-targeted cases only.
 - [x] Record at least multi-class `FROM`, one-to-three-hop `OBJECTS`, four-hop rejection, duplicate targets, null/missing fields, cycles, and budget exhaustion.
 - [x] Freeze grammar boundaries from corpus evidence.
-- [ ] Request a Terra review focused on representativeness and hidden unbounded semantics.
+- [x] Request a Terra review focused on representativeness and hidden unbounded semantics. (Important: relabeled handbook cases to documentation-referenced.)
 
 ### Slice 22.B — Add bounded multi-class `FROM`
 
@@ -522,7 +522,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Render the CLI field without changing analysis.
 - [x] Ship hierarchy projection only if the design gate proves no new traversal/contract is needed; otherwise retain the existing flat superclass regroup and record the matrix row as open. (Gate: flat keys only → keep flat; expand/collapse gated on explicit resolvable `parentKey`; matrix row **open** for MAT-like tree.)
 - [x] Run focused and full applicable gates. (`classloader_cli` Unique Classes + histogram hierarchy UI tests green)
-- [ ] Request a Terra review focused on misleading hierarchy claims.
+- [x] Request a Terra review focused on misleading hierarchy claims. (Important: reject cyclic/duplicate parentKey graphs.)
 
 ### Slice 22.E — Publish measured parity movement
 

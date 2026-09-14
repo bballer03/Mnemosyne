@@ -1,14 +1,14 @@
 {
   "version": 1,
   "corpus": "m22.a-mat-compatibility",
-  "mat_help_baseline": "Eclipse Memory Analyzer OQL help (help.eclipse.org latest)",
-  "honesty": "Only cases with equivalency=mat-referenced may close a MAT compatibility-matrix row. Cases labeled non-equivalency are Mnemosyne bounds or syntax deltas and must not support equivalency claims.",
+  "mat_help_baseline": "Eclipse Memory Analyzer OQL help (help.eclipse.org latest) — documentation links only; no recorded MAT version golden results in this corpus slice.",
+  "honesty": "Only cases with equivalency=mat-referenced AND a recorded_mat_result (versioned golden) may close a MAT compatibility-matrix row. Cases labeled documentation-referenced cite Eclipse MAT help but have no recorded golden dump/result and must not support equivalency claims. non-equivalency cases are Mnemosyne bounds or syntax deltas.",
   "cases": [
     {
       "id": "multi-class-from-two-literals",
       "category": "multi-class-from",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "FROM Clause — by the object addresses of more than one class",
@@ -27,13 +27,14 @@
         "fixture": "multi_class",
         "min_matched": 3,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-one-hop",
       "category": "objects-hops",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause — Flatten select items into an object list (OBJECTS)",
@@ -51,13 +52,14 @@
         "fixture": "objects_projection",
         "min_matched": 1,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-two-hop",
       "category": "objects-hops",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause — OBJECTS field/expression projection",
@@ -71,13 +73,14 @@
         "fixture": "multi_hop",
         "min_matched": 1,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-three-hop",
       "category": "objects-hops",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause — OBJECTS field/expression projection",
@@ -91,7 +94,8 @@
         "fixture": "multi_hop",
         "min_matched": 1,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-four-hop-reject",
@@ -111,7 +115,7 @@
       "id": "objects-duplicate-targets",
       "category": "duplicates",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause — without DISTINCT OBJECTS, duplicate class rows are retained",
@@ -126,13 +130,14 @@
         "fixture": "objects_projection",
         "min_matched": 2,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-distinct-duplicate-collapse",
       "category": "distinct-objects",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause — Select unique objects (DISTINCT OBJECTS)",
@@ -147,7 +152,8 @@
         "fixture": "objects_projection",
         "exact_matched": 1,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "distinct-without-objects-reject",
@@ -167,7 +173,7 @@
       "id": "objects-null-field-omitted",
       "category": "null-missing",
       "status": "shipped",
-      "equivalency": "mat-referenced",
+      "equivalency": "documentation-referenced",
       "mat_refs": [
         {
           "section": "SELECT Clause / OBJECTS — null field projections are skipped (no fabricated rows)",
@@ -181,7 +187,8 @@
         "fixture": "objects_projection",
         "exact_matched": 0,
         "result_budget": "unbounded unless LIMIT present"
-      }
+      },
+      "documentation_reference_note": "Handbook/help linked only; no recorded MAT version result or golden dump comparison yet."
     },
     {
       "id": "objects-missing-field-error",

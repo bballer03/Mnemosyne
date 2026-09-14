@@ -34,10 +34,20 @@ describe("histogram-hierarchy", () => {
     ).toBe(true);
   });
 
-  it("rejects dangling parentKey that invents missing ancestry", () => {
+  it("rejects cyclic parentKey links that would hide all roots", () => {
     expect(
       supportsDeterministicParentRelation("superclass", [
-        { key: "java.util.ArrayList", parentKey: "java.util.AbstractList" },
+        { key: "a", parentKey: "b" },
+        { key: "b", parentKey: "a" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("rejects duplicate keys that make parent resolution ambiguous", () => {
+    expect(
+      supportsDeterministicParentRelation("superclass", [
+        { key: "dup" },
+        { key: "dup", parentKey: "dup" },
       ]),
     ).toBe(false);
   });

@@ -5,9 +5,11 @@
 //! `query_parser.rs` / `query_executor.rs`; this file only freezes the
 //! equivalency catalog and the honesty labels.
 //!
-//! Honesty: only `equivalency == "mat-referenced"` cases may close a MAT
-//! compatibility-matrix row. `non-equivalency` cases are Mnemosyne bounds
-//! or syntax deltas and must not support equivalency claims.
+//! Honesty: only `equivalency == "mat-referenced"` cases with a recorded
+//! MAT golden/versioned result may close a MAT compatibility-matrix row.
+//! `documentation-referenced` cases cite Eclipse MAT help but have no golden
+//! dump result yet and must not support equivalency claims.
+//! `non-equivalency` cases are Mnemosyne bounds or syntax deltas.
 
 use mnemosyne_core::{
     build_dominator_tree,
@@ -36,6 +38,8 @@ struct CorpusCase {
     equivalency: String,
     #[serde(default)]
     non_equivalency_reason: Option<String>,
+    #[serde(default)]
+    documentation_reference_note: Option<String>,
     #[serde(default)]
     mat_refs: Vec<MatRef>,
     query: String,
@@ -487,10 +491,11 @@ fn mat_referenced_cases_have_handbook_links() {
     let corpus = load_corpus();
     for case in &corpus.cases {
         match case.equivalency.as_str() {
-            "mat-referenced" => {
+            "mat-referenced" | "documentation-referenced" => {
                 assert!(
                     !case.mat_refs.is_empty(),
-                    "mat-referenced case `{}` needs MAT handbook refs",
+                    "{} case `{}` needs MAT handbook refs",
+                    case.equivalency,
                     case.id
                 );
                 for mat_ref in &case.mat_refs {
@@ -504,6 +509,16 @@ fn mat_referenced_cases_have_handbook_links() {
                     assert!(
                         !mat_ref.section.is_empty(),
                         "case `{}` mat_ref section must be non-empty",
+                        case.id
+                    );
+                }
+                if case.equivalency == "documentation-referenced" {
+                    assert!(
+                        case
+                            .documentation_reference_note
+                            .as_deref()
+                            .is_some_and(|s| !s.is_empty()),
+                        "documentation-referenced case `{}` needs documentation_reference_note",
                         case.id
                     );
                 }
@@ -621,8 +636,8 @@ fn corpus_cases_match_parse_and_execute_expectations() {
 
 #[test]
 fn only_mat_referenced_shipped_cases_are_equivalency_eligible() {
-    // Meta-guard: keep the honesty rule mechanical so later slices cannot
-    // accidentally mark a Mnemosyne-only bound as mat-referenced without refs.
+    // Meta-guard: handbook-linked documentation-referenced cases must not
+    // silently count as equivalency-eligible without recorded MAT goldens.
     let corpus = load_corpus();
     let equivalency_eligible: Vec<_> = corpus
         .cases
@@ -630,19 +645,29 @@ fn only_mat_referenced_shipped_cases_are_equivalency_eligible() {
         .filter(|c| c.status == "shipped" && c.equivalency == "mat-referenced")
         .map(|c| c.id.as_str())
         .collect();
+    let documentation_referenced: Vec<_> = corpus
+        .cases
+        .iter()
+        .filter(|c| c.status == "shipped" && c.equivalency == "documentation-referenced")
+        .map(|c| c.id.as_str())
+        .collect();
 
     assert!(
-        equivalency_eligible.contains(&"multi-class-from-two-literals"),
-        "multi-class FROM should remain equivalency-eligible once shipped"
+        equivalency_eligible.is_empty(),
+        "no mat-referenced (golden) cases yet; got {equivalency_eligible:?}"
     );
     assert!(
-        equivalency_eligible.contains(&"objects-one-hop"),
-        "1-hop OBJECTS should remain equivalency-eligible once shipped"
+        documentation_referenced.contains(&"multi-class-from-two-literals"),
+        "multi-class FROM should remain documentation-referenced once shipped"
     );
     assert!(
-        !equivalency_eligible
+        documentation_referenced.contains(&"objects-one-hop"),
+        "1-hop OBJECTS should remain documentation-referenced once shipped"
+    );
+    assert!(
+        !documentation_referenced
             .iter()
             .any(|id| id.contains("four-hop") || id.contains("budget") || id.contains("cycle")),
-        "Mnemosyne-bound cases must not appear in equivalency-eligible set: {equivalency_eligible:?}"
+        "Mnemosyne-bound cases must not appear as documentation-referenced: {documentation_referenced:?}"
     );
 }

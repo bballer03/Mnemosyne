@@ -35,7 +35,13 @@ export function supportsDeterministicParentRelation(
   }
 
   const keys = new Set(entries.map((entry) => entry.key));
+  if (keys.size !== entries.length) {
+    // Duplicate keys make parent resolution ambiguous — stay flat.
+    return false;
+  }
+
   let declaredParents = 0;
+  const parentOf = new Map<string, string>();
 
   for (const entry of entries) {
     const parent = entry.parentKey?.trim();
@@ -47,9 +53,27 @@ export function supportsDeterministicParentRelation(
     if (parent === entry.key || !keys.has(parent)) {
       return false;
     }
+    parentOf.set(entry.key, parent);
   }
 
-  return declaredParents > 0;
+  if (declaredParents === 0) {
+    return false;
+  }
+
+  // Reject cycles: walking parent links from any node must terminate.
+  for (const start of parentOf.keys()) {
+    const seen = new Set<string>();
+    let current: string | undefined = start;
+    while (current && parentOf.has(current)) {
+      if (seen.has(current)) {
+        return false;
+      }
+      seen.add(current);
+      current = parentOf.get(current);
+    }
+  }
+
+  return true;
 }
 
 /**
