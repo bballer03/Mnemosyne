@@ -85,6 +85,11 @@ def tauri_rename_map(version: str) -> dict[str, str]:
         f"Mnemosyne_{version}_arm64.dmg": dmgs["macos-aarch64-dmg"],
         f"Mnemosyne_{version}_x64.dmg": dmgs["macos-x64-dmg"],
         f"Mnemosyne_{version}_x86_64.dmg": dmgs["macos-x64-dmg"],
+        # Windows installer fallbacks (primary remains portable zip) — identity
+        # copy into dist-normalized so release upload still finds files if the
+        # tauri-action artifactPaths join fails.
+        f"Mnemosyne_{version}_x64_en-US.msi": f"Mnemosyne_{version}_x64_en-US.msi",
+        f"Mnemosyne_{version}_x64-setup.exe": f"Mnemosyne_{version}_x64-setup.exe",
     }
 
 

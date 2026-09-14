@@ -76,6 +76,20 @@ class NormalizeDesktopAssetsTests(unittest.TestCase):
             self.assertTrue(result.ok, nda.format_report(result))
             self.assertTrue((dist / f"Mnemosyne-{VERSION}-macos-x64.dmg").is_file())
 
+    def test_copy_windows_msi_and_nsis_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            search = root / "tauri" / "target" / "release" / "bundle"
+            _write(search / "msi" / f"Mnemosyne_{VERSION}_x64_en-US.msi", b"msi")
+            _write(search / "nsis" / f"Mnemosyne_{VERSION}_x64-setup.exe", b"nsis")
+            out = root / "dist-normalized"
+            result = nda.normalize_desktop_assets(
+                VERSION, search_root=root / "tauri" / "target", out_dir=out
+            )
+            self.assertTrue(result.ok, nda.format_report(result))
+            self.assertTrue((out / f"Mnemosyne_{VERSION}_x64_en-US.msi").is_file())
+            self.assertTrue((out / f"Mnemosyne_{VERSION}_x64-setup.exe").is_file())
+
     def test_zip_macos_app_refuses_python_without_flag(self) -> None:
         """Without ditto, production path must refuse Python zipfile."""
         if nda.shutil.which("ditto") is not None:

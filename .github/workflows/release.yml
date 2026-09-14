@@ -319,19 +319,36 @@ jobs:
             exit 1
           fi
 
+      # Export Apple signing env only when Developer ID Application is validated.
+      # Never set empty APPLE_CERTIFICATE on the build step: tauri-cli treats a
+      # present-but-empty value as "attempt codesign" and fails `security import`.
+      - name: Export Apple signing env for Tauri
+        if: ${{ runner.os == 'macOS' && steps.mac-cert.outputs.signing_enabled == 'true' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          {
+            echo "APPLE_CERTIFICATE<<EOF"
+            printf '%s\n' "${APPLE_CERTIFICATE}"
+            echo "EOF"
+            echo "APPLE_CERTIFICATE_PASSWORD=${APPLE_CERTIFICATE_PASSWORD}"
+            echo "APPLE_ID=${APPLE_ID}"
+            echo "APPLE_PASSWORD=${APPLE_PASSWORD}"
+            echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+          } >> "${GITHUB_ENV}"
+
       - name: Build Tauri bundle
         id: tauri-build
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple env vars are consumed by tauri-cli only when mac-cert validated Developer ID Application.
+          # Apple signing vars come from GITHUB_ENV only when Export Apple signing ran.
           # Windows signing uses bundle.windows.* injected into tauri.conf.json after PFX import.
-          APPLE_CERTIFICATE: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && env.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: tauri
           args: ${{ matrix.tauri_args }}
@@ -368,15 +385,8 @@ jobs:
             find dist-normalized -type f | sed 's|.*/||' | sort || true
           fi
 
-      - name: Upload desktop bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: desktop-${{ matrix.target }}
-          path: |
-            ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '\n') }}
-            dist-normalized/*
-          if-no-files-found: error
-
+      # Package portable zip before installer upload so a path-list glitch cannot
+      # skip the frozen Windows primary asset.
       - name: Package Windows portable zip
         if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
         shell: pwsh
@@ -405,6 +415,26 @@ jobs:
         with:
           name: desktop-windows-portable
           path: dist-portable/Mnemosyne-*-windows-x64-portable.zip
+          if-no-files-found: error
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.target }}
+          # join(..., '\n') is a literal backslash-n in GHA expressions and collapses
+          # Windows MSI+NSIS into one bogus path. Use a real newline separator.
+          # Also keep broad globs + dist-normalized so frozen/renamed assets upload.
+          path: |
+            ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '
+') }}
+            tauri/target/**/bundle/msi/*.msi
+            tauri/target/**/bundle/nsis/*-setup.exe
+            tauri/target/**/bundle/dmg/*.dmg
+            tauri/target/**/bundle/macos/*.app
+            tauri/target/**/bundle/appimage/*.AppImage
+            tauri/target/**/bundle/deb/*.deb
+            tauri/target/**/bundle/rpm/*.rpm
+            dist-normalized/*
           if-no-files-found: error
 
   docker:
