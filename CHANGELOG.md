@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-14
+
+### Fixed
+- Desktop host bridges now inject from the Vite UI bundle (`ui/src/host/tauri-bridge.ts` + bootstrap in `ui/src/main.tsx`). Packaged Tauri builds previously served `ui/dist` without loading `tauri/src/bridge.ts`, so Open heap dump reported “available in the desktop app” while already inside it.
+- Tauri ACL: `allow-desktop-commands` permission + capability grant so `invoke` for heap/workflow/assistant commands is allowed on the main window.
+- Clearer Home unavailable copy: browser vs Tauri-without-bridge.
+- Remove accidental `STATUS.md` merge conflict markers from main.
+
+### Changed
+- Workspace / Tauri / Homebrew formula versions bump to `0.4.1`. Homebrew SHA-256 values are placeholders until post-tag archives exist.
+- **Versioning policy:** **v0.5.0** is reserved for the M24 Continuous Heap Investigation (MAT-equivalent heap-first workbench UI). Do not ship that IA under 0.4.x.
+
 ## [0.4.0] - 2026-09-14
 
 ### Added
