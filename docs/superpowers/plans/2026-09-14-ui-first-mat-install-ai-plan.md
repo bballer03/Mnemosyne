@@ -280,7 +280,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Run focused UI gates (snapshot + flamegraph page tests); session-ops `cargo check` green.
 - [x] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits. (Important findings closed in `9ca7a1b`.)
 - [x] React surfaces overview/unavailable host errors without injecting SVG HTML (thin bridge-mock coverage).
-- [ ] Native flamegraph 16 MiB / overview unavailability parity tests still thin (rely on core/MCP).
+- [x] Native flamegraph overview unavailability UI tests. (`FlamegraphPage.test.tsx` surfaces `feature_unavailable_in_overview_mode` without SVG). **Still thin:** dedicated 16 MiB cap UI assertion (relies on core/MCP).
 
 ### Slice 20.H — UI parity closure and visual evidence
 
