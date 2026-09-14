@@ -39,7 +39,7 @@ Mnemosyne ships CLI and (on post-M16 tags) desktop GUI channels. Use the path th
 - Prefer the AppImage on Linux (`chmod +x`, then run) and the `.dmg` / `.app` on macOS; keep MSI/setup, `.deb`, and `.rpm` for managed installs.
 - **WSL cannot prove packaged GUI smoke.** Treat WSL work as command/unit/build evidence only; launch claims need matching native hosts.
 
-First-run intent (when the desktop shell is available): open the app → choose an `.hprof` → select an analysis profile → investigate. See the README Desktop section for per-OS steps and [../SECURITY.md](../SECURITY.md#desktop-app-distribution-m16) for SmartScreen/Gatekeeper workarounds.
+First-run intent (when the desktop shell is available): open the app → choose an `.hprof` → select an analysis profile → investigate. From the workbench shell you can also reach **Policies**, **Snapshots** (list/save/remove), and **Flamegraphs** without dropping to the CLI. Capability status and caveats (including deferred snapshot-open and WSL GUI limits) live in [product/ui-capability-matrix.md](product/ui-capability-matrix.md) and [evidence/m20-ui-workbench.md](evidence/m20-ui-workbench.md). See the README Desktop section for per-OS steps and [../SECURITY.md](../SECURITY.md#desktop-app-distribution-m16) for SmartScreen/Gatekeeper workarounds.
 
 ### Cargo install
 

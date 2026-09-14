@@ -292,11 +292,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Browser fallback tests and native command tests pass.
 - WSL evidence is labeled command-layer/browser evidence, not packaged GUI launch evidence.
 
-- [ ] Run the complete UI, Rust, and Tauri command-layer gate set.
-- [ ] Capture browser screenshots against synthetic, non-sensitive fixtures for each workbench family.
-- [ ] Record packaged GUI smoke as not run on WSL and link it to M21 native-host evidence.
-- [ ] Update the capability ledger and docs only from observed output.
-- [ ] Run `gitnexus_detect_changes(scope: "all")`.
+- [ ] Run the complete UI, Rust, and Tauri command-layer gate set. (Not re-run in 20.H docs closeout; prior slices recorded focused gates.)
+- [ ] Capture browser screenshots against synthetic, non-sensitive fixtures for each workbench family. (Not captured; see evidence NOT-proven.)
+- [x] Record packaged GUI smoke as not run on WSL and link it to M21 native-host evidence. (`docs/evidence/m20-ui-workbench.md`)
+- [x] Update the capability ledger and docs only from observed output. (matrix + STATUS + user-guide pointers)
+- [x] Run `gitnexus_detect_changes(scope: "all")`. (docs-only hunks; no indexed symbol overlap)
 - [ ] Request final Terra milestone review; Sol records the M20 closeout verdict.
 
 ---

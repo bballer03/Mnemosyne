@@ -1,11 +1,11 @@
 # Functional Status
 
-_Last updated: 2026-09-14 (UI-first M20 + portable-install M21 in progress on `sync/m15g-m16bcd`)_
+_Last updated: 2026-09-14 (M20 UI workbench docs/evidence closeout + M21 portable-install in progress on `sync/m15g-m16bcd`)_
 
 This document captures where the current alpha build stands versus the roadmap described in `README.md` and `ARCHITECTURE.md`. Use it to see what already works, what is partially there, and which gaps remain before we can call the heap analyzer "functionally complete".
 
 ## Snapshot
-- 🟡 **M20 UI workbench (in progress)** — detail panels for strings/collections/top-instances/unreachable; desktop **Open heap dump** with opaque `sourceId` + sanitized `run_desktop_analysis`; classloader Loaded vs Unique columns; **Policies** (`run_ci_check`), **Snapshots** (list/save/remove), **Flamegraphs** (SVG via object URL); capability matrix at [docs/product/ui-capability-matrix.md](docs/product/ui-capability-matrix.md). Plan: [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md).
+- 🟡 **M20 UI workbench (UI surfaces shipped; milestone closeout pending Terra/Sol)** — detail panels for strings/collections/top-instances/unreachable; desktop **Open heap dump** with opaque `sourceId` + sanitized `run_desktop_analysis`; classloader Loaded vs Unique columns; **Policies** (`run_ci_check`), **Snapshots** (list/save/remove; open-from-key deferred), **Flamegraphs** (SVG via object URL). Capability matrix: [docs/product/ui-capability-matrix.md](docs/product/ui-capability-matrix.md). Evidence (incl. NOT-proven WSL GUI / clean Windows unzip): [docs/evidence/m20-ui-workbench.md](docs/evidence/m20-ui-workbench.md). Plan: [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md).
 - 🟡 **M21 portable install (in progress)** — README documents Eclipse-style unzip-and-click with honest **WebView2 prerequisite** labeling; `scripts/release/package_windows_portable.ps1` + release CI step for `Mnemosyne-*-windows-x64-portable.zip`. Packaged GUI smoke still blocked on this WSL host.
 - 🟡 **M22 bounded MAT OQL (in progress)** — **22.B shipped:** bounded multi-class `FROM`. **22.C shipped:** 1–3 hop `OBJECTS` with four-hop rejection. Remaining: MAT-referenced corpus.
 - ✅ **M18 MCP agent/IDE loop completion** — `ci_check` (+ baseline/`baseline_snapshot`), `diff_heaps.cross_reference_leaks`, `save_snapshot`/`remove_snapshot`, `generate_flamegraph` + managed artifacts; sanitized transcripts in [docs/examples/mcp-agent-loop-transcripts.md](docs/examples/mcp-agent-loop-transcripts.md).
