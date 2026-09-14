@@ -4,6 +4,7 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
 import { pickHeapFile, runDesktopAnalysis } from "./desktop-heap-client";
+import { formatHostError } from "../../host/format-host-error";
 import { rememberDesktopHeapSource } from "./desktop-heap-session";
 import { parseAnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "./use-artifact-store";
@@ -153,7 +154,8 @@ export function ArtifactLoaderPage() {
         return;
       }
 
-      const message = error instanceof Error ? error.message : "Failed to load artifact";
+      const message = formatHostError(error, "Failed to load artifact");
+      console.error("[mnemosyne] artifact load failed", error);
       setLoadError(message);
       setStatusLines((current) => [
         `[${formatTimestamp(new Date())}] validation error: ${message}`,
@@ -232,7 +234,8 @@ export function ArtifactLoaderPage() {
         ...current,
       ]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to open heap dump";
+      const message = formatHostError(error, "Failed to open heap dump");
+      console.error("[mnemosyne] open heap dump failed", error);
       setDesktopHeapMessage(message);
       setStatusLines((current) => [
         `[${formatTimestamp(new Date())}] heap open error: ${message}`,
@@ -410,6 +413,10 @@ export function ArtifactLoaderPage() {
                 <div key={line}>{line}</div>
               ))}
             </div>
+            <p style={{ margin: "0.55rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
+              Recent host errors also appear here. In the desktop app, open DevTools (Right-click →
+              Inspect, or F12) for the full console log under <code>[mnemosyne]</code>.
+            </p>
 
             {artifact ? (
               <div
