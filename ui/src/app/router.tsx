@@ -1,4 +1,10 @@
-import { Navigate, createBrowserRouter, createMemoryRouter, RouterProvider, type RouteObject } from "react-router-dom";
+import { useState } from "react";
+import {
+  Navigate,
+  createBrowserRouter,
+  RouterProvider,
+  type RouteObject,
+} from "react-router-dom";
 
 import { ArtifactLoaderPage } from "../features/artifact-loader/ArtifactLoaderPage";
 import { ArtifactExplorerPage } from "../features/artifact-explorer/ArtifactExplorerPage";
@@ -128,11 +134,16 @@ const future = {
   v7_startTransition: true,
 };
 
-const browserRouter = typeof document === "undefined" ? null : createBrowserRouter(routes);
-const memoryRouter = createMemoryRouter(routes);
-
+/**
+ * Create the data router once per app mount — never at module scope.
+ *
+ * Previously this module always ran both `createBrowserRouter(routes)` and
+ * `createMemoryRouter(routes)` on import. Every unit test that imported
+ * `{ routes }` therefore pinned two full app trees for the process lifetime.
+ * Combined with TopNav tests that remounted/navigated the real tree, that
+ * drove ~14GB RSS and crashed WSL / CI.
+ */
 export function AppRouter() {
-  const router = typeof document === "undefined" ? memoryRouter : browserRouter!;
-
+  const [router] = useState(() => createBrowserRouter(routes));
   return <RouterProvider router={router} future={future} />;
 }

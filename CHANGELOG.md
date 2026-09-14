@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Desktop **Open heap dump** first-open no longer runs field-data-heavy incident defaults (strings/collections/threads/duplicate arrays/by-referrer). Those forced `retain_field_data` and multi-GB RSS on large dumps, so the UI appeared stuck on “Opening…”. First open now runs a lean dashboard pass (histogram, leaks, classloaders, top instances).
 - Open-heap button phases: **Opening…** only while the native picker is up; **Analyzing…** while analysis runs.
+- UI test / WSL OOM: `AppRouter` no longer constructs module-scoped browser+memory routers on every `import { routes }` (that pinned two full app trees for the process lifetime). TopNav reachability tests use a stub route tree instead of mounting/navigating the real application routes (~14GB RSS previously).
 
 ### Added
 - Desktop host file logging (`tracing` → `desktop.log` under the platform data-local dir, e.g. `%LOCALAPPDATA%\mnemosyne\logs` on Windows). Override with `MNEMOSYNE_LOG_DIR`; level via `RUST_LOG`. Open heap / analysis start/finish/failure are logged with display name, size, and mode flags (no full heap paths).
