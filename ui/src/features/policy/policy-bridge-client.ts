@@ -34,6 +34,7 @@ export type CiCheckResponse = {
   };
   exit_code: number;
   fail_on: string;
+  evaluation_complete: boolean;
 };
 
 type DesktopPolicyBridge = {
@@ -69,7 +70,11 @@ export async function runCiCheck(input: CiCheckInput): Promise<
 
   try {
     const raw = await bridge.runCiCheck(input);
-    return { status: "ready", data: raw as CiCheckResponse };
+    const data = raw as CiCheckResponse;
+    if (typeof data.evaluation_complete !== "boolean") {
+      data.evaluation_complete = (data.result?.skipped?.length ?? 0) === 0;
+    }
+    return { status: "ready", data };
   } catch (error) {
     return {
       status: "error",

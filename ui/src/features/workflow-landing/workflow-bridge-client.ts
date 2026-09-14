@@ -211,6 +211,11 @@ function parseWorkflowStepResult(value: unknown): WorkflowStepResult {
   };
 }
 
+function displayHeapName(path: string): string {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
+}
+
 function parseSnapshotManifest(value: unknown, path: string): SnapshotManifest {
   if (!isRecord(value)) {
     throw new TypeError(`Invalid workflow bridge payload: expected ${path} to be an object.`);
@@ -219,7 +224,8 @@ function parseSnapshotManifest(value: unknown, path: string): SnapshotManifest {
   return {
     schemaVersion: readNumber(value.schema_version, `${path}.schema_version`),
     heapSha256: readString(value.heap_sha256, `${path}.heap_sha256`),
-    heapPath: readString(value.heap_path, `${path}.heap_path`),
+    // Terra M20.G: never keep absolute store paths in React state.
+    heapPath: displayHeapName(readString(value.heap_path, `${path}.heap_path`)),
     createdAt: readString(value.created_at, `${path}.created_at`),
     mnemosyneVersion: readString(value.mnemosyne_version, `${path}.mnemosyne_version`),
     objectCount: readNumber(value.object_count, `${path}.object_count`),

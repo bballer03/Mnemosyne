@@ -403,6 +403,10 @@ pub async fn run_ci_check(
         "result": result,
         "exit_code": desktop_ci_check_exit_code(&result, fail_on),
         "fail_on": fail_on,
+        // Desktop UI must not treat exit_code 0 as a full green pass when
+        // deep-only rules were skipped (e.g. auto → overview). CLI/MCP keep
+        // the historical exit-code contract; this flag is additive for UI.
+        "evaluation_complete": result.skipped.is_empty(),
     }))
 }
 

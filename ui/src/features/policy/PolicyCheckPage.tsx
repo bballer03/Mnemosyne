@@ -141,8 +141,14 @@ export function PolicyCheckPage() {
         <section style={{ display: "grid", gap: "1rem" }}>
           <div style={{ color: "#94a3b8" }}>
             mode_used={ready.result.mode_used} · exit_code={ready.exit_code} · violations=
-            {ready.result.violations.length} · skipped={ready.result.skipped.length}
+            {ready.result.violations.length} · skipped={ready.result.skipped.length} ·{" "}
+            {ready.evaluation_complete ? "complete" : "incomplete"}
           </div>
+          {!ready.evaluation_complete ? (
+            <p role="note" style={{ color: "#facc15", margin: 0 }}>
+              Incomplete evaluation: skipped rules were not proven. Exit code 0 is not a green pass.
+            </p>
+          ) : null}
           {ready.result.skipped.length > 0 ? (
             <div>
               <strong>Skipped (not a green pass)</strong>
@@ -166,14 +172,13 @@ export function PolicyCheckPage() {
                 ))}
               </ul>
             </div>
-          ) : (
+          ) : ready.evaluation_complete ? (
             <p style={{ color: "#86efac" }}>No violations at or above the evaluated rules.</p>
-          )}
-          {ready.exit_code === 0 && ready.result.skipped.length > 0 ? (
-            <p role="note" style={{ color: "#facc15" }}>
-              Exit code 0 does not mean skipped deep-only rules passed.
+          ) : (
+            <p style={{ color: "#facc15" }}>
+              No violations among rules that ran; skipped deep-only rules remain unproven.
             </p>
-          ) : null}
+          )}
         </section>
       ) : null}
     </main>

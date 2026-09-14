@@ -16,11 +16,6 @@ import {
   type SnapshotManifest,
 } from "../workflow-landing/workflow-bridge-client";
 
-function displayHeapName(path: string): string {
-  const parts = path.split(/[/\\]/);
-  return parts[parts.length - 1] || path;
-}
-
 export function SnapshotManagerPage() {
   const [snapshots, setSnapshots] = useState<SnapshotManifest[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "unavailable" | "error">("loading");
@@ -219,7 +214,7 @@ export function SnapshotManagerPage() {
                       overflowWrap: "anywhere",
                     }}
                   >
-                    {displayHeapName(snapshot.heapPath)}
+                    {snapshot.heapPath}
                   </td>
                   <td style={{ padding: "0.55rem 0.6rem 0.55rem 0", borderTop: "1px solid #1e293b" }}>
                     {snapshot.createdAt}

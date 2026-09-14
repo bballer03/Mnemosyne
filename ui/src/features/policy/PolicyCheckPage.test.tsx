@@ -35,21 +35,15 @@ describe("PolicyCheckPage", () => {
     window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
       runCiCheck: async () => ({
         result: {
-          mode_used: "DEEP",
-          mode_requested: "DEEP",
-          violations: [
-            {
-              rule_id: "leak-budget",
-              predicate: "leak_count",
-              severity: "error",
-              message: "too many leaks",
-            },
-          ],
-          evaluations: [{ rule_id: "leak-budget", passed: false }],
+          mode_used: "OVERVIEW",
+          mode_requested: "AUTO",
+          violations: [],
+          evaluations: [],
           skipped: [{ rule_id: "deep-only-rule", reason: "deep_only_in_overview" }],
         },
-        exit_code: 1,
+        exit_code: 0,
         fail_on: "error",
+        evaluation_complete: false,
       }),
     };
 
@@ -61,9 +55,10 @@ describe("PolicyCheckPage", () => {
 
     await user.click(view.getByRole("button", { name: /run policy check/i }));
     await waitFor(() => {
-      expect(view.getByText(/too many leaks/i)).toBeInTheDocument();
+      expect(view.getByText(/Incomplete evaluation/i)).toBeInTheDocument();
     });
     expect(view.getByText(/Skipped \(not a green pass\)/i)).toBeInTheDocument();
     expect(view.getByText(/deep-only-rule/i)).toBeInTheDocument();
+    expect(view.queryByText(/No violations at or above the evaluated rules/i)).toBeNull();
   });
 });
