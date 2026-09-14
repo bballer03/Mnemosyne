@@ -1,9 +1,11 @@
 import { useMemo } from "react";
-import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { createColumnHelper, flexRender, tableFeatures, useTable } from "@tanstack/react-table";
 
 import type { AnalysisArtifact } from "../../../lib/analysis-types";
 
 type DuplicateArrayRow = NonNullable<AnalysisArtifact["arrayReport"]>["duplicateGroups"][number];
+
+const features = tableFeatures({});
 
 function formatBytes(bytes: number | undefined) {
   if (bytes === undefined) {
@@ -21,9 +23,9 @@ function formatBytes(bytes: number | undefined) {
   return `${bytes} B`;
 }
 
-const columnHelper = createColumnHelper<DuplicateArrayRow>();
+const columnHelper = createColumnHelper<typeof features, DuplicateArrayRow>();
 
-const columns = [
+const columns = columnHelper.columns([
   columnHelper.accessor("elementType", {
     header: "Element type",
     cell: (info) => <span style={{ fontWeight: 600 }}>{info.getValue()}</span>,
@@ -48,16 +50,16 @@ const columns = [
       </span>
     ),
   }),
-];
+]);
 
 export function DuplicateArrayPanel({ artifact }: { artifact: AnalysisArtifact }) {
   const report = artifact.arrayReport;
   const groups = useMemo(() => report?.duplicateGroups ?? [], [report]);
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: groups,
     columns,
-    getCoreRowModel: getCoreRowModel(),
   });
 
   if (!report) {
@@ -121,7 +123,7 @@ export function DuplicateArrayPanel({ artifact }: { artifact: AnalysisArtifact }
           <tbody>
             {table.getRowModel().rows.map((row) => (
               <tr key={row.id}>
-                {row.getVisibleCells().map((cell) => (
+                {row.getAllCells().map((cell) => (
                   <td
                     key={cell.id}
                     style={{
