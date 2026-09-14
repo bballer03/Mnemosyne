@@ -1051,9 +1051,10 @@ fn parse_workflow_kind(kind: &str) -> CoreResult<WorkflowKind> {
         "tune_gc" => Ok(WorkflowKind::TuneGc),
         "traverse_object_graph" => Ok(WorkflowKind::TraverseObjectGraph),
         "compare_snapshots" => Ok(WorkflowKind::CompareSnapshots),
+        "classloader_leak" => Ok(WorkflowKind::ClassloaderLeak),
         other => Err(CoreError::InvalidInput(format!(
             "unknown workflow kind '{other}': expected one of triage_memory_leak, tune_gc, \
-             traverse_object_graph, compare_snapshots"
+             traverse_object_graph, compare_snapshots, classloader_leak"
         ))),
     }
 }
@@ -1743,7 +1744,7 @@ fn tool_catalog() -> Value {
                 "name": "describe_workflow",
                 "description": "Introspect a workflow kind's fixed step sequence and each step's expected input/underlying primitives, without creating any workflow state.",
                 "params": [
-                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." }
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots, classloader_leak." }
                 ],
                 "output_schema": "WorkflowDescription"
             },
@@ -1751,8 +1752,8 @@ fn tool_catalog() -> Value {
                 "name": "start_workflow",
                 "description": "Create a new workflow instance of the given kind, run its first step, and persist the resulting state.",
                 "params": [
-                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." },
-                    { "name": "heap_path", "type": "string", "required": false, "description": "Required for triage_memory_leak/tune_gc/traverse_object_graph. Not used by compare_snapshots (see params below)." },
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots, classloader_leak." },
+                    { "name": "heap_path", "type": "string", "required": false, "description": "Required for triage_memory_leak/tune_gc/traverse_object_graph/classloader_leak. Not used by compare_snapshots (see params below)." },
                     { "name": "object_id", "type": "string", "required": false, "description": "traverse_object_graph only: the starting object." },
                     { "name": "before_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
                     { "name": "after_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
@@ -2390,7 +2391,8 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let (heap_path, initial_params) = match kind {
                 WorkflowKind::TriageMemoryLeak
                 | WorkflowKind::TuneGc
-                | WorkflowKind::TraverseObjectGraph => {
+                | WorkflowKind::TraverseObjectGraph
+                | WorkflowKind::ClassloaderLeak => {
                     let heap_path = params.heap_path.clone().ok_or_else(|| {
                         CoreError::InvalidInput(format!(
                             "heap_path is required for start_workflow(kind: \"{}\")",

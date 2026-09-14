@@ -37,6 +37,10 @@ const WORKFLOW_KEYWORDS: Array<{ pattern: RegExp; kind: WorkflowKindId }> = [
   { pattern: /\bcompare\b|\bdiff\b|\bbefore.*after\b/i, kind: "compare_snapshots" },
   { pattern: /\bgc\b|garbage collect|\btune\b/i, kind: "tune_gc" },
   { pattern: /\btraverse\b|\bgraph\b|reference path|walk (the )?(object|graph)/i, kind: "traverse_object_graph" },
+  {
+    pattern: /\bclass\s*loader\b|\bclassloader\b|\bduplicate class(es)?\b|\bredeploy\b/i,
+    kind: "classloader_leak",
+  },
 ];
 
 export function routeFreeTextToWorkflow(input: string): WorkflowKindId {

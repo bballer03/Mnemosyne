@@ -328,15 +328,15 @@ These camelCase signatures are the host interface consumed by `ui/src`; each mus
 
 **Likely files:** `core/src/workflow/`, `core/src/mcp/server.rs`, workflow contract tests.
 
-- [ ] Add `classloader_leak` as orchestration only over duplicate classes, loader chains, object inspection, and GC paths.
-- [ ] Define a bounded sequence: detect → select duplicate class/loader → inspect retention → explain → complete.
-- [ ] Add full-run, invalid-selection, resume, and close tests plus a real transcript.
+- [x] Add `classloader_leak` as orchestration only over duplicate classes, loader chains, object inspection, and GC paths.
+- [x] Define a bounded sequence: detect → select duplicate class/loader → inspect retention → explain → complete.
+- [x] Add full-run, invalid-selection, resume, and close tests plus a real transcript.
 
 ### Slice 19.E — Guided workflow card
 
-- [ ] Add the workflow to discovery and the guided landing without hiding existing power routes.
-- [ ] Run it through browser and M17 Tauri generic workflow bridges without a classloader-specific host API.
-- [ ] Deep-link findings to the shipped classloader and object-inspector panels.
+- [x] Add the workflow to discovery and the guided landing without hiding existing power routes.
+- [x] Run it through browser and M17 Tauri generic workflow bridges without a classloader-specific host API.
+- [x] Deep-link findings to the shipped classloader and object-inspector panels.
 
 ### Slice 19.F — Bounded conversation continuity
 

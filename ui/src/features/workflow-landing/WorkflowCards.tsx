@@ -61,6 +61,12 @@ export function WorkflowCards({ heapPath }: WorkflowCardsProps) {
         heapPath={heapPath}
       />
       <WorkflowCard
+        kind="classloader_leak"
+        title="Classloader leak"
+        description="Detects duplicate classes across loaders, inspects retention, and deep-links into the classloader explorer."
+        heapPath={heapPath}
+      />
+      <WorkflowCard
         kind="traverse_object_graph"
         title="Traverse Object Graph"
         description="Walks the reference graph outward from a starting object."

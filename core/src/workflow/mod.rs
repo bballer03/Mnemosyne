@@ -30,6 +30,7 @@
 //! out of scope here. [`start`] and [`advance`] are written to be directly
 //! callable from a future MCP handler (see their doc comments).
 
+pub mod classloader_leak;
 pub mod compare_snapshots;
 pub mod traverse_object_graph;
 pub mod triage_memory_leak;
@@ -74,6 +75,7 @@ pub enum WorkflowKind {
     TuneGc,
     TraverseObjectGraph,
     CompareSnapshots,
+    ClassloaderLeak,
 }
 
 impl WorkflowKind {
@@ -86,6 +88,7 @@ impl WorkflowKind {
             WorkflowKind::TuneGc => "tune_gc",
             WorkflowKind::TraverseObjectGraph => "traverse_object_graph",
             WorkflowKind::CompareSnapshots => "compare_snapshots",
+            WorkflowKind::ClassloaderLeak => "classloader_leak",
         }
     }
 }
@@ -328,6 +331,7 @@ pub fn describe(kind: WorkflowKind) -> CoreResult<WorkflowDescription> {
         WorkflowKind::TuneGc => Ok(tune_gc::describe()),
         WorkflowKind::TraverseObjectGraph => Ok(traverse_object_graph::describe()),
         WorkflowKind::CompareSnapshots => Ok(compare_snapshots::describe()),
+        WorkflowKind::ClassloaderLeak => Ok(classloader_leak::describe()),
     }
 }
 
@@ -387,6 +391,11 @@ pub async fn start(
             compare_snapshots::run_step(&mut state, initial_params).await?;
             state
         }
+        WorkflowKind::ClassloaderLeak => {
+            let mut state = new_state(kind, heap_path, classloader_leak::STEP_DETECT);
+            classloader_leak::run_step(&mut state, initial_params).await?;
+            state
+        }
     };
 
     state.updated_at = timestamp_now();
@@ -427,6 +436,9 @@ pub async fn advance(
         }
         WorkflowKind::CompareSnapshots => {
             compare_snapshots::run_step(&mut state, step_input).await?;
+        }
+        WorkflowKind::ClassloaderLeak => {
+            classloader_leak::run_step(&mut state, step_input).await?;
         }
     }
 
@@ -500,19 +512,13 @@ mod tests {
     }
 
     #[test]
-    fn describe_succeeds_for_all_four_workflow_kinds() {
-        // As of Slice 11.C, every `WorkflowKind` variant -- including the
-        // last one, `CompareSnapshots` -- has an implemented step sequence.
-        // `start`/`advance`'s equivalent full-run coverage for
-        // `CompareSnapshots` lives in
-        // `core/tests/workflow_compare_snapshots.rs` (it needs a real,
-        // on-disk heap fixture, which this module's own lightweight unit
-        // tests deliberately avoid).
+    fn describe_succeeds_for_all_workflow_kinds() {
         for kind in [
             WorkflowKind::TriageMemoryLeak,
             WorkflowKind::TuneGc,
             WorkflowKind::TraverseObjectGraph,
             WorkflowKind::CompareSnapshots,
+            WorkflowKind::ClassloaderLeak,
         ] {
             let description = describe(kind)
                 .unwrap_or_else(|err| panic!("describe({kind}) should succeed, got error: {err}"));

@@ -49,7 +49,8 @@ export type WorkflowKindId =
   | "triage_memory_leak"
   | "tune_gc"
   | "traverse_object_graph"
-  | "compare_snapshots";
+  | "compare_snapshots"
+  | "classloader_leak";
 
 export type StartWorkflowParams = {
   heapPath?: string;

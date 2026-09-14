@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 
 import {
   isStartWorkflowAvailable,
@@ -53,10 +54,30 @@ const buttonStyle = {
   justifySelf: "start",
 } as const;
 
+const linkStyle = {
+  ...buttonStyle,
+  textDecoration: "none",
+  display: "inline-block",
+} as const;
+
+function firstDuplicateClassName(stepResult: unknown): string | undefined {
+  if (typeof stepResult !== "object" || stepResult === null) {
+    return undefined;
+  }
+
+  const names = (stepResult as { duplicate_class_names?: unknown }).duplicate_class_names;
+  if (!Array.isArray(names) || typeof names[0] !== "string") {
+    return undefined;
+  }
+
+  return names[0];
+}
+
 export function WorkflowCard({ kind, title, description, heapPath, showObjectIdInput = false }: WorkflowCardProps) {
   const [objectId, setObjectId] = useState("");
   const [state, setState] = useState<CardState>({ phase: "idle" });
   const bridgeAvailable = isStartWorkflowAvailable();
+  const isInRouterContext = useInRouterContext();
 
   async function handleStart() {
     setState({ phase: "starting" });
@@ -82,10 +103,24 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
     });
   }
 
-  async function handleContinue(workflowId: string) {
+  async function handleContinue(current: WorkflowStepResult) {
     setState({ phase: "advancing" });
 
-    const result = await runNextStep(workflowId);
+    let input: unknown;
+    if (kind === "classloader_leak" && current.currentStep === "select") {
+      const className = firstDuplicateClassName(current.stepResult);
+      if (!className) {
+        setState({
+          phase: "error",
+          message:
+            "No duplicate class was returned by detect. Open Artifact Explorer → Classloaders to inspect manually.",
+        });
+        return;
+      }
+      input = { class_name: className };
+    }
+
+    const result = await runNextStep(current.workflowId, input);
 
     if (result.status === "unavailable") {
       setState({ phase: "idle" });
@@ -175,13 +210,23 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
                 <button
                   type="button"
                   style={buttonStyle}
-                  onClick={() => void handleContinue(state.result.workflowId)}
+                  onClick={() => void handleContinue(state.result)}
                 >
                   Continue
                 </button>
               ) : (
                 <div style={{ color: "#86efac", fontSize: "0.85rem" }}>Workflow complete.</div>
               )}
+              {kind === "classloader_leak" && isInRouterContext ? (
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <Link to="/artifacts/explorer" style={linkStyle}>
+                    Open classloader explorer
+                  </Link>
+                  <Link to="/heap-explorer/object-inspector" style={linkStyle}>
+                    Open object inspector
+                  </Link>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </>

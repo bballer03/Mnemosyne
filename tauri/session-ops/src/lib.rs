@@ -322,9 +322,10 @@ pub fn parse_workflow_kind(kind: &str) -> Result<WorkflowKind, String> {
         "tune_gc" => Ok(WorkflowKind::TuneGc),
         "traverse_object_graph" => Ok(WorkflowKind::TraverseObjectGraph),
         "compare_snapshots" => Ok(WorkflowKind::CompareSnapshots),
+        "classloader_leak" => Ok(WorkflowKind::ClassloaderLeak),
         other => Err(format!(
             "unknown workflow kind '{other}': expected one of triage_memory_leak, tune_gc, \
-             traverse_object_graph, compare_snapshots"
+             traverse_object_graph, compare_snapshots, classloader_leak"
         )),
     }
 }
@@ -372,7 +373,10 @@ pub async fn start_workflow_for_session(
     let kind = parse_workflow_kind(&input.kind)?;
 
     let (heap_path, initial_params) = match kind {
-        WorkflowKind::TriageMemoryLeak | WorkflowKind::TuneGc | WorkflowKind::TraverseObjectGraph => {
+        WorkflowKind::TriageMemoryLeak
+        | WorkflowKind::TuneGc
+        | WorkflowKind::TraverseObjectGraph
+        | WorkflowKind::ClassloaderLeak => {
             let heap_path = input.heap_path.clone().ok_or_else(|| {
                 format!(
                     "heap_path is required for start_workflow(kind: \"{}\")",
