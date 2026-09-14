@@ -106,6 +106,10 @@ def _looks_like_desktop_asset(name: str) -> bool:
     lower = name.lower()
     if name in IGNORE_BASENAMES:
         return False
+    # CLI release archives live next to desktop assets in dist/; do not treat them
+    # as misnamed desktop bundles.
+    if lower.startswith("mnemosyne-cli-"):
+        return False
     if not name.startswith("Mnemosyne") and not name.startswith("mnemosyne"):
         return False
     return any(
