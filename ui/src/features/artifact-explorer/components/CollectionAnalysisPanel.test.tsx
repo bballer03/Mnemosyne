@@ -70,6 +70,9 @@ describe("CollectionAnalysisPanel", () => {
     const table = view.getByRole("table");
     expect(within(table).getByText("java.util.ArrayList")).toBeInTheDocument();
     expect(within(table).getByText(/0x101/i)).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: /0x101/i }).getAttribute("href")).toContain(
+      "objectId=0x101",
+    );
     expect(view.getByText(/40 collections/i)).toBeInTheDocument();
   });
 

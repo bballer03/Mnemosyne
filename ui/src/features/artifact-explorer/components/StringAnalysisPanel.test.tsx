@@ -62,6 +62,7 @@ describe("StringAnalysisPanel", () => {
     expect(view.getByText("leak-token")).toBeInTheDocument();
     expect(view.getByText(/4 copies/i)).toBeInTheDocument();
     expect(view.getByText(/0xabc/i)).toBeInTheDocument();
+    expect(view.getByRole("link", { name: /0xabc/i }).getAttribute("href")).toContain("objectId=0xabc");
   });
 
   it("renders an explicit empty state when the report has no duplicate groups", () => {

@@ -65,7 +65,9 @@ export function TopInstancesPanel({ artifact }: { artifact: AnalysisArtifact }) 
               {visible.map((row) => (
                 <tr key={row.objectId}>
                   <td style={{ padding: "0.55rem 0.6rem 0.55rem 0", borderTop: "1px solid #1e293b" }}>
-                    <Link to="/heap-explorer/object-inspector">{`0x${row.objectId.toString(16)}`}</Link>
+                    <Link
+                      to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(`0x${row.objectId.toString(16)}`)}`}
+                    >{`0x${row.objectId.toString(16)}`}</Link>
                   </td>
                   <td
                     style={{

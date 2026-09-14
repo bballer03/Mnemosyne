@@ -65,6 +65,9 @@ describe("TopInstancesPanel", () => {
     const table = view.getByRole("table");
     expect(within(table).getByText("com.example.Cache")).toBeInTheDocument();
     expect(within(table).getByText(/0x42/i)).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: /0x42/i }).getAttribute("href")).toContain(
+      "objectId=0x42",
+    );
   });
 
   it("renders an explicit empty state when instances are empty", () => {

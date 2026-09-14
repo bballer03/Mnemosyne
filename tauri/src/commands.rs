@@ -76,6 +76,15 @@ fn is_supported_heap_path(path: &str) -> bool {
     lower.ends_with(".hprof") || lower.ends_with(".bin")
 }
 
+fn map_native_error(error: impl ToString) -> String {
+    let raw = error.to_string();
+    if raw.contains('/') || raw.contains('\\') {
+        return "Heap open or analysis failed. Check that the file is a valid .hprof/.bin dump."
+            .to_string();
+    }
+    raw
+}
+
 fn sanitize_analyze_response_value(mut value: Value, display_name: &str) -> Value {
     if let Some(summary) = value.get_mut("summary").and_then(|summary| summary.as_object_mut()) {
         summary.insert("heap_path".to_string(), Value::String(display_name.to_string()));
@@ -184,7 +193,7 @@ pub async fn run_desktop_analysis(
 
     let (response, object_graph, _dominator) = analyze_heap_capturing_graph(request)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(map_native_error)?;
 
     let _session = state
         .session_mutation
@@ -328,10 +337,10 @@ async fn load_heap_internal(
 ) -> Result<HeapLoadSummary, String> {
     let graph = spawn_blocking({
         let path = path.clone();
-        move || parse_hprof_file(&path).map_err(|error| error.to_string())
+        move || parse_hprof_file(&path).map_err(map_native_error)
     })
     .await
-    .map_err(|error| error.to_string())??;
+    .map_err(map_native_error)??;
 
     let summary = HeapLoadSummary {
         display_name: display_name_for_path(&path),

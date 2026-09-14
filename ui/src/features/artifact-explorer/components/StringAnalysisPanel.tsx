@@ -96,7 +96,9 @@ export function StringAnalysisPanel({ artifact }: { artifact: AnalysisArtifact }
           <strong>Largest strings</strong>
           {report.topStringsBySize.slice(0, 10).map((entry) => (
             <div key={entry.objectId} style={{ color: "#cbd5e1", fontSize: "0.9rem" }}>
-              <Link to={`/heap-explorer/object-inspector`}>{`0x${entry.objectId.toString(16)}`}</Link>
+              <Link
+                to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(`0x${entry.objectId.toString(16)}`)}`}
+              >{`0x${entry.objectId.toString(16)}`}</Link>
               {" · "}
               {formatBytes(entry.byteLength)} · {entry.value.slice(0, 80)}
               {entry.value.length > 80 ? "…" : ""}
