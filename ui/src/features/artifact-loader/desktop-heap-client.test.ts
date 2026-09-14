@@ -3,6 +3,7 @@ import "../../test/setup";
 import { afterEach, describe, expect, it } from "bun:test";
 
 import {
+  getDesktopLogPath,
   loadHeapFromSource,
   pickHeapFile,
   runDesktopAnalysis,
@@ -88,5 +89,14 @@ describe("desktop-heap-client", () => {
 
   it("rejects load when the bridge is unavailable", async () => {
     await expect(loadHeapFromSource("src-1")).rejects.toThrow(/unavailable/i);
+  });
+
+  it("returns undefined log path without a bridge and forwards when present", async () => {
+    await expect(getDesktopLogPath()).resolves.toBeUndefined();
+
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      getDesktopLogPath: async () => "/tmp/mnemosyne-logs/desktop.log",
+    };
+    await expect(getDesktopLogPath()).resolves.toBe("/tmp/mnemosyne-logs/desktop.log");
   });
 });

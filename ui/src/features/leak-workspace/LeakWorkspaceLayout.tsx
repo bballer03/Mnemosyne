@@ -5,6 +5,9 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { useLeakWorkspaceStore } from "./leak-workspace-store";
 
+/** Stable empty array so Zustand v5 selectors do not allocate a new `[]` each render. */
+const EMPTY_RECENT_OBJECT_TARGETS: string[] = [];
+
 const shellStyle = {
   display: "grid",
   gap: "1rem",
@@ -52,9 +55,12 @@ export function LeakWorkspaceLayout() {
   const encodedLeakId = encodeURIComponent(resolvedLeakId);
   const basePath = `/leaks/${encodedLeakId}`;
   const leak = artifact?.leaks.find((entry) => entry.id === leakId);
-  const recentObjectTargets = useLeakWorkspaceStore(
-    (state) => (leak?.id ? state.recentObjectTargetsByLeak[leak.id] ?? [] : []),
-  );
+  const recentObjectTargets = useLeakWorkspaceStore((state) => {
+    if (!leak?.id) {
+      return EMPTY_RECENT_OBJECT_TARGETS;
+    }
+    return state.recentObjectTargetsByLeak[leak.id] ?? EMPTY_RECENT_OBJECT_TARGETS;
+  });
   const tabs = [
     { to: `${basePath}/overview`, label: "Overview" },
     { to: `${basePath}/explain`, label: "Explain" },

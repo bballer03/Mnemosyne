@@ -103,9 +103,33 @@ describe("ArtifactLoaderPage", () => {
     expect(page.queryByText(/\/tmp\//i)).not.toBeInTheDocument();
   });
 
+  it("surfaces the desktop host log path in Validation Console when the bridge provides it", async () => {
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      getDesktopLogPath: async () => "C:\\Users\\dev\\AppData\\Local\\mnemosyne\\logs\\desktop.log",
+      pickHeapFile: async () => ({ status: "unavailable" as const }),
+      loadHeapFromSource: async () => {
+        throw new Error("unused");
+      },
+      runDesktopAnalysis: async () => {
+        throw new Error("unused");
+      },
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+
+    await waitFor(() => {
+      expect(
+        page.getAllByText(/C:\\Users\\dev\\AppData\\Local\\mnemosyne\\logs\\desktop\.log/).length,
+      ).toBeGreaterThanOrEqual(2);
+    });
+    expect(page.getByText(/desktop log:/i)).toBeInTheDocument();
+  });
+
   it("opens a selected desktop heap by opaque source id and loads only the basename", async () => {
     const user = userEvent.setup();
     let analyzedSourceId: string | undefined;
+    let analyzedInput: Record<string, unknown> | undefined;
 
     window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
       pickHeapFile: async () => ({
@@ -118,6 +142,7 @@ describe("ArtifactLoaderPage", () => {
       },
       runDesktopAnalysis: async (input) => {
         analyzedSourceId = input.sourceId;
+        analyzedInput = input as unknown as Record<string, unknown>;
         return JSON.parse(createArtifactJson());
       },
     };
@@ -130,8 +155,50 @@ describe("ArtifactLoaderPage", () => {
       expect(page.getByText(/analyzed fixture\.hprof/i)).toBeInTheDocument();
     });
     expect(analyzedSourceId).toBe("src-opaque");
+    expect(analyzedInput).toMatchObject({
+      sourceId: "src-opaque",
+      mode: "incident",
+      enableClassloaders: true,
+      enableTopInstances: true,
+      enableThreads: false,
+      enableStrings: false,
+      enableCollections: false,
+      enableByReferrer: false,
+      enableDuplicateArrays: false,
+    });
     expect(page.queryByText(/\/home\//i)).not.toBeInTheDocument();
     expect(page.queryByText(/C:\\/i)).not.toBeInTheDocument();
+  });
+
+  it("shows Analyzing… while lean first-open analysis is in flight", async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred<unknown>();
+
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      pickHeapFile: async () => ({
+        status: "selected",
+        sourceId: "src-opaque",
+        displayName: "fixture.hprof",
+      }),
+      loadHeapFromSource: async () => {
+        throw new Error("unused");
+      },
+      runDesktopAnalysis: async () => deferred.promise,
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^open heap dump$/i }));
+
+    await waitFor(() => {
+      expect(page.getByRole("button", { name: /analyzing/i })).toBeDisabled();
+    });
+
+    deferred.resolve(JSON.parse(createArtifactJson()));
+
+    await waitFor(() => {
+      expect(page.getByRole("button", { name: /^open heap dump$/i })).toBeEnabled();
+    });
   });
 
   it("treats desktop heap picker cancellation as a neutral status", async () => {

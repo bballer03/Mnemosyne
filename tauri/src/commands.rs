@@ -1,32 +1,27 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::Ordering,
-};
+use std::{path::PathBuf, sync::atomic::Ordering};
 
+use mnemosyne_core::snapshot::SnapshotManifest;
+use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
     analysis::{
         analyze_heap, analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest,
         ObjectInspection,
     },
     diff::ObjectDiffReport,
-    evaluate,
-    focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
-    parse_hprof_overview_file,
-    propose_fix_with_config,
+    evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file,
+    parse_hprof_file_with_options, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
-    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, OverviewOptions, ParseOptions,
-    Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult, HistogramResult,
+    HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest, OverviewOptions,
+    ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult,
 };
-use mnemosyne_core::snapshot::SnapshotManifest;
-use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_desktop_session::{
     ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
     close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
     default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
     find_all_gc_paths_for_session, get_ai_session_for_session, get_workflow_for_session,
-    graph_has_field_data, install_field_data_cache_if_still_current, inspect_object_for_session,
+    graph_has_field_data, inspect_object_for_session, install_field_data_cache_if_still_current,
     list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
     remove_snapshot_for_session, resume_ai_session_for_session, save_snapshot_for_session,
@@ -45,8 +40,7 @@ use crate::state::HeapSession;
 const NO_HEAP_LOADED: &str = "No heap loaded";
 const LOCK_ERROR: &str = "Heap session lock poisoned";
 const UNKNOWN_SOURCE: &str = "Unknown heap source";
-const INVALID_HEAP_EXTENSION: &str =
-    "Selected file must use a .hprof or .bin extension";
+const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin extension";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,8 +90,14 @@ fn map_native_error(error: impl ToString) -> String {
 }
 
 fn sanitize_analyze_response_value(mut value: Value, display_name: &str) -> Value {
-    if let Some(summary) = value.get_mut("summary").and_then(|summary| summary.as_object_mut()) {
-        summary.insert("heap_path".to_string(), Value::String(display_name.to_string()));
+    if let Some(summary) = value
+        .get_mut("summary")
+        .and_then(|summary| summary.as_object_mut())
+    {
+        summary.insert(
+            "heap_path".to_string(),
+            Value::String(display_name.to_string()),
+        );
     }
     value
 }
@@ -153,14 +153,16 @@ pub async fn run_desktop_analysis(
         );
     }
 
-    // Incident-response defaults: useful bounded set without AI.
+    // Home Open-heap / incident defaults: dashboard-useful, field-data light.
+    // Strings/collections/threads/duplicate_arrays force retain_field_data and
+    // multi-GB RSS on large dumps — opt in via custom flags from other surfaces.
     let enable_classloaders = input.enable_classloaders.unwrap_or(true);
-    let enable_threads = input.enable_threads.unwrap_or(true);
-    let enable_strings = input.enable_strings.unwrap_or(true);
-    let enable_collections = input.enable_collections.unwrap_or(true);
+    let enable_threads = input.enable_threads.unwrap_or(false);
+    let enable_strings = input.enable_strings.unwrap_or(false);
+    let enable_collections = input.enable_collections.unwrap_or(false);
     let enable_top_instances = input.enable_top_instances.unwrap_or(true);
-    let enable_by_referrer = input.enable_by_referrer.unwrap_or(true);
-    let enable_duplicate_arrays = input.enable_duplicate_arrays.unwrap_or(true);
+    let enable_by_referrer = input.enable_by_referrer.unwrap_or(false);
+    let enable_duplicate_arrays = input.enable_duplicate_arrays.unwrap_or(false);
     let top_n = input.top_n.unwrap_or(25);
     let min_collection_capacity = input.min_collection_capacity.unwrap_or(16);
 
@@ -179,8 +181,14 @@ pub async fn run_desktop_analysis(
             .map_err(|_| LOCK_ERROR.to_string())?;
         state.bump_session_epoch();
         *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
     }
 
     let request = AnalyzeRequest {
@@ -201,9 +209,45 @@ pub async fn run_desktop_analysis(
         min_duplicate_count: 2,
     };
 
-    let (response, object_graph, _dominator) = analyze_heap_capturing_graph(request)
-        .await
-        .map_err(map_native_error)?;
+    let file_bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
+    let started = std::time::Instant::now();
+    tracing::info!(
+        %display_name,
+        source_id = %input.source_id,
+        mode,
+        file_bytes,
+        enable_classloaders,
+        enable_threads,
+        enable_strings,
+        enable_collections,
+        enable_top_instances,
+        enable_by_referrer,
+        enable_duplicate_arrays,
+        "run_desktop_analysis: starting (lean Home defaults skip field-data reports unless explicitly enabled)"
+    );
+
+    let (response, object_graph, _dominator) = match analyze_heap_capturing_graph(request).await {
+        Ok(result) => result,
+        Err(error) => {
+            let mapped = map_native_error(error);
+            tracing::error!(
+                %display_name,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                error = %mapped,
+                "run_desktop_analysis: failed"
+            );
+            return Err(mapped);
+        }
+    };
+
+    let object_count = object_graph.as_ref().map(|graph| graph.object_count());
+    tracing::info!(
+        %display_name,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        object_count,
+        leak_count = response.leaks.len(),
+        "run_desktop_analysis: completed"
+    );
 
     let _session = state
         .session_mutation
@@ -211,8 +255,14 @@ pub async fn run_desktop_analysis(
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = object_graph;
-    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+    *state
+        .field_data_graph
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state
+        .heap_path
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
     let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
     Ok(sanitize_analyze_response_value(raw, &display_name))
@@ -319,9 +369,7 @@ pub async fn run_ci_check(
 
     let resolved_mode = match requested_mode {
         AnalysisMode::Auto => {
-            let size = std::fs::metadata(&path)
-                .map_err(map_native_error)?
-                .len();
+            let size = std::fs::metadata(&path).map_err(map_native_error)?.len();
             AnalysisMode::Auto.resolve(size)
         }
         mode => mode,
@@ -482,16 +530,17 @@ pub async fn generate_desktop_flamegraph(
             .map_err(|_| LOCK_ERROR.to_string())?;
         state.bump_session_epoch();
         *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph.clone());
-        *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
     }
 
-    let stacks = collapse(
-        root,
-        &graph,
-        &dominator,
-        &CollapseOptions::default(),
-    );
+    let stacks = collapse(root, &graph, &dominator, &CollapseOptions::default());
     let mut buffer = Vec::new();
     render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
     let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
@@ -580,6 +629,7 @@ pub async fn pick_heap_file(
     app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<PickHeapFileResult, String> {
+    tracing::info!("pick_heap_file: opening native file dialog");
     let picked = app
         .dialog()
         .file()
@@ -587,19 +637,25 @@ pub async fn pick_heap_file(
         .blocking_pick_file();
 
     let Some(file_path) = picked else {
+        tracing::info!("pick_heap_file: cancelled");
         return Ok(PickHeapFileResult::Cancelled);
     };
 
     let path = match file_path.into_path() {
         Ok(path) => path,
-        Err(_) => return Ok(PickHeapFileResult::Unavailable),
+        Err(error) => {
+            tracing::warn!(error = %error, "pick_heap_file: path conversion failed");
+            return Ok(PickHeapFileResult::Unavailable);
+        }
     };
 
     let path_string = path.to_string_lossy().into_owned();
     if !is_supported_heap_path(&path_string) {
+        tracing::warn!(ext_ok = false, "pick_heap_file: unsupported extension");
         return Err(INVALID_HEAP_EXTENSION.to_string());
     }
 
+    let file_bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
     let source_id = Uuid::new_v4().to_string();
     let display_name = display_name_for_path(&path_string);
     let mut sources = state
@@ -608,10 +664,26 @@ pub async fn pick_heap_file(
         .map_err(|_| LOCK_ERROR.to_string())?;
     sources.insert(source_id.clone(), path_string);
 
+    tracing::info!(
+        %display_name,
+        %source_id,
+        file_bytes,
+        "pick_heap_file: selected"
+    );
+
     Ok(PickHeapFileResult::Selected {
         source_id,
         display_name,
     })
+}
+
+/// Absolute path to the desktop host log file (for Support / Validation Console).
+/// Path is the log location itself — not a heap path.
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_desktop_log_path() -> String {
+    crate::logging::log_file_path()
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -634,7 +706,10 @@ pub async fn load_heap_from_source(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<HeapLoadSummary, String> {
+pub async fn load_heap(
+    path: String,
+    state: State<'_, HeapSession>,
+) -> Result<HeapLoadSummary, String> {
     if !is_supported_heap_path(&path) {
         return Err(INVALID_HEAP_EXTENSION.to_string());
     }
@@ -667,8 +742,14 @@ async fn load_heap_internal(
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
-    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+    *state
+        .field_data_graph
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state
+        .heap_path
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
     Ok(summary)
 }
@@ -686,8 +767,14 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
 
     state.bump_session_epoch();
     *graph = None;
-    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state
+        .field_data_graph
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state
+        .heap_path
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = None;
 
     Ok(())
 }
@@ -751,7 +838,8 @@ pub async fn query_heap(
     spawn_blocking(move || {
         let dominator = mnemosyne_core::build_dominator_tree(&graph);
         let query = parse_query(&input.query).map_err(|error| error.to_string())?;
-        let result = execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
+        let result =
+            execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
 
         Ok(HeapQueryResult {
             columns: result.columns,
@@ -848,33 +936,27 @@ pub async fn inspect_object(
     };
 
     let (inspection, refreshed_field_graph) = spawn_blocking(move || {
-        let (inspect_graph, refreshed_field_graph) =
-            if retain_field_data && !graph_has_field_data(&graph) {
-                if let Some(cached) =
-                    cached_field_graph.filter(|cached| graph_has_field_data(cached))
-                {
-                    (cached, None)
-                } else {
-                    let reloaded = parse_hprof_file_with_options(
-                        &heap_path,
-                        ParseOptions {
-                            retain_field_data: true,
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                    (reloaded.clone(), Some(reloaded))
-                }
+        let (inspect_graph, refreshed_field_graph) = if retain_field_data
+            && !graph_has_field_data(&graph)
+        {
+            if let Some(cached) = cached_field_graph.filter(|cached| graph_has_field_data(cached)) {
+                (cached, None)
             } else {
-                (graph, None)
-            };
+                let reloaded = parse_hprof_file_with_options(
+                    &heap_path,
+                    ParseOptions {
+                        retain_field_data: true,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+                (reloaded.clone(), Some(reloaded))
+            }
+        } else {
+            (graph, None)
+        };
 
-        inspect_object_for_session(
-            &inspect_graph,
-            &heap_path,
-            &object_id,
-            retain_field_data,
-        )
-        .map(|inspection| (inspection, refreshed_field_graph))
+        inspect_object_for_session(&inspect_graph, &heap_path, &object_id, retain_field_data)
+            .map(|inspection| (inspection, refreshed_field_graph))
     })
     .await
     .map_err(|error| error.to_string())??;
@@ -918,11 +1000,9 @@ pub async fn find_all_gc_paths(
     let heap_path = require_loaded_heap_path(&state)?;
     let max_paths = max_paths.unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS);
 
-    spawn_blocking(move || {
-        find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    spawn_blocking(move || find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1092,12 +1172,7 @@ pub async fn create_ai_session(
 
     let config = read_config(&state)?;
     let store = ai_session_store_for_config(&config);
-    create_ai_session_for_session(
-        &store,
-        &config,
-        CreateAiSessionInput { heap_path },
-    )
-    .await
+    create_ai_session_for_session(&store, &config, CreateAiSessionInput { heap_path }).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1234,8 +1309,14 @@ pub async fn open_snapshot(
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
     *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
-    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
+    *state
+        .field_data_graph
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state
+        .heap_path
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
 
     Ok(summary)
 }
@@ -1249,7 +1330,9 @@ fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, St
         .ok_or_else(|| NO_HEAP_LOADED.to_string())
 }
 
-fn require_loaded_graph(state: &State<'_, HeapSession>) -> Result<mnemosyne_core::hprof::ObjectGraph, String> {
+fn require_loaded_graph(
+    state: &State<'_, HeapSession>,
+) -> Result<mnemosyne_core::hprof::ObjectGraph, String> {
     state
         .graph
         .read()
@@ -1354,4 +1437,3 @@ mod pick_heap_file_result_tests {
         assert!(value.get("display_name").is_none());
     }
 }
-

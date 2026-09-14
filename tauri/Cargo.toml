@@ -10,7 +10,7 @@
 
 [package]
 name = "mnemosyne-desktop"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "Mnemosyne desktop app - native JVM heap analysis"
 license = "Apache-2.0"
@@ -25,6 +25,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 dirs = "5"
 tauri-plugin-dialog = "2"
 uuid = { version = "1.26.1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

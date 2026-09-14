@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-14
+
+### Fixed
+- Desktop **Open heap dump** first-open no longer runs field-data-heavy incident defaults (strings/collections/threads/duplicate arrays/by-referrer). Those forced `retain_field_data` and multi-GB RSS on large dumps, so the UI appeared stuck on “Opening…”. First open now runs a lean dashboard pass (histogram, leaks, classloaders, top instances).
+- Open-heap button phases: **Opening…** only while the native picker is up; **Analyzing…** while analysis runs.
+
+### Added
+- Desktop host file logging (`tracing` → `desktop.log` under the platform data-local dir, e.g. `%LOCALAPPDATA%\mnemosyne\logs` on Windows). Override with `MNEMOSYNE_LOG_DIR`; level via `RUST_LOG`. Open heap / analysis start/finish/failure are logged with display name, size, and mode flags (no full heap paths).
+- `get_desktop_log_path` bridge + Validation Console tip so Support can find the log without digging through AppData.
+
+### Changed
+- GitHub Actions: pin newer checkout / artifact / Docker Buildx / softprops-gh-release / rust-cache action SHAs (Node 24-ready where applicable).
+- Docker builder base: `rust:1.97-bookworm`.
+- Cargo.lock refresh; `inferno` pin relaxed to `0.12` in core.
+- UI deps: zustand 5, jsdom 29, and current patch/minor bumps for TanStack / Vite 5 / testing libs. Tailwind 4, Vite 8 / `@vitejs/plugin-react` 6, and React 19 types remain deferred (breaking / peer mismatches; track with M24 / 0.5).
+- Workspace / Tauri / Homebrew versions bump to `0.4.3`. Homebrew SHA-256 placeholders until archives publish.
+
 ## [0.4.2] - 2026-09-14
 
 ### Fixed
