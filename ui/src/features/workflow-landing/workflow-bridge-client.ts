@@ -36,7 +36,7 @@
 //     snake_case with no `#[serde(rename_all)]` override, so the wire JSON
 //     keys equal the Rust field names verbatim.
 //
-// Tauri wiring: `tauri/src/bridge.ts` does not inject
+// Tauri wiring: `ui/src/host/tauri-bridge.ts` injects (see also deprecated stub `tauri/src/bridge.ts`)
 // `__MNEMOSYNE_WORKFLOW_BRIDGE__` yet (no `describe_workflow`/`start_workflow`/
 // `next_step`/`list_snapshots` Tauri commands exist in `tauri/src/commands.rs`).
 // Per the design doc's scope cap (§4 "Out"), this slice does not add Tauri

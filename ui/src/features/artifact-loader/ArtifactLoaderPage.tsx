@@ -186,11 +186,17 @@ export function ArtifactLoaderPage() {
       }
 
       if (picked.status === "unavailable") {
+        const inTauri =
+          typeof globalThis !== "undefined" && "__TAURI_INTERNALS__" in globalThis;
         setDesktopHeapMessage(
-          "Open heap dump is available in the desktop app. In the browser, import an analysis JSON artifact instead.",
+          inTauri
+            ? "Desktop host is running but the heap bridge failed to load. Restart the app, or import an analysis JSON artifact."
+            : "Open heap dump needs the desktop app. In the browser, import an analysis JSON artifact instead.",
         );
         setStatusLines((current) => [
-          `[${formatTimestamp(new Date())}] desktop heap picker unavailable`,
+          `[${formatTimestamp(new Date())}] desktop heap picker unavailable${
+            inTauri ? " (tauri without bridge)" : " (browser)"
+          }`,
           ...current,
         ]);
         return;

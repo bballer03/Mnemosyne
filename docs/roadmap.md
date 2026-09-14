@@ -1,11 +1,11 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-14 (docs sync: UI-first M20–M23 progress on `sync/m15g-m16bcd`; final Terra/Sol closeouts pending)  
+> **Last updated:** 2026-09-14 (v0.4.0 shipped; **M24 Continuous Heap Investigation** next UI milestone — [design](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md); Track A desktop bridge injection prerequisite)  
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
 >
-> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. Those numbers **collide** with the older post-M16 candidate rows still listed below (Bounded MAT / Credibility / Advanced OQL / Extension Runtime). Prefer the UI-first plan + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
+> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. **M24 = Continuous Heap Investigation** (heap-first workbench IA) is the active follow-on — see [2026-09-14-m24-continuous-heap-investigation-design.md](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md). Older post-M16 candidate rows below still collide on M20–M23 numbers; prefer UI-first plan + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
 
 Mnemosyne has closed M1 through M7 and shipped `v0.3.0` (2026-04-26) across GitHub Releases, GHCR, and Homebrew. The active roadmap is now a Tech PM **post-v0.3.0 refresh**: an honest MAT parity matrix, an explicit differentiator inventory, a backlog of candidate M8+ milestones, and a recommended next milestone for orchestration to schedule.
 
@@ -475,6 +475,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M15 MAT Backend Parity Completion** | [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) | ✅ Shipped (slices 15.A–15.F implementation, 15.G doc-sync) |
 | **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
 | **M23 AI-First Guided Investigation (UI-first plan)** | [design/milestone-23-ai-first-guided-investigation.md](design/milestone-23-ai-first-guided-investigation.md), [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md) | 🟡 Slices 23.A–C shipped; 23.D evidence recorded; Terra/Sol final verdict pending |
+| **M24 Continuous Heap Investigation** | [superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md) | 🧭 Design; implementation pending (Track A bridge injection prerequisite) |
 
 ---
 
