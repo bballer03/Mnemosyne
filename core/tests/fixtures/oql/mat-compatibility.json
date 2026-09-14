@@ -204,9 +204,9 @@
       "category": "cycles",
       "status": "shipped",
       "equivalency": "non-equivalency",
-      "non_equivalency_reason": "Cycle-safe hop traversal with row omission is a Mnemosyne safety bound; not a recorded MAT golden result. Non-equivalency.",
+      "non_equivalency_reason": "Cycle-safe hop traversal omits only when a revisit would continue further hops; final self-refs are projected. Non-equivalency.",
       "mat_refs": [],
-      "query": "SELECT OBJECTS n.parent.link FROM \"com.example.Node\" WHERE count = 1",
+      "query": "SELECT OBJECTS n.parent.link.target FROM \"com.example.Node\" WHERE count = 1",
       "expect": {
         "parse": "ok",
         "execute": "ok",

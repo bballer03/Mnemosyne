@@ -497,7 +497,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Traverse under the existing result/work budget with a visited set per source path.
 - [x] Preserve single-hop output and error behavior.
 - [x] Run query, CLI, MCP, and corpus tests. (parser/executor green; corpus covers multi-hop cases)
-- [ ] Request a Terra review focused on traversal explosion and semantic drift. (queued after late completion notification)
+- [x] Request a Terra review focused on traversal explosion and semantic drift. (Important findings closed after review.)
 
 ### Slice 22.D — Finish small operator and MAT-like UI polish
 
