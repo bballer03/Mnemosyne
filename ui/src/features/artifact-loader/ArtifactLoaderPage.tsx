@@ -3,6 +3,9 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
+import { pickHeapFile, runDesktopAnalysis } from "./desktop-heap-client";
+import { rememberDesktopHeapSource } from "./desktop-heap-session";
+import { parseAnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "./use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { GuidedLanding } from "../workflow-landing/GuidedLanding";
@@ -85,6 +88,8 @@ export function ArtifactLoaderPage() {
   } = useArtifactStore();
   const resetDashboardState = useDashboardStore((state) => state.reset);
   const [isLoading, setIsLoading] = useState(false);
+  const [isOpeningHeap, setIsOpeningHeap] = useState(false);
+  const [desktopHeapMessage, setDesktopHeapMessage] = useState<string | undefined>();
   const [isCompactLayout, setIsCompactLayout] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 980 : false,
   );
@@ -161,6 +166,77 @@ export function ArtifactLoaderPage() {
     }
   }
 
+  async function handleOpenHeapDump() {
+    setDesktopHeapMessage(undefined);
+    setIsOpeningHeap(true);
+    setStatusLines((current) => [
+      `[${formatTimestamp(new Date())}] opening heap dump picker`,
+      ...current,
+    ]);
+
+    try {
+      const picked = await pickHeapFile();
+      if (picked.status === "cancelled") {
+        setDesktopHeapMessage("Heap dump selection cancelled.");
+        setStatusLines((current) => [
+          `[${formatTimestamp(new Date())}] heap dump selection cancelled`,
+          ...current,
+        ]);
+        return;
+      }
+
+      if (picked.status === "unavailable") {
+        setDesktopHeapMessage(
+          "Open heap dump is available in the desktop app. In the browser, import an analysis JSON artifact instead.",
+        );
+        setStatusLines((current) => [
+          `[${formatTimestamp(new Date())}] desktop heap picker unavailable`,
+          ...current,
+        ]);
+        return;
+      }
+
+      setStatusLines((current) => [
+        `[${formatTimestamp(new Date())}] heap selected: ${picked.displayName}`,
+        `[${formatTimestamp(new Date())}] running incident-response analysis`,
+        ...current,
+      ]);
+      rememberDesktopHeapSource(picked.sourceId, picked.displayName);
+
+      const raw = await runDesktopAnalysis({
+        sourceId: picked.sourceId,
+        mode: "incident",
+      });
+      const artifact = parseAnalysisArtifact(raw);
+      const loadedAt = new Date();
+      setArtifact(picked.displayName, artifact);
+      resetDashboardState();
+      setShouldNavigateToDashboard(true);
+      addRecentLoad({
+        fileName: picked.displayName,
+        sizeLabel: `${artifact.summary.totalObjects.toLocaleString()} objects`,
+        loadedAtLabel: formatTimestamp(loadedAt),
+        heapPath: artifact.summary.heapPath,
+      });
+      setDesktopHeapMessage(
+        `Analyzed ${picked.displayName}: ${artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
+      );
+      setStatusLines((current) => [
+        `[${formatTimestamp(loadedAt)}] desktop analysis ready: ${picked.displayName}`,
+        ...current,
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to open heap dump";
+      setDesktopHeapMessage(message);
+      setStatusLines((current) => [
+        `[${formatTimestamp(new Date())}] heap open error: ${message}`,
+        ...current,
+      ]);
+    } finally {
+      setIsOpeningHeap(false);
+    }
+  }
+
   const previewItems = [
     {
       title: "Summary",
@@ -231,9 +307,9 @@ export function ArtifactLoaderPage() {
             lineHeight: 1.7,
           }}
         >
-          Choose an analysis artifact to begin. Load a Mnemosyne analysis JSON derived from
-          AnalyzeResponse to inspect summary metrics, leak triage hints, graph counts, and
-          histogram coverage entirely in the browser.
+          Choose an analysis artifact to begin, or open a heap dump in the desktop app.
+          Browser mode keeps JSON artifact import; desktop mode can pick `.hprof` / `.bin`
+          without exposing the absolute path to the UI.
         </p>
       </section>
 
@@ -248,6 +324,39 @@ export function ArtifactLoaderPage() {
         }}
       >
         <div style={{ display: "grid", gap: "1.5rem" }}>
+          <section style={panelStyle()}>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <h3 style={{ margin: 0 }}>Open heap dump</h3>
+              <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
+                Desktop first-run path: select a local `.hprof` or `.bin` file. The absolute path
+                stays in the native session; React only sees the filename and an opaque source id.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleOpenHeapDump();
+                }}
+                disabled={isOpeningHeap || isLoading}
+                style={{
+                  justifySelf: "start",
+                  border: "1px solid #38bdf8",
+                  borderRadius: 999,
+                  background: "rgba(56, 189, 248, 0.12)",
+                  color: "#e0f2fe",
+                  padding: "0.55rem 1rem",
+                  cursor: isOpeningHeap || isLoading ? "wait" : "pointer",
+                }}
+              >
+                {isOpeningHeap ? "Opening…" : "Open heap dump"}
+              </button>
+              {desktopHeapMessage ? (
+                <p role="status" style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.6 }}>
+                  {desktopHeapMessage}
+                </p>
+              ) : null}
+            </div>
+          </section>
+
           <ArtifactDropzone onFileSelected={handleFile} />
 
           <section style={panelStyle()}>

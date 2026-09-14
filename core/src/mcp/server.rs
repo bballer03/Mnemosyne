@@ -1,12 +1,14 @@
 use crate::{
     analysis::{
-        analyze_heap, analyze_heap_from_graph, detect_duplicate_classes, detect_leaks, focus_leaks,
-        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AiChatTurn,
-        AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, analyze_heap_from_graph, analyze_heap_with_graph, detect_duplicate_classes,
+        detect_leaks, focus_leaks, generate_ai_chat_turn_async, generate_ai_insights_async,
+        validate_leak_id, AiChatTurn, AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind,
+        LeakSeverity,
     },
     config::AppConfig,
-    diff::{DiffRequest, DiffResult},
+    diff::{DiffMode, DiffRequest, DiffResult, IdentityStrategy},
     errors::{CoreError, CoreResult},
+    evaluate,
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{
         find_all_gc_paths, find_all_gc_paths_in_graph, find_gc_path, find_gc_path_in_graph,
@@ -14,14 +16,16 @@ use crate::{
     },
     hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
+    mcp::artifact::{default_artifact_dir, ArtifactStore},
     mcp::session::{
         new_session_id, timestamp_now, top_leak_ids, McpSessionStore, PersistedAiSession,
         SessionAnalysisSnapshot, SessionConversationSnapshot, MCP_SESSION_VERSION,
     },
     query::{execute_query, parse_query},
+    report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     snapshot::{SnapshotPayload, SnapshotStore},
     workflow::{WorkflowKind, WorkflowState, WorkflowStore},
-    HistogramGroupBy, ParseOptions,
+    HistogramGroupBy, ParseOptions, Policy, PolicyInput, PolicyResult, Predicate, Severity,
 };
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -41,6 +45,7 @@ pub struct McpServerOptions {
 /// responses on stdout.
 pub async fn serve(options: McpServerOptions, config: AppConfig) -> CoreResult<()> {
     info!(host = %options.host, port = options.port, "starting MCP server over stdio");
+    ArtifactStore::new(default_artifact_dir()).cleanup_expired();
 
     let stdin = io::stdin();
     let reader = BufReader::new(stdin);
@@ -320,6 +325,24 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": detail })),
             },
+            CoreError::Unsupported(detail)
+                if detail.starts_with("artifact_size_limit_exceeded:") =>
+            {
+                diff_feature_error_details("artifact_size_limit_exceeded", detail)
+            }
+            CoreError::Unsupported(detail)
+                if matches!(detail.as_str(), "artifact_not_found" | "artifact_expired") =>
+            {
+                Self {
+                    code: if detail == "artifact_expired" {
+                        "artifact_expired"
+                    } else {
+                        "artifact_not_found"
+                    },
+                    message,
+                    details: Some(json!({ "detail": detail })),
+                }
+            }
             CoreError::Unsupported(detail) => Self {
                 code: "unsupported",
                 message,
@@ -554,6 +577,31 @@ struct DetectClassloaderLeaksParams {
     heap_path: String,
 }
 
+/// M18 Slice 18.A/18.B: policy gate — mirrors `mnemosyne-cli ci-check`
+/// (including optional baseline for `object_growth_threshold`) without
+/// rendered output formats.
+#[derive(Debug, Deserialize, Default)]
+struct CiCheckParams {
+    heap_path: String,
+    #[serde(default)]
+    policy_path: Option<String>,
+    #[serde(default)]
+    policy_toml: Option<String>,
+    #[serde(default)]
+    mode: AnalysisMode,
+    #[serde(default)]
+    fail_on: Severity,
+    #[serde(default)]
+    snapshot: Option<String>,
+    /// Before-heap path for `object_growth_threshold` rules (M18.B). Mutually
+    /// exclusive with `baseline_snapshot`.
+    #[serde(default)]
+    baseline: Option<String>,
+    /// Before-heap snapshot key alternative to `baseline` (M18.B).
+    #[serde(default)]
+    baseline_snapshot: Option<String>,
+}
+
 /// M11 Slice 11.D: params for the `describe_workflow` tool.
 #[derive(Debug, Deserialize)]
 struct DescribeWorkflowParams {
@@ -688,6 +736,75 @@ struct OpenSnapshotParams {
     key: String,
 }
 
+/// M18 Slice 18.D: params for the `save_snapshot` tool.
+#[derive(Debug, Deserialize)]
+struct SaveSnapshotParams {
+    heap_path: String,
+    #[serde(default)]
+    retain_field_data: bool,
+}
+
+/// M18 Slice 18.D: params for the `remove_snapshot` tool.
+#[derive(Debug, Deserialize)]
+struct RemoveSnapshotParams {
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateFlamegraphParams {
+    heap_path: String,
+    #[serde(default)]
+    snapshot: Option<String>,
+    #[serde(default = "default_flame_root")]
+    root: FlameRoot,
+    #[serde(default)]
+    format: McpFlameFormat,
+    #[serde(default = "default_flame_min_fraction")]
+    min_fraction: f64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default = "default_flame_max_frames")]
+    max_frames: usize,
+    #[serde(default)]
+    mode: AnalysisMode,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadArtifactParams {
+    artifact_id: String,
+    #[serde(default)]
+    offset_bytes: u64,
+    #[serde(default = "default_artifact_read_max")]
+    max_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteArtifactParams {
+    artifact_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+enum McpFlameFormat {
+    #[default]
+    Svg,
+    FoldedStack,
+    Json,
+}
+
+fn default_flame_min_fraction() -> f64 {
+    0.001
+}
+fn default_flame_max_frames() -> usize {
+    5_000
+}
+fn default_flame_root() -> FlameRoot {
+    FlameRoot::Dominator
+}
+fn default_artifact_read_max() -> u64 {
+    crate::mcp::artifact::ARTIFACT_INLINE_MAX_BYTES
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryHeapParams {
     heap_path: String,
@@ -755,6 +872,8 @@ struct DiffHeapsParams {
     object_diff_min_retained: u64,
     #[serde(default)]
     retain_field_data: bool,
+    #[serde(default)]
+    cross_reference_leaks: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -856,6 +975,30 @@ fn snapshot_store() -> SnapshotStore {
     SnapshotStore::new(default_snapshot_dir())
 }
 
+/// Validates that `key` is a snapshot-store SHA-256 hash, not an arbitrary
+/// filesystem path. M18 Slice 18.D restricts `remove_snapshot` mutations to
+/// configured-store keys so callers cannot delete files outside the cache
+/// root via path traversal or absolute paths.
+fn validated_store_snapshot_key(key: &str) -> CoreResult<String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "snapshot key must not be empty".into(),
+        ));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+        return Err(CoreError::InvalidInput(
+            "remove_snapshot accepts a store key (SHA-256 hash) only, not a file path".into(),
+        ));
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CoreError::InvalidInput(
+            "remove_snapshot key must be a 64-character SHA-256 hex hash".into(),
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 /// `MNEMOSYNE_WORKFLOW_DIR` overrides the default on-disk root for persisted
 /// `WorkflowState` (M11 Slice 11.D). Mirrors `SNAPSHOT_DIR_ENV`/
 /// `default_snapshot_dir()` above exactly -- same env-var-then-
@@ -908,9 +1051,10 @@ fn parse_workflow_kind(kind: &str) -> CoreResult<WorkflowKind> {
         "tune_gc" => Ok(WorkflowKind::TuneGc),
         "traverse_object_graph" => Ok(WorkflowKind::TraverseObjectGraph),
         "compare_snapshots" => Ok(WorkflowKind::CompareSnapshots),
+        "classloader_leak" => Ok(WorkflowKind::ClassloaderLeak),
         other => Err(CoreError::InvalidInput(format!(
             "unknown workflow kind '{other}': expected one of triage_memory_leak, tune_gc, \
-             traverse_object_graph, compare_snapshots"
+             traverse_object_graph, compare_snapshots, classloader_leak"
         ))),
     }
 }
@@ -1040,7 +1184,7 @@ fn analysis_mode_param() -> Value {
 /// tool that gained the additive param (`parse_heap`, `analyze_heap`,
 /// `find_gc_path`, `inspect_object`, `query_heap`), mirroring how
 /// `analysis_mode_param()` shares one description across tools.
-const MCP_SNAPSHOT_PARAM_DESCRIPTION: &str = "SHA-256 hash or direct snapshot file path (see `open_snapshot`/`list_snapshots` and `mnemosyne snapshot save`). When set, uses the cached object graph instead of re-parsing heap_path/path -- an invalid, stale, or schema-mismatched key returns a structured snapshot_not_found/snapshot_stale_source/snapshot_schema_mismatch/snapshot_corrupt error rather than silently falling back to a fresh parse.";
+const MCP_SNAPSHOT_PARAM_DESCRIPTION: &str = "SHA-256 hash or direct snapshot file path (see `open_snapshot`/`list_snapshots`/`save_snapshot`/`remove_snapshot` and `mnemosyne snapshot save`). When set, uses the cached object graph instead of re-parsing heap_path/path -- an invalid, stale, or schema-mismatched key returns a structured snapshot_not_found/snapshot_stale_source/snapshot_schema_mismatch/snapshot_corrupt error rather than silently falling back to a fresh parse.";
 
 fn snapshot_param() -> Value {
     json!({
@@ -1059,6 +1203,209 @@ fn resolve_heap_mode(heap_path: &str, requested_mode: AnalysisMode) -> CoreResul
         }
         mode => Ok(mode),
     }
+}
+
+fn load_ci_check_policy(params: &CiCheckParams) -> CoreResult<Policy> {
+    match (&params.policy_path, &params.policy_toml) {
+        (Some(path), None) => Policy::from_toml_file(path),
+        (None, Some(toml)) => Policy::from_toml_str(toml),
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "exactly one of policy_path or policy_toml is required, not both".into(),
+        )),
+        (None, None) => Err(CoreError::InvalidInput(
+            "exactly one of policy_path or policy_toml is required".into(),
+        )),
+    }
+}
+
+fn ci_check_policy_label(params: &CiCheckParams) -> &str {
+    params.policy_path.as_deref().unwrap_or("(inline policy)")
+}
+
+fn is_explicit_overview_mode_mismatch(violation: &crate::Violation) -> bool {
+    violation.severity == Severity::Critical
+        && violation.actual.is_null()
+        && violation.expected.is_null()
+        && violation
+            .message
+            .contains("cannot run in explicit overview mode")
+}
+
+fn ci_check_exit_code(result: &PolicyResult, fail_on: Severity) -> i32 {
+    if result
+        .violations
+        .iter()
+        .any(is_explicit_overview_mode_mismatch)
+    {
+        4
+    } else if result
+        .violations
+        .iter()
+        .any(|violation| violation.severity >= fail_on)
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn ci_check_response(result: PolicyResult, fail_on: Severity) -> Value {
+    let exit_code = ci_check_exit_code(&result, fail_on);
+    json!({
+        "result": result,
+        "exit_code": exit_code,
+        "fail_on": fail_on,
+    })
+}
+
+fn resolve_ci_check_baseline(params: &CiCheckParams) -> CoreResult<Option<String>> {
+    match (&params.baseline, &params.baseline_snapshot) {
+        (Some(_), Some(_)) => Err(CoreError::InvalidInput(
+            "exactly one of baseline or baseline_snapshot is allowed, not both".into(),
+        )),
+        (None, None) => Ok(None),
+        (Some(path), None) => Ok(Some(path.clone())),
+        (None, Some(key)) => {
+            let store = snapshot_store();
+            let payload = store.load(key)?;
+            Ok(Some(payload.manifest.heap_path))
+        }
+    }
+}
+
+/// Runs the baseline-to-heap object diff `ci_check` needs for
+/// `object_growth_threshold` rules (M18.B), mirroring
+/// `mnemosyne-cli ci-check --baseline`.
+async fn run_ci_check_baseline_diff(
+    baseline: &str,
+    heap: &str,
+) -> CoreResult<crate::diff::ObjectDiffReport> {
+    let result = crate::diff::run_diff(DiffRequest {
+        before_path: baseline.into(),
+        after_path: heap.into(),
+        mode: DiffMode::Object,
+        identity_strategy: IdentityStrategy::default(),
+        retained_bucket_bits: 10,
+        min_retained_bytes: crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+        retained_change_threshold: crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+        top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+        retain_field_data: false,
+        cross_reference_leaks: false,
+    })
+    .await?;
+
+    match result {
+        DiffResult::Object(diff) => diff.object_diff.ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "object diff mode produced no object_diff section for baseline '{baseline}' -> '{heap}'"
+            ))
+        }),
+        DiffResult::Class(_) => Err(CoreError::InvalidInput(
+            "expected an object diff for baseline but got a class diff".into(),
+        )),
+    }
+}
+
+async fn run_ci_check(params: CiCheckParams, config: &AppConfig) -> CoreResult<Value> {
+    let requested_mode = params.mode;
+    let fail_on = params.fail_on;
+    let policy = load_ci_check_policy(&params)?;
+
+    let needs_baseline = policy
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
+
+    let baseline_path = resolve_ci_check_baseline(&params)?;
+
+    if needs_baseline && baseline_path.is_none() {
+        return Err(CoreError::ConfigError {
+            detail: format!(
+                "object_growth_threshold_requires_baseline: policy '{}' contains an \
+                 object_growth_threshold rule but baseline was not supplied",
+                ci_check_policy_label(&params)
+            ),
+            suggestion: Some(
+                "Pass baseline (or baseline_snapshot) so ci_check can diff it against the heap under test."
+                    .into(),
+            ),
+        });
+    }
+
+    let object_diff = match baseline_path.as_deref() {
+        Some(baseline) => Some(run_ci_check_baseline_diff(baseline, &params.heap_path).await?),
+        None => None,
+    };
+
+    let resolved_mode = resolve_heap_mode(&params.heap_path, requested_mode)?;
+
+    if params.snapshot.is_some() && resolved_mode == AnalysisMode::Overview {
+        return Err(CoreError::FeatureUnavailableInOverviewMode {
+            feature: "snapshot".into(),
+            hint: "re-run with mode=deep; snapshot keys load a cached deep-mode object graph."
+                .into(),
+        });
+    }
+
+    let result = match resolved_mode {
+        AnalysisMode::Overview => {
+            let summary =
+                parse_hprof_overview_file(&params.heap_path, &OverviewOptions::default())?;
+            evaluate(
+                &policy,
+                &PolicyInput::Overview(&summary),
+                requested_mode,
+                object_diff.as_ref(),
+            )
+        }
+        AnalysisMode::Deep => {
+            let enable_classloaders = policy
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.predicate, Predicate::ClassloaderLeakCount));
+
+            let mut request_config = config.clone();
+            request_config.ai.enabled = false;
+
+            let heap_path = params.heap_path.clone();
+            let request = AnalyzeRequest {
+                heap_path: params.heap_path,
+                config: request_config,
+                leak_options: LeakDetectionOptions::from(&config.analysis),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                enable_classloaders,
+                enable_threads: false,
+                enable_strings: false,
+                enable_collections: false,
+                enable_top_instances: false,
+                enable_by_referrer: false,
+                enable_duplicate_arrays: false,
+                top_n: 10,
+                min_collection_capacity: 16,
+                min_duplicate_count: 2,
+            };
+
+            let analysis = if let Some(key) = &params.snapshot {
+                let store = snapshot_store();
+                let payload = store.load_checked(key, &heap_path)?;
+                analyze_heap_from_graph(request, &payload.object_graph, &payload.dominator_tree)
+                    .await?
+            } else {
+                analyze_heap(request).await?
+            };
+
+            evaluate(
+                &policy,
+                &PolicyInput::Deep(&analysis),
+                requested_mode,
+                object_diff.as_ref(),
+            )
+        }
+        AnalysisMode::Auto => unreachable!("resolved MCP mode should never remain auto"),
+    };
+
+    Ok(ci_check_response(result, fail_on))
 }
 
 fn overview_options(top_n: Option<usize>) -> OverviewOptions {
@@ -1202,7 +1549,8 @@ fn tool_catalog() -> Value {
                     { "name": "retained_change_threshold", "type": "number", "required": false, "default": 1048576, "description": "Minimum |retained delta| in bytes for inclusion in retained_changed; default 1048576." },
                     { "name": "top_n", "type": "number", "required": false, "default": 50, "description": "Per-section result cap; default 50." },
                     { "name": "object_diff_min_retained", "type": "number", "required": false, "default": 4096, "description": "Skip objects whose retained size is below this floor; default 4096." },
-                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "Required when identity_strategy='full-fingerprint'." }
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "Required when identity_strategy='full-fingerprint'." },
+                    { "name": "cross_reference_leaks", "type": "boolean", "required": false, "default": false, "description": "Cross-reference added/retained_changed object deltas against after-heap leak suspects (object mode only)." }
                 ],
                 "output_schema": "HeapDiff (existing) extended with optional object_diff: ObjectDiffReport"
             },
@@ -1325,6 +1673,51 @@ fn tool_catalog() -> Value {
                 "output_schema": "Vec<SnapshotManifest>"
             },
             {
+                "name": "save_snapshot",
+                "description": "Parse a heap dump and cache its object graph + dominator tree in the configured snapshot store (mirrors `mnemosyne snapshot save`).",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump to parse and cache." },
+                    { "name": "retain_field_data", "type": "boolean", "required": false, "default": false, "description": "When true, instance field values are retained in the cached graph (needed for field-based query_heap)." }
+                ],
+                "output_schema": "SnapshotManifest"
+            },
+            {
+                "name": "remove_snapshot",
+                "description": "Delete a cached snapshot by its SHA-256 store key (mirrors `mnemosyne snapshot rm`). Only keys within the configured snapshot store are accepted — not arbitrary filesystem paths.",
+                "params": [
+                    { "name": "key", "type": "string", "required": true, "description": "SHA-256 hash of the snapshot to remove (store key only)." }
+                ],
+                "output_schema": "{ removed: true, key: string }"
+            },
+            {
+                "name": "generate_flamegraph",
+                "description": "Render a deep-only flamegraph into a managed artifact; inline artifacts are returned only up to 256 KiB.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true },
+                    { "name": "snapshot", "type": "string", "required": false },
+                    { "name": "root", "type": "string", "required": false, "default": "dominator", "enum": ["dominator", "class-hierarchy", "gc-root-path"] },
+                    { "name": "format", "type": "string", "required": false, "default": "svg", "enum": ["svg", "folded-stack", "json"] },
+                    { "name": "min_fraction", "type": "number", "required": false, "default": 0.001 },
+                    { "name": "title", "type": "string", "required": false },
+                    { "name": "max_frames", "type": "number", "required": false, "default": 5000 },
+                    analysis_mode_param()
+                ]
+            },
+            {
+                "name": "read_artifact",
+                "description": "Read a bounded chunk from a managed artifact.",
+                "params": [
+                    { "name": "artifact_id", "type": "string", "required": true },
+                    { "name": "offset_bytes", "type": "number", "required": false, "default": 0 },
+                    { "name": "max_bytes", "type": "number", "required": false, "default": 262144 }
+                ]
+            },
+            {
+                "name": "delete_artifact",
+                "description": "Immediately delete a managed artifact.",
+                "params": [{ "name": "artifact_id", "type": "string", "required": true }]
+            },
+            {
                 "name": "detect_classloader_leaks",
                 "description": "Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern.",
                 "params": [
@@ -1333,10 +1726,25 @@ fn tool_catalog() -> Value {
                 "output_schema": "Vec<DuplicateClassGroup>"
             },
             {
+                "name": "ci_check",
+                "description": "Evaluate a TOML policy against one heap dump and return a structured PolicyResult plus the equivalent CLI ci-check exit classification. object_growth_threshold rules require baseline or baseline_snapshot.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true, "description": "Path to the heap dump under test." },
+                    { "name": "policy_path", "type": "string", "required": false, "description": "Path to a policy TOML file. Exactly one of policy_path or policy_toml is required." },
+                    { "name": "policy_toml", "type": "string", "required": false, "description": "Inline policy TOML. Exactly one of policy_path or policy_toml is required." },
+                    analysis_mode_param(),
+                    { "name": "fail_on", "type": "string", "required": false, "default": "error", "enum": ["info", "warning", "error", "critical"], "description": "Minimum violation severity that maps to exit_code 1, matching mnemosyne-cli ci-check --fail-on." },
+                    snapshot_param(),
+                    { "name": "baseline", "type": "string", "required": false, "description": "Before-heap path for object_growth_threshold rules. Exactly one of baseline or baseline_snapshot when required." },
+                    { "name": "baseline_snapshot", "type": "string", "required": false, "description": "Before-heap snapshot key alternative to baseline (see open_snapshot/list_snapshots)." }
+                ],
+                "output_schema": "{ result: PolicyResult, exit_code: number, fail_on: string }"
+            },
+            {
                 "name": "describe_workflow",
                 "description": "Introspect a workflow kind's fixed step sequence and each step's expected input/underlying primitives, without creating any workflow state.",
                 "params": [
-                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." }
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots, classloader_leak." }
                 ],
                 "output_schema": "WorkflowDescription"
             },
@@ -1344,8 +1752,8 @@ fn tool_catalog() -> Value {
                 "name": "start_workflow",
                 "description": "Create a new workflow instance of the given kind, run its first step, and persist the resulting state.",
                 "params": [
-                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots." },
-                    { "name": "heap_path", "type": "string", "required": false, "description": "Required for triage_memory_leak/tune_gc/traverse_object_graph. Not used by compare_snapshots (see params below)." },
+                    { "name": "kind", "type": "string", "required": true, "description": "One of: triage_memory_leak, tune_gc, traverse_object_graph, compare_snapshots, classloader_leak." },
+                    { "name": "heap_path", "type": "string", "required": false, "description": "Required for triage_memory_leak/tune_gc/traverse_object_graph/classloader_leak. Not used by compare_snapshots (see params below)." },
                     { "name": "object_id", "type": "string", "required": false, "description": "traverse_object_graph only: the starting object." },
                     { "name": "before_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
                     { "name": "after_heap_path", "type": "string", "required": false, "description": "compare_snapshots only." },
@@ -1396,6 +1804,85 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let store = snapshot_store();
             let manifests = store.list()?;
             Ok(serde_json::to_value(manifests)?)
+        }
+        "save_snapshot" => {
+            let params: SaveSnapshotParams = serde_json::from_value(packet.params)?;
+            let graph = crate::hprof::parse_hprof_file_with_options(
+                &params.heap_path,
+                ParseOptions {
+                    retain_field_data: params.retain_field_data,
+                },
+            )?;
+            let dominator = crate::graph::build_dominator_tree(&graph);
+            let store = snapshot_store();
+            let manifest = store.save(&params.heap_path, &graph, &dominator)?;
+            Ok(serde_json::to_value(manifest)?)
+        }
+        "remove_snapshot" => {
+            let params: RemoveSnapshotParams = serde_json::from_value(packet.params)?;
+            let store_key = validated_store_snapshot_key(&params.key)?;
+            let store = snapshot_store();
+            store.remove(&store_key)?;
+            Ok(json!({ "removed": true, "key": store_key }))
+        }
+        "generate_flamegraph" => {
+            let params: GenerateFlamegraphParams = serde_json::from_value(packet.params)?;
+            let mode = resolve_heap_mode(&params.heap_path, params.mode)?;
+            if mode == AnalysisMode::Overview {
+                return Err(CoreError::FeatureUnavailableInOverviewMode {
+                    feature: "generate_flamegraph".into(),
+                    hint: "rerun with mode=deep; flamegraphs require object-graph analysis".into(),
+                });
+            }
+            let (graph, dominator) = if let Some(snapshot) = params.snapshot.as_deref() {
+                let payload = snapshot_store().load_checked(snapshot, &params.heap_path)?;
+                (payload.object_graph, payload.dominator_tree)
+            } else {
+                let request = AnalyzeRequest {
+                    heap_path: params.heap_path.clone(),
+                    config: config.clone(),
+                    ..AnalyzeRequest::default()
+                };
+                let (_, graph, dominator) = analyze_heap_with_graph(request).await?;
+                (graph, dominator)
+            };
+            let stacks = collapse(
+                params.root,
+                &graph,
+                &dominator,
+                &CollapseOptions {
+                    min_fraction: params.min_fraction,
+                    max_frames: params.max_frames,
+                },
+            );
+            let (format, media_type, format_name) = match params.format {
+                McpFlameFormat::Svg => (FlameFormat::Svg, "image/svg+xml", "svg"),
+                McpFlameFormat::FoldedStack => {
+                    (FlameFormat::FoldedStack, "text/plain", "folded-stack")
+                }
+                McpFlameFormat::Json => (FlameFormat::Json, "application/json", "json"),
+            };
+            let title = params.title.clone();
+            let store = ArtifactStore::new(default_artifact_dir());
+            let response = store.create(format_name, media_type, |writer| {
+                render(&stacks, format, title.as_deref(), writer)
+            })?;
+            Ok(serde_json::to_value(response)?)
+        }
+        "read_artifact" => {
+            let params: ReadArtifactParams = serde_json::from_value(packet.params)?;
+            let store = ArtifactStore::new(default_artifact_dir());
+            Ok(serde_json::to_value(store.read(
+                &params.artifact_id,
+                params.offset_bytes,
+                params.max_bytes,
+            )?)?)
+        }
+        "delete_artifact" => {
+            let params: DeleteArtifactParams = serde_json::from_value(packet.params)?;
+            let store = ArtifactStore::new(default_artifact_dir());
+            store.delete(&params.artifact_id)?;
+            Ok(json!({ "deleted": true, "artifact_id": params.artifact_id }))
         }
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
@@ -1546,12 +2033,13 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             if let Some(target) = params.focus_leak_id {
                 session.conversation.focus_leak_id = Some(target);
             }
-            crate::mcp::session::trim_history(
+            crate::mcp::session::trim_history_to(
                 &mut session.conversation.history,
                 AiChatTurn {
                     question: params.question,
                     answer_summary: ai.summary.clone(),
                 },
+                crate::mcp::session::effective_history_limit(ai_config.sessions.history_max_turns),
             );
             session.updated_at = timestamp_now();
             persist_session(&store, &session)?;
@@ -1631,10 +2119,7 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
                 retained_change_threshold: params.retained_change_threshold,
                 top_n: params.top_n,
                 retain_field_data: params.retain_field_data,
-                // M10-B's --cross-reference-leaks / DiffRequest.cross_reference_leaks
-                // is CLI-first (design doc §3 "Out"); MCP wiring is deferred, so this
-                // handler always leaves it false pending a future slice.
-                cross_reference_leaks: false,
+                cross_reference_leaks: params.cross_reference_leaks,
             })
             .await?
             {
@@ -1798,6 +2283,10 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let duplicates = detect_duplicate_classes(&graph);
             Ok(serde_json::to_value(duplicates)?)
         }
+        "ci_check" => {
+            let params: CiCheckParams = serde_json::from_value(packet.params)?;
+            run_ci_check(params, config).await
+        }
         "explain_leak" => {
             let params: ExplainLeakParams = serde_json::from_value(packet.params)?;
             match (&params.heap_path, &params.session_id) {
@@ -1902,7 +2391,8 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let (heap_path, initial_params) = match kind {
                 WorkflowKind::TriageMemoryLeak
                 | WorkflowKind::TuneGc
-                | WorkflowKind::TraverseObjectGraph => {
+                | WorkflowKind::TraverseObjectGraph
+                | WorkflowKind::ClassloaderLeak => {
                     let heap_path = params.heap_path.clone().ok_or_else(|| {
                         CoreError::InvalidInput(format!(
                             "heap_path is required for start_workflow(kind: \"{}\")",
@@ -3180,6 +3670,13 @@ mod tests {
                     "required": false,
                     "default": false,
                     "description": "Required when identity_strategy='full-fingerprint'."
+                },
+                {
+                    "name": "cross_reference_leaks",
+                    "type": "boolean",
+                    "required": false,
+                    "default": false,
+                    "description": "Cross-reference added/retained_changed object deltas against after-heap leak suspects (object mode only)."
                 }
             ]))
         );
@@ -3236,6 +3733,66 @@ mod tests {
 
         assert_eq!(result, expected);
         assert!(result.get("object_diff").is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_cross_reference_leaks_defaults_off() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(&heap_path, &heap_path, json!({ "mode": "object" }))
+            .await
+            .expect("diff_heaps object mode should succeed");
+
+        let object_diff = result
+            .get("object_diff")
+            .expect("object mode should include object_diff");
+
+        for section in ["added", "retained_changed"] {
+            if let Some(deltas) = object_diff.get(section).and_then(Value::as_array) {
+                for delta in deltas {
+                    assert!(
+                        delta.get("leak_severity").is_none(),
+                        "{section} deltas should not be leak-annotated when cross_reference_leaks is omitted"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn diff_heaps_cross_reference_leaks_wires_to_diff_request() {
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let result = diff_heaps_result(
+            &heap_path,
+            &heap_path,
+            json!({ "mode": "object", "cross_reference_leaks": true }),
+        )
+        .await
+        .expect("diff_heaps with cross_reference_leaks should succeed");
+        let expected = match crate::diff::run_diff(crate::diff::DiffRequest {
+            before_path: heap_path.clone(),
+            after_path: heap_path.clone(),
+            mode: crate::diff::DiffMode::Object,
+            identity_strategy: crate::diff::IdentityStrategy::ClassDominator,
+            retained_bucket_bits: 10,
+            min_retained_bytes: crate::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+            retained_change_threshold:
+                crate::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+            top_n: crate::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+            retain_field_data: false,
+            cross_reference_leaks: true,
+        })
+        .await
+        .expect("direct object diff with cross_reference_leaks should succeed")
+        {
+            crate::diff::DiffResult::Class(_) => panic!("expected object diff"),
+            crate::diff::DiffResult::Object(diff) => serde_json::to_value(diff).unwrap(),
+        };
+
+        assert_eq!(result, expected);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3777,6 +4334,45 @@ mod tests {
             list_snapshots.get("output_schema"),
             Some(&json!("Vec<SnapshotManifest>"))
         );
+
+        let save_snapshot = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("save_snapshot")))
+            .expect("save_snapshot tool");
+        assert_eq!(
+            save_snapshot.get("output_schema"),
+            Some(&json!("SnapshotManifest"))
+        );
+        let save_params = save_snapshot
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("save_snapshot params");
+        for expected in ["heap_path", "retain_field_data"] {
+            assert!(
+                save_params
+                    .iter()
+                    .any(|param| param.get("name") == Some(&json!(expected))),
+                "save_snapshot should advertise the '{expected}' param"
+            );
+        }
+
+        let remove_snapshot = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("remove_snapshot")))
+            .expect("remove_snapshot tool");
+        assert_eq!(
+            remove_snapshot.get("output_schema"),
+            Some(&json!("{ removed: true, key: string }"))
+        );
+        assert_eq!(
+            remove_snapshot.get("params"),
+            Some(&json!([{
+                "name": "key",
+                "type": "string",
+                "required": true,
+                "description": "SHA-256 hash of the snapshot to remove (store key only)."
+            }]))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3911,6 +4507,161 @@ mod tests {
             .collect();
         assert!(hashes.contains(&manifest_a.heap_sha256));
         assert!(hashes.contains(&manifest_b.heap_sha256));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_save_snapshot_open_list_remove_lifecycle_with_synthetic_heap() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+
+        let saved = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "save_snapshot".into(),
+                params: json!({ "heap_path": heap_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        let key = saved
+            .get("heap_sha256")
+            .and_then(Value::as_str)
+            .expect("save_snapshot returns heap_sha256")
+            .to_string();
+
+        let opened = handle_request(
+            RpcRequest {
+                id: json!(2),
+                method: "open_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened.get("heap_sha256"), Some(&json!(key)));
+
+        let listed = handle_request(
+            RpcRequest {
+                id: json!(3),
+                method: "list_snapshots".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        let manifests = listed.as_array().expect("list_snapshots array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].get("heap_sha256"), Some(&json!(key)));
+
+        let removed = handle_request(
+            RpcRequest {
+                id: json!(4),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed.get("removed"), Some(&json!(true)));
+        assert_eq!(removed.get("key"), Some(&json!(key)));
+
+        let listed_after = handle_request(
+            RpcRequest {
+                id: json!(5),
+                method: "list_snapshots".into(),
+                params: Value::Null,
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            listed_after.as_array().expect("list array").is_empty(),
+            "list_snapshots should be empty after remove_snapshot"
+        );
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(6),
+                method: "open_snapshot".into(),
+                params: json!({ "key": key }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+        let response = RpcResponse::from_core_error(json!(6), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_remove_snapshot_missing_key_returns_snapshot_not_found_error_details() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("snapshot_not_found"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_remove_snapshot_rejects_arbitrary_filesystem_path() {
+        let _env_lock = snapshot_env_lock().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        let _env_guard = pin_snapshot_dir(store_dir.path());
+
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let outside_path = outside.path().to_string_lossy().into_owned();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "remove_snapshot".into(),
+                params: json!({ "key": outside_path }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("invalid_input"))
+        );
+        assert!(
+            outside.path().exists(),
+            "remove_snapshot must not delete arbitrary filesystem paths"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -4584,6 +5335,423 @@ mod tests {
         assert_eq!(result, json!([]));
     }
 
+    // --- M18 Slice 18.A: `ci_check` ---
+
+    async fn ci_check_result(heap_path: &str, extra_params: Value) -> CoreResult<Value> {
+        let mut params = serde_json::Map::new();
+        params.insert("heap_path".into(), json!(heap_path));
+        if let Some(extra) = extra_params.as_object() {
+            params.extend(extra.clone());
+        }
+
+        handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "ci_check".into(),
+                params: Value::Object(params),
+            },
+            &AppConfig::default(),
+        )
+        .await
+    }
+
+    fn write_policy_file(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_list_tools_includes_ci_check() {
+        let result = list_tools_result().await;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("ci_check")))
+            .expect("ci_check tool");
+
+        assert!(
+            tool.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("PolicyResult")),
+            "ci_check description should mention structured result"
+        );
+        let params = tool
+            .get("params")
+            .and_then(Value::as_array)
+            .expect("params array");
+        let names: Vec<&str> = params
+            .iter()
+            .filter_map(|param| param.get("name").and_then(Value::as_str))
+            .collect();
+        for expected in [
+            "heap_path",
+            "policy_path",
+            "policy_toml",
+            "mode",
+            "fail_on",
+            "snapshot",
+            "baseline",
+            "baseline_snapshot",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "ci_check params missing {expected}"
+            );
+        }
+        assert_eq!(
+            tool.get("output_schema"),
+            Some(&json!(
+                "{ result: PolicyResult, exit_code: number, fail_on: string }"
+            ))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_passes_on_below_threshold_returns_exit_code_zero() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let policy_toml = format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len() as u64 + 1024
+        );
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let policy_result = result.get("result").expect("structured result");
+        assert!(policy_result
+            .get("violations")
+            .and_then(Value::as_array)
+            .is_some_and(|violations| violations.is_empty()));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_fails_on_violation_returns_exit_code_one() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let policy_toml = format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len().saturating_sub(1) as u64
+        );
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(1)));
+        let violations = result
+            .pointer("/result/violations")
+            .and_then(Value::as_array)
+            .expect("violations array");
+        assert!(violations
+            .iter()
+            .any(|violation| violation.get("rule_id") == Some(&json!("heap-budget"))));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_invalid_policy_returns_config_error() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+
+        let err = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": "[[rule]]\nid = \"broken\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = \n"
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("config_error"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_missing_heap_returns_file_not_found_error() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let (_dir, policy_path) = write_policy_file(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 1024\nseverity = \"error\"\n",
+        );
+        let missing_heap = sandbox.path().join("missing.hprof");
+
+        let err = ci_check_result(
+            &missing_heap.to_string_lossy(),
+            json!({ "policy_path": policy_path.to_string_lossy() }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert!(
+            matches!(
+                value.pointer("/error_details/code"),
+                Some(code) if code == "file_not_found" || code == "io_error"
+            ),
+            "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_without_baseline_returns_config_error() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-runaway-cache-growth\"\npredicate = \"object_growth_threshold\"\nclass = \"com.example.CacheEntry\"\nop = \"<=\"\nvalue = 1048576\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_toml": policy_toml }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("config_error"))
+        );
+        assert!(
+            value
+                .pointer("/error_details/message")
+                .and_then(Value::as_str)
+                .is_some_and(
+                    |message| message.contains("object_growth_threshold_requires_baseline")
+                ),
+            "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_with_baseline_evaluates_instead_of_skipping() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let policy_toml = "[[rule]]\nid = \"no-runaway-growth\"\npredicate = \"object_growth_threshold\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let result = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline": heap_path,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let policy_result = result.get("result").expect("structured result");
+        let skipped = policy_result
+            .get("skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(
+            skipped.is_empty(),
+            "object_growth_threshold should have been evaluated, not skipped: {result}"
+        );
+        let evaluations = policy_result
+            .get("evaluations")
+            .and_then(Value::as_array)
+            .expect("evaluations array");
+        assert!(
+            evaluations
+                .iter()
+                .any(|entry| entry.get("rule_id") == Some(&json!("no-runaway-growth"))),
+            "{result}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_object_growth_with_baseline_snapshot_evaluates() {
+        let _lock = snapshot_env_lock().await;
+        let _guard = mode_test_guard().await;
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let _pin = pin_snapshot_dir(snapshot_dir.path());
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let manifest = seed_snapshot(snapshot_dir.path(), file.path(), false);
+        let policy_toml = "[[rule]]\nid = \"no-runaway-growth\"\npredicate = \"object_growth_threshold\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let result = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline_snapshot": manifest.heap_sha256,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let skipped = result
+            .pointer("/result/skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(skipped.is_empty(), "{result}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_baseline_and_baseline_snapshot_both_set_returns_invalid_input() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let policy_toml = "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "baseline": heap_path,
+                "baseline_snapshot": "some-key",
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("invalid_input"))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_snapshot_with_resolved_overview_returns_feature_unavailable() {
+        let _lock = snapshot_env_lock().await;
+        let _guard = mode_test_guard().await;
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let _pin = pin_snapshot_dir(snapshot_dir.path());
+        let file = write_fixture();
+        let heap_path = file.path().to_string_lossy().into_owned();
+        let manifest = seed_snapshot(snapshot_dir.path(), file.path(), false);
+        let policy_toml = "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = 999999999999\nseverity = \"error\"\n";
+
+        let err = ci_check_result(
+            &heap_path,
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "overview",
+                "snapshot": manifest.heap_sha256,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("feature_unavailable_in_overview_mode"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/feature"),
+            Some(&json!("snapshot"))
+        );
+        assert!(
+            value
+                .pointer("/error_details/details/hint")
+                .and_then(Value::as_str)
+                .is_some_and(|hint| hint.contains("mode=deep")),
+            "{value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_explicit_overview_with_deep_only_rule_returns_exit_code_four() {
+        let _guard = mode_test_guard().await;
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n";
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "overview",
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(4)));
+        let violations = result
+            .pointer("/result/violations")
+            .and_then(Value::as_array)
+            .expect("violations array");
+        assert!(violations
+            .iter()
+            .any(|violation| violation.get("rule_id") == Some(&json!("no-critical-leaks"))));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_auto_overview_skips_deep_only_rule_without_violation() {
+        let _guard = mode_test_guard().await;
+        let _threshold = TempEnvVar::set("MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD", "1");
+        let file = write_fixture();
+        let policy_toml = "[[rule]]\nid = \"no-critical-leaks\"\npredicate = \"leak_count\"\nop = \"==\"\nvalue = 0\nseverity = \"critical\"\nseverity_filter = \"critical\"\n";
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({
+                "policy_toml": policy_toml,
+                "mode": "auto",
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+        let skipped = result
+            .pointer("/result/skipped")
+            .and_then(Value::as_array)
+            .expect("skipped array");
+        assert!(
+            skipped
+                .iter()
+                .any(|entry| entry.get("rule_id") == Some(&json!("no-critical-leaks"))),
+            "{result}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mcp_ci_check_policy_path_loads_from_disk() {
+        let _guard = mode_test_guard().await;
+        let fixture = build_graph_fixture();
+        let file = write_fixture();
+        let (_dir, policy_path) = write_policy_file(&format!(
+            "[[rule]]\nid = \"heap-budget\"\npredicate = \"total_bytes\"\nop = \"<=\"\nvalue = {}\nseverity = \"error\"\n",
+            fixture.len() as u64 + 1024
+        ));
+
+        let result = ci_check_result(
+            &file.path().to_string_lossy(),
+            json!({ "policy_path": policy_path.to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.get("exit_code"), Some(&json!(0)));
+    }
+
     // --- M11 Slice 11.D: workflow tool registration ---
 
     /// Serializes `MNEMOSYNE_WORKFLOW_DIR` mutation across workflow-backed
@@ -4999,5 +6167,63 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("heap_path is required"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn generate_flamegraph_rejects_overview_mode_with_structured_error() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&build_overview_only_fixture()).unwrap();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "generate_flamegraph".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy(),
+                    "mode": "overview",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("feature_unavailable_in_overview_mode"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/feature"),
+            Some(&json!("generate_flamegraph"))
+        );
+    }
+
+    #[test]
+    fn artifact_size_error_exposes_machine_readable_limits() {
+        let error = CoreError::Unsupported(
+            "artifact_size_limit_exceeded: exceeded render limit (limit_bytes=16777216, observed_bytes=16777217, format=svg)"
+                .into(),
+        );
+        let response = RpcResponse::from_core_error(json!(1), &error);
+        let value = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("artifact_size_limit_exceeded"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/limit_bytes"),
+            Some(&json!(16_777_216))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/observed_bytes"),
+            Some(&json!(16_777_217))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/format"),
+            Some(&json!("svg"))
+        );
     }
 }

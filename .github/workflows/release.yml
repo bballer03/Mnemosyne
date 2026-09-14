@@ -172,11 +172,166 @@ jobs:
         working-directory: ui
         run: bun install --frozen-lockfile
 
+      # Slice 16.B — code-signing is conditional on GitHub Actions secrets.
+      # Each platform step logs loudly when secrets are absent so maintainers
+      # know exactly where to plug in real certificates later.
+      - name: Desktop auto-update (v1 decision)
+        run: |
+          echo "M16 16.B: Desktop auto-update SKIPPED for v1 — no Tauri updater plugin is wired."
+          echo "Users re-download installers from GitHub Releases (same as the CLI today)."
+          echo "Revisit after a full code-signing + update-signing trust chain is in place."
+
+      - name: Resolve code-signing (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          echo "M16 16.B: Linux desktop bundles (.deb/.AppImage/.rpm) ship unsigned by design."
+          echo "No OS-level signing gate applies on Linux — no GitHub secrets required."
+
+      - name: Resolve code-signing (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        id: win-signing
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${WINDOWS_CERTIFICATE:-}" && -n "${WINDOWS_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "secrets_present=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: WINDOWS_CERTIFICATE secrets present — will import PFX and wire Tauri signing next."
+          else
+            echo "secrets_present=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD secrets NOT configured."
+            echo "Shipping UNSIGNED Windows installer (.msi/.exe)."
+            echo "Windows SmartScreen will warn on first run — see SECURITY.md for the workaround."
+          fi
+
+      - name: Import Windows code-signing certificate and wire Tauri signing
+        if: ${{ runner.os == 'Windows' && steps.win-signing.outputs.secrets_present == 'true' }}
+        id: win-signing-config
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Path certificate -Force | Out-Null
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          Remove-Item certificate/tempCert.txt
+
+          $pfxPassword = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          Import-PfxCertificate `
+            -FilePath certificate/certificate.pfx `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $pfxPassword | Out-Null
+
+          $pfxData = Get-PfxData -FilePath certificate/certificate.pfx -Password $pfxPassword
+          $thumbprint = $pfxData.EndEntityCertificates[0].Thumbprint
+          if ([string]::IsNullOrWhiteSpace($thumbprint)) {
+            Write-Error "Failed to resolve Windows certificate thumbprint from imported PFX"
+            exit 1
+          }
+
+          $timestampUrl = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { "http://timestamp.comodoca.com" }
+          $confPath = "tauri/tauri.conf.json"
+          $conf = Get-Content $confPath -Raw | ConvertFrom-Json
+          if (-not $conf.bundle) {
+            $conf | Add-Member -NotePropertyName bundle -NotePropertyValue ([pscustomobject]@{})
+          }
+          $conf.bundle | Add-Member -NotePropertyName windows -NotePropertyValue ([pscustomobject]@{
+            certificateThumbprint = $thumbprint
+            digestAlgorithm     = "sha256"
+            timestampUrl        = $timestampUrl
+          }) -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content $confPath -Encoding utf8
+
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "M16 16.B: Windows Authenticode signing ENABLED — PFX imported; thumbprint wired to tauri.conf.json (digest=sha256, timestamp=$timestampUrl)."
+
+      - name: Resolve code-signing (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        id: mac-signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${APPLE_CERTIFICATE:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${KEYCHAIN_PASSWORD:-}" ]]; then
+            echo "secrets_present=true" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple signing/notarization secrets present — will validate Developer ID Application certificate after import."
+          else
+            echo "secrets_present=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple signing/notarization secrets NOT configured."
+            echo "Required when enabling (Apple-ID path): APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,"
+            echo "APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD."
+            echo "Shipping UNSIGNED macOS bundle (.dmg/.app)."
+            echo "macOS Gatekeeper will block on first open — use Right-click → Open. See SECURITY.md."
+          fi
+
+      - name: Import Apple Developer certificate
+        if: ${{ runner.os == 'macOS' && steps.mac-signing.outputs.secrets_present == 'true' }}
+        id: mac-cert
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          echo "${APPLE_CERTIFICATE}" | base64 -D > certificate.p12
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+
+          IDENTITIES="$(security find-identity -v -p codesigning build.keychain)"
+          CERT_ID="$(
+            echo "${IDENTITIES}" \
+              | grep 'Developer ID Application' \
+              | head -1 \
+              | awk -F'"' '{print $2}' \
+              || true
+          )"
+          if [[ -n "${CERT_ID}" ]]; then
+            echo "signing_enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "APPLE_SIGNING_IDENTITY=${CERT_ID}" >> "${GITHUB_ENV}"
+            echo "M16 16.B: macOS code signing + Apple-ID notarization ENABLED — Developer ID Application identity: ${CERT_ID}"
+          elif echo "${IDENTITIES}" | grep -q 'Apple Development'; then
+            echo "signing_enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "M16 16.B: Apple Development certificate detected — NOT valid for release notarization." >&2
+            echo "Direct distribution requires a Developer ID Application certificate." >&2
+            echo "Shipping UNSIGNED macOS bundle (.dmg/.app)." >&2
+            echo "macOS Gatekeeper will block on first open — use Right-click → Open. See SECURITY.md." >&2
+          else
+            echo "Failed to resolve Developer ID Application signing identity from imported certificate" >&2
+            exit 1
+          fi
+
       - name: Build Tauri bundle
         id: tauri-build
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple env vars are consumed by tauri-cli only when mac-cert validated Developer ID Application.
+          # Windows signing uses bundle.windows.* injected into tauri.conf.json after PFX import.
+          APPLE_CERTIFICATE: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.mac-cert.outputs.signing_enabled == 'true' && env.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: tauri
           args: ${{ matrix.tauri_args }}
@@ -184,12 +339,72 @@ jobs:
           # attaches these bundles to the same tagged release the CLI
           # archives publish to, via artifactPaths + upload-artifact.
 
+      # M21.C/D — map Tauri output names → frozen primaries (AppImage, macOS app zip)
+      # and frozen fallback DMGs. macOS zip uses ditto only (no Python zipfile).
+      # Not launch-tested.
+      - name: Normalize desktop asset names
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist-normalized
+          arch_args=()
+          case "${TARGET}" in
+            aarch64-apple-darwin) arch_args=(--macos-arch aarch64) ;;
+            x86_64-apple-darwin) arch_args=(--macos-arch x64) ;;
+          esac
+          if [[ "${#arch_args[@]}" -gt 0 ]] && ! command -v ditto >/dev/null 2>&1; then
+            echo "error: ditto required to zip Mnemosyne.app on macOS runners" >&2
+            exit 1
+          fi
+          python3 scripts/release/normalize_desktop_assets.py \
+            --version "${TAG_VERSION}" \
+            --search-root tauri/target \
+            --out-dir dist-normalized \
+            "${arch_args[@]}"
+          echo "Normalized desktop assets (not launch proof):"
+          if [[ -d dist-normalized ]]; then
+            find dist-normalized -type f | sed 's|.*/||' | sort || true
+          fi
+
       - name: Upload desktop bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ matrix.target }}
           path: |
             ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '\n') }}
+            dist-normalized/*
+          if-no-files-found: error
+
+      - name: Package Windows portable zip
+        if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${{ needs.validate-version.outputs.tag_version }}"
+          # Prefer the release output tree; the packaging script searches recursively for Mnemosyne.exe.
+          $candidates = @(
+            "tauri/target/release",
+            "tauri/target/x86_64-pc-windows-msvc/release"
+          )
+          $source = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $source) {
+            Write-Error "No Tauri release output directory found for portable packaging"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path dist-portable | Out-Null
+          & .\scripts\release\package_windows_portable.ps1 `
+            -Version $version `
+            -SourceDir $source `
+            -OutDir dist-portable
+
+      - name: Upload Windows portable zip
+        if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-windows-portable
+          path: dist-portable/Mnemosyne-*-windows-x64-portable.zip
           if-no-files-found: error
 
   docker:
@@ -259,6 +474,67 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
           path: dist
+
+      # M21.C/D — Rename any leftover Tauri basenames under dist/ to frozen names
+      # before checksums. Build job also writes dist-normalized/*; this catches
+      # artifacts that arrived only via tauri-action artifactPaths. Not launch proof.
+
+      - name: Normalize desktop asset names in dist
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/normalize_desktop_assets.py \
+            --version "${TAG_VERSION}" \
+            --dist dist \
+            --in-place
+          echo "dist/ after normalize (basenames; not launch proof):"
+          find dist -type f | sed 's|.*/||' | sort
+
+      # M21.B–F — Checksums + archive inspect + fail-closed name/checksum verify.
+      # Emits unsigned desktop-scope SHA256SUMS (+ asset-manifest provenance).
+      # Missing/misnamed primaries or checksum gaps fail the release job.
+      # Structural probe is also fail-closed for *present* macOS/AppImage assets.
+      # Green here ≠ GUI launch-tested (native hosts still required for 21.F launch rows).
+
+      - name: Inspect desktop zip archives for secrets
+        run: |
+          set -euo pipefail
+          python3 scripts/release/inspect_desktop_archives.py --dist dist
+
+      - name: Probe macOS/AppImage structure (fail-closed when present)
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/probe_desktop_bundles.py \
+            --dist dist \
+            --version "${TAG_VERSION}"
+
+      - name: Generate desktop SHA256SUMS
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/generate_sha256sums.py \
+            --dist dist \
+            --desktop-only \
+            --version "${TAG_VERSION}" \
+            --output dist/SHA256SUMS \
+            --manifest auto
+          echo "SHA256SUMS (unsigned desktop-heuristic; not launch proof):"
+          cat dist/SHA256SUMS
+
+      - name: Verify desktop assets (fail-closed names + checksums)
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/verify_desktop_assets.py \
+            --dist dist \
+            --version "${TAG_VERSION}" \
+            --require-checksums
+          echo "Name/checksum gate passed (not launch-tested)."
 
       - name: Resolve release notes path
         id: notes

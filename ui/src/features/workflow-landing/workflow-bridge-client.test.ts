@@ -3,13 +3,19 @@ import "../../test/setup";
 import { afterEach, describe, expect, it } from "bun:test";
 
 import {
+  isCloseWorkflowAvailable,
   isDescribeWorkflowAvailable,
+  isGetWorkflowAvailable,
   isListSnapshotsAvailable,
   isNextStepAvailable,
+  isOpenSnapshotAvailable,
   isStartWorkflowAvailable,
+  runCloseWorkflow,
   runDescribeWorkflow,
+  runGetWorkflow,
   runListSnapshots,
   runNextStep,
+  runOpenSnapshot,
   runStartWorkflow,
 } from "./workflow-bridge-client";
 
@@ -22,7 +28,10 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isDescribeWorkflowAvailable()).toBe(false);
     expect(isStartWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
+    expect(isGetWorkflowAvailable()).toBe(false);
+    expect(isCloseWorkflowAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
+    expect(isOpenSnapshotAvailable()).toBe(false);
   });
 
   it("report true only for methods the bridge actually implements", () => {
@@ -33,7 +42,10 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isStartWorkflowAvailable()).toBe(true);
     expect(isDescribeWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
+    expect(isGetWorkflowAvailable()).toBe(false);
+    expect(isCloseWorkflowAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
+    expect(isOpenSnapshotAvailable()).toBe(false);
   });
 });
 
@@ -195,6 +207,29 @@ describe("runListSnapshots", () => {
     ]);
   });
 
+  it("strips absolute heap_path down to basename in React state", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      listSnapshots: async () => [
+        {
+          schema_version: 1,
+          heap_sha256: "abc123",
+          heap_path: "/var/tmp/heaps/fixture.hprof",
+          created_at: "1700000000",
+          mnemosyne_version: "0.4.0",
+          object_count: 42,
+          has_field_data: false,
+        },
+      ],
+    };
+
+    const result = await runListSnapshots();
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data[0]?.heapPath).toBe("fixture.hprof");
+  });
+
   it("surfaces a malformed payload as an error status rather than throwing", async () => {
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       listSnapshots: async () => [{ heap_path: "fixture.hprof" }],
@@ -202,5 +237,155 @@ describe("runListSnapshots", () => {
 
     const result = await runListSnapshots();
     expect(result.status).toBe("error");
+  });
+});
+
+describe("runOpenSnapshot", () => {
+  it("returns unavailable when the bridge is absent", async () => {
+    expect(await runOpenSnapshot("abc")).toEqual({ status: "unavailable" });
+  });
+
+  it("parses the display-safe HeapLoadSummary camelCase payload", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async (key) => {
+        expect(key).toBe("deadbeef");
+        return {
+          displayName: "fixture.hprof",
+          sourceId: "src-1",
+          objectCount: 42,
+          classCount: 3,
+          gcRootCount: 1,
+        };
+      },
+    };
+
+    const result = await runOpenSnapshot("deadbeef");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data).toEqual({
+      displayName: "fixture.hprof",
+      sourceId: "src-1",
+      objectCount: 42,
+      classCount: 3,
+      gcRootCount: 1,
+    });
+  });
+
+  it("strips accidental absolute displayName down to basename", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => ({
+        displayName: "/var/tmp/heaps/fixture.hprof",
+        sourceId: "src-1",
+        objectCount: 10,
+        classCount: 2,
+        gcRootCount: 1,
+      }),
+    };
+
+    const result = await runOpenSnapshot("deadbeef");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data.displayName).toBe("fixture.hprof");
+  });
+
+  it("surfaces bridge rejections as an error status", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => {
+        throw new Error("snapshot_not_found");
+      },
+    };
+
+    expect(await runOpenSnapshot("deadbeef")).toEqual({
+      status: "error",
+      error: "snapshot_not_found",
+    });
+  });
+});
+
+describe("runGetWorkflow / runCloseWorkflow", () => {
+  it("returns unavailable when the bridge lacks get/close", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {};
+    expect(await runGetWorkflow("wf-1")).toEqual({ status: "unavailable" });
+    expect(await runCloseWorkflow("wf-1")).toEqual({ status: "unavailable" });
+  });
+
+  it("parses get_workflow WorkflowState with basename-only heap path", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      getWorkflow: async (workflowId) => {
+        expect(workflowId).toBe("wf-9");
+        return {
+          schema_version: 1,
+          workflow_id: "wf-9",
+          kind: "CLASSLOADER_LEAK",
+          created_at: "1700000000",
+          updated_at: "1700000001",
+          heap_path: "/var/tmp/heaps/fixture.hprof",
+          current_step: "select",
+          step_history: [
+            {
+              step_name: "detect",
+              input: null,
+              output_summary: { duplicate_class_names: ["com/example/Dup"] },
+              timestamp: "1700000000",
+            },
+          ],
+          context: {},
+        };
+      },
+    };
+
+    const result = await runGetWorkflow("wf-9");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+
+    expect(result.data).toEqual({
+      workflowId: "wf-9",
+      kind: "classloader_leak",
+      currentStep: "select",
+      heapDisplayName: "fixture.hprof",
+      stepHistory: [
+        {
+          stepName: "detect",
+          outputSummary: { duplicate_class_names: ["com/example/Dup"] },
+        },
+      ],
+      stepResult: { duplicate_class_names: ["com/example/Dup"] },
+      nextExpectedInput: [],
+    });
+  });
+
+  it("surfaces workflow_corrupt from get_workflow as an error status", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      getWorkflow: async () => {
+        throw new Error("workflow_corrupt: failed to load workflow 'wf-bad'");
+      },
+    };
+
+    expect(await runGetWorkflow("wf-bad")).toEqual({
+      status: "error",
+      error: "workflow_corrupt: failed to load workflow 'wf-bad'",
+    });
+  });
+
+  it("parses close_workflow confirmation", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      closeWorkflow: async (workflowId) => {
+        expect(workflowId).toBe("wf-9");
+        return { workflow_id: "wf-9", closed: true };
+      },
+    };
+
+    const result = await runCloseWorkflow("wf-9");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data).toEqual({ workflowId: "wf-9", closed: true });
   });
 });

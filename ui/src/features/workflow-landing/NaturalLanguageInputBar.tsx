@@ -54,6 +54,7 @@ const WORKFLOW_LABELS: Record<string, string> = {
   tune_gc: "Tune GC",
   traverse_object_graph: "Traverse object graph",
   compare_snapshots: "Compare snapshots",
+  classloader_leak: "Classloader leak",
 };
 
 /**

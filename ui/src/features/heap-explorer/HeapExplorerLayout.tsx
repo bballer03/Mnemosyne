@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 
+import { InvestigationBreadcrumbs } from "../../app/InvestigationBreadcrumbs";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
@@ -112,6 +113,7 @@ export function HeapExplorerLayout() {
               Heap Explorer
             </NavLink>
           </div>
+          <InvestigationBreadcrumbs />
           <div style={{ color: "#38bdf8", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
             Heap Explorer
           </div>

@@ -315,6 +315,108 @@ fn build_objects_projection_graph() -> ObjectGraph {
     graph
 }
 
+fn build_multi_hop_objects_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        2,
+        1,
+        "com.example.ParentNode",
+        vec![FieldDescriptor {
+            name: Some("link".into()),
+            field_type: field_types::OBJECT,
+        }],
+    );
+    add_class(
+        &mut graph,
+        7,
+        1,
+        "com.example.Link",
+        vec![FieldDescriptor {
+            name: Some("target".into()),
+            field_type: field_types::OBJECT,
+        }],
+    );
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Node",
+        vec![
+            FieldDescriptor {
+                name: Some("parent".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("depth".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("count".into()),
+                field_type: field_types::INT,
+            },
+            FieldDescriptor {
+                name: Some("payload".into()),
+                field_type: field_types::OBJECT,
+            },
+        ],
+    );
+    add_class(&mut graph, 6, 1, "com.example.Payload", Vec::new());
+
+    graph.objects.insert(
+        0x2100,
+        HeapObject {
+            id: 0x2100,
+            class_id: 2,
+            shallow_size: 16,
+            references: vec![0x7000],
+            field_data: object_ref_bytes(0x7000),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x2100,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph.objects.insert(
+        0x2300,
+        HeapObject {
+            id: 0x2300,
+            class_id: 2,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: object_ref_bytes(0),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x2300,
+        root_type: GcRootType::StickyClass,
+    });
+
+    add_projection_payload(&mut graph, 0x6100, 64);
+
+    graph.objects.insert(
+        0x7000,
+        HeapObject {
+            id: 0x7000,
+            class_id: 7,
+            shallow_size: 16,
+            references: vec![0x6100],
+            field_data: object_ref_bytes(0x6100),
+            kind: ObjectKind::Instance,
+        },
+    );
+
+    add_projection_node(&mut graph, 0x4100, 4, 0x2100, 4, 1, 0x6100);
+    add_projection_node(&mut graph, 0x4300, 4, 0x2300, 8, 3, 0);
+
+    graph
+}
+
 fn add_owner_object(graph: &mut ObjectGraph, object_id: ObjectId, class_id: ObjectId) {
     graph.objects.insert(
         object_id,
@@ -928,6 +1030,8 @@ fn execute_query_supports_instanceof_filters_on_instance_fields() {
     assert_eq!(result.rows, vec![vec![CellValue::Id(0x1000)]]);
 }
 
+// MAT SELECT Clause OBJECTS (corpus `objects-one-hop`):
+// https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
 #[test]
 fn objects_projection_returns_referenced_target() {
     let graph = build_objects_projection_graph();
@@ -948,6 +1052,7 @@ fn objects_projection_returns_referenced_target() {
     );
 }
 
+// MAT OBJECTS skips null projections (corpus `objects-null-field-omitted`).
 #[test]
 fn objects_projection_omits_rows_with_null_field() {
     let graph = build_objects_projection_graph();
@@ -974,6 +1079,8 @@ fn objects_projection_omits_rows_with_unresolved_target() {
     assert!(result.rows.is_empty());
 }
 
+// MAT SELECT Clause without DISTINCT OBJECTS retains duplicate targets
+// (corpus `objects-duplicate-targets`).
 #[test]
 fn objects_projection_keeps_duplicates_when_multiple_sources_share_target() {
     let graph = build_objects_projection_graph();
@@ -996,6 +1103,56 @@ fn objects_projection_keeps_duplicates_when_multiple_sources_share_target() {
             vec![
                 CellValue::Id(0x2300),
                 CellValue::Str("com.example.ParentNode".into()),
+            ],
+        ]
+    );
+}
+
+// MAT SELECT Clause DISTINCT OBJECTS collapses duplicate projected targets
+// (corpus `objects-distinct-duplicate-collapse`).
+#[test]
+fn distinct_objects_projection_collapses_duplicate_targets() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE count >= 3 AND count < 5"#,
+    )
+    .expect("DISTINCT OBJECTS should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x2300),
+            CellValue::Str("com.example.ParentNode".into()),
+        ]]
+    );
+}
+
+#[test]
+fn distinct_objects_projection_preserves_first_seen_unique_order() {
+    let graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+    // depth > 5 matches nodes with parents 0x2300 (twice) then 0x2400.
+    let query =
+        parse_query(r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE depth > 5"#)
+            .expect("DISTINCT OBJECTS should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 2);
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![
+                CellValue::Id(0x2300),
+                CellValue::Str("com.example.ParentNode".into()),
+            ],
+            vec![
+                CellValue::Id(0x2400),
+                CellValue::Str("com.example.OtherParent".into()),
             ],
         ]
     );
@@ -1095,18 +1252,171 @@ fn objects_projection_on_primitive_field_returns_clear_error() {
     assert!(error.to_string().contains("object-reference"));
 }
 
+// MAT-referenced multi-hop OBJECTS (corpus `objects-two-hop` / `objects-three-hop`).
+// NON-EQUIVALENCY companions: four-hop reject, cycle omit, missing-field error.
 #[test]
-fn objects_projection_multi_hop_returns_not_supported_error() {
+fn objects_projection_two_hop_returns_final_referent() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x7000),
+            CellValue::Str("com.example.Link".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_three_hop_returns_final_referent() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node" WHERE count = 1"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(0x6100),
+            CellValue::Str("com.example.Payload".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_four_hop_returns_structured_limit_error() {
     let graph = build_objects_projection_graph();
     let dominator = build_dominator_tree(&graph);
-    let query = parse_query(r#"SELECT OBJECTS n.parent.parent FROM "com.example.Node""#)
-        .expect("query should parse");
+    let parse_error =
+        parse_query(r#"SELECT OBJECTS n.parent.link.target.extra FROM "com.example.Node""#)
+            .expect_err("four-hop OBJECTS should fail at parse time");
+
+    assert!(parse_error
+        .to_string()
+        .contains("multi-hop OBJECTS exceeds limit"));
+
+    use mnemosyne_core::query::{
+        FieldRef, FromClause, Query, SelectClause, MAX_OBJECTS_FIELD_HOPS,
+    };
+
+    let built = Query {
+        select: SelectClause::Objects(FieldRef::InstanceField("n.parent.link.target.extra".into())),
+        from: FromClause {
+            class_pattern: mnemosyne_core::query::ClassPattern::Exact("com.example.Node".into()),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+    let error = execute_query(&built, &graph, Some(&dominator))
+        .expect_err("executor should reject over-limit OBJECTS paths");
+
+    assert!(error
+        .to_string()
+        .contains("multi-hop OBJECTS exceeds limit"));
+    assert!(error
+        .to_string()
+        .contains(&MAX_OBJECTS_FIELD_HOPS.to_string()));
+}
+
+#[test]
+fn objects_projection_omits_rows_when_multi_hop_hits_null_ref() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE @objectId = 17152"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_preserves_single_hop_self_reference() {
+    let mut graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Node.parent -> self is a valid single-hop self-reference projection.
+    let node_id = 0x4100u64;
+    let node = graph.objects.get_mut(&node_id).expect("node fixture");
+    node.field_data = node_projection_field_bytes(node_id, 4, 1, 0x6100);
+    node.references = vec![node_id, 0x6100];
+
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE @objectId = 16640"#)
+            .expect("query should parse");
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(node_id),
+            CellValue::Str("com.example.Node".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_omits_rows_when_multi_hop_cycle_blocks_further_hops() {
+    let mut graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // ParentNode.link -> self: hop2 revisits before the final hop, so omit.
+    graph
+        .objects
+        .get_mut(&0x2100)
+        .expect("parent fixture")
+        .field_data = object_ref_bytes(0x2100);
+    graph
+        .objects
+        .get_mut(&0x2100)
+        .expect("parent fixture")
+        .references = vec![0x2100];
+
+    let query = parse_query(
+        r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node" WHERE count = 1"#,
+    )
+    .expect("query should parse");
+
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 0);
+    assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_rejects_unprefixed_four_hop_field_path() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Without an alias prefix, every segment is a hop — four real fields
+    // must not silently strip into a three-hop path.
+    let query = parse_query(r#"SELECT OBJECTS parent.link.target.extra FROM "com.example.Node""#)
+        .expect("four unprefixed segments still parse under alias+hop ceiling");
 
     let error = execute_query(&query, &graph, Some(&dominator))
-        .expect_err("multi-hop OBJECTS should be deferred cleanly");
-
-    assert!(error.to_string().contains("multi-hop OBJECTS"));
-    assert!(error.to_string().contains("not yet supported"));
+        .expect_err("unprefixed four-hop OBJECTS must fail at execute time");
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -2347,4 +2657,196 @@ fn union_right_side_limit_bounds_its_own_contribution_before_merge() {
     // if it had been run standalone. If `LIMIT` were silently dropped here,
     // this would instead return all 7 users.
     assert_eq!(ids, vec![0x2000, 0x2001, 0x2002]);
+}
+
+// M22 Slice 22.B: bounded multi-class `FROM`.
+//
+// MAT refs: FROM Clause multi-class addresses/ids + BNF FromItem list
+// (see docs/design/milestone-22-bounded-mat-oql-polish.md and corpus
+// `multi-class-from-two-literals`). List-size reject / LIMIT truncation are
+// NON-EQUIVALENCY Mnemosyne bounds (`limit-budget-exhaustion`).
+
+fn build_multi_class_from_graph() -> ObjectGraph {
+    let mut graph = ObjectGraph::new(8);
+
+    add_class(&mut graph, 1, 0, "java.lang.Object", Vec::new());
+    add_class(
+        &mut graph,
+        3,
+        1,
+        "com.example.User",
+        vec![
+            FieldDescriptor {
+                name: Some("name".into()),
+                field_type: field_types::OBJECT,
+            },
+            FieldDescriptor {
+                name: Some("kind".into()),
+                field_type: field_types::INT,
+            },
+        ],
+    );
+    add_class(
+        &mut graph,
+        4,
+        1,
+        "com.example.Admin",
+        vec![FieldDescriptor {
+            name: Some("level".into()),
+            field_type: field_types::INT,
+        }],
+    );
+    add_class(&mut graph, 5, 1, "com.example.Other", Vec::new());
+
+    add_user_object(&mut graph, 0x3000, 0, 1);
+    add_user_object(&mut graph, 0x3001, 0, 2);
+
+    graph.objects.insert(
+        0x3100,
+        HeapObject {
+            id: 0x3100,
+            class_id: 4,
+            shallow_size: 24,
+            references: Vec::new(),
+            field_data: int_field_bytes(9),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x3100,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph.objects.insert(
+        0x3200,
+        HeapObject {
+            id: 0x3200,
+            class_id: 5,
+            shallow_size: 16,
+            references: Vec::new(),
+            field_data: Vec::new(),
+            kind: ObjectKind::Instance,
+        },
+    );
+    graph.gc_roots.push(GcRoot {
+        object_id: 0x3200,
+        root_type: GcRootType::StickyClass,
+    });
+
+    graph
+}
+
+#[test]
+fn multi_class_from_returns_objects_from_two_literal_classes() {
+    let graph = build_multi_class_from_graph();
+    let query =
+        parse_query(r#"SELECT @objectId, @className FROM "com.example.User", "com.example.Admin""#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001, 0x3100]);
+    assert_eq!(result.total_matched, 3);
+}
+
+#[test]
+fn multi_class_from_supports_mixed_exact_and_glob_patterns() {
+    let graph = build_multi_class_from_graph();
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Admin", "com.example.*""#)
+        .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001, 0x3100, 0x3200]);
+}
+
+#[test]
+fn multi_class_from_deduplicates_objects_matched_by_multiple_patterns() {
+    let graph = build_multi_class_from_graph();
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.*" WHERE kind = 1"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000]);
+    assert_eq!(result.total_matched, 1);
+}
+
+#[test]
+fn multi_class_from_applies_limit_after_deduplication() {
+    let graph = build_multi_class_from_graph();
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.Admin" LIMIT 2"#)
+            .expect("query should parse");
+
+    let result = execute_query(&query, &graph, None).expect("query should execute");
+
+    let ids: Vec<u64> = result
+        .rows
+        .iter()
+        .map(|row| match row[0] {
+            CellValue::Id(id) => id,
+            _ => unreachable!("expected @objectId column"),
+        })
+        .collect();
+
+    assert_eq!(ids, vec![0x3000, 0x3001]);
+    assert_eq!(result.total_matched, 2);
+    assert!(result.truncated);
+}
+
+#[test]
+fn multi_class_from_rejects_programmatic_list_over_limit() {
+    use mnemosyne_core::query::{ClassPattern, FromClause, Query, SelectClause};
+
+    let patterns = (0..9)
+        .map(|idx| ClassPattern::Exact(format!("com.example.Class{idx}")))
+        .collect();
+    let query = Query {
+        select: SelectClause::All,
+        from: FromClause {
+            class_pattern: ClassPattern::Multi(patterns),
+            instanceof: false,
+        },
+        filter: None,
+        limit: None,
+    };
+
+    let graph = build_multi_class_from_graph();
+    let error = execute_query(&query, &graph, None).expect_err("over-limit list should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-class FROM list exceeds limit"),
+        "unexpected error: {error}"
+    );
 }

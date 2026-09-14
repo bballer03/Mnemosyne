@@ -13,7 +13,15 @@ pub struct Query {
 pub enum SelectClause {
     All,
     Fields(Vec<FieldRef>),
+    /// `SELECT OBJECTS <field>` — project referenced objects; duplicate
+    /// targets are retained (MAT SELECT Clause without DISTINCT).
     Objects(FieldRef),
+    /// `SELECT DISTINCT OBJECTS <field>` — same projection as [`Objects`],
+    /// but collapse duplicate target object ids while preserving first-seen
+    /// order (MAT SELECT Clause "Select unique objects" / DISTINCT OBJECTS).
+    /// Bounded: DISTINCT is only accepted with OBJECTS, not `SELECT DISTINCT *`
+    /// or field lists — matching the hop/multi-class style of explicit bounds.
+    DistinctObjects(FieldRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +47,25 @@ pub struct FromClause {
     pub instanceof: bool,
 }
 
+/// Maximum class patterns in a comma-separated `FROM` list (M22 Slice 22.B).
+pub const MAX_MULTI_CLASS_FROM_LIST_SIZE: usize = 8;
+
+/// Maximum object-reference field hops in `SELECT OBJECTS` (M22 Slice 22.C).
+/// A path such as `n.parent.link.target` traverses three hops after a
+/// non-field alias prefix; a fourth hop is rejected with a structured limit
+/// error. Unprefixed paths count every segment as a hop (so
+/// `parent.link.target.extra` is four hops and is rejected).
+pub const MAX_OBJECTS_FIELD_HOPS: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassPattern {
     Exact(String),
     Glob(String),
+    /// Comma-separated class patterns in `FROM "a", "b", ...` (M22 Slice 22.B).
+    /// Single-class queries keep `Exact`/`Glob` for backward-compatible serialization.
+    /// Each entry reuses the same exact/glob resolution as a standalone `FROM`; the
+    /// executor unions matched object ids and deduplicates before ordering/limit.
+    Multi(Vec<ClassPattern>),
     /// A traversal function producing an explicit object-id set instead of
     /// matching by class name. Slots into the same `FromClause.class_pattern`
     /// extension point as `Exact`/`Glob` rather than introducing a parallel

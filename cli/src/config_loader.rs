@@ -213,8 +213,13 @@ fn apply_ai_section(cfg: &mut AiConfig, section: PartialAiConfig) {
     if let Some(value) = prompts.and_then(|prompts| prompts.template_dir) {
         cfg.prompts.template_dir = Some(value);
     }
-    if let Some(value) = sessions.and_then(|sessions| sessions.directory) {
-        cfg.sessions.directory = Some(value);
+    if let Some(sessions) = sessions.as_ref() {
+        if let Some(value) = sessions.directory.clone() {
+            cfg.sessions.directory = Some(value);
+        }
+        if let Some(value) = sessions.history_max_turns {
+            cfg.sessions.history_max_turns = Some(value);
+        }
     }
     if let Some(value) = section.endpoint {
         cfg.endpoint = Some(value);
@@ -470,6 +475,7 @@ struct PartialAiPromptConfig {
 #[derive(Debug, Default, Deserialize)]
 struct PartialAiSessionConfig {
     directory: Option<String>,
+    history_max_turns: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]

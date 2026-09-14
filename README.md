@@ -49,10 +49,10 @@ Mnemosyne transforms `.hprof` heap dumps into **actionable insights** — giving
 - `mnemosyne-cli parse` and `mnemosyne-cli analyze` now accept `--mode auto|deep|overview`; `auto` flips to overview at 4 GiB by default and can be overridden with `MNEMOSYNE_OVERVIEW_AUTO_THRESHOLD`
 - Overview mode is a streaming, graph-free triage path with approximate shallow sizes only. Retained sizes, dominator data, and leak suspects remain deep-mode-only.
 - `mnemosyne-cli analyze` and `mnemosyne-cli leaks` both use graph-backed retained sizes when the object graph is available, then fall back to heuristics with provenance markers
-- `mnemosyne-cli analyze --group-by class|package|classloader` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
-- Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --top-instances` adds per-thread retained-size views, duplicate-string analysis, collection waste inspection, classloader summaries, and top-instance ranking in one run
+- `mnemosyne-cli analyze --group-by class|package|classloader|superclass` now renders graph-backed histogram tables with instance, shallow-size, and retained-size totals, plus an unreachable-object summary when full parsing succeeds
+- Optional investigation reports now hang off the same graph-backed path: `mnemosyne-cli analyze --threads --strings --collections --classloaders --duplicate-arrays --top-instances` adds per-thread retained-size views, duplicate-string analysis, duplicate primitive-array detection, collection waste inspection, classloader summaries, and top-instance ranking in one run
 - `--classloaders` now also detects cross-loader duplicate classes (MAT's "Duplicate Classes" report -- the classic Tomcat/Jetty/Spring hot-redeploy leak: same class name loaded by 2+ distinct classloaders) alongside the existing single-loader `potential_leaks` heuristic, plus a bounded parent-loader ancestor chain per loader
-- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS`, `OBJECTS`, and `IS NULL` / `IS NOT NULL`
+- `mnemosyne-cli query heap.hprof "SELECT @objectId, @className FROM \"com.example.*\" LIMIT 25"` now executes a graph-backed OQL-style query surface for built-in object fields, targeted pseudo-attributes (`@retainedSize`, `@toString`, `@gcRootPath`), `LIKE` / `CONTAINS` / regex `=~`, `OBJECTS`, `IS NULL` / `IS NOT NULL`, traversal functions (`outbounds`/`inbounds`/`dominators`), one-level subqueries, and `UNION`
 - `mnemosyne-cli analyze --profile overview|incident-response|ci-regression` now applies preconfigured investigation defaults inside the deep analysis path; this is distinct from `--mode overview`, which skips object-graph analysis entirely
 - `--top-n` and `--min-capacity` let you tune report depth and collection noise floor without changing the underlying analysis pipeline
 - Parse summaries and leak listings now render aligned terminal tables at the CLI boundary, with follow-up disclosure sections when width-bounded cells truncate long values
@@ -155,8 +155,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 **Layers at a glance:**
 - **CLI** (`mnemosyne-cli`) — `parse`, `leaks`, `analyze`, `ci-check`, `flamegraph`, `diff`, `map`, `gc-path`, `query`, `explain`, `chat`, `fix`, `snapshot`, `serve`, `config`
 - **Core** (`mnemosyne-core`) — HPROF parser, object graph, dominators, policy engine, flamegraph renderer, analysis engine, snapshot cache, AI insights, MCP server, report generator
-- **Browser UI** (`ui/`) — React frontend: AI-guided landing (triage summary, NL query bar, workflow cards, recent-heaps picker), artifact loader, triage dashboard, artifact explorer (now with referrer + classloader panels), heap explorer (now with a thread view), leak workspace, and a comparison basket for object-level diffs (M14)
-- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects the two pre-M14 host bridges (the M14 comparison/workflow bridges have no Tauri native-command equivalent yet — see M16)
+- **Browser UI** (`ui/`) — React frontend: AI-guided landing (triage summary, NL query bar, workflow cards, recent-heaps picker), artifact loader, triage dashboard, artifact explorer (now with referrer + classloader panels), heap explorer (now with a thread view), leak workspace, comparison basket (M14), and `/assistant` Investigation session (M23 — rules default; AI advisory only)
+- **Desktop shell** (`tauri/`) — optional native wrapper that bundles the shared frontend and injects M14 host bridges plus workflow get/close/resume and thin AI-session chat adapters (M17/M23)
 - **MCP** — 24 methods for IDE integration (VS Code, Cursor, JetBrains, ChatGPT Desktop), including the five-tool M11 workflow-lifecycle surface (`describe_workflow`/`start_workflow`/`next_step`/`get_workflow`/`close_workflow`)
 - **AI** — `rules` (default offline), `stub`, and `provider` (OpenAI-compatible / Anthropic) modes
 
@@ -170,7 +170,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 
 ### Browser-first dashboard and desktop scaffold
-The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, the leak workspace route family under `/leaks/:leakId`, a `/compare` comparison basket, and an AI-guided landing page (M14). Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, query-console, and new thread-view routes can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references, referrers, and dominator context as clickable navigation chips; the GC-path view can enumerate every path instead of only the shortest; the comparison basket can run a live object-level diff; and the guided landing can drive an M11 workflow end-to-end or list cached snapshots. Every one of those live capabilities degrades to an explicit unavailable state without a connected bridge — artifact-backed panels (referrer, classloader, thread) never need one at all. An optional Tauri scaffold now lives under `tauri/`; it bundles the same `ui/` build and injects the two pre-M14 host bridges, but native desktop bundles are not yet part of the tagged release pipeline, and the M14 comparison/workflow bridges are not yet wired into the Tauri native-command layer.
+The current UI lives under `ui/` as a shared React frontend. It is browser-first, uses Bun as the supported package manager/script runner, and ships the local artifact loader, triage dashboard, artifact explorer, heap explorer, the leak workspace route family under `/leaks/:leakId`, a `/compare` comparison basket, an AI-guided landing page (M14), and an `/assistant` Investigation session (M23) that keeps measured heap facts visually separate from advisory AI text (rules mode offline by default). Heap explorer panes now resolve selected objects back to leak IDs so the dominator, object-inspector, query-console, and new thread-view routes can open the related leak workspace directly. When a host bridge is present, the Object Inspector can also load live references, referrers, and dominator context as clickable navigation chips; the GC-path view can enumerate every path instead of only the shortest; the comparison basket can run a live object-level diff; the guided landing can drive an M11 workflow end-to-end or list cached snapshots; and the assistant can call thin create/resume/get/close/`chatSession` adapters with rules fallback. Every one of those live capabilities degrades to an explicit unavailable state without a connected bridge — artifact-backed panels (referrer, classloader, thread) and rules-mode Ask never need one. **AI guidance does not replace MAT-equivalent analysis** — histogram, dominator, inspector, OQL, and GC-path remain the deterministic path. An optional Tauri shell lives under `tauri/`; it bundles the same `ui/` build and injects M14/M17 bridges plus M23 session adapters. Releases that include the M16 desktop CI job attach Tauri desktop installers alongside the CLI archives (see **Desktop app** below); older tags such as `v0.3.0` predate M16 and publish CLI archives only. Command wiring is evidenced by `tauri/session-ops/` unit tests. M23 synthetic usability evidence (and NOT-proven WSL GUI / live-provider rows): [docs/evidence/m23-guided-investigation.md](docs/evidence/m23-guided-investigation.md). **WSL cannot prove packaged GUI smoke** (WebKitGTK/GTK desktop stack absent): treat WSL results as command/unit/build evidence only; native-host launch rows remain M21 scope.
 
 ```bash
 cd ui
@@ -179,7 +179,53 @@ npx --yes bun run build
 npx --yes bun run lint
 ```
 
-The optional desktop shell currently validates with `cargo check --manifest-path tauri/Cargo.toml`.
+The desktop shell validates with `cargo check --manifest-path tauri/Cargo.toml`.
+
+### Desktop app (GUI)
+
+Install the native Mnemosyne GUI from the same [GitHub Releases](https://github.com/bballer03/mnemosyne/releases) page as the CLI. Desktop installers ship on releases that include the M16 desktop CI job (future tags and post-M16 releases), not on every historical `v*` tag — `v0.3.0` and earlier CLI-only releases have no desktop bundles.
+
+**Signing and upgrades:** v1 installers ship **unsigned** unless release CI signing secrets are configured (see [SECURITY.md — Desktop app distribution](SECURITY.md#desktop-app-distribution-m16) for SmartScreen/Gatekeeper workarounds — do not assume a signed or notarized build). There is **no in-app auto-updater** in v1; re-download from Releases when upgrading.
+
+**Pick your asset** (Tauri `productName` is `Mnemosyne`; `<version>` matches the release tag without the leading `v`):
+
+| Platform | Release-matrix target | Primary click-to-run (M21 frozen) | Fallback / managed installers |
+| --- | --- | --- | --- |
+| **Windows** (x64) | `x86_64-pc-windows-msvc` | `Mnemosyne-<version>-windows-x64-portable.zip` | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe` |
+| **macOS** (Apple Silicon) | `aarch64-apple-darwin` | `Mnemosyne-<version>-macos-aarch64-app.zip` | `Mnemosyne-<version>-macos-aarch64.dmg` (or transitional Tauri `Mnemosyne_<version>_aarch64.dmg`) |
+| **macOS** (Intel) | `x86_64-apple-darwin` | `Mnemosyne-<version>-macos-x64-app.zip` | `Mnemosyne-<version>-macos-x64.dmg` (or transitional Tauri `Mnemosyne_<version>_x64.dmg`) |
+| **Linux** (x86_64) | `x86_64-unknown-linux-gnu` | `Mnemosyne-<version>-linux-x86_64.AppImage` | `Mnemosyne_<version>_amd64.deb`, `Mnemosyne-<version>-1.x86_64.rpm` |
+| **Linux** (aarch64) | `aarch64-unknown-linux-gnu` | `Mnemosyne-<version>-linux-aarch64.AppImage` | `Mnemosyne_<version>_arm64.deb`, `Mnemosyne-<version>-1.aarch64.rpm` |
+
+**Goal:** download → unzip/mount → double-click. No Java/JVM or developer toolchain required.
+
+**Honesty — prerequisites and evidence (do not over-claim):**
+- **JVM-free alone is not enough.** Platform webview runtimes still apply (Windows WebView2; Linux WebKitGTK; macOS WebKit via the system).
+- **Windows portable zip** is labeled **portable with WebView2 prerequisite**. Unzip → double-click `Mnemosyne.exe` works when Microsoft Edge WebView2 Runtime (Evergreen) is already present (common on current Windows 10/11). If the app fails to start with a WebView/runtime error, install WebView2 from Microsoft, then retry. Do not describe this zip as a silent offline single-file drop-in until a clean-image launch matrix proves that.
+- **Linux AppImage** is the primary portable Linux path (`chmod +x`, then double-click/run). Prefer the frozen `Mnemosyne-<version>-linux-{x86_64,aarch64}.AppImage` names. Many distros still need WebKitGTK available to the AppImage; CI producing an AppImage is **not** launch-tested proof.
+- **macOS** prefer the frozen `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` (unzip → launch `Mnemosyne.app`); DMG remains a fallback. Unsigned builds hit Gatekeeper (see [SECURITY.md](SECURITY.md#desktop-app-distribution-m16)). CI build success is **not** notarization or launch-tested proof.
+- **WSL cannot prove packaged GUI smoke.** Use matching native Windows/macOS/Linux hosts for launch claims.
+
+When a release lists multiple formats for one platform, prefer the portable zip / AppImage / `.app` for MAT-like workflows; keep `.msi` / `-setup.exe` / `.dmg` / `.deb` / `.rpm` for managed installs. Each CI desktop job builds all Tauri bundle targets declared in `tauri/tauri.conf.json` (`bundle.targets: "all"`).
+
+**Install steps**
+
+- **Windows (portable zip):** Unzip `Mnemosyne-<version>-windows-x64-portable.zip` → double-click `Mnemosyne.exe` (WebView2 prerequisite above). Until a given release attaches that zip, use the MSI/setup assets.
+- **Windows (installer):** Run the `.msi` or `-setup.exe`. If SmartScreen warns on first launch, follow [SECURITY.md](SECURITY.md#desktop-app-distribution-m16).
+- **macOS (app zip):** Unzip `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` → launch **Mnemosyne.app**. On first open, use **Right-click → Open** if Gatekeeper blocks an unsigned build — details in [SECURITY.md](SECURITY.md#desktop-app-distribution-m16). Not launch-tested from WSL.
+- **macOS (DMG fallback):** Open the `.dmg`, drag **Mnemosyne.app** to Applications if desired, then launch.
+- **Linux (.AppImage):** `chmod +x Mnemosyne-<version>-linux-x86_64.AppImage && ./Mnemosyne-<version>-linux-x86_64.AppImage` (or the `linux-aarch64` name; WebKitGTK caveat above). Not launch-tested from WSL.
+- **Linux (.deb):** `sudo apt install ./Mnemosyne_<version>_*.deb` (or `dpkg -i`). Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu).
+- **Linux (.rpm):** `sudo rpm -i Mnemosyne-*.rpm`
+
+**Build from source** (requires Rust, Bun, and platform bundler deps — see [docs/design/milestone-16-desktop-packaging.md](docs/design/milestone-16-desktop-packaging.md)):
+
+```bash
+cd ui && bun install && bun run build
+cargo tauri build --manifest-path tauri/Cargo.toml
+```
+
+Homebrew Cask was evaluated and **deferred for v1** — GitHub Releases remains the supported desktop install path; [`HomebrewFormula/mnemosyne.rb`](HomebrewFormula/mnemosyne.rb) is CLI-only and unchanged.
 
 ### 1. Download a tagged release binary
 Visit the repository's Releases page and download the archive for your platform from any `v*` tag release.
@@ -542,8 +588,12 @@ mnemosyne-cli query heap.hprof "SELECT @objectId, @retainedSize FROM \"com.examp
 | `CONTAINS` | Match plain substrings on built-in or retained instance fields. | `SELECT @objectId FROM "com.example.User" WHERE name CONTAINS 'min'` |
 | `OBJECTS x.field` | Project the one-hop referent of an object-reference field instead of the matched source object. | `SELECT OBJECTS n.parent FROM "com.example.Node" WHERE payload IS NULL` |
 | `IS NULL` / `IS NOT NULL` | Test whether an object-reference field is unset or present. | `SELECT @objectId FROM "com.example.Node" WHERE payload IS NOT NULL` |
+| `=~` | Regex match on string-capable fields (linear-time `regex` crate). | `SELECT @objectId FROM "com.example.User" WHERE name =~ "^admin.*"` |
+| `outbounds(id)` / `inbounds(id)` / `dominators(id)` | Traversal functions in `FROM` clauses (single-hop out/in; dominator chain). | `SELECT @objectId FROM outbounds(1) WHERE @objectId = 3` |
+| Subqueries | One-level nesting: `FROM OBJECTS (SELECT ...)`. | `SELECT * FROM OBJECTS (SELECT @objectId FROM "com.example.*" LIMIT 10)` |
+| `UNION` | Combine two queries, deduplicated by object id. | `SELECT @objectId FROM "A" WHERE x < 3 UNION SELECT @objectId FROM "A" WHERE x > 7` |
 
-These additions stay intentionally narrower than full MAT OQL: no subqueries, no multi-hop `OBJECTS`, and no broad set algebra. For the full semantics and explicit non-scope, see [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md).
+Named deferrals (not silent gaps): `eval(...)`, multi-class `FROM`, arbitrary-depth subquery nesting, multi-hop `OBJECTS`. M7-4 baseline: [docs/design/milestone-7-4-oql-targeted-expansion.md](docs/design/milestone-7-4-oql-targeted-expansion.md). M15 bounded expansion: [docs/design/milestone-15-mat-backend-parity.md](docs/design/milestone-15-mat-backend-parity.md).
 
 #### Output TOON (for CI/CD)
 ```bash
@@ -861,7 +911,8 @@ Default graph-backed runs now keep raw field retention disabled unless thread, s
 - M5 is complete for the approved scope: shipped AI/MCP differentiation now leaves only narrower follow-on work
 - M6 is complete: heap explorer now resolves selected objects back to leak IDs for leak-workspace cross-navigation, the in-repo Tauri desktop scaffold ships under `tauri/`, and the repo now includes the expanded docs/examples/integration/community surfaces
 - M7 is shipped: M7-1 streaming overview mode, M7-2 `ci-check`, M7-3 allocation-site flame graphs, and M7-4 OQL targeted expansion are complete; M7-5 comparative benchmarks remains 🟡 partial with a published WSL report and shipped harness; the native-Linux reference-spec rerun remains future work; and M7-6 v0.3.0 shipped on 2026-04-26
-- Post-v0.3.0 milestone planning is pending Tech PM review; current follow-on remains evidence-driven around richer interactive reports, deeper heap-browser workflows, indexed re-query support, and optional desktop release hardening
+- M8, M9, M10, M10-B, M11, M13, M14, M15, **M16** (desktop packaging, unsigned default), and **M17** (desktop M14 bridge wiring — shipped with caveats: 17.A–17.C ✅, 17.D packaged GUI smoke → M21) are post-v0.3.0; M12 (reference-workstation benchmark rerun) remains blocked on environment
+- UI-first plan track ([docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)): **M20** workbench surfaces, **M21** portable install (in progress), **M22** bounded OQL (in progress), **M23** guided investigation slices shipped with evidence closeout pending final Terra/Sol — see [docs/evidence/m23-guided-investigation.md](docs/evidence/m23-guided-investigation.md)
 
 ---
 

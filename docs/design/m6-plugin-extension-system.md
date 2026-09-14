@@ -1,25 +1,25 @@
 # M6 Phase 8 — Plugin/Extension System Design
 
-> **Status:** Design only — implementation deferred until demonstrated demand  
-> **Parent:** [milestone-6-ecosystem-and-community.md](milestone-6-ecosystem-and-community.md) §20  
-> **Design Owner:** Design Consulting Agent  
-> **Last Updated:** 2026-04-25
+> **Status:** Phase 2 shipped (M15 Slice 15.F); Phase 3 still gated
+> **Parent:** [milestone-6-ecosystem-and-community.md](milestone-6-ecosystem-and-community.md) §20
+> **Design Owner:** Design Consulting Agent
+> **Last Updated:** 2026-09-13 (M15 Slice 15.G doc-sync)
 
 ---
 
 ## 1. Status & Recommendation
 
-**Current stance:** document, don't build.
+**Current stance:** Phase 2 is shipped; Phase 3 remains deferred.
 
-The `mnemosyne-core` crate already exposes a public library API (`ObjectGraph`, `AnalysisConfig`, `AnalyzeResponse`, `render_report`, LLM helpers). Any Rust project can `use mnemosyne_core` today and build custom analysis on top. A formal plugin system adds discovery, registration, and (optionally) dynamic loading — none of which is justified by the current user base.
+The `mnemosyne-core` crate exposes a public library API (`ObjectGraph`, `AnalysisConfig`, `AnalyzeResponse`, `render_report`, LLM helpers). M15 Slice 15.F added a formal **Phase-2 static trait registry** (`core::plugin`) so Rust consumers can register custom analyzers and formatters at compile time. Dynamic loading (Phase 3) is still gated — no third-party plugin demand exists yet to justify `cdylib` ABI stability work.
 
 **Recommended path:**
 
-| Phase | Trigger | Deliverable |
-|-------|---------|-------------|
-| **1 — Library API** (current) | Already available | Document `mnemosyne-core` as the extension mechanism |
-| **2 — Trait registry** | ≥3 requests for custom analyzers/formats | `AnalyzerPlugin` + `ReportFormatterPlugin` traits, static registration |
-| **3 — Dynamic loading** | Phase 2 adoption + demand for out-of-tree plugins | `cdylib` discovery via `~/.mnemosyne/plugins/` |
+| Phase | Trigger | Deliverable | Status |
+|-------|---------|-------------|--------|
+| **1 — Library API** | Already available | Document `mnemosyne-core` as the extension mechanism | ✅ Shipped |
+| **2 — Trait registry** | ≥3 requests for custom analyzers/formats | `AnalyzerPlugin` + `ReportFormatterPlugin` traits, static registration | ✅ Shipped (M15 Slice 15.F) |
+| **3 — Dynamic loading** | Phase 2 adoption + demand for out-of-tree plugins | `cdylib` discovery via `~/.mnemosyne/plugins/` | ⏳ Gated |
 
 ---
 
@@ -54,12 +54,12 @@ pub trait AnalyzerPlugin: Send + Sync {
     fn analyze(
         &self,
         graph: &ObjectGraph,
-        config: &AnalysisConfig,
-    ) -> Result<AnalyzerResult, CoreError>;
+        dominator: Option<&DominatorTree>,
+    ) -> CoreResult<AnalyzerResult>;
 }
 ```
 
-Integration: a `PluginRegistry` would iterate registered analyzers after the built-in leak/dominator passes and append their findings to `AnalyzeResponse`.
+**Shipped integration (M15):** `PluginRegistry::register_analyzer()` plus `analyze_heap_with_plugins()` appends each registered analyzer's output to `AnalyzeResponse::plugin_results`. Existing `analyze_heap()` callers are unchanged (empty `plugin_results`).
 
 ### 2.2 Custom Report Formatter Plugin
 
@@ -81,7 +81,7 @@ pub trait ReportFormatterPlugin: Send + Sync {
 }
 ```
 
-Integration: `render_report()` in `core/src/report/renderer.rs` would delegate to the registry when `OutputFormat` is `Custom(name)`.
+**Shipped integration (M15):** `OutputFormat::Custom(String)` plus `render_report_with_plugins()` in `core/src/report/renderer.rs` delegates to a registered `ReportFormatterPlugin`. Plain `render_report()` returns `CoreError::Unsupported` for custom formats when no registry is supplied.
 
 ### 2.3 Custom LLM Backend
 
@@ -104,7 +104,9 @@ This would sit alongside `llm::complete()` as a fallback: if `AiProvider` doesn'
 
 ## 3. Plugin Discovery & Registration
 
-### 3.1 Static (compile-time)
+Phase 2 ships **§3.1 only**. §3.2–3.3 describe proposed Phase 3 behavior — not implemented.
+
+### 3.1 Static (compile-time) — shipped (Phase 2)
 
 Library users call registration functions before invoking analysis:
 
@@ -116,9 +118,9 @@ registry.register_formatter(Box::new(MySarifFormatter));
 
 No ABI concerns. No security risk beyond normal `mnemosyne-core` usage.
 
-### 3.2 Config-based
+### 3.2 Config-based (Phase 3 — proposed, not shipped)
 
-A `[plugins]` section in `mnemosyne.toml`:
+A future `[plugins]` section in `mnemosyne.toml` would allow:
 
 ```toml
 [plugins]
@@ -126,9 +128,9 @@ analyzers = ["path/to/libmy_analyzer.so"]
 formatters = ["path/to/libsarif_fmt.so"]
 ```
 
-### 3.3 Directory-based
+### 3.3 Directory-based (Phase 3 — proposed, not shipped)
 
-Well-known directory `~/.mnemosyne/plugins/` scanned at startup. Each `.so`/`.dylib`/`.dll` exposes a C-ABI entry point:
+A future well-known directory `~/.mnemosyne/plugins/` would be scanned at startup. Each `.so`/`.dylib`/`.dll` would expose a C-ABI entry point:
 
 ```rust
 #[no_mangle]
@@ -162,17 +164,22 @@ No changes to existing CLI commands or MCP handlers.
 
 ---
 
-## 6. Non-scope
+## 6. Non-scope (Phase 3 — still deferred)
 
-- Actual implementation of plugin loading or registry
-- Changes to `Cargo.toml`, source files, or CI
+- Dynamic `cdylib`/`.so`/`.dylib`/`.dll` loading or filesystem discovery
+- Config-driven plugin paths (`[plugins]` in `mnemosyne.toml`, `~/.mnemosyne/plugins/`)
+- CLI `--plugin <path>` flag
 - WASM-based plugin sandboxing (interesting but premature)
 - Plugin marketplace or distribution infrastructure
+
+Phase 2 (static registry) **is** implemented — see `core/src/plugin/mod.rs`.
 
 ---
 
 ## 7. Decision Record
 
-**Decision:** Defer plugin system implementation. The `mnemosyne-core` library API is the extension mechanism for now. This document captures the design so it can be picked up when demand materialises.
+**Decision (2026-04-25):** Defer dynamic plugin loading; library API is sufficient for now.
 
-**Revisit when:** three or more users/integrators request custom analyzers, output formats, or LLM backends that cannot be satisfied by the library API alone.
+**Update (2026-09-13, M15 Slice 15.F):** Phase 2 shipped — `AnalyzerPlugin`, `ReportFormatterPlugin`, and `PluginRegistry` with compile-time static registration. Phase 3 remains gated behind "Phase 2 adoption + demand for out-of-tree plugins."
+
+**Revisit Phase 3 when:** real out-of-tree plugin authors appear and compile-time linking is insufficient.

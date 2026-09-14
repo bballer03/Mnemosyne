@@ -82,9 +82,13 @@ describe("ClassloaderExplorerPanel", () => {
     const loadersSection = within(view.getByRole("region", { name: /^loaders$/i }));
     const table = loadersSection.getByRole("table");
     const rows = within(table).getAllByRole("row");
+    expect(within(table).getByText("Loaded classes")).toBeInTheDocument();
+    expect(within(table).getByText("Unique classes")).toBeInTheDocument();
     // rows[0] is the header row; rows[1]/rows[2] are the two loader rows in
     // report order (4096, then 8192, whose ancestorChain is [4096]).
-    expect(within(rows[1]).getByText("1 / 0")).toBeInTheDocument();
+    const firstRowCells = within(rows[1]).getAllByRole("cell");
+    expect(within(firstRowCells[1]).getByText("1")).toBeInTheDocument();
+    expect(within(firstRowCells[2]).getByText("0")).toBeInTheDocument();
     expect(within(rows[2]).getByText("0x1000")).toBeInTheDocument();
   });
 

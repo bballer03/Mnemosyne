@@ -52,3 +52,8 @@ Use `list_tools` first if your client wants the machine-readable method list and
 - `parse_heap` and `analyze_heap` both accept optional `mode` values `auto|deep|overview`.
 - When mode resolves to overview, the response carries `"mode": "overview"` and returns streaming partial data with approximate shallow sizes only, not retained sizes.
 - [`docs/api.md`](../api.md) is the source of truth for the live wire format, params, and result shapes.
+
+## See also
+
+- [MCP agent-loop transcripts (M18.F)](mcp-agent-loop-transcripts.md) — sanitized `ci_check` baseline and snapshot→diff→flamegraph exchanges.
+- [MCP workflows](../mcp-workflows.md) — captured transcripts per workflow kind.

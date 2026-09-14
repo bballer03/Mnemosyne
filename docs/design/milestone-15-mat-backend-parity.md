@@ -1,11 +1,11 @@
 # Milestone 15 — MAT Backend Parity Completion
 
-> **Status:** 🔲 Pending — design authored 2026-08-20, awaiting Implementation Agent pickup of Slice 15.A.
+> **Status:** ✅ Shipped — slices 15.A–15.F (implementation) + 15.G (documentation sync, 2026-09-13).
 > **Owner (design):** Design Consulting Agent (this pass, run inline by the orchestrating session per user directive — no human gate)
 > **Owner (implementation):** Implementation Agent (per slice, subagent-driven)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M15
-> **Predecessors:** M7-4 (OQL targeted expansion, shipped) — this milestone closes the remaining ~70% of MAT's OQL surface that M7-4 explicitly deferred. M3 Phase 3 (`analyze_strings()` duplicate-group shape, shipped) — this milestone's duplicate-array detector mirrors it. M6 Phase 8 (plugin/extension design doc, shipped as design-only) — this milestone executes its own recommended Phase 2.
-> **Last updated:** 2026-08-20
+> **Predecessors:** M7-4 (OQL targeted expansion, shipped) — this milestone closes the bounded high-value OQL slice M7-4 explicitly deferred. M3 Phase 3 (`analyze_strings()` duplicate-group shape, shipped) — this milestone's duplicate-array detector mirrors it. M6 Phase 8 (plugin/extension design doc, shipped as design-only) — this milestone executes its own recommended Phase 2.
+> **Last updated:** 2026-09-13 (Slice 15.G doc-sync)
 
 ---
 
@@ -157,4 +157,10 @@ All slices end with `cargo {check, test, clippy --workspace --all-targets -- -D 
 
 ## 8. Implementation readiness verdict
 
-**READY.** Slice 15.A (duplicate arrays) first — smallest, lowest-risk, proves the milestone's working pattern. 15.B (group-by-superclass) is independent and may run in a **separate isolated git worktree** in parallel with 15.A (different files: `analysis/string_analysis.rs` vs `graph/metrics.rs`/`analysis/engine.rs`'s histogram path). 15.C→15.D→15.E are sequential (same files, increasing grammar complexity, each proving out before the next). 15.F is independent of the OQL slices (different module) but sequenced last per its own higher design uncertainty. 15.G is gated behind all of 15.A–15.F.
+**SHIPPED.** All slices 15.A–15.G closed. See §9 for the documentation-sync closeout.
+
+## 9. Slice 15.G closeout (documentation sync)
+
+Slice 15.G (this pass) updated: `docs/roadmap.md` (M15 marked shipped in §5; four §2 parity-matrix rows — OQL depth, duplicate arrays, group-by-superclass, custom plugin runtime — flipped to ✅/🟡 with honest named deferrals; §6 recommendation moved to M16; §7 scorecard and §9 design-doc index updated), `STATUS.md` (M15 snapshot bullet + capability-checklist rows for OQL expansion, duplicate arrays, superclass grouping, Phase-2 plugins), `CHANGELOG.md` (`[Unreleased]` M15 entry), `README.md` (OQL/`--group-by`/`--duplicate-arrays`/plugin pointers), `ARCHITECTURE.md` (M15 analysis surfaces + `core::plugin` module), `docs/user-guide.md` (extended OQL reference, `--group-by superclass`, duplicate-array section, plugin API pointer), `docs/design/m6-plugin-extension-system.md` (Phase 2 shipped, Phase 3 gated), this design doc (status + closeout), and `docs/SESSION-SUMMARY-M14-M15-M16.md` (15.G complete).
+
+Validation: documentation-only — no Rust/TS runtime changes. Full-workspace `cargo check` expected green (no code delta).

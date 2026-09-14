@@ -2,6 +2,7 @@ use super::synth::synth_to_string;
 use super::types::{
     BuiltInField, CellValue, ClassPattern, ComparisonOp, FieldRef, Query, QueryError, QueryResult,
     QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 use crate::{
     analysis::string_analysis::extract_string_value,
@@ -207,23 +208,20 @@ fn resolve_matched_ids_at_depth(
             }
             Ok(ids)
         }
-        ClassPattern::Exact(_) | ClassPattern::Glob(_) => {
-            let mut ids = Vec::new();
-            for (&object_id, object) in &graph.objects {
-                if !matches_class_pattern(
-                    graph,
-                    object.class_id,
-                    &query.from.class_pattern,
-                    query.from.instanceof,
-                ) {
-                    continue;
-                }
-                if !matches_filter(query, graph, dominator, object_id, regexes)? {
-                    continue;
-                }
-                ids.push(object_id);
+        ClassPattern::Exact(_) | ClassPattern::Glob(_) => resolve_class_pattern_candidates(
+            graph,
+            dominator,
+            query,
+            std::slice::from_ref(&query.from.class_pattern),
+            regexes,
+        ),
+        ClassPattern::Multi(patterns) => {
+            if patterns.len() > MAX_MULTI_CLASS_FROM_LIST_SIZE {
+                return Err(QueryError::Unsupported(format!(
+                    "multi-class FROM list exceeds limit of {MAX_MULTI_CLASS_FROM_LIST_SIZE} class patterns"
+                )));
             }
-            Ok(ids)
+            resolve_class_pattern_candidates(graph, dominator, query, patterns, regexes)
         }
     }
 }
@@ -293,8 +291,14 @@ fn finalize_query_result(
     mut matched_ids: Vec<ObjectId>,
     columns: Vec<String>,
 ) -> Result<QueryResult, QueryError> {
-    if let SelectClause::Objects(field) = select {
-        return execute_objects_projection(limit, graph, field, matched_ids, columns);
+    match select {
+        SelectClause::Objects(field) => {
+            return execute_objects_projection(limit, graph, field, matched_ids, columns, false);
+        }
+        SelectClause::DistinctObjects(field) => {
+            return execute_objects_projection(limit, graph, field, matched_ids, columns, true);
+        }
+        SelectClause::All | SelectClause::Fields(_) => {}
     }
 
     let total_before_limit = matched_ids.len();
@@ -319,7 +323,9 @@ fn projected_columns(select: &SelectClause) -> Vec<String> {
     match select {
         SelectClause::All => vec!["@objectId".into(), "@className".into()],
         SelectClause::Fields(fields) => fields.iter().map(field_label).collect(),
-        SelectClause::Objects(_) => vec!["@objectId".into(), "@className".into()],
+        SelectClause::Objects(_) | SelectClause::DistinctObjects(_) => {
+            vec!["@objectId".into(), "@className".into()]
+        }
     }
 }
 
@@ -348,7 +354,10 @@ fn validate_supported_query(
             ));
         }
 
-        if matches!(query.select, SelectClause::Objects(_)) {
+        if matches!(
+            query.select,
+            SelectClause::Objects(_) | SelectClause::DistinctObjects(_)
+        ) {
             return Err(QueryError::feature_unavailable_in_overview_mode(
                 "OBJECTS",
                 OBJECTS_OVERVIEW_HINT,
@@ -458,7 +467,9 @@ fn select_references_built_in(select: &SelectClause, built_in: BuiltInField) -> 
     match select {
         SelectClause::All => false,
         SelectClause::Fields(fields) => fields.contains(&FieldRef::BuiltIn(built_in)),
-        SelectClause::Objects(field) => *field == FieldRef::BuiltIn(built_in),
+        SelectClause::Objects(field) | SelectClause::DistinctObjects(field) => {
+            *field == FieldRef::BuiltIn(built_in)
+        }
     }
 }
 
@@ -468,14 +479,22 @@ fn execute_objects_projection(
     field: &FieldRef,
     matched_ids: Vec<ObjectId>,
     columns: Vec<String>,
+    distinct: bool,
 ) -> Result<QueryResult, QueryError> {
     let mut rows = Vec::with_capacity(matched_ids.len());
+    let mut seen_targets: HashSet<ObjectId> = HashSet::new();
 
     for object_id in matched_ids {
         // Match MAT-style OBJECTS behavior: null and dangling refs do not emit a row.
         let Some(target_id) = resolve_objects_projection_target(field, graph, object_id)? else {
             continue;
         };
+
+        // DISTINCT OBJECTS: collapse duplicate projected targets by object id
+        // (MAT "Select unique objects"), preserving first-seen order.
+        if distinct && !seen_targets.insert(target_id) {
+            continue;
+        }
 
         rows.push(project_row(&SelectClause::All, graph, None, target_id));
     }
@@ -504,7 +523,88 @@ fn resolve_objects_projection_target(
         ));
     };
 
-    let field_name = normalize_objects_field_name(path)?;
+    let hop_fields = parse_objects_field_hops(path, graph, object_id)?;
+    let mut current_id = object_id;
+    let mut visited: HashSet<ObjectId> = HashSet::new();
+    visited.insert(object_id);
+
+    for (index, field_name) in hop_fields.iter().enumerate() {
+        let Some(next_id) = resolve_objects_single_hop(graph, current_id, field_name)? else {
+            return Ok(None);
+        };
+        let is_last_hop = index + 1 == hop_fields.len();
+        if !visited.insert(next_id) {
+            // Preserve a final self-reference / cycle terminus as a real
+            // projected target. Only omit when a revisit would continue
+            // traversal (more hops remain) — Terra M22.C.
+            if is_last_hop {
+                return Ok(Some(next_id));
+            }
+            return Ok(None);
+        }
+        current_id = next_id;
+    }
+
+    Ok(Some(current_id))
+}
+
+/// Parses an `OBJECTS` field path into 1–3 hop field names.
+///
+/// When the first segment is **not** an instance field on the source object,
+/// it is treated as a MAT-style alias prefix (`n` in `n.parent`) and stripped.
+/// When the first segment *is* a field on the source object, every segment is a
+/// hop — so unprefixed `parent.link.target.extra` counts as four hops and is
+/// rejected rather than silently alias-stripping into a three-hop path.
+fn parse_objects_field_hops<'a>(
+    path: &'a str,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> Result<Vec<&'a str>, QueryError> {
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    if segments.is_empty() {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires a non-empty instance field expression".into(),
+        ));
+    }
+
+    let hops = if segments.len() == 1 {
+        vec![segments[0]]
+    } else if source_has_instance_field(graph, object_id, segments[0]) {
+        segments
+    } else {
+        segments[1..].to_vec()
+    };
+
+    if hops.is_empty() {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires at least one field hop after an alias prefix".into(),
+        ));
+    }
+
+    if hops.len() > MAX_OBJECTS_FIELD_HOPS {
+        return Err(QueryError::Unsupported(format!(
+            "multi-hop OBJECTS exceeds limit of {MAX_OBJECTS_FIELD_HOPS} field hops: '{path}'"
+        )));
+    }
+
+    Ok(hops)
+}
+
+fn source_has_instance_field(graph: &ObjectGraph, object_id: ObjectId, field_name: &str) -> bool {
+    graph.get_object(object_id).is_some_and(|object| {
+        lookup_instance_field_type(graph, object.class_id, field_name).is_some()
+    })
+}
+
+fn resolve_objects_single_hop(
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+    field_name: &str,
+) -> Result<Option<ObjectId>, QueryError> {
     let Some(object) = graph.get_object(object_id) else {
         return Ok(None);
     };
@@ -535,21 +635,6 @@ fn resolve_objects_projection_target(
         ))),
         None => Err(QueryError::Unsupported(format!(
             "OBJECTS field '{field_name}' could not be read from class '{class_name}'"
-        ))),
-    }
-}
-
-fn normalize_objects_field_name(path: &str) -> Result<&str, QueryError> {
-    let segments: Vec<&str> = path
-        .split('.')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-
-    match segments.as_slice() {
-        [field_name] => Ok(field_name),
-        [_, field_name] => Ok(field_name),
-        _ => Err(QueryError::NotImplemented(format!(
-            "multi-hop OBJECTS not yet supported: '{path}'"
         ))),
     }
 }
@@ -653,6 +738,39 @@ fn resolve_dominator_chain(
     chain
 }
 
+/// Resolves one or more class-name patterns to a deduplicated object-id set.
+/// Each pattern uses the same `matches_class_pattern` path as a standalone
+/// single-class `FROM`; when multiple patterns match the same object, it
+/// appears once (M22 Slice 22.B).
+fn resolve_class_pattern_candidates(
+    graph: &ObjectGraph,
+    dominator: Option<&DominatorTree>,
+    query: &Query,
+    patterns: &[ClassPattern],
+    regexes: &[Option<Regex>],
+) -> Result<Vec<ObjectId>, QueryError> {
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+    let mut ids = Vec::new();
+
+    for pattern in patterns {
+        for (&object_id, object) in &graph.objects {
+            if seen.contains(&object_id) {
+                continue;
+            }
+            if !matches_class_pattern(graph, object.class_id, pattern, query.from.instanceof) {
+                continue;
+            }
+            if !matches_filter(query, graph, dominator, object_id, regexes)? {
+                continue;
+            }
+            seen.insert(object_id);
+            ids.push(object_id);
+        }
+    }
+
+    Ok(ids)
+}
+
 fn matches_class_pattern(
     graph: &ObjectGraph,
     class_id: u64,
@@ -697,6 +815,7 @@ fn class_name_matches(graph: &ObjectGraph, class_id: u64, pattern: &ClassPattern
         // pattern to match against, so these arms always return `false`.
         ClassPattern::Traversal(_) => false,
         ClassPattern::Subquery(_) => false,
+        ClassPattern::Multi(_) => false,
     }
 }
 
@@ -1070,7 +1189,7 @@ fn project_row(
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],
         SelectClause::Fields(fields) => fields.clone(),
-        SelectClause::Objects(_) => vec![
+        SelectClause::Objects(_) | SelectClause::DistinctObjects(_) => vec![
             FieldRef::BuiltIn(BuiltInField::ObjectId),
             FieldRef::BuiltIn(BuiltInField::ClassName),
         ],

@@ -1,13 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-client";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
+import { CollectionAnalysisPanel } from "./components/CollectionAnalysisPanel";
+import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
 import { HistogramExplorerPanel } from "./components/HistogramExplorerPanel";
+import { PluginFindingsPanel } from "./components/PluginFindingsPanel";
 import { ReferrerPanel } from "./components/ReferrerPanel";
 import { SelectedBucketDetail } from "./components/SelectedBucketDetail";
+import { StringAnalysisPanel } from "./components/StringAnalysisPanel";
+import { TopInstancesPanel } from "./components/TopInstancesPanel";
+import { UnreachableObjectsPanel } from "./components/UnreachableObjectsPanel";
 
 const panelStyle = {
   border: "1px solid #1e293b",
@@ -21,12 +28,31 @@ export function ArtifactExplorerPage() {
   const [selectedHistogramKey, setSelectedHistogramKey] = useState<string | undefined>(
     artifact?.histogram?.entries[0]?.key,
   );
+  const [liveHistogram, setLiveHistogram] = useState<HistogramResultView | undefined>();
+  const [histogramSource, setHistogramSource] = useState<"artifact" | "live">("artifact");
 
   useEffect(() => {
     setSelectedHistogramKey(artifact?.histogram?.entries[0]?.key);
+    setLiveHistogram(undefined);
+    setHistogramSource("artifact");
   }, [artifact]);
 
-  if (!artifact) {
+  const explorerArtifact = useMemo(() => {
+    if (!artifact) {
+      return undefined;
+    }
+
+    if (!liveHistogram) {
+      return artifact;
+    }
+
+    return {
+      ...artifact,
+      histogram: liveHistogram,
+    };
+  }, [artifact, liveHistogram]);
+
+  if (!artifact || !explorerArtifact) {
     return <Navigate to="/" replace />;
   }
 
@@ -70,12 +96,18 @@ export function ArtifactExplorerPage() {
         <section aria-label="Histogram explorer" style={panelStyle}>
           <HistogramExplorerPanel
             artifact={artifact}
+            liveHistogram={liveHistogram}
+            histogramSource={histogramSource}
+            onLiveHistogramChange={(histogram, source) => {
+              setLiveHistogram(histogram);
+              setHistogramSource(source);
+            }}
             selectedKey={selectedHistogramKey}
             onSelectKey={setSelectedHistogramKey}
           />
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>
-          <SelectedBucketDetail artifact={artifact} selectedKey={selectedHistogramKey} />
+          <SelectedBucketDetail artifact={explorerArtifact} selectedKey={selectedHistogramKey} />
         </aside>
       </section>
 
@@ -90,9 +122,49 @@ export function ArtifactExplorerPage() {
         <section aria-label="Referrer panel" style={panelStyle}>
           <ReferrerPanel artifact={artifact} />
         </section>
-        <section aria-label="Classloader explorer panel" style={panelStyle}>
+        <section id="classloader-explorer" aria-label="Classloader explorer panel" style={panelStyle}>
           <ClassloaderExplorerPanel artifact={artifact} />
         </section>
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "1rem",
+          alignItems: "start",
+        }}
+      >
+        <section id="string-analysis" aria-label="String analysis panel" style={panelStyle}>
+          <StringAnalysisPanel artifact={artifact} />
+        </section>
+        <section id="duplicate-arrays" aria-label="Duplicate array panel" style={panelStyle}>
+          <DuplicateArrayPanel artifact={artifact} />
+        </section>
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "1rem",
+          alignItems: "start",
+        }}
+      >
+        <section id="collections" aria-label="Collection analysis panel" style={panelStyle}>
+          <CollectionAnalysisPanel artifact={artifact} />
+        </section>
+        <section id="top-instances" aria-label="Top instances panel" style={panelStyle}>
+          <TopInstancesPanel artifact={artifact} />
+        </section>
+      </section>
+
+      <section id="unreachable-objects" aria-label="Unreachable objects panel" style={panelStyle}>
+        <UnreachableObjectsPanel artifact={artifact} />
+      </section>
+
+      <section aria-label="Static plugin findings panel" style={panelStyle}>
+        <PluginFindingsPanel artifact={artifact} />
       </section>
     </main>
   );

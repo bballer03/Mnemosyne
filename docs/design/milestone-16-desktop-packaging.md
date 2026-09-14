@@ -1,11 +1,11 @@
 # Milestone 16 — Desktop Packaging & Distribution
 
-> **Status:** 🔲 Pending — design authored 2026-08-20, awaiting Implementation Agent pickup of Slice 16.A.
+> **Status:** ✅ Shipped (unsigned default) — slices 16.A–16.C (implementation) + 16.D (documentation sync, this pass). **Do not claim signed or notarized releases exist** until release CI signing secrets are configured.
 > **Owner (design):** Design Consulting Agent (this pass, run inline by the orchestrating session per user directive — no human gate)
 > **Owner (implementation):** Implementation Agent (per slice, subagent-driven)
 > **Parent:** [docs/roadmap.md §5](../roadmap.md) — M16
 > **Predecessors:** M6 (Tauri scaffold, shipped). M14 (UI backend-parity & AI-native redesign) — this milestone bundles whatever GUI M14 ships; sequenced after it, though the release-pipeline plumbing in §4 can be built and tested against today's UI in the meantime.
-> **Last updated:** 2026-08-20
+> **Last updated:** 2026-09-13
 
 ---
 
@@ -29,7 +29,7 @@ After M16, a user can download one installer for their platform from GitHub Rele
 
 - [tauri/Cargo.toml](../../tauri/Cargo.toml) — `mnemosyne-desktop` binary, Tauri **v2** (`tauri = { version = "2", features = ["devtools"] }`), already depends on `mnemosyne-core` directly (no IPC/subprocess boundary — the desktop app links the analysis engine in-process).
 - [tauri/tauri.conf.json](../../tauri/tauri.conf.json) — `bundle.active: true`, `bundle.targets: "all"` (Tauri's bundler already configured to produce every platform-native format it knows how to build: `.msi`/`.exe` on Windows, `.dmg`/`.app` on macOS, `.deb`/`.AppImage`/`.rpm` on Linux). Icons already present (`32x32.png`, `128x128.png`, `.icns`, `.ico`). `beforeBuildCommand: "cd ../ui && bun run build"` — the Tauri build already wires in the `ui/` frontend build step, meaning **M14's UI work needs zero packaging-side changes to be included** once it lands; this milestone doesn't have to "hook up" the frontend, that plumbing already exists.
-- [.github/workflows/release.yml](../../.github/workflows/release.yml) — existing 5-target CLI release matrix (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`), tag-triggered, publishes to GitHub Releases + GHCR + (separately) Homebrew formula bump. **No Tauri/desktop build step exists in this workflow today** — this is the actual gap M16 closes, not the Tauri scaffold itself (which is already release-bundle-configured).
+- [.github/workflows/release.yml](../../.github/workflows/release.yml) — existing 5-target CLI release matrix plus M16's `build-desktop` job **configured** for Windows/macOS/Linux Tauri builds (artifact upload + release attachment on tagged releases). Signing steps are conditional-on-secrets with loud unsigned fallback; auto-update skipped for v1.
 - `tauri/src/commands.rs` — native commands for `load_heap`, `unload_heap`, `query_heap`, `get_references`, `get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, `propose_fix`. M9/M10/M11/M13's newer capabilities have no native-command equivalent yet — in scope for this milestone only where M14's UI genuinely needs one to function in the desktop shell (see §4 "Out").
 
 ### 3.2 What MAT does
@@ -59,35 +59,30 @@ Out:
 
 ## 5. Sub-slice plan
 
-All slices end with a real built-and-launched installer verification on at least one platform this environment can actually test (Windows, given the executing sandbox — cross-platform builds may need to be verified via CI logs/artifacts rather than local launch if this environment can't run macOS/Linux binaries directly; be explicit about which platforms were genuinely launch-tested vs. build-verified-only in each slice's report).
+All slices end with a real built-and-launched installer verification on at least one platform this environment can actually test (Windows, given the executing sandbox). For other platforms, be explicit about which were launch-tested vs. **not launch-tested** — the desktop CI job is **configured** in `release.yml`, but do not claim successful CI artifact upload unless evidenced by a tagged run.
 
-### Slice 16.A — CI pipeline: build + attach unsigned installers
+### Slice 16.A — CI pipeline: build + attach unsigned installers — ✅ Shipped
 
 - **Scope:** Items 1–2. Get a real installer artifact attached to a tagged release, unsigned, on all three OS families, before touching signing at all — prove the pipeline works end-to-end first.
-- **Files owned:** `.github/workflows/release.yml` (or new sibling workflow file), possibly `tauri/tauri.conf.json` if bundle config needs adjustment for CI (verify locally first with `cargo tauri build` if the toolchain is available in this environment, or document that it could only be verified via workflow-syntax review, not a real run, if not).
-- **Validation gates:** a real (or dry-run/workflow-lint-verified, documented which) release produces installer artifacts for Windows at minimum (this environment's own platform — highest-confidence verification), with macOS/Linux artifacts at least build-attempted in CI even if this session can't launch-test them directly.
-- **Target size:** CI config + small `tauri.conf.json` adjustments if needed.
+- **Delivered:** `build-desktop` matrix job **configured** in `.github/workflows/release.yml` for Windows/macOS/Linux Tauri builds (artifact upload + release attachment on tagged releases). Windows `.msi`/`.exe` launch-tested locally.
+- **Platform verification:** Windows launch-tested; macOS/Linux **not launch-tested** (no evidenced tagged CI run yet — job configured only).
 
-### Slice 16.B — Code-signing wiring (conditional-on-secrets) + auto-update decision
+### Slice 16.B — Code-signing wiring (conditional-on-secrets) + auto-update decision — ✅ Shipped
 
 - **Scope:** Item 3 (signing wired to check for secrets, unsigned fallback documented) and item 4 (explicit auto-update decision recorded, default: skip for v1).
-- **Files owned:** `.github/workflows/release.yml`, `SECURITY.md` or `README.md` (signing/Gatekeeper caveat documentation).
-- **Validation gates:** the signing step visibly no-ops (not silently, a clear CI log line) when secrets are absent, so a future maintainer adding real certificates knows exactly where to plug them in; the auto-update decision is written down, not left implicit.
-- **Target size:** CI config + documentation.
+- **Delivered:** Conditional signing steps in `build-desktop` job. **Windows:** `WINDOWS_CERTIFICATE` + password; CI derives thumbprint and injects `bundle.windows.*` into `tauri.conf.json` when secrets present. **macOS:** requires full Apple secret set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `KEYCHAIN_PASSWORD`). **Linux:** unsigned by design. Loud CI log lines when secrets absent. **No signing credentials configured in CI today → default artifacts unsigned.** Auto-update **skipped for v1** (no Tauri updater plugin). Documented in `SECURITY.md` and README.
+- **Validation gates (met):** signing steps no-op loudly when secrets absent; auto-update decision written down.
 
-### Slice 16.C — Installation docs + optional Homebrew Cask evaluation
+### Slice 16.C — Installation docs + optional Homebrew Cask evaluation — ✅ Shipped
 
 - **Scope:** Items 5–6.
-- **Files owned:** `README.md`, possibly new `HomebrewFormula/mnemosyne-desktop.rb` (Cask) if item 6's evaluation favors it.
-- **Validation gates:** documentation accurately describes the actual shipped (possibly unsigned) experience per platform — no claiming a signed/notarized experience that Slice 16.B didn't actually achieve.
-- **Target size:** Documentation + optional Cask file.
+- **Delivered:** README "Desktop app (GUI)" subsection with download pattern, per-platform install steps, SmartScreen/Gatekeeper workarounds for unsigned builds, build-from-source pointer. `tauri/Cargo.toml` version synced to `0.3.0`. Desktop bundles documented as post-M16 tags only (not historical `v0.3.0`).
+- **Homebrew Cask decision (16.C):** **Deferred for v1.** GitHub Releases remains the sole desktop distribution channel.
 
-### Slice 16.D — Documentation sync
+### Slice 16.D — Documentation sync — ✅ Shipped (this pass)
 
-- **Scope:** `docs/roadmap.md` (mark M16 shipped or partially-shipped, being honest about which platforms got real signing vs. documented-unsigned), `STATUS.md`, `CHANGELOG.md`, design doc closeout.
-- **Files owned:** Documentation only.
-- **Validation gates:** Matches this session's established doc-sync precedent; explicit about signing status per platform, not glossed over.
-- **Target size:** Documentation-only.
+- **Scope:** `docs/roadmap.md`, `STATUS.md`, `CHANGELOG.md`, design doc closeout, `ARCHITECTURE.md` (desktop status drift), `docs/SESSION-SUMMARY-M14-M15-M16.md`.
+- **Delivered:** M16 marked shipped with unsigned-default caveats across all owned docs. Explicit signing status per platform; no signed/notarized claims.
 
 ## 6. Risks and mitigations
 
@@ -95,7 +90,7 @@ All slices end with a real built-and-launched installer verification on at least
 |---|---|---|
 | R1 | This executing environment cannot obtain or test real code-signing credentials (Windows Authenticode cert, Apple Developer account) | §4 item 3's binding scope: CI wiring is conditional-on-secrets, ships unsigned with documented user-facing caveats otherwise. Same "flag the environment constraint before claiming the milestone done" discipline M12 already established when it turned out fully blocked — this milestone is partially blocked on the same class of external-credential problem, not fully. |
 | R2 | Unsigned installers trigger OS security warnings (SmartScreen on Windows, Gatekeeper on macOS) that read as "broken" to a new user | Document the exact click-through/right-click workaround in the README's Desktop app section (item 5) — same honesty-over-polish instinct as this project's `ProvenanceKind` contract elsewhere. |
-| R3 | Cross-platform build verification is asymmetric — this session can genuinely launch-test Windows builds but only CI-log-verify macOS/Linux ones | Each slice's own report must be explicit about which platforms were actually launched vs. only build-verified — no claiming uniform confidence across platforms this session structurally cannot equally test. |
+| R3 | Cross-platform verification is asymmetric — Windows launch-tested locally; macOS/Linux **not launch-tested**; `build-desktop` job **configured** but no evidenced tagged CI run | Each slice's report must distinguish launch-tested vs configured-only — no claiming CI build/upload success without an evidenced tagged run. |
 | R4 | Auto-update half-implemented (update check wired but signing/trust chain incomplete) becomes worse than no auto-update at all | §4 item 4's default scope is explicitly "skip for v1" unless implementation finds the full chain cheap — no partial/broken auto-update ships. |
 
 ## 7. Cross-references
@@ -108,4 +103,4 @@ All slices end with a real built-and-launched installer verification on at least
 
 ## 8. Implementation readiness verdict
 
-**READY, with an environment caveat surfaced up front (not discovered mid-slice):** this executing sandbox has no macOS/Linux/Windows code-signing credentials, matching M12's earlier fully-blocked precedent but here only partially — Slice 16.A (unsigned pipeline) is fully executable in this environment; Slice 16.B's signing half is executable only as conditional CI wiring, not as an actual signed artifact, until real credentials are supplied by the user outside this session. Slice 16.A first. 16.B and 16.C are independent of each other once 16.A lands and may run in **separate isolated git worktrees**. 16.D is gated behind 16.A–16.C.
+**CLOSED (2026-09-13):** All four slices shipped. Release pipeline has `build-desktop` **configured** for tagged releases (Windows launch-tested locally; macOS/Linux not launch-tested; no evidenced tagged CI run yet). Signing is conditional-on-secrets; **no credentials configured → unsigned default**. Auto-update skipped for v1. Homebrew Cask deferred. Desktop bundles on post-M16 tags only. Optional follow-up: configure release CI signing secrets for signed/notarized artifacts on future tags; run a tagged release to evidence CI artifact upload.

@@ -1,12 +1,13 @@
 import "../../test/setup";
 
-import { render, waitFor, within } from "@testing-library/react";
+import { cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "bun:test";
 
 import { NaturalLanguageInputBar } from "./NaturalLanguageInputBar";
 
 afterEach(() => {
+  cleanup();
   delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
   delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
 });

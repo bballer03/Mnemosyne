@@ -1,6 +1,6 @@
 import "../test/setup";
 
-import { act, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -51,6 +51,10 @@ const POWER_ROUTE_LABELS: Array<[label: string, path: string]> = [
   ["Query Console", "/heap-explorer/query-console"],
   ["Threads", "/heap-explorer/threads"],
   ["Compare", "/compare"],
+  ["Policies", "/workbench/policies"],
+  ["Snapshots", "/workbench/snapshots"],
+  ["Flamegraphs", "/workbench/flamegraphs"],
+  ["Assistant", "/assistant"],
 ];
 
 describe("TopNav reachability", () => {
@@ -62,6 +66,7 @@ describe("TopNav reachability", () => {
   });
 
   afterEach(() => {
+    cleanup();
     act(() => {
       useArtifactStore.getState().reset();
       useDashboardStore.getState().reset();
@@ -100,17 +105,25 @@ describe("TopNav reachability", () => {
         act(() => {
           void router.navigate("/");
         });
-        await waitFor(() => {
-          expect(router.state.location.pathname).toBe("/");
-        });
+        await waitFor(
+          () => {
+            expect(router.state.location.pathname).toBe("/");
+          },
+          { timeout: 3000 },
+        );
       }
 
-      const nav = document.querySelector('nav[aria-label="Power routes"]')!;
+      const nav = document.querySelector('nav[aria-label="Power routes"]');
+      expect(nav).not.toBeNull();
       const link = within(nav as HTMLElement).getByRole("link", { name: label });
+      expect(link.getAttribute("href")).toBe(path);
       await user.click(link);
-      await waitFor(() => {
-        expect(router.state.location.pathname).toBe(path);
-      });
+      await waitFor(
+        () => {
+          expect(router.state.location.pathname).toBe(path);
+        },
+        { timeout: 3000 },
+      );
     }
   });
 

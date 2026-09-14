@@ -9,6 +9,9 @@ import {
   isInspectObjectAvailable,
   isReferencesAvailable,
   isReferrersAvailable,
+  isRegroupHistogramAvailable,
+  normalizeHistogramGroupBy,
+  regroupHistogram,
   runHeapQuery,
 } from "./heap-explorer-query-client";
 
@@ -400,5 +403,49 @@ describe("heap explorer query client", () => {
     }
 
     expect(result.error).toContain("expected inspection.references_out to be an array");
+  });
+
+  it("normalizeHistogramGroupBy accepts classloader alias", () => {
+    expect(normalizeHistogramGroupBy("classloader")).toBe("class_loader");
+    expect(normalizeHistogramGroupBy("superclass")).toBe("superclass");
+  });
+
+  it("isRegroupHistogramAvailable and regroupHistogram follow optional-bridge semantics", async () => {
+    expect(isRegroupHistogramAvailable()).toBeFalse();
+    expect(await regroupHistogram("superclass")).toEqual({ status: "unavailable" });
+
+    setHeapExplorerBridge({
+      regroupHistogram: async (groupBy) => ({
+        group_by: groupBy,
+        total_instances: 2,
+        total_shallow_size: 16,
+        entries: [
+          {
+            key: "java.lang.Object",
+            instance_count: 2,
+            shallow_size: 16,
+            retained_size: 40,
+          },
+        ],
+      }),
+    });
+
+    expect(isRegroupHistogramAvailable()).toBeTrue();
+    expect(await regroupHistogram("superclass")).toEqual({
+      status: "ready",
+      data: {
+        groupBy: "superclass",
+        totalInstances: 2,
+        totalShallowSize: 16,
+        entries: [
+          {
+            key: "java.lang.Object",
+            instanceCount: 2,
+            shallowSize: 16,
+            retainedSize: 40,
+          },
+        ],
+      },
+    });
   });
 });

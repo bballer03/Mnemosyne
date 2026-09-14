@@ -1,9 +1,11 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-04-26 (post-v0.3.0 Tech PM refresh)
+> **Last updated:** 2026-09-14 (docs sync: UI-first M20–M23 progress on `sync/m15g-m16bcd`; final Terra/Sol closeouts pending)  
 > **Owner:** Tech PM Agent  
-> **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
-> **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
+> **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
+> **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
+>
+> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. Those numbers **collide** with the older post-M16 candidate rows still listed below (Bounded MAT / Credibility / Advanced OQL / Extension Runtime). Prefer the UI-first plan + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
 
 Mnemosyne has closed M1 through M7 and shipped `v0.3.0` (2026-04-26) across GitHub Releases, GHCR, and Homebrew. The active roadmap is now a Tech PM **post-v0.3.0 refresh**: an honest MAT parity matrix, an explicit differentiator inventory, a backlog of candidate M8+ milestones, and a recommended next milestone for orchestration to schedule.
 
@@ -37,7 +39,7 @@ Every milestone proposal in this document MUST either close a parity gap that is
 | AI | ✅ Shipped | Rules / stub / provider modes, CLI `chat`, persisted MCP sessions, redaction + audit |
 | MCP | ✅ Shipped | 14 methods, `list_tools`, `error_details`, session lifecycle, mode-aware |
 | UI | ✅ Shipped | Browser-first React: triage / artifact / heap / leak workspace |
-| Desktop | ⚠️ Scaffold | Tauri shell with native commands; no signed release artifacts |
+| Desktop | 🟡 Shipped (unsigned default) | Tauri v2 desktop CI job **configured** in tagged-release pipeline (`.msi`/`.exe`, `.dmg`/`.app`, `.deb`/`.AppImage`/`.rpm` targets); Windows launch-tested locally; macOS/Linux **not launch-tested**; signing conditional-on-secrets — **no signing credentials configured today, so default artifacts are unsigned**; desktop bundles ship on **post-M16 tags only** (not historical `v0.3.0`) |
 | Distribution | ✅ Full | GitHub Releases (5 targets), GHCR, Homebrew, source |
 | Testing | ✅ Solid | 448 Rust tests + UI suite |
 | Scale credibility | 🟡 Partial | Deep validated ~2 GB; overview survives 6.47 GB on WSL; **native-Linux + MAT + 10 GiB rerun still pending (M7-5)** |
@@ -56,18 +58,18 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 | Path to GC roots — shortest path | ✅ | ✅ | None | — | `mnemosyne gc-path` uses `ObjectGraph` BFS first, then `GcGraph` budget fallback, then synthetic. |
 | Path to GC roots — **all paths** / by class | ✅ | ✅ | None | — | `mnemosyne gc-path --all-paths [--by-class <name>] [--max-paths <n>]` enumerates every GC root path up to a shared `max_paths` budget (default 20), with an honest `truncated: bool` flag when the budget caps enumeration. Exit codes `8` (`--object-id` not found) / `9` (`--by-class` matches zero live instances). Shipped M8 Slice 8.A. |
 | Leak suspects report (heuristic) | ✅ | ✅ | None | — | `detect_leaks()` ships graph-backed retained-size + accumulation-point ranking with heuristic fallback labeled via `ProvenanceKind::Fallback`. **Differentiator:** structured provenance markers vs MAT's opaque suspect text. |
-| OQL — full operator set | ✅ | 🟡 | M7-4 covers ~30% of MAT OQL surface | Medium (M8 / M9) | Shipped: `@retainedSize`, `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS x.field`, `IS NULL`. Missing: subqueries, `UNION`, multi-hop traversal, full predicate functions, `eval(...)`, regex `=~`, `dominators(...)`, `outbounds`/`inbounds` traversal. |
+| OQL — full operator set | ✅ | 🟡 | M7-4 + M15 closed the bounded high-value slice; named MAT gaps remain | Low | Shipped (M7-4): `@retainedSize`, `@toString`, `@gcRootPath`, `LIKE`, `CONTAINS`, `OBJECTS x.field`, `IS NULL`. Shipped (M15): `outbounds(...)`/`inbounds(...)`/`dominators(...)` traversal functions, regex `=~`, one-level subqueries (`FROM OBJECTS (SELECT ...)`), `UNION`. Still deferred (named, not silent): `eval(...)`, multi-class `FROM`, arbitrary-depth subquery nesting, multi-hop `OBJECTS`. |
 | Top consumers report | ✅ | ✅ | None | — | `find_top_instances()` + analyze report top-N largest instances by retained or shallow size. |
 | Class loader explorer (per-loader histogram, unique classes) | ✅ | ✅ | None | — | `analyze --classloaders` ships `ClassLoaderReport { loaders, potential_leaks, duplicate_classes }` — **two independent leak signals that coexist, neither replacing the other**: (1) `potential_leaks`, a single-loader "retains a lot, loads almost nothing else" heuristic (M3 Phase 3, CLI-rendered + tested as of M13's grounding fix), and (2) `duplicate_classes` (new, M13), MAT's actual "Duplicate Classes" cross-loader signal — a class name loaded by ≥2 distinct classloaders, the classic Tomcat/Jetty/Spring hot-redeploy pattern. Each `ClassLoaderInfo` also gains `unique_class_count` (computed, not yet CLI-rendered — see M13 design doc closeout) and `ancestor_chain` (bounded parent-loader walk, rendered as an "Ancestors" column). `ci-check classloader_leak_count` predicate and MCP `detect_classloader_leaks` tool both ship. Shipped M13 Slices 13.A–13.C (13.D is this doc-sync). Browser UI: `ClassloaderExplorerPanel` in Artifact Explorer surfaces both signals plus the ancestor chain. Shipped M14 Slice 14.C. |
-| Duplicate strings / arrays detection | ✅ | 🟡 | Strings yes; arrays no | Low | `analyze_strings()` reports duplicate groups + dedup waste. **No** equivalent for primitive arrays or boxed array dedup. MAT has both. |
+| Duplicate strings / arrays detection | ✅ | ✅ | None | — | `analyze_strings()` reports duplicate-string groups + dedup waste. `analyze_duplicate_arrays()` (new `core::analysis::array_analysis`, M15 Slice 15.A) mirrors the same shape for primitive arrays (`DuplicateArrayGroup { element_type, content_hash, length, count, total_wasted_bytes }`). CLI `analyze --duplicate-arrays` and MCP `analyze_heap` `enable_duplicate_arrays: boolean` param attach an optional `ArrayReport` on `AnalyzeResponse`. Shipped M15 Slice 15.A. |
 | Thread overview + frame-locals + stack | ✅ | ✅ | None | — | `inspect_threads()` now additionally cross-references `ROOT_JAVA_FRAME` / `ROOT_JNI_LOCAL` GC roots into per-frame `FrameLocal { variable_slot, object_id, class_name, root_kind }` entries, printed as `local:`/`jni-local:` lines under each stack frame in `analyze --threads` text output. `variable_slot` honestly reuses the HPROF frame number — HPROF frame-local roots carry no genuine bytecode slot index. Shipped M8 Slice 8.D. Browser UI: new `/heap-explorer/threads` route (`ThreadExplorerPanel`) renders per-thread stacks with per-frame local tables. Shipped M14 Slice 14.C. |
 | Inspector — object field-level browse, refs in/out | ✅ | ✅ | None | — | `mnemosyne inspect <heap> --object-id <id> [--retain-field-data] [--format text\|json\|toon]` and MCP `inspect_object` ship a focused single-object view: shallow/retained size, dominator parent/children, references out, referrers in (all as structured `ObjectRef { object_id, class_name }`, not baked strings), and opt-in typed field values. Shipped M8 Slice 8.C. Browser UI: `ObjectInspectorPanel` renders refs/dominator parent-children as clickable navigation chips via a new optional `inspectObject` bridge method. Shipped M14 Slice 14.B. |
-| Group by class / classloader / package / superclass | ✅ | 🟡 | Class / package / classloader yes; superclass no | Low | `--group-by class\|package\|classloader`. Missing `--group-by superclass` (and the related "group by class -> superclass tree"). |
+| Group by class / classloader / package / superclass | ✅ | ✅ | None | — | `--group-by class\|package\|classloader\|superclass` (M15 Slice 15.B adds `HistogramGroupBy::Superclass`, grouping by immediate superclass via bounded `super_class_id` walk). MCP `histogram_group_by` gains the additive `"superclass"` enum value. Flat grouped list only — MAT's collapsible superclass tree UI is out of scope (M14 backend-before-UI pattern). Shipped M15 Slice 15.B. |
 | **Group by referrer** (incoming references analysis) | ✅ | ✅ | None | — | `mnemosyne analyze --by-referrer` and MCP `analyze_heap` `by_referrer: boolean` param rank objects by incoming-reference count (tiebreak retained size), with top referrer classes per entry. Shipped as a `ReferrerReport` optional field on `AnalyzeResponse` / an additive param on the existing `analyze_heap` tool — not a separate `analyze_by_referrer` tool (roadmap text below in §5 originally speculated otherwise). Shipped M8 Slice 8.B. Browser UI: new `ReferrerPanel` in Artifact Explorer renders the ranked table directly from the artifact, no live bridge call needed. Shipped M14 Slice 14.C. |
 | Reachable / unreachable objects analysis | ✅ | ✅ | None | — | `find_unreachable_objects()` walks from GC roots and reports per-class counts + shallow size. |
 | **Compare two heap dumps** (object-level diff) | ✅ | ✅ | None | — | `mnemosyne diff --mode object` ships fingerprint-based per-object identity (`class+retained` / `class+dominator` / `full-fingerprint`), added/removed/retained_changed sections, `MatchQuality`, and MCP `diff_heaps` mode. `ci-check --baseline` + `object_growth_threshold` predicate and `--cross-reference-leaks` leak-progression cross-reference shipped in M10-B. Browser UI: new `/compare` route (comparison basket) loads a precomputed diff report or runs one live via a new dedicated bridge, rendering added/removed/retained-changed tables with a match-quality badge. Shipped M14 Slice 14.A. |
 | Allocation-site flame graphs | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has no native flame-graph export; users typically pipe to async-profiler. Mnemosyne ships SVG / folded-stack / JSON natively. **Differentiator.** |
-| Custom inspector views / extensions | ✅ | ❌ | Not shipped | Defer | MAT plugins (`org.eclipse.mat.api.IQuery`) are widely used. Mnemosyne has a plugin design doc (M6) but no runtime extension surface. Defer until adoption justifies. |
+| Custom inspector views / extensions | ✅ | 🟡 | Phase 2 static registry shipped; Phase 3 dynamic loading deferred | Low | M15 Slice 15.F ships Phase 2 only: `AnalyzerPlugin`/`ReportFormatterPlugin` traits + `PluginRegistry` with compile-time static registration (`analyze_heap_with_plugins`, `render_report_with_plugins`, `OutputFormat::Custom(name)`). No filesystem discovery, no `cdylib` loading, no CLI `--plugin` flag — Phase 3 stays gated per `docs/design/m6-plugin-extension-system.md`. Shipped M15 Slice 15.F. |
 | **Index files / persistent snapshot** (parse-once, query-many) | ✅ | ✅ | None | — | `mnemosyne snapshot save\|load\|list\|rm` plus additive `--snapshot <hash-or-path>`/`--refresh` on `analyze`/`leaks`/`gc-path`/`inspect`/`query` cache the parsed `ObjectGraph` + `DominatorTree` keyed by heap-file SHA-256 under `dirs::cache_dir()/mnemosyne` (override via `MNEMOSYNE_SNAPSHOT_DIR`); auto-discovery re-opens a fresh matching cache entry with no flags at all. Schema/staleness mismatches on an *explicit* `--snapshot`/`snapshot load` fail loudly with exit codes `10`-`13`; auto-discovery misses fall through to a normal parse, never silently. MCP gets `open_snapshot`/`list_snapshots` plus an additive `snapshot` param on `analyze_heap`/`parse_heap`/`find_gc_path`/`inspect_object`/`query_heap`. Shipped M9 Slices 9.A-9.D (9.E is this doc-sync). Browser UI: `RecentHeapsList` on the AI-guided landing lists cached snapshots via a new `listSnapshots` bridge method, omitting the section entirely when unavailable. Shipped M14 Slice 14.D. |
 | **CI/CD-native automation** | ❌ | ✅ | **Mnemosyne ahead** | — | MAT has no first-class CI gate. `ci-check` + JSON / JUnit / GitHub Actions output is unique. **Differentiator.** |
 | **Streaming bounded-memory mode** | 🟡 | ✅ | **Mnemosyne ahead** | — | MAT has `ParseHeapDump.sh` for batch indexing, but no truly streaming bounded-RSS triage on multi-GB dumps. **Differentiator.** |
@@ -80,8 +82,7 @@ Honest comparison against Eclipse MAT capability dimensions. **MAT support:** �
 
 - **Mnemosyne ≥ MAT:** allocation flame graphs, CI/CD automation, streaming bounded-memory mode, AI-assisted diagnosis, MCP/IDE integration, provenance, distribution.
 - **MAT ≈ Mnemosyne (parity closed):** persistent indexes / parse-once-query-many, all-paths-to-GC-roots / by-class, group-by-referrer, object-level heap diff, and classloader leak detection (both the pre-existing single-loader heuristic and the new cross-loader duplicate-class signal) — closed in M9/M8/M10/M13, see below.
-- **MAT ≥ Mnemosyne (medium priority):** full OQL depth.
-- **MAT ≥ Mnemosyne (low priority / defer):** duplicate-arrays, group-by-superclass, custom plugin runtime.
+- **MAT ≥ Mnemosyne (low priority / named deferrals):** remaining OQL tail (`eval(...)`, multi-class `FROM`, arbitrary-depth subquery nesting, multi-hop `OBJECTS`); Phase 3 dynamic plugin loading (Phase 2 static registry shipped in M15).
 
 ---
 
@@ -223,7 +224,7 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
   - CLI: `mnemosyne analyze --classloaders` (no new flag — additive to the existing flag) gains a "Duplicate classes across loaders" section, printed only when non-empty, same convention as the pre-existing "Potential classloader leaks" section. The per-loader table gains an "Ancestors" column (**not** a "Unique" column as originally speculated below — `unique_class_count` is computed and serialized but not yet CLI-rendered; see the design doc's closeout for this scope-drift note).
   - `ci-check classloader_leak_count` predicate (threshold on `duplicate_classes.len()`, deep-only, same skip convention as `leak_count`/`retained_size`/`dominator_root_count`) in `core::policy`. A follow-up fix landed in the same slice after code review: `ci-check`'s handler had hardcoded `enable_classloaders: false`, so the predicate's own evaluator logic was correct but never received real data outside its unit tests — now `enable_classloaders` is derived from whether the loaded policy actually declares the rule.
   - MCP `detect_classloader_leaks` tool (`heap_path` in, `Vec<DuplicateClassGroup>` out) — a focused, cheaper single-purpose call, same rationale as `diff_heaps` existing standalone. `analyze_heap`'s existing `enable_classloaders` param needed no new param; the extended `ClassLoaderReport`'s new fields are additive and appear automatically.
-- **Not shipped (explicit non-goal, per design doc §4/§12):** UI leak-workspace panel (downgraded to documented future work, matching the established M8/M9/M10/M11 backend-before-UI pattern — **since resolved:** M14 Slice 14.C shipped `ClassloaderExplorerPanel` in Artifact Explorer, not the leak workspace specifically, but the same `duplicate_classes`/`ancestor_chain` data now has a browser surface). Group-by-superclass histograms. Live classloader unloading. Custom plugin runtime for user-defined heuristics.
+- **Not shipped (explicit non-goal, per design doc §4/§12):** UI leak-workspace panel (downgraded to documented future work, matching the established M8/M9/M10/M11 backend-before-UI pattern — **since resolved:** M14 Slice 14.C shipped `ClassloaderExplorerPanel` in Artifact Explorer, not the leak workspace specifically, but the same `duplicate_classes`/`ancestor_chain` data now has a browser surface). Group-by-superclass histograms (**since resolved:** M15 Slice 15.B shipped `--group-by superclass`). Live classloader unloading. Custom plugin runtime for user-defined heuristics (**since resolved for Phase 2:** M15 Slice 15.F shipped static trait registry; Phase 3 dynamic loading remains deferred).
 - **Why now / strategic rationale:** Closes a real MAT capability that matters specifically for JVM webapp / app-server users — a non-trivial slice of Mnemosyne's target audience. Builds cleanly on the M3 classloader report, and — per §3.3 of the design doc — deliberately keeps both leak signals alive rather than treating the new one as a replacement.
 - **Success criteria (met):** A deliberately-duplicated "redeployed webapp" fixture (same class name, two distinct loaders) produces exactly one `DuplicateClassGroup`; a class loaded twice by the *same* loader never appears in any group; a three-loader mixed fixture confirms `unique_class_count` and `duplicate_classes` agree (derived from one grouping pass, not two); a three-level ancestor chain resolves in ascending generation order and a self-referential / two-node-cycle chain terminates without hanging; the `ci-check` predicate fires on a duplicated fixture, stays clean on a non-duplicated one, and skips (not errors) on overview-mode input; the pre-existing `potential_leaks` tests continue passing unchanged, proving the two-signals-coexist claim as a regression gate, not just a design note.
 - **Risks / dependencies:** Parent-loader chain walk on adversarial/cyclic HPROF data — mitigated with a bounded depth (16) plus a visited-set cycle guard that terminates well before the depth bound, same discipline as M8 Slice 8.A's path-enumeration budget caps. False positives on legitimately re-loaded framework classes — mitigated by reporting the raw signal without a baked-in severity judgment, same "give the operator the data" philosophy as `MatchQuality` (M10) and `potential_leaks` itself.
@@ -240,41 +241,99 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
   - **Referrer, classloader, and thread panels (Slice 14.C):** `ReferrerPanel`/`ClassloaderExplorerPanel` (new, in `ArtifactExplorerPage`) and `ThreadExplorerPanel` (new `/heap-explorer/threads` route, `HeapThreadsPage`) — all three purely artifact-backed (`AnalysisArtifact.referrerReport`/`.classloaderReport`/`.threadReport`), no new bridge calls. Real backend JSON shape verified against a hand-built HPROF fixture (`analyze --by-referrer --classloaders --threads --format json`): the response fields are `thread_report`/`classloader_report`/`referrer_report` (not a bare `threads` field as the design doc's illustrative §6 sketch had it), and object-id encoding is inconsistent *within* `thread_report` itself — `ReferrerEntry.objectId`/`FrameLocal.objectId` are hex strings (`"0x..."`) while `ThreadInfo.objectId` and every classloader-side object id are raw numeric `u64` — faithfully preserved as found, not normalized away.
   - **AI-guided landing + workflow cards + persistent nav (Slice 14.D):** a fourth dedicated bridge, `__MNEMOSYNE_WORKFLOW_BRIDGE__` (`describeWorkflow`/`startWorkflow`/`nextStep`/`listSnapshots`) — not an extension of any of the other three, since workflow orchestration and snapshot-cache introspection don't fit a single-heap, single-leak, or before/after-pair shape. `TriageSummaryCard` drives M11's `triage_memory_leak` end-to-end through the shared generic `WorkflowCard`; `NaturalLanguageInputBar` routes OQL-shaped input (leading `SELECT`, or an OQL-only operator like `=~`) to the existing query-console execution path and everything else to `start_workflow` with a small keyword table (`natural-language-router.ts`), defaulting to `triage_memory_leak` when nothing matches; `WorkflowCards` surfaces `tune_gc`/`traverse_object_graph` directly and deep-links `compare_snapshots` to the Slice 14.A `/compare` route instead of driving `start_workflow` itself (that workflow's first step needs a before/after pair the landing page has no natural source for); `RecentHeapsList` (`list_snapshots`) renders nothing at all when unavailable, per the design doc's own explicit scope note. `TopNav` (persistent navigation to every power route) is rendered directly inside `ArtifactLoaderPage`'s `/` route rather than as a shared layout wrapping every route in `router.tsx` — a shared-layout wrapper was tried first and reverted because it collided with several pre-existing pages' own in-page navigation links sharing the same accessible names ("Dashboard", "Artifact Explorer", "Heap Explorer"), breaking those pages' own pre-existing tests. `ArtifactLoaderPage`'s existing drop-flow markup, copy, and auto-navigate-to-`/dashboard` behavior are completely unchanged — `GuidedLanding` is appended below it, not swapped in.
   - **Visual-consistency pass + documentation sync (Slice 14.E, this pass):** reviewed all ~15 new/extended Slice 14.A–14.D components against `ui/src/app/globals.css`'s tokens and against each other. Found and fixed one small drift: `NaturalLanguageInputBar` and `RecentHeapsList` each rendered their own `<h3>` nested directly under `GuidedLanding`'s own `<h3>` section heading (an a11y heading-hierarchy violation, and inconsistent with `TriageSummaryCard`/`WorkflowCards`' sibling content, which sits at `<h4>` under that same parent) — both demoted to `<h4>`. Everything else already matched the established panel/card/table/badge conventions from the pre-existing M4-era `DashboardPage`/`ArtifactExplorerPage` (border `#1e293b`, panel radius 24 with the `rgba(15,23,42,.96)→rgba(2,6,23,.96)` gradient, card radius 16 on `rgba(2,6,23,.75)`, `#38bdf8` uppercase eyebrow labels, `#94a3b8` body text, identical table header/row/badge-pill styling) — confirmed, not assumed, by reading every touched file. One apparent inconsistency was investigated and confirmed to be a **pre-existing, internally-consistent sub-convention, not drift**: the entire `leak-workspace` subpage family (`LeakExplainPage`/`LeakFixPage`/`LeakSourceMapPage`/`LeakGcPathPage`) uses a different card-border color (`#334155`) than the rest of the app, consistently, predating M14 — left untouched rather than "fixed" into a mismatch with its own siblings.
-- **Out of scope (unchanged from original text):** New backend capability (this milestone surfaces what already exists — zero `core`/`cli` files changed across 14.A–14.E). MAT backend-parity gaps (OQL depth, duplicate arrays, group-by-superclass, plugin runtime) — M15. Desktop packaging — M16. Tauri native-command wiring for any of the four new/extended bridges (`diffObjects`, `inspectObject`, `findAllGcPaths`, the workflow bridge's four methods) — `tauri/src/bridge.ts`/`commands.rs` inject none of them yet; every new UI surface degrades to an explicit unavailable state without a live bridge, exactly like every pre-existing optional-capability method.
+- **Out of scope (unchanged from original text):** New backend capability (this milestone surfaces what already exists — zero `core`/`cli` files changed across 14.A–14.E). MAT backend-parity gaps (OQL depth, duplicate arrays, group-by-superclass, plugin runtime) — **since resolved:** M15. Desktop packaging — M16. Tauri native-command wiring for any of the four new/extended bridges (`diffObjects`, `inspectObject`, `findAllGcPaths`, the workflow bridge's four methods) — `tauri/src/bridge.ts`/`commands.rs` inject none of them yet; every new UI surface degrades to an explicit unavailable state without a live bridge, exactly like every pre-existing optional-capability method.
 - **Why now / strategic rationale:** User-requested, brainstormed 2026-08-20. Every prior M8–M13 milestone deliberately deferred UI work ("backend-before-UI" pattern) — this milestone is the accumulated backlog from that pattern, not new scope invention. Highest usability leverage per unit of work: the backend risk was already retired: this was presentation-layer work only. Also resolves three specific UI-deferral notes those milestones' own sections carried: M8's "UI surfaces beyond what the existing leak workspace already covers" (Slices 14.B/14.C shipped exactly that), M9's "No UI/Tauri surfacing" (Slice 14.D's `RecentHeapsList` shipped the browser snapshot picker), and M13's "UI leak-workspace panel (downgraded to documented future work)" (Slice 14.C shipped `ClassloaderExplorerPanel` in Artifact Explorer, not the leak workspace specifically, but the same underlying `duplicate_classes`/`ancestor_chain` data now has a browser surface).
 - **Success criteria (met):** Every listed backend surface has a working UI page verified in-browser and by its own test file. Guided landing and power views are both reachable within one click of each other at all times (`TopNav`'s `POWER_ROUTES`). No regression to existing M4–M6 UI routes — `bun run test` stayed green across all four implementation slices, and stands at 285 passing tests (112+85+45+43 across four batches) at this Slice 14.E closeout, with `tsc --noEmit` clean throughout.
 - **Risks / dependencies:** UI work has no existing test-suite precedent as heavy as the Rust side in this repo — mitigated by keeping `bun run test`/`tsc --noEmit`/in-browser verification as a hard gate per slice, same discipline as `cargo test`/clippy/fmt on the Rust side; held for all five slices. Scope creep into a second design language — mitigated by treating `globals.css`'s existing tokens as the source of truth, extended not replaced; verified directly in Slice 14.E rather than assumed.
 - **Estimated slice count:** 5–8 slices (5 shipped: 14.A–14.D implementation + 14.E visual-consistency-and-doc-sync).
 
-### M15 — MAT Backend Parity Completion (Parity-Closing)
+### M15 — MAT Backend Parity Completion (Parity-Closing) — ✅ Shipped
 
-- **Status:** 🔲 Pending — design doc to be authored.
-- **Theme:** Close the remaining backend/analysis gaps against Eclipse MAT identified in the parity matrix (§2): OQL depth, duplicate primitive-array detection, group-by-superclass, and a custom plugin/extension runtime.
-- **Goal:** No MAT analysis capability left un-mirrored in core/CLI/MCP, absorbing the deferred B1/B9 backlog items below as this milestone's actual scope rather than indefinite deferral.
-- **Scope:**
-  - OQL depth: subqueries, `UNION`, multi-hop traversal, full predicate functions, `eval(...)`, regex `=~`, `dominators(...)`, `outbounds`/`inbounds` traversal — closing the remaining ~70% of MAT's OQL surface beyond M7-4's targeted slice.
-  - Duplicate primitive-array / boxed-array detection, mirroring the existing `analyze_strings()` duplicate-group shape.
-  - `--group-by superclass` (and the related "group by class → superclass tree").
-  - Custom plugin/extension runtime (MAT's `IQuery` equivalent) — builds on the existing design reference `docs/design/m6-plugin-extension-system.md`.
-- **Out of scope:** UI surfacing of any of the above (that's a follow-on to M14's pattern, scoped when this milestone's backend lands). Live JVM interaction (unrelated to OQL/grouping/plugins).
-- **Why now / strategic rationale:** These are the last four rows in the MAT parity matrix (§2) still marked 🟡/❌ that are pure analysis-capability gaps (M7-5's benchmark rerun, tracked separately as M12, is a credibility/evidence gap, not a capability gap). Closing them retires the "Path to MAT" framing's remaining honest caveats.
-- **Success criteria:** Each of the four scope items has core+CLI+MCP+test+doc coverage matching the M8–M13 bar (design doc, TDD, `cargo {check,test,clippy,fmt}` clean, doc sync).
-- **Risks / dependencies:** OQL depth is explicitly flagged in this roadmap's own risk register as "treadmill risk" (§8) — mitigate by shipping it as a bounded, named slice list (not an open-ended "improve OQL" task) the same way M7-4's targeted slice was scoped. Plugin runtime is the highest-risk/highest-effort item in this milestone — consider sequencing it last within M15, or splitting it into its own M15-B if scope proves too large once designed.
-- **Estimated slice count:** 6–10 slices.
+- **Status:** ✅ **Shipped** — design doc [milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md), slices 15.A–15.F (implementation) + 15.G (documentation sync, this pass).
+- **Theme:** Close the remaining backend/analysis gaps against Eclipse MAT identified in the parity matrix (§2): bounded OQL depth, duplicate primitive-array detection, group-by-superclass, and a Phase-2 static plugin/extension runtime.
+- **Goal:** Retire the four pure analysis-capability gaps that remained after M14 — not UI, not benchmark evidence (M12).
+- **Delivered scope (as shipped; bounded OQL list per design doc §4.1 — see note):**
+  - **Duplicate primitive-array detection (Slice 15.A):** new `core::analysis::array_analysis` module (`DuplicateArrayGroup`, `ArrayReport`, `analyze_duplicate_arrays()`), wired into `AnalyzeResponse.array_report` via `enable_duplicate_arrays`. CLI `analyze --duplicate-arrays` and MCP `analyze_heap` `enable_duplicate_arrays: boolean` param. Requires field-data retention (same precondition as string duplicate detection).
+  - **Group-by-superclass (Slice 15.B):** `HistogramGroupBy::Superclass` variant; grouping key walks `ClassInfo.super_class_id` to immediate superclass (bounded + cycle-guarded). CLI `--group-by superclass`; MCP `histogram_group_by: "superclass"`.
+  - **OQL traversal functions (Slice 15.C):** `outbounds(<id>)`, `inbounds(<id>)`, `dominators(<id>)` in `FROM` clauses, reusing `ObjectGraph::get_references`/`get_referrers` and `DominatorTree::immediate_dominator`.
+  - **OQL regex operator (Slice 15.D):** `=~` on string-capable fields (uses `regex` crate — linear-time guarantee). Malformed patterns fail at parse time with structured errors.
+  - **OQL subqueries + UNION (Slice 15.E):** `SELECT * FROM OBJECTS (<subquery>)` (one nesting level; deeper nesting rejected with "nesting depth exceeded"), and `UNION` with object-id deduplication (each side's `LIMIT` applies before merge).
+  - **Phase-2 plugin runtime (Slice 15.F):** new `core::plugin` module (`AnalyzerPlugin`, `ReportFormatterPlugin`, `PluginRegistry`). Static compile-time registration only — `analyze_heap_with_plugins()` appends to `AnalyzeResponse::plugin_results`; `render_report_with_plugins()` dispatches `OutputFormat::Custom(name)`. No dynamic loading, no CLI `--plugin` flag (Phase 3 stays gated).
+- **Not shipped (explicit named deferrals, per design doc §4):** `eval(...)` scriptlets, multi-class `FROM`, arbitrary-depth subquery nesting, multi-hop `OBJECTS`, Phase-3 dynamic `cdylib` plugin loading, UI surfacing of any M15 backend item (M14 backend-before-UI pattern).
+- **Why now / strategic rationale:** These were the last four 🟡/❌ analysis-capability rows in §2. M15 absorbed backlog items B1 (bounded OQL) and B9 (Phase-2 plugin registry) from the lower-priority table.
+- **Success criteria (met):** Each slice has core+CLI+MCP (where applicable)+test coverage; full-workspace `cargo {check,test,clippy,fmt}` clean at each gate; Slice 15.G doc-sync closes the milestone.
+- **Risks / dependencies:** OQL scope bounded to the named §4.1 list — mitigated. Plugin runtime limited to Phase 2 per §3.3 binding decision — mitigated.
+- **Estimated slice count:** 7 shipped (15.A–15.G).
 
-### M16 — Desktop Packaging & Distribution (Adoption)
+### M16 — Desktop Packaging & Distribution (Adoption) — ✅ Shipped (unsigned default)
 
-- **Status:** 🔲 Pending — design doc to be authored.
+- **Status:** ✅ **Shipped with documented caveats** — design doc [milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md), slices 16.A–16.C (implementation) + 16.D (documentation sync, this pass). **Do not claim signed or notarized releases exist** until release CI signing secrets are configured and a release notes that fact explicitly.
 - **Theme:** Ship Mnemosyne as a downloadable, installable desktop application (parity with how users obtain and run Eclipse MAT today), not just a CLI binary + optional dev-mode Tauri shell.
 - **Goal:** A user can download one installer per platform (Windows/macOS/Linux), run it, and get the full M14 GUI without installing Rust, Node, or building from source — absorbing the deferred B7 backlog item as this milestone's actual scope.
-- **Scope:**
-  - Harden the existing `tauri/` scaffold (already wraps the shared `ui/` build and injects host bridges) into a release-grade build: signed installers where platform tooling requires it, auto-update story (or an explicit documented decision to skip auto-update for v1), and inclusion in the tagged-release pipeline alongside the existing 5-target CLI archives / GHCR / Homebrew channels.
-  - Bundle the M14 UI (this milestone depends on M14 having shipped a GUI worth bundling — sequencing note, not a hard blocker on individual M14 slices).
-- **Out of scope:** New native commands beyond what `tauri/src/commands.rs` already exposes (`load_heap`, `query_heap`, `get_references`/`get_referrers`, `explain_leak`, `find_gc_path`, `map_to_code`, `propose_fix` — extend only if M14 UI work surfaces a gap). Auto-update infrastructure unless scoped in explicitly during design.
-- **Why now / strategic rationale:** User-requested for adoption — "for easy adoption we could also package and make this downloadable with gui like eclipse mat." The scaffold already exists (M6); this is release-hardening, not new architecture, matching the "adoption-data dependent" B7 backlog note this roadmap already carried.
-- **Success criteria:** A signed (or documented-as-unsigned-with-rationale) installer exists per target platform, downloadable from GitHub Releases alongside the CLI archives, launches the M14 GUI, and loads/analyzes a real heap dump end-to-end without any local Rust/Node toolchain.
-- **Risks / dependencies:** Code-signing requires platform-specific credentials/certificates this environment may not have — flag early in design rather than discovering it mid-slice, same "check the environment before promising the milestone" discipline M12 already established when it turned out to be blocked here. Depends on M14 shipping a GUI worth packaging.
-- **Estimated slice count:** 4–6 slices.
+- **Delivered scope (as shipped; signing is conditional-on-secrets — see note):**
+  - **CI release-pipeline integration (Slice 16.A):** `.github/workflows/release.yml` gains a `build-desktop` matrix job **configured** for Windows/macOS/Linux (`cargo tauri build`, per-target artifact upload, release attachment on tagged releases). Desktop bundles appear on **post-M16 tags only** — historical `v0.3.0` and earlier CLI-only releases have no desktop installers. Tagged CI artifact upload **not evidenced yet**.
+  - **Conditional code-signing + auto-update decision (Slice 16.B):** signing steps are wired but **no-op loudly** when secrets are absent. **Windows:** Authenticode via `WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD` (optional `WINDOWS_TIMESTAMP_URL`); CI derives the cert thumbprint and injects `bundle.windows.*` into `tauri.conf.json` before build when secrets are present. **macOS:** requires `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `KEYCHAIN_PASSWORD` for signing + notarization. **Linux:** unsigned by design. **Current default:** no signing secrets configured in CI → all desktop artifacts ship **unsigned**. **Auto-update:** explicitly **skipped for v1** — no Tauri updater plugin; users re-download from GitHub Releases. Documented in `SECURITY.md` and README Desktop app section.
+  - **Installation docs + Homebrew Cask evaluation (Slice 16.C):** README gains a "Desktop app (GUI)" subsection (download pattern, per-platform install steps, SmartScreen/Gatekeeper workarounds for unsigned builds). Homebrew **Cask deferred for v1** — GitHub Releases remains the sole desktop distribution channel; existing `HomebrewFormula/mnemosyne.rb` stays CLI-only. `tauri/Cargo.toml` version synced to `0.3.0`.
+- **Not shipped (explicit non-goals, per design doc §4/§6):** Actual code-signing certificates/accounts (organizational decision outside this milestone). In-app auto-update infrastructure. Homebrew Cask / winget / Flatpak / Snap.
+- **Platform verification asymmetry (honest):** Windows builds were launch-tested locally (`.msi`/`.exe` produced). macOS/Linux are **not launch-tested** in this environment; the `build-desktop` job is **configured** in `release.yml` but no tagged CI run has been evidenced yet — do not claim successful artifact upload until one exists.
+- **Why now / strategic rationale:** User-requested for adoption. M14 shipped a GUI worth bundling; M16 hardens the existing M6 Tauri scaffold into the tagged-release pipeline rather than inventing new architecture.
+- **Success criteria (met with caveats):** `build-desktop` CI job configured for all three OS families; Windows launch-tested locally. Tagged CI artifact upload not evidenced yet. Signing is conditional-on-secrets with loud unsigned fallback and user-facing SmartScreen/Gatekeeper documentation. Auto-update decision recorded (skip v1). README accurately describes the unsigned default — no signed/notarized claims.
+- **Risks / dependencies:** R1 (no signing credentials in this environment) — mitigated by conditional CI wiring + documented unsigned default. R2 (OS security warnings on unsigned builds) — mitigated by README/SECURITY.md workarounds. R3 (asymmetric launch testing) — documented per platform above.
+- **Estimated slice count:** 4 shipped (16.A–16.D).
+
+### M17 — Desktop Guided UX Bridge Completion — 🟡 Shipped with caveats
+
+- **Status:** 🟡 **Shipped with caveats** — [design doc](design/milestone-17-desktop-guided-ux-bridges.md); [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md). Slices **17.A–17.C** shipped: all seven required M14 bridge methods (`inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) are injected in `tauri/src/bridge.ts` and backed by native Tauri commands over existing `mnemosyne_core` behavior. **Evidence:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 24/24 pass. Slice **17.D partial:** command-layer tests and docs closeout only — packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence deferred to **M21**.
+- **Goal:** Wire M14's live bridge capabilities into the Tauri desktop using existing core behavior — achieved at the command/bridge layer for all four capability groups (inspector, multi-path GC, comparison, workflow/snapshots); end-to-end packaged-desktop GUI verification remains open.
+- **Why it mattered:** M16 distributed the M14 UI, but pre-M17 the desktop host injected only the two legacy bridges, forcing honest unavailable states on guided and power surfaces.
+- **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. Browser-without-bridge fallback unchanged. **Follow-on (UI-first M23.B):** `getWorkflow`/`closeWorkflow` later wired for desktop continuity — see [UI-first plan](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md).
+- **Slices:** 17.A ✅ inspector/all-paths; 17.B ✅ object comparison; 17.C ✅ workflow/snapshot commands; 17.D 🟡 partial (command-layer evidence only; GUI smoke → M21 / UI-first M21).
+
+### M18 — MCP Agent and IDE Loop Completion — ✅ Shipped (18.F transcripts documented)
+
+- **Status:** 🟡 **18.A–18.E shipped on branch** — `ci_check` (+ baseline / `baseline_snapshot`), `diff_heaps.cross_reference_leaks`, `save_snapshot` / `remove_snapshot`, `generate_flamegraph` + managed `read_artifact` / `delete_artifact` (`core/src/mcp/artifact.rs`). **18.F** transcripts documented in `docs/examples/mcp-agent-loop-transcripts.md`. Plan: [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
+- **Goal:** Let agents run `ci-check` with optional baseline, leak-annotated diffs, snapshot save/remove, and flamegraph generation through structured MCP calls.
+- **Why now:** These core/CLI capabilities already ship; MCP omission forces IDE agents to shell out and breaks Mnemosyne's MCP-first invariant.
+- **Boundary:** Thin MCP adapters only where core behavior exists. No shell execution, policy duplication, transport rewrite, or token streaming.
+- **Slices:** 18.A–18.F ✅.
+
+### M19 — Guided Analysis and Investigation Continuity — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-19-guided-analysis-completion.md`.
+- **Goal:** Surface M15 duplicate-array/static-plugin/superclass data, add a classloader-leak workflow over M13, and replace separate three-turn AI caps with one shared bounded 12-turn default (hard maximum 32).
+- **Why now:** This is mostly presentation and orchestration over shipped backends, so it converts existing capability into guided usefulness before adding deeper analysis.
+- **Boundary:** No new classloader heuristic, dynamic plugin loading, user-defined workflow language, arbitrary history, or streaming.
+- **Slices:** duplicate-array panel; MCP/Tauri-backed superclass regroup control; static plugin findings; classloader workflow; guided workflow card; bounded shared conversation history.
+
+### M20 — Bounded MAT Migration Polish — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-20-bounded-mat-migration-polish.md`.
+- **Goal:** Reduce common MAT saved-query migration friction with multi-class `FROM`, `OBJECTS` chains capped at three field segments, and small classloader/operator UI polish.
+- **Why after M17–M19:** Agent, desktop, and guided UI loops have higher product leverage. This milestone then takes only bounded, evidenced MAT leftovers.
+- **Boundary:** OQL remains explicitly partial. `eval(...)`, arbitrary-depth subqueries, query-engine rewrites, and Phase-3 plugins stay out.
+- **Slices:** sanitized compatibility corpus; multi-class `FROM`; bounded multi-hop `OBJECTS`; `unique_class_count` CLI rendering and cheap UI-only superclass presentation.
+
+### M21 — Credibility and Release Evidence — 🔲 Pending
+
+- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-21-credibility-release-evidence.md`.
+- **Goal:** Publish the missing snapshot-load benchmark and evidence post-M16 desktop build/attachment/launch claims without overstating signing or platform coverage.
+- **M12 relationship:** M12 remains separately blocked on a native-Linux reference workstation, Eclipse MAT, and the 10 GiB fixture. Run it in parallel when available; do not remove the partial benchmark caveat before it succeeds.
+- **Boundary:** Workflow configuration is not build evidence; a built artifact is not launch evidence; an unsigned artifact is not signed/notarized.
+- **Slices:** snapshot Criterion benchmark; desktop release artifact proof; per-platform launch evidence; exact M12 prerequisite check/handoff.
+
+### M22 — Advanced OQL Compatibility — 🔲 Pending (conditional)
+
+- **Status:** 🔲 **Pending candidate, demand-gated** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-22-advanced-oql-compatibility.md`.
+- **Scheduling gate:** At least 20 sanitized, currently failing real-world saved queries must show that deeper nesting or `eval(...)` blocks migration after M20.
+- **Candidate scope:** Subqueries capped at depth 8 and only an allowlisted, Rust-native pure-expression subset justified by the corpus.
+- **Boundary:** No Java/JVM, JavaScript, shell, reflection, I/O, network, arbitrary code execution, or unbounded recursion.
+
+### M23 — Extension Runtime and Custom Inspectors — 🔲 Pending (conditional)
+
+- **Status:** 🔲 **Pending candidate, adoption-gated** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-23-extension-runtime-custom-inspectors.md`.
+- **Scheduling gate:** At least two maintained out-of-tree extensions must be blocked by Phase-2 static registration.
+- **Candidate scope:** Versioned manifest/compatibility negotiation, safe discovery and opt-in, one isolated extension proof, MCP provenance, and declarative custom-inspector view models.
+- **Boundary:** Raw Rust trait-object ABI is not a stable plugin contract; no JVM/JAR plugins, automatic internet installation, arbitrary plugin JavaScript, marketplace, or default-on native loading.
 
 ### Other backlog items (lower priority — not proposed as standalone M8+)
 
@@ -291,23 +350,34 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 ---
 
-## 6. Recommended Next Milestone — **M14 UI Backend-Parity & AI-Native Redesign**
+## 6. Recommended Post-M16 Sequence — **M17 Desktop Guided UX Bridge Completion**
 
-**Status update (2026-09-13):** M8, M9, M10, M10-B, M11, M13, and now **M14** are all shipped as of this update — the sequencing below this note is now history, preserved for the record. M12 remains blocked (no native-Linux + Eclipse MAT reference workstation available in the executing environment). With M14's UI-backfill closed out, the active recommendation moves to M15 (MAT backend parity completion), followed by M16 (desktop packaging, which depends on M14 having shipped a GUI worth bundling — it now has).
+**Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16 shipped; **M17 shipped with caveats** (17.A–17.C command/bridge wiring ✅; 17.D packaged GUI smoke → M21). M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. Parallel **UI-first plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) renumbers post-M19 product work as M20 workbench / M21 portable install / M22 bounded OQL / **M23 AI-first guided investigation** (slices 23.A–C shipped; 23.D evidence note recorded; final Terra/Sol verdict pending — see [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md)). Do not confuse that M23 with the older conditional “Extension Runtime” M23 row below. Legacy M18+ candidate rows remain in this document for history; treat STATUS + the UI-first plan as runtime truth for the active worktree.
 
-**Recommendation (historical, at the time M14 was scheduled):** Schedule **M14 — UI Backend-Parity & AI-Native Redesign** as the active next milestone, followed by M15 (MAT backend parity completion) and M16 (desktop packaging).
+**Recommendation (active worktree):** Finish remaining **UI-first** gaps in order — M22.D operator polish → M21 native-host/portable evidence (where hosts allow) → milestone Terra/Sol closeouts. Treat older “Schedule M18 next” text below as historical sequencing from the post-M16 plan; M18/M19 already shipped on this branch.
 
-**Justification:**
+**Ranking rationale (historical post-M16 plan):**
 
-1. **Retired backend risk, presentation-only work left:** every M8–M13 milestone deliberately deferred UI work under a "backend-before-UI" pattern (see each milestone's own "Not shipped" notes above). That backlog is now the single highest-leverage piece of remaining work — the analysis capability already exists and is tested; M14 is surfacing it, not inventing it.
-2. **User-requested, explicitly scoped via brainstorming session (2026-08-20):** AI-guided default navigation with the full MAT-equivalent power surface kept undiminished underneath — see [milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md).
-3. **M15 (remaining OQL/array/superclass/plugin gaps) and M16 (desktop packaging) sequenced after M14** because M16 explicitly depends on M14 having shipped a GUI worth packaging, and M15's backend gaps don't block M14's UI-backfill scope (M14 surfaces what's already shipped, not what M15 will add).
+1. **Complete shipped product loops before adding analysis depth:** M17 fixes desktop surfaces users can already see but cannot run; M18 removes agent shell-outs for capabilities the CLI/core already have.
+2. **Surface and orchestrate existing backend value:** M19 gives M15 data a UI and adds the missing classloader workflow without inventing a new analyzer.
+3. **Take only bounded MAT leftovers:** M20 targets common saved-query friction and small operator polish, while preserving explicit limits and deferrals.
+4. **Publish evidence after utility:** M21 closes runnable credibility gaps. M12 runs in parallel only when its external environment exists and remains honestly blocked otherwise.
+5. **Delay expensive tails:** M22 deep OQL and M23 dynamic extensions/custom inspectors start only with real demand. Live JVM attach, MAT index interchange, and MCP streaming remain discovery items, not scheduled milestones.
 
 **Recommended sequencing (current):**
 
-1. **M14** — UI Backend-Parity & AI-Native Redesign (active)
-2. **M15** — MAT Backend Parity Completion (independent of M14; can run in parallel in a separate worktree track if capacity allows)
-3. **M16** — Desktop Packaging & Distribution (depends on M14 shipping a GUI)
+1. ~~**M17 — Desktop Guided UX Bridge Completion**~~ — 🟡 shipped with caveats; 17.A–17.C bridge wiring ✅ (`tauri/session-ops/` 24/24); 17.D packaged GUI smoke → M21.
+2. **M18 — MCP Agent and IDE Loop Completion** — policy/baseline, leak cross-reference, snapshots, flamegraphs.
+3. **M19 — Guided Analysis and Investigation Continuity** — M15 UI, classloader workflow, bounded conversation depth.
+4. **M20 — Bounded MAT Migration Polish** — multi-class `FROM`, capped multi-hop `OBJECTS`, operator polish.
+5. **M21 — Credibility and Release Evidence** — snapshot benchmark and desktop artifact/launch proof.
+6. **M22 — Advanced OQL Compatibility** — conditional on a failing saved-query corpus.
+7. **M23 — Extension Runtime and Custom Inspectors** — conditional on out-of-tree extension demand.
+
+**Parallel/optional tracks:**
+
+- **M12 — Reference-workstation rerun:** blocked on environment; run unchanged when prerequisites exist. Never infer native-Linux/MAT/10 GiB results from WSL or workflow configuration.
+- **Configure release CI signing secrets:** optional organizational follow-up. Signing is not a functional dependency for M17–M21 and must not be claimed until a signed/notarized artifact is verified.
 
 **Historical sequencing (M8–M13 era, completed):**
 
@@ -318,6 +388,8 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 5. ~~M11~~ — MCP workflow suite — ✅ shipped
 6. ~~M13~~ — Classloader explorer — ✅ shipped
 7. ~~M14~~ — UI backend-parity & AI-native redesign — ✅ shipped
+8. ~~M15~~ — MAT backend parity completion — ✅ shipped
+9. ~~M16~~ — Desktop packaging & distribution — ✅ shipped (unsigned default; post-M16 tags only)
 
 ---
 
@@ -331,13 +403,13 @@ Updated to reflect the parity matrix in §2.
 | Retained sizes | ✅ | — |
 | Leak suspects | ✅ | — |
 | GC root paths (shortest) | ✅ | — |
-| Histogram grouping (class / package / classloader) | ✅ | — |
+| Histogram grouping (class / package / classloader / superclass) | ✅ | — |
 | Thread inspection (stacks + retained) | ✅ | — |
 | String analysis (duplicate detection) | ✅ | — |
 | Collection inspection | ✅ | — |
 | Reachable / unreachable analysis | ✅ | — |
 | Top consumers | ✅ | — |
-| OQL — targeted subset | 🟡 ~30% | M7-4 ✅ → B1 (incremental) |
+| OQL — targeted + bounded M15 expansion | 🟡 named deferrals remain | **M7-4** ✅ + **M15** ✅ shipped (15.C–15.E) |
 | GC root paths — all paths / by class | ✅ (`gc-path --all-paths`/`--by-class`) | **M8** ✅ shipped |
 | Group by referrer | ✅ (`analyze --by-referrer`) | **M8** ✅ shipped |
 | Object inspector (CLI/MCP) | ✅ (`mnemosyne inspect`, MCP `inspect_object`) | **M8** ✅ shipped |
@@ -345,9 +417,9 @@ Updated to reflect the parity matrix in §2.
 | Object-level heap diff | ✅ (`--mode object`; `ci-check` predicate pending) | **M10** ✅ mostly shipped |
 | Persistent indexes / parse-once-query-many | ✅ (`snapshot save\|load\|list\|rm`, `--snapshot`/`--refresh`) | **M9** ✅ shipped |
 | Classloader leak detection | ✅ (`potential_leaks` single-loader heuristic + `duplicate_classes` cross-loader signal, both permanent) | **M13** ✅ shipped |
-| Group by superclass | ❌ | B-list |
-| Duplicate primitive arrays | ❌ | B-list |
-| Custom plugin runtime | ❌ | Defer (B9) |
+| Group by superclass | ✅ (`analyze --group-by superclass`) | **M15** ✅ shipped |
+| Duplicate primitive arrays | ✅ (`analyze --duplicate-arrays`) | **M15** ✅ shipped |
+| Custom plugin runtime (Phase 2 static registry) | 🟡 Phase 2 ✅; Phase 3 deferred | **M15** ✅ shipped (15.F) |
 | Large-dump handling — full reference benchmark | 🟡 partial WSL | **M12** |
 | **CI/CD automation** | ✅ Better than MAT | M7-2 ✅ — extended in M10 |
 | **AI-assisted diagnosis** | ✅ MAT has none | Differentiator |
@@ -370,7 +442,7 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | Object-identity heuristics in M10 will be approximate | Honesty contract risk if growth-detection looks more authoritative than it is | Mandatory `ProvenanceKind::Partial` markers; documented false-positive bounds |
 | M9 snapshot format churn | Re-versioning a shipped on-disk format is expensive | Land M9 **after** M8 so the format includes the new analyzers from day one |
 | Provider-specific AI quality drift | Multi-provider UX can erode trust | Strict wire contracts; provider tests; rules fallback always available |
-| Desktop hardening could consume bandwidth | Native packaging is not the credibility blocker | Keep B7 deferred until adoption data justifies |
+| Desktop installers ship unsigned by default | SmartScreen/Gatekeeper warnings may read as "broken" to new users | README + SECURITY.md document workarounds; signing secrets enable conditional CI signing on future releases |
 | Differentiator dilution | Adding parity-only features without preserving provenance / MCP / overview-aware error paths would erode the moat | **Roadmap-wide invariant** in §0; every M8+ milestone must extend or preserve at least one differentiator |
 | Rare HPROF edge cases on new real-world heaps | Parser correctness risk grows with broader fixture variety | Property-based testing (B2) folded into M8 hardening |
 
@@ -400,8 +472,9 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M12 Reference-Workstation Re-run** | reuse [design/milestone-7-5-comparative-benchmarks.md](design/milestone-7-5-comparative-benchmarks.md) | ⏳ Pending |
 | **M13 Classloader Explorer** | [design/milestone-13-classloader-explorer.md](design/milestone-13-classloader-explorer.md) | ✅ Shipped (slices 13.A–13.C implementation, 13.D doc-sync) |
 | **M14 UI Backend-Parity & AI-Native Redesign** | [design/milestone-14-ui-parity-ai-native.md](design/milestone-14-ui-parity-ai-native.md) | ✅ Shipped (slices 14.A–14.D implementation, 14.E visual-consistency + doc-sync) |
-| **M15 MAT Backend Parity Completion** | _to be authored_ | ⏳ Pending |
-| **M16 Desktop Packaging & Distribution** | _to be authored_ | ⏳ Pending |
+| **M15 MAT Backend Parity Completion** | [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) | ✅ Shipped (slices 15.A–15.F implementation, 15.G doc-sync) |
+| **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
+| **M23 AI-First Guided Investigation (UI-first plan)** | [design/milestone-23-ai-first-guided-investigation.md](design/milestone-23-ai-first-guided-investigation.md), [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md) | 🟡 Slices 23.A–C shipped; 23.D evidence recorded; Terra/Sol final verdict pending |
 
 ---
 

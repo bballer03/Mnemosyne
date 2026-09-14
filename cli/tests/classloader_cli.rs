@@ -297,6 +297,39 @@ fn analyze_classloaders_prints_duplicate_classes_section_when_present() {
     );
 }
 
+/// M22.D: `unique_class_count` is already computed on `ClassLoaderInfo`; the CLI
+/// table must render it as its own "Unique Classes" column (presentation only).
+#[test]
+fn analyze_classloaders_renders_unique_classes_column() {
+    let fixture = write_fixture(&build_classloader_duplicate_fixture());
+    let fixture_path = path_arg(fixture.path());
+    let (mut cmd, _sandbox) = cli_command();
+
+    let output = cmd
+        .args(["analyze", fixture_path.as_str(), "--classloaders"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+
+    assert!(
+        stdout.contains("Unique Classes"),
+        "stdout missing Unique Classes column header: {stdout}"
+    );
+    // Header order: Classes then Unique Classes (distinct columns, not a merged cell).
+    let classes_at = stdout
+        .find("Classes")
+        .expect("Classes column header missing");
+    let unique_at = stdout
+        .find("Unique Classes")
+        .expect("Unique Classes column header missing");
+    assert!(
+        unique_at > classes_at,
+        "Unique Classes should appear after Classes in the table header: {stdout}"
+    );
+}
+
 #[test]
 fn analyze_classloaders_omits_duplicate_classes_section_when_absent() {
     let fixture = write_fixture(&build_graph_fixture());

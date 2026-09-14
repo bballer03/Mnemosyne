@@ -61,6 +61,7 @@ describe("ArtifactLoaderPage", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
     act(() => {
       useArtifactStore.getState().reset();
       useDashboardStore.getState().reset();
@@ -75,9 +76,7 @@ describe("ArtifactLoaderPage", () => {
     expect(
       page.getByRole("heading", { name: /load analysis artifact/i }),
     ).toBeInTheDocument();
-    expect(
-      page.getByText(/expects mnemosyne analysis json derived from analyzeresponse/i),
-    ).toBeInTheDocument();
+    expect(page.getByRole("button", { name: /open heap dump/i })).toBeInTheDocument();
     expect(page.getByText(/dashboard preview/i)).toBeInTheDocument();
     expect(page.getByText(/validation console/i)).toBeInTheDocument();
     expect(page.getByText(/recent loads/i)).toBeInTheDocument();
@@ -89,6 +88,71 @@ describe("ArtifactLoaderPage", () => {
 
     expect(page.getByText(/artifact loaded:\s*fixture\.json/i)).toBeInTheDocument();
     expect(page.getByText(/heap path:\s*fixture\.hprof/i)).toBeInTheDocument();
+  });
+
+  it("reports desktop picker unavailable without leaking paths in browser mode", async () => {
+    const user = userEvent.setup();
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+
+    await user.click(page.getByRole("button", { name: /open heap dump/i }));
+
+    await waitFor(() => {
+      expect(page.getByText(/available in the desktop app/i)).toBeInTheDocument();
+    });
+    expect(page.queryByText(/\/tmp\//i)).not.toBeInTheDocument();
+  });
+
+  it("opens a selected desktop heap by opaque source id and loads only the basename", async () => {
+    const user = userEvent.setup();
+    let analyzedSourceId: string | undefined;
+
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      pickHeapFile: async () => ({
+        status: "selected",
+        sourceId: "src-opaque",
+        displayName: "fixture.hprof",
+      }),
+      loadHeapFromSource: async () => {
+        throw new Error("loadHeapFromSource should not run in pick→analyze flow");
+      },
+      runDesktopAnalysis: async (input) => {
+        analyzedSourceId = input.sourceId;
+        return JSON.parse(createArtifactJson());
+      },
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /open heap dump/i }));
+
+    await waitFor(() => {
+      expect(page.getByText(/analyzed fixture\.hprof/i)).toBeInTheDocument();
+    });
+    expect(analyzedSourceId).toBe("src-opaque");
+    expect(page.queryByText(/\/home\//i)).not.toBeInTheDocument();
+    expect(page.queryByText(/C:\\/i)).not.toBeInTheDocument();
+  });
+
+  it("treats desktop heap picker cancellation as a neutral status", async () => {
+    const user = userEvent.setup();
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      pickHeapFile: async () => ({ status: "cancelled" as const }),
+      loadHeapFromSource: async () => {
+        throw new Error("unused");
+      },
+      runDesktopAnalysis: async () => {
+        throw new Error("unused");
+      },
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^open heap dump$/i }));
+
+    expect(
+      await page.findAllByText(/heap dump selection cancelled/i, {}, { timeout: 3000 }),
+    ).not.toHaveLength(0);
   });
 
   it("stacks the preview panel below the loader content on narrow screens", () => {

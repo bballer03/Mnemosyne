@@ -10,17 +10,21 @@
 
 [package]
 name = "mnemosyne-desktop"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Mnemosyne desktop app - native JVM heap analysis"
 license = "Apache-2.0"
 
 [dependencies]
 mnemosyne-core = { path = "../core" }
+mnemosyne-desktop-session = { path = "session-ops" }
 tauri = { version = "2", features = ["devtools"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+dirs = "5"
+tauri-plugin-dialog = "2"
+uuid = { version = "1.26.1", features = ["v4"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

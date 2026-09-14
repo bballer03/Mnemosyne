@@ -1,6 +1,7 @@
 use super::types::{
     BuiltInField, ClassPattern, ComparisonOp, Condition, FieldRef, FromClause, LogicalOp, Query,
     QueryParseError, QueryStatement, SelectClause, TraversalFunction, Value, WhereClause,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 use regex::Regex;
 
@@ -92,11 +93,25 @@ impl<'a> Parser<'a> {
 
     fn parse_select_clause(&mut self) -> Result<SelectClause, QueryParseError> {
         self.skip_ws();
+        if self.consume_keyword("DISTINCT") {
+            if !self.consume_keyword("OBJECTS") {
+                return Err(self.error(
+                    "DISTINCT is only supported with OBJECTS projection \
+                     (SELECT DISTINCT OBJECTS ...); \
+                     SELECT DISTINCT * / field lists are unsupported",
+                ));
+            }
+            let field = self.parse_field_ref()?;
+            validate_objects_field_hops(&field)?;
+            return Ok(SelectClause::DistinctObjects(field));
+        }
         if self.consume_char('*') {
             return Ok(SelectClause::All);
         }
         if self.consume_keyword("OBJECTS") {
-            return Ok(SelectClause::Objects(self.parse_field_ref()?));
+            let field = self.parse_field_ref()?;
+            validate_objects_field_hops(&field)?;
+            return Ok(SelectClause::Objects(field));
         }
 
         let mut fields = vec![self.parse_field_ref()?];
@@ -129,16 +144,50 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let pattern = self.parse_quoted_string()?;
-        let class_pattern = if pattern.contains('*') {
-            ClassPattern::Glob(pattern)
-        } else {
-            ClassPattern::Exact(pattern)
-        };
+        let class_pattern = self.parse_class_pattern_list()?;
 
         Ok(FromClause {
             class_pattern,
             instanceof,
+        })
+    }
+
+    /// Parses one quoted class pattern, then any comma-separated siblings
+    /// (M22 Slice 22.B). A lone pattern stays `Exact`/`Glob` for compatible
+    /// serialization; two or more collapse into `ClassPattern::Multi`.
+    fn parse_class_pattern_list(&mut self) -> Result<ClassPattern, QueryParseError> {
+        let mut patterns = vec![self.parse_single_quoted_class_pattern()?];
+
+        loop {
+            self.skip_ws();
+            if !self.consume_char(',') {
+                break;
+            }
+            self.skip_ws();
+            patterns.push(self.parse_single_quoted_class_pattern()?);
+            if patterns.len() > MAX_MULTI_CLASS_FROM_LIST_SIZE {
+                return Err(self.error(format!(
+                    "multi-class FROM list exceeds limit of {MAX_MULTI_CLASS_FROM_LIST_SIZE} class patterns"
+                )));
+            }
+        }
+
+        Ok(if patterns.len() == 1 {
+            patterns.into_iter().next().expect("one pattern")
+        } else {
+            ClassPattern::Multi(patterns)
+        })
+    }
+
+    fn parse_single_quoted_class_pattern(&mut self) -> Result<ClassPattern, QueryParseError> {
+        let pattern = self.parse_quoted_string()?;
+        if pattern.is_empty() {
+            return Err(self.error("expected non-empty quoted class pattern"));
+        }
+        Ok(if pattern.contains('*') {
+            ClassPattern::Glob(pattern)
+        } else {
+            ClassPattern::Exact(pattern)
         })
     }
 
@@ -497,6 +546,31 @@ impl<'a> Parser<'a> {
 
 fn ch_len(ch: char) -> usize {
     ch.len_utf8()
+}
+
+/// Rejects `SELECT OBJECTS` field paths longer than
+/// `MAX_OBJECTS_FIELD_HOPS + 1` segments at parse time (M22 Slice 22.C).
+/// The optional MAT-style alias prefix may add one leading segment; the
+/// executor then decides whether that leading segment is an alias or a hop
+/// based on the source object's fields (defense-in-depth hop cap).
+fn validate_objects_field_hops(field: &FieldRef) -> Result<(), QueryParseError> {
+    let FieldRef::InstanceField(path) = field else {
+        return Ok(());
+    };
+
+    let segments: Vec<&str> = path
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+
+    // Absolute ceiling: optional alias + MAX hops.
+    if segments.len() > MAX_OBJECTS_FIELD_HOPS + 1 {
+        return Err(QueryParseError::new(format!(
+            "multi-hop OBJECTS exceeds limit of {MAX_OBJECTS_FIELD_HOPS} field hops: '{path}'"
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -67,6 +67,8 @@ pub struct AiPromptConfig {
 #[serde(default)]
 pub struct AiSessionConfig {
     pub directory: Option<String>,
+    /// Max retained chat turns for CLI/MCP sessions. Default 12; hard-capped at 32 (M19.F).
+    pub history_max_turns: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 use mnemosyne_core::query::{
     parse_query, parse_query_statement, BuiltInField, ClassPattern, ComparisonOp, Condition,
     FieldRef, FromClause, Query, QueryStatement, SelectClause, Value, WhereClause,
+    MAX_MULTI_CLASS_FROM_LIST_SIZE, MAX_OBJECTS_FIELD_HOPS,
 };
 
 #[test]
@@ -246,4 +247,201 @@ fn parse_query_still_rejects_trailing_union_keyword() {
             .expect_err("parse_query should reject trailing UNION, not silently accept it");
 
     assert!(error.to_string().contains("expected end of query"));
+}
+
+// M22 Slice 22.B: bounded multi-class `FROM`.
+//
+// MAT refs (equivalency-eligible intent — corpus id `multi-class-from-two-literals`):
+// - FROM Clause — "by the object addresses of more than one class"
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html
+// - BNF FromItem comma-separated ObjectAddress / ObjectId
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/bnfofoql.html
+// Syntax delta: MAT uses class object addresses/ids; Mnemosyne accepts quoted
+// class-name patterns with the same multi-source union + ID-dedup intent.
+
+#[test]
+fn parse_query_supports_two_literal_class_patterns() {
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.Admin""#)
+        .expect("two-class FROM should parse");
+
+    assert_eq!(
+        query.from,
+        FromClause {
+            class_pattern: ClassPattern::Multi(vec![
+                ClassPattern::Exact("com.example.User".into()),
+                ClassPattern::Exact("com.example.Admin".into()),
+            ]),
+            instanceof: false,
+        }
+    );
+}
+
+#[test]
+fn parse_query_supports_mixed_exact_and_glob_class_patterns() {
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.*""#)
+        .expect("mixed-pattern FROM should parse");
+
+    assert_eq!(
+        query.from.class_pattern,
+        ClassPattern::Multi(vec![
+            ClassPattern::Exact("com.example.User".into()),
+            ClassPattern::Glob("com.example.*".into()),
+        ])
+    );
+}
+
+#[test]
+fn parse_query_keeps_single_class_pattern_as_exact_not_multi() {
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User""#)
+        .expect("single-class FROM should parse");
+
+    assert_eq!(
+        query.from.class_pattern,
+        ClassPattern::Exact("com.example.User".into())
+    );
+}
+
+#[test]
+fn parse_query_rejects_trailing_comma_in_multi_class_from() {
+    let error = parse_query(r#"SELECT @objectId FROM "com.example.User","#)
+        .expect_err("trailing comma should fail");
+
+    assert!(
+        error.to_string().contains("quoted"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_rejects_empty_class_pattern_entry() {
+    let error = parse_query(r#"SELECT @objectId FROM "", "com.example.User""#)
+        .expect_err("empty class pattern should fail");
+
+    assert!(
+        error.to_string().contains("non-empty"),
+        "unexpected parse error: {error}"
+    );
+}
+
+// M22 Slice 22.C: bounded multi-hop `SELECT OBJECTS`.
+//
+// MAT refs (equivalency-eligible for 1–3 hops — corpus ids `objects-*-hop`):
+// - SELECT Clause — "Flatten select items into an object list" (OBJECTS)
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
+// - FROM Clause example: SELECT OBJECTS s.value FROM java.lang.String s
+//   https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxfrom.html
+// NON-EQUIVALENCY: four-hop rejection is a Mnemosyne hop cap (corpus id
+// `objects-four-hop-reject`), not a MAT handbook claim.
+
+#[test]
+fn parse_query_supports_two_hop_objects_field_path() {
+    let query = parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node""#)
+        .expect("two-hop OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::Objects(FieldRef::InstanceField("n.parent.link".into()))
+    );
+}
+
+#[test]
+fn parse_query_supports_three_hop_objects_field_path() {
+    let query = parse_query(r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node""#)
+        .expect("three-hop OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::Objects(FieldRef::InstanceField("n.parent.link.target".into()))
+    );
+}
+
+#[test]
+fn parse_query_rejects_four_hop_objects_field_path() {
+    let hop_chain = (1..=MAX_OBJECTS_FIELD_HOPS + 1)
+        .map(|idx| format!("hop{idx}"))
+        .collect::<Vec<_>>()
+        .join(".");
+    let query_text = format!(r#"SELECT OBJECTS n.{hop_chain} FROM "com.example.Node""#);
+    let error = parse_query(&query_text).expect_err("four-hop OBJECTS should fail at parse time");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
+        "unexpected parse error: {error}"
+    );
+}
+
+// M22: bounded `SELECT DISTINCT OBJECTS` (OBJECTS-only; not DISTINCT * / fields).
+// MAT SELECT Clause — "Select unique objects" / DISTINCT OBJECTS:
+// https://help.eclipse.org/latest/topic/org.eclipse.mat.ui.help/reference/oqlsyntaxselect.html
+
+#[test]
+fn parse_query_supports_distinct_objects() {
+    let query = parse_query(r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node""#)
+        .expect("DISTINCT OBJECTS should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::DistinctObjects(FieldRef::InstanceField("n.parent".into()))
+    );
+}
+
+#[test]
+fn parse_query_supports_distinct_objects_multi_hop_within_cap() {
+    let query = parse_query(r#"SELECT DISTINCT OBJECTS n.parent.link FROM "com.example.Node""#)
+        .expect("DISTINCT OBJECTS multi-hop within cap should parse");
+
+    assert_eq!(
+        query.select,
+        SelectClause::DistinctObjects(FieldRef::InstanceField("n.parent.link".into()))
+    );
+}
+
+#[test]
+fn parse_query_rejects_distinct_without_objects() {
+    let error = parse_query(r#"SELECT DISTINCT * FROM "com.example.Node""#)
+        .expect_err("DISTINCT * should be rejected as out of bound");
+
+    assert!(
+        error
+            .to_string()
+            .contains("DISTINCT is only supported with OBJECTS"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_rejects_four_hop_distinct_objects_field_path() {
+    let hop_chain = (1..=MAX_OBJECTS_FIELD_HOPS + 1)
+        .map(|idx| format!("hop{idx}"))
+        .collect::<Vec<_>>()
+        .join(".");
+    let query_text = format!(r#"SELECT DISTINCT OBJECTS n.{hop_chain} FROM "com.example.Node""#);
+    let error =
+        parse_query(&query_text).expect_err("four-hop DISTINCT OBJECTS should fail at parse time");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
+        "unexpected parse error: {error}"
+    );
+}
+
+#[test]
+fn parse_query_rejects_multi_class_from_list_over_limit() {
+    let patterns = (0..=MAX_MULTI_CLASS_FROM_LIST_SIZE)
+        .map(|idx| format!(r#""com.example.Class{idx}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query_text = format!("SELECT @objectId FROM {patterns}");
+    let error = parse_query(&query_text).expect_err("over-limit list should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("multi-class FROM list exceeds limit"),
+        "unexpected parse error: {error}"
+    );
 }
