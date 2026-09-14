@@ -54,6 +54,7 @@ const POWER_ROUTE_LABELS: Array<[label: string, path: string]> = [
   ["Policies", "/workbench/policies"],
   ["Snapshots", "/workbench/snapshots"],
   ["Flamegraphs", "/workbench/flamegraphs"],
+  ["Assistant", "/assistant"],
 ];
 
 describe("TopNav reachability", () => {

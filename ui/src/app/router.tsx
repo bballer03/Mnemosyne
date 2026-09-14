@@ -18,6 +18,7 @@ import { LeakWorkspaceLayout } from "../features/leak-workspace/LeakWorkspaceLay
 import { SnapshotManagerPage } from "../features/snapshots/SnapshotManagerPage";
 import { PolicyCheckPage } from "../features/policy/PolicyCheckPage";
 import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
+import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
 
 // M14 Slice 14.D note: the persistent top-nav (`TopNav`) is NOT wired in
 // here as a shared layout route wrapping every entry below. That was tried
@@ -60,6 +61,10 @@ export const routes: RouteObject[] = [
   {
     path: "/workbench/flamegraphs",
     element: <FlamegraphPage />,
+  },
+  {
+    path: "/assistant",
+    element: <InvestigationAssistantPage />,
   },
   {
     path: "/heap-explorer",

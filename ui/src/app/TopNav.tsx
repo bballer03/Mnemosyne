@@ -44,6 +44,7 @@ const POWER_ROUTES: NavItem[] = [
   { to: "/workbench/policies", label: "Policies" },
   { to: "/workbench/snapshots", label: "Snapshots" },
   { to: "/workbench/flamegraphs", label: "Flamegraphs" },
+  { to: "/assistant", label: "Assistant" },
 ];
 
 /**

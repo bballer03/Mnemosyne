@@ -563,11 +563,13 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Rules mode remains the default and works offline.
 - Every AI statement is visually separated from measured heap facts and carries provenance.
 
-- [ ] Add tests for rules mode, provider unavailable, focus changes, 12-turn eviction, and deterministic deep links.
-- [ ] Observe failures before assistant workspace implementation.
-- [ ] Compose existing workflow and AI-session contracts; add no analyzer.
-- [ ] Run focused and full UI gates.
+- [x] Add tests for rules mode, provider unavailable, focus changes, 12-turn eviction, and deterministic deep links.
+- [x] Observe failures before assistant workspace implementation.
+- [x] Compose existing workflow and AI-session contracts; add no analyzer.
+- [x] Run focused UI gates (`bun test` on assistant + TopNav); full `bun run test` still hits a **pre-existing** ArtifactExplorer `section_absent` multi-match failure unrelated to 23.A. `bun run lint` (`tsc --noEmit`) clean.
 - [ ] Request a Terra review focused on fact/AI separation and context bounds.
+
+**23.A shipped (partial vertical slice):** design doc READY; `/assistant` Investigation session workspace with rules-mode default, fact/AI visual separation + provenance, basename/`sourceId` opacity, 12/32 history helpers, provider-unavailable probe, TopNav link. **Still open inside 23.A:** live workflow id/step binding into the session panel; Terra review.
 
 ### Slice 23.B — Expose shipped workflow continuity in desktop
 

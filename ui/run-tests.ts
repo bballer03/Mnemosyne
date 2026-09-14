@@ -61,6 +61,8 @@ const testBatches = [
     // is exactly the kind of heavy React-Router rendering that has
     // previously tipped a combined batch into a V8 OOM.
     "src/app/TopNav.test.tsx",
+    "src/features/assistant/assistant-bridge-client.test.ts",
+    "src/features/assistant/InvestigationAssistantPage.test.tsx",
     "src/features/workflow-landing/workflow-bridge-client.test.ts",
     "src/features/workflow-landing/natural-language-router.test.ts",
     "src/features/workflow-landing/WorkflowCard.test.tsx",
