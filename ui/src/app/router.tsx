@@ -16,6 +16,7 @@ import { LeakSourceMapPage } from "../features/leak-workspace/LeakSourceMapPage"
 import { LeakWorkspaceOverview } from "../features/leak-workspace/LeakWorkspaceOverview";
 import { LeakWorkspaceLayout } from "../features/leak-workspace/LeakWorkspaceLayout";
 import { WorkbenchPlaceholderPage } from "../features/workbench/WorkbenchPlaceholderPage";
+import { SnapshotManagerPage } from "../features/snapshots/SnapshotManagerPage";
 
 // M14 Slice 14.D note: the persistent top-nav (`TopNav`) is NOT wired in
 // here as a shared layout route wrapping every entry below. That was tried
@@ -58,12 +59,7 @@ export const routes: RouteObject[] = [
   },
   {
     path: "/workbench/snapshots",
-    element: (
-      <WorkbenchPlaceholderPage
-        title="Snapshots"
-        summary="Cached heap snapshot management surface. Native list_snapshots already exists; full UI lands next."
-      />
-    ),
+    element: <SnapshotManagerPage />,
   },
   {
     path: "/workbench/flamegraphs",
