@@ -1,6 +1,6 @@
 # Dependency currency inventory (registry-verified)
 
-**Date:** 2026-09-15 (M32.A–B applied: React 19.3 / RR 7.18 / Vite 8.3 / Tailwind 4.3 / react-table 9.2 / jest-dom 7.0 / TypeScript 7.0)
+**Date:** 2026-09-15 (M32.A+B applied)
 **Sources of truth:** [npmjs.com](https://www.npmjs.com) `dist-tags.latest`, [crates.io](https://crates.io) `max_stable_version`, Docker Hub `library/rust` tags, GitHub Releases for Actions.  
 **Program home:** [UI → MAT maturity roadmap](../superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) § **M32 Dependency & toolchain currency**  
 **Open Dependabot majors (superseded by M32):** [#50](https://github.com/bballer03/Mnemosyne/pull/50) `@types/react` 19, [#51](https://github.com/bballer03/Mnemosyne/pull/51) `@vitejs/plugin-react` 6, [#52](https://github.com/bballer03/Mnemosyne/pull/52) `tailwindcss` 4.
@@ -25,7 +25,7 @@
 | `jsdom` | ^24.1.1 | **30.0.1** | major (historically OOM-correlated on bun) — **M32.C** |
 | `@tanstack/react-table` | 9.2.4 | 9.2.4 | **current (M32.B)** |
 | `@testing-library/jest-dom` | 7.0.1 | 7.0.1 | **current (M32.B)** |
-| `typescript` | 7.0.2 | 7.0.2 | **current (M32.B; npm `latest`)** |
+| `typescript` | 7.0.2 | 7.0.2 | **current (M32.B)** |
 | `@tanstack/react-query` | ^5.102.8 | 5.102.8 | current |
 | `@tauri-apps/api` | ^2.11.1 | 2.11.1 | current |
 | `clsx` | ^2.1.1 | 2.1.1 | current |
