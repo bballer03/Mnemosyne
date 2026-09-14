@@ -195,6 +195,29 @@ describe("runListSnapshots", () => {
     ]);
   });
 
+  it("strips absolute heap_path down to basename in React state", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      listSnapshots: async () => [
+        {
+          schema_version: 1,
+          heap_sha256: "abc123",
+          heap_path: "/var/tmp/heaps/fixture.hprof",
+          created_at: "1700000000",
+          mnemosyne_version: "0.4.0",
+          object_count: 42,
+          has_field_data: false,
+        },
+      ],
+    };
+
+    const result = await runListSnapshots();
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data[0]?.heapPath).toBe("fixture.hprof");
+  });
+
   it("surfaces a malformed payload as an error status rather than throwing", async () => {
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       listSnapshots: async () => [{ heap_path: "fixture.hprof" }],

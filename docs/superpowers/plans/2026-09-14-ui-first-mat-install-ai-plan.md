@@ -239,7 +239,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 
 - [x] Add the thin command/client/page and route it from the workbench.
 - [x] Run focused UI gates (policy page tests).
-- [ ] Request a Terra review focused on policy semantics and false-green states.
+- [x] Request a Terra review focused on policy semantics and false-green states.
 - [ ] Add native parity tests against the existing M18 policy path (remaining).
 - [ ] Expand React tests for baseline-required, malformed policy, and overview mismatch (partial: unavailable + skip-vs-pass covered).
 
@@ -273,7 +273,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Render bounded SVG safely via object URL (never injected HTML) and revoke on replacement/unmount.
 - [x] Snapshot save/list/remove UI with confirm-on-remove; key-only deletion scope in session-ops.
 - [x] Run focused UI gates (snapshot + flamegraph page tests); session-ops `cargo check` green.
-- [ ] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits.
+- [x] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits. (Important findings closed in `9ca7a1b`.)
 - [ ] Native flamegraph 16 MiB / overview unavailability parity tests still thin (rely on core/MCP).
 - [ ] Snapshot “open” (load graph into session from key) still deferred.
 
