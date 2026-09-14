@@ -189,21 +189,21 @@ Install the native Mnemosyne GUI from the same [GitHub Releases](https://github.
 
 **Pick your asset** (Tauri `productName` is `Mnemosyne`; `<version>` matches the release tag without the leading `v`):
 
-| Platform | Release-matrix target | Typical installer / portable filenames |
-| --- | --- | --- |
-| **Windows** (x64) | `x86_64-pc-windows-msvc` | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe`, and (M21) `Mnemosyne-<version>-windows-x64-portable.zip` |
-| **macOS** (Apple Silicon) | `aarch64-apple-darwin` | `Mnemosyne_<version>_aarch64.dmg`, zipped `Mnemosyne.app` |
-| **macOS** (Intel) | `x86_64-apple-darwin` | `Mnemosyne_<version>_x64.dmg`, zipped `Mnemosyne.app` |
-| **Linux** (x86_64) | `x86_64-unknown-linux-gnu` | `Mnemosyne_<version>_amd64.deb`, `Mnemosyne_<version>_amd64.AppImage`, `Mnemosyne-<version>-1.x86_64.rpm` |
-| **Linux** (aarch64) | `aarch64-unknown-linux-gnu` | `Mnemosyne_<version>_arm64.deb`, `Mnemosyne_<version>_arm64.AppImage`, `Mnemosyne-<version>-1.aarch64.rpm` |
+| Platform | Release-matrix target | Primary click-to-run (M21 frozen) | Fallback / managed installers |
+| --- | --- | --- | --- |
+| **Windows** (x64) | `x86_64-pc-windows-msvc` | `Mnemosyne-<version>-windows-x64-portable.zip` | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe` |
+| **macOS** (Apple Silicon) | `aarch64-apple-darwin` | `Mnemosyne-<version>-macos-aarch64-app.zip` | `Mnemosyne-<version>-macos-aarch64.dmg` (or transitional Tauri `Mnemosyne_<version>_aarch64.dmg`) |
+| **macOS** (Intel) | `x86_64-apple-darwin` | `Mnemosyne-<version>-macos-x64-app.zip` | `Mnemosyne-<version>-macos-x64.dmg` (or transitional Tauri `Mnemosyne_<version>_x64.dmg`) |
+| **Linux** (x86_64) | `x86_64-unknown-linux-gnu` | `Mnemosyne-<version>-linux-x86_64.AppImage` | `Mnemosyne_<version>_amd64.deb`, `Mnemosyne-<version>-1.x86_64.rpm` |
+| **Linux** (aarch64) | `aarch64-unknown-linux-gnu` | `Mnemosyne-<version>-linux-aarch64.AppImage` | `Mnemosyne_<version>_arm64.deb`, `Mnemosyne-<version>-1.aarch64.rpm` |
 
 **Goal:** download → unzip/mount → double-click. No Java/JVM or developer toolchain required.
 
 **Honesty — prerequisites and evidence (do not over-claim):**
 - **JVM-free alone is not enough.** Platform webview runtimes still apply (Windows WebView2; Linux WebKitGTK; macOS WebKit via the system).
 - **Windows portable zip** is labeled **portable with WebView2 prerequisite**. Unzip → double-click `Mnemosyne.exe` works when Microsoft Edge WebView2 Runtime (Evergreen) is already present (common on current Windows 10/11). If the app fails to start with a WebView/runtime error, install WebView2 from Microsoft, then retry. Do not describe this zip as a silent offline single-file drop-in until a clean-image launch matrix proves that.
-- **Linux AppImage** is the closest unzip-free click path (`chmod +x`, then double-click/run). Many distros still need WebKitGTK available to the AppImage; CI producing an AppImage is **not** launch-tested proof.
-- **macOS** `.dmg` / zipped `.app`: open or unzip, then launch. Unsigned builds hit Gatekeeper (see [SECURITY.md](SECURITY.md#desktop-app-distribution-m16)). CI build success is **not** notarization or launch-tested proof.
+- **Linux AppImage** is the primary portable Linux path (`chmod +x`, then double-click/run). Prefer the frozen `Mnemosyne-<version>-linux-{x86_64,aarch64}.AppImage` names. Many distros still need WebKitGTK available to the AppImage; CI producing an AppImage is **not** launch-tested proof.
+- **macOS** prefer the frozen `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` (unzip → launch `Mnemosyne.app`); DMG remains a fallback. Unsigned builds hit Gatekeeper (see [SECURITY.md](SECURITY.md#desktop-app-distribution-m16)). CI build success is **not** notarization or launch-tested proof.
 - **WSL cannot prove packaged GUI smoke.** Use matching native Windows/macOS/Linux hosts for launch claims.
 
 When a release lists multiple formats for one platform, prefer the portable zip / AppImage / `.app` for MAT-like workflows; keep `.msi` / `-setup.exe` / `.dmg` / `.deb` / `.rpm` for managed installs. Each CI desktop job builds all Tauri bundle targets declared in `tauri/tauri.conf.json` (`bundle.targets: "all"`).
@@ -212,8 +212,9 @@ When a release lists multiple formats for one platform, prefer the portable zip 
 
 - **Windows (portable zip):** Unzip `Mnemosyne-<version>-windows-x64-portable.zip` → double-click `Mnemosyne.exe` (WebView2 prerequisite above). Until a given release attaches that zip, use the MSI/setup assets.
 - **Windows (installer):** Run the `.msi` or `-setup.exe`. If SmartScreen warns on first launch, follow [SECURITY.md](SECURITY.md#desktop-app-distribution-m16).
-- **macOS:** Open the `.dmg` (or unzip the `.app`), drag **Mnemosyne.app** to Applications if desired, then launch. On first open, use **Right-click → Open** if Gatekeeper blocks an unsigned build — details in [SECURITY.md](SECURITY.md#desktop-app-distribution-m16). Not launch-tested from WSL.
-- **Linux (.AppImage):** `chmod +x Mnemosyne_<version>_*.AppImage && ./Mnemosyne_<version>_*.AppImage` (WebKitGTK caveat above). Not launch-tested from WSL.
+- **macOS (app zip):** Unzip `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` → launch **Mnemosyne.app**. On first open, use **Right-click → Open** if Gatekeeper blocks an unsigned build — details in [SECURITY.md](SECURITY.md#desktop-app-distribution-m16). Not launch-tested from WSL.
+- **macOS (DMG fallback):** Open the `.dmg`, drag **Mnemosyne.app** to Applications if desired, then launch.
+- **Linux (.AppImage):** `chmod +x Mnemosyne-<version>-linux-x86_64.AppImage && ./Mnemosyne-<version>-linux-x86_64.AppImage` (or the `linux-aarch64` name; WebKitGTK caveat above). Not launch-tested from WSL.
 - **Linux (.deb):** `sudo apt install ./Mnemosyne_<version>_*.deb` (or `dpkg -i`). Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu).
 - **Linux (.rpm):** `sudo rpm -i Mnemosyne-*.rpm`
 

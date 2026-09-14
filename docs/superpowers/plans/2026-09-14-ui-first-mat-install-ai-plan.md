@@ -366,9 +366,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - The archive preserves executable bits and app bundle structure.
 - Signing/notarization status is written into the asset manifest from observed codesign results.
 
-- [ ] Add app-bundle manifest tests.
-- [x] Zip the built `.app` with a tool that preserves bundle metadata. (`ditto -c -k --sequesterRsrc --keepParent` required on macOS runners; Python `zipfile` refused for release after Terra Critical; wired in `release.yml`. **Not** launch-tested; deeper Info.plist/executable-bit checks still open.)
-- [ ] Verify `Info.plist` version/identifier and executable presence.
+- [x] Add app-bundle manifest tests. (`scripts/tests/test_probe_desktop_bundles.py` — Info.plist + executable presence on synthetic zips)
+- [x] Zip the built `.app` with a tool that preserves bundle metadata. (`ditto -c -k --sequesterRsrc --keepParent` required on macOS runners; Python `zipfile` refused for release after Terra Critical; wired in `release.yml`. **Not** launch-tested; deeper codesign/notarization truthfulness still open.)
+- [x] Verify `Info.plist` version/identifier and executable presence. (`probe_desktop_bundles.py` structural probe in release CI warn mode; version mismatch recorded as finding when ShortVersionString present)
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
 - [x] Run the asset verifier. (CI warn-mode after in-place normalize; frozen macOS app-zip names produced when `.app` exists — not fail-closed / not launch proof)
 - [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
@@ -386,8 +386,8 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Release CI verifies executable mode and AppImage metadata.
 - `.deb`/`.rpm` remain optional alternatives; docs state WebKit/runtime constraints honestly.
 
-- [ ] Add asset-manifest tests for both architectures and an explicitly unsupported runner case.
-- [ ] Verify AppImage output exists, is executable, and reports expected architecture.
+- [x] Add asset-manifest tests for both architectures and an explicitly unsupported runner case. (`test_probe_desktop_bundles.py` covers x86_64 vs aarch64 ELF mismatch; missing assets skipped by probe — name gate remains verifier)
+- [x] Verify AppImage output exists, is executable, and reports expected architecture. (`probe_desktop_bundles.py` ELF e_machine + mode bits; warn mode in CI; mode may be FS-limited on some hosts)
 - [x] Normalize the asset name before release upload. (`normalize_desktop_assets.py`: Tauri `Mnemosyne_<ver>_{amd64,aarch64,arm64}.AppImage` → frozen `Mnemosyne-<ver>-linux-{x86_64,aarch64}.AppImage`; build job `--out-dir dist-normalized` + release job `--in-place`. **Not** launch-tested.)
 - [x] Do not call a build launch-tested unless it runs on a matching native host.
 - [x] Run the asset verifier. (CI warn-mode after normalize; not fail-closed / not launch proof)
@@ -407,7 +407,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - First-run instructions say: open app → choose `.hprof` → select analysis profile → investigate.
 - Unsigned SmartScreen/Gatekeeper warnings and Linux WebKit dependencies remain explicit.
 
-- [ ] Add docs checks that required asset names and “No Java/JVM required” appear consistently.
+- [x] Add docs checks that required asset names and “No Java/JVM required” appear consistently. (`scripts/tests/test_m21_docs_consistency.py`)
 - [x] Replace installer-first wording with the primary portable path and retain package alternatives below it.
 - [ ] Add first-run heap-open screenshots only from synthetic fixtures.
 - [x] Verify all links and release filename examples.

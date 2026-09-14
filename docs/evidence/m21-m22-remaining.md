@@ -11,7 +11,8 @@
 | Desktop asset verifier | `7ced971` — `scripts/release/verify_desktop_assets.py` + synthetic tests |
 | SHA256SUMS + warn-mode verify in CI | `3ad3ba2` |
 | Frozen macOS/AppImage name normalization | `b7bc663` |
-| ditto-only macOS zip + unsigned provenance + zip secret inspect | tip after Terra Critical fix — refuse Python zipfile for release; `inspect_desktop_archives.py`; manifest `signed: false` + CI provenance |
+| ditto-only macOS zip + unsigned provenance + zip secret inspect | `9477e35` |
+| Info.plist / AppImage ELF structural probe + README frozen names | tip — `probe_desktop_bundles.py` + docs consistency test |
 | M22.D Unique Classes CLI + hierarchy gate | `175a6ce`, Terra cycle fix `f004efd` |
 | OQL corpus honesty relabel | `f004efd` — handbook cases are `documentation-referenced` only |
 

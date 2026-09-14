@@ -501,6 +501,17 @@ jobs:
           set -euo pipefail
           python3 scripts/release/inspect_desktop_archives.py --dist dist
 
+      - name: Probe macOS/AppImage structure (warn mode)
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          # Structural only (Info.plist / ELF arch). Soft until 21.F fail-closed + native launch.
+          python3 scripts/release/probe_desktop_bundles.py \
+            --dist dist \
+            --version "${TAG_VERSION}" \
+            --allow-warnings
+
       - name: Generate desktop SHA256SUMS
         env:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}

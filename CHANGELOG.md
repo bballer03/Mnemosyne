@@ -8,8 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- M21.B/C/D release CI honesty: `scripts/release/generate_sha256sums.py` emits unsigned desktop-scope `SHA256SUMS` + `asset-manifest.json` (`launch_tested: false`, `signed: false`, optional CI provenance); `inspect_desktop_archives.py` fail-closes on credential/build-path zip members; `verify_desktop_assets.py --allow-warnings` runs in warn mode on tagged releases. Does **not** claim native GUI launch proof or fail-closed frozen-name gating.
+- M21.B/C/D release CI honesty: `scripts/release/generate_sha256sums.py` emits unsigned desktop-scope `SHA256SUMS` + `asset-manifest.json` (`launch_tested: false`, `signed: false`, optional CI provenance); `inspect_desktop_archives.py` fail-closes on credential/build-path zip members; `probe_desktop_bundles.py` checks Info.plist / AppImage ELF arch in warn mode; `verify_desktop_assets.py --allow-warnings` on tagged releases. Does **not** claim native GUI launch proof or fail-closed frozen-name gating.
 - M21.C macOS app zip: `normalize_desktop_assets.py` requires Apple `ditto` for release zips (Python `zipfile` refused; `--allow-unsafe-python-zip` for synthetic tests only).
+- M21.E README / user-guide lead with frozen primary portable asset names; `scripts/tests/test_m21_docs_consistency.py` guards the phrases.
 
 ### Changed
 - M21 portable-install honesty polish (docs + packaging readme only): README/user-guide/troubleshooting/SECURITY state unzip→double-click as the goal, label the Windows portable zip **portable with WebView2 prerequisite** (JVM-free alone is not enough), add AppImage WebKit and macOS Gatekeeper/launch caveats, and state that **WSL cannot prove packaged GUI smoke**. `scripts/release/package_windows_portable.ps1` embeds the same README-PORTABLE.txt wording.

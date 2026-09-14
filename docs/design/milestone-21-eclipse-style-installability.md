@@ -1,6 +1,6 @@
 # Milestone 21 — Eclipse-Style Portable Installability
 
-> **Status:** 🟡 Partial — **21.A** verifier; **21.B** Windows portable + unsigned desktop `SHA256SUMS`/manifest provenance + zip secret inspect; **21.C/D** normalize AppImage/DMG + **ditto-only** macOS `.app` zip (Python zipfile refused for release). Verifier still **warn mode**. **Not claimed:** native launch matrix, strict fail-closed gate, or GUI smoke.
+> **Status:** 🟡 Partial — **21.A–E** command/docs layer largely shipped (ditto macOS zip, secret inspect, unsigned checksum provenance, Info.plist/ELF structural probe warn mode, README frozen primary names). **21.F** native launch + strict fail-closed still open. **Not claimed:** GUI smoke or clean-image WebView2 proof.
 > **Parent plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) (M21)
 > **Last updated:** 2026-09-14
 
@@ -79,6 +79,15 @@ Archive member inspect (credential / absolute build-path denylist; fail-closed i
 python3 scripts/release/inspect_desktop_archives.py --dist dist
 ```
 
+Structural bundle probe (Info.plist / AppImage ELF arch; warn mode until 21.F):
+
+```bash
+python3 scripts/release/probe_desktop_bundles.py \
+  --dist dist \
+  --version 0.3.1 \
+  --allow-warnings
+```
+
 Tests (synthetic trees only — no GUI launch):
 
 ```bash
@@ -86,6 +95,8 @@ python3 scripts/tests/test_verify_desktop_assets.py
 python3 scripts/tests/test_generate_sha256sums.py
 python3 scripts/tests/test_normalize_desktop_assets.py
 python3 scripts/tests/test_inspect_desktop_archives.py
+python3 scripts/tests/test_probe_desktop_bundles.py
+python3 scripts/tests/test_m21_docs_consistency.py
 ```
 
 The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required). With `--allow-warnings`, findings are printed but exit status stays 0. `SHA256SUMS` header comments + `asset-manifest.json` declare `scope=desktop-heuristic`, `signed: false`, and optional CI provenance fields — not a Sigstore attestation.
@@ -101,8 +112,9 @@ The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-li
 
 - Fail the release job when required frozen primaries / checksums are absent (strict gate — 21.F).
 - Native-host launch matrix + evidence doc (21.F); no WSL launch claim.
-- Full macOS bundle integrity checks (Info.plist / executable bits) and AppImage arch metadata probes beyond rename.
+- Fail-closed structural probe (today warn mode) + codesign/notarization truthfulness in manifest.
 - Signed/attested checksums (Sigstore/GPG) — provenance fields today are informational only.
+- First-run screenshots from synthetic fixtures.
 
 ## Non-goals
 
