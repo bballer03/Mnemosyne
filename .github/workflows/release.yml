@@ -445,6 +445,15 @@ jobs:
           merge-multiple: true
           path: dist
 
+      # M21.A — Asset-name / integrity verifier (WSL-safe; not launch proof).
+      # Frozen primary names + `scripts/release/verify_desktop_assets.py` are
+      # documented in docs/design/milestone-21-eclipse-style-installability.md.
+      # Do NOT treat a green desktop build or this comment as GUI launch-tested.
+      # Strict CI gate (fail release when required primaries / SHA256SUMS absent)
+      # waits on checksum generation + macOS/Linux name normalization (21.C/D/F).
+      # Local check against a staged dist/:
+      #   python3 scripts/release/verify_desktop_assets.py --dist dist --version "$TAG"
+
       - name: Resolve release notes path
         id: notes
         env:

@@ -324,11 +324,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Release creation fails when a required asset or checksum is absent.
 - Names include version, OS, and architecture without ambiguous `.exe` labeling.
 
-- [ ] Write verifier tests for complete, missing, duplicate, and misnamed asset sets.
-- [ ] Run the tests and observe failure because no manifest verifier exists.
-- [ ] Define required names for Windows portable zip, macOS app zip/dmg, and Linux AppImage.
-- [ ] Generate SHA-256 checksums and a machine-readable asset manifest in release CI.
-- [ ] Run verifier tests against a synthetic `dist/`.
+- [x] Write verifier tests for complete, missing, duplicate, and misnamed asset sets. (`scripts/tests/test_verify_desktop_assets.py`)
+- [x] Run the tests and observe failure because no manifest verifier exists. (TDD red then green in same WSL-safe pass; tests cover missing/duplicate/misnamed.)
+- [x] Define required names for Windows portable zip, macOS app zip/dmg, and Linux AppImage. (frozen table in `docs/design/milestone-21-eclipse-style-installability.md`)
+- [ ] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (verifier supports SHA256SUMS when present / `--require-checksums`; CI generation + strict release fail gate not wired yet — note only in `release.yml`)
+- [x] Run verifier tests against a synthetic `dist/`.
 - [ ] Request a Terra review focused on release failure modes and artifact provenance.
 
 ### Slice 21.B — Produce a portable Windows zip
