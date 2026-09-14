@@ -73,6 +73,7 @@ export async function injectHostBridges(): Promise<boolean> {
     pickHeapFile: async () => normalizePickHeapFileResult(await call("pick_heap_file")),
     loadHeapFromSource: (sourceId) => call("load_heap_from_source", { sourceId }),
     runDesktopAnalysis: (input) => call("run_desktop_analysis", { input }),
+    unloadHeap: () => call("unload_heap"),
     getDesktopLogPath: () => call("get_desktop_log_path"),
     runCiCheck: (input) => call("run_ci_check", { input }),
     generateFlamegraph: (input) => call("generate_desktop_flamegraph", { input }),

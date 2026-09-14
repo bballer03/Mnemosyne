@@ -98,7 +98,7 @@ describe("ArtifactLoaderPage", () => {
     await user.click(page.getByRole("button", { name: /open heap dump/i }));
 
     await waitFor(() => {
-      expect(page.getByText(/needs the desktop app/i)).toBeInTheDocument();
+      expect(page.getAllByText(/needs the desktop app/i).length).toBeGreaterThanOrEqual(1);
     });
     expect(page.queryByText(/\/tmp\//i)).not.toBeInTheDocument();
   });

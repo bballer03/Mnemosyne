@@ -3,14 +3,16 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
-import { pickHeapFile, runDesktopAnalysis, getDesktopLogPath } from "./desktop-heap-client";
+import { getDesktopLogPath } from "./desktop-heap-client";
 import { formatHostError } from "../../host/format-host-error";
-import { rememberDesktopHeapSource } from "./desktop-heap-session";
-import { parseAnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "./use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { GuidedLanding } from "../workflow-landing/GuidedLanding";
 import { TopNav } from "../../app/TopNav";
+import {
+  applyOpenedHeap,
+  openDesktopHeapLean,
+} from "../investigation/workspace-actions";
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -191,88 +193,40 @@ export function ArtifactLoaderPage() {
 
   async function handleOpenHeapDump() {
     setDesktopHeapMessage(undefined);
-    setHeapOpenPhase("picking");
     setStatusLines((current) => [
       `[${formatTimestamp(new Date())}] opening heap dump picker`,
       ...current,
     ]);
 
-    try {
-      const picked = await pickHeapFile();
-      if (picked.status === "cancelled") {
-        setDesktopHeapMessage("Heap dump selection cancelled.");
-        setStatusLines((current) => [
-          `[${formatTimestamp(new Date())}] heap dump selection cancelled`,
-          ...current,
-        ]);
-        return;
-      }
-
-      if (picked.status === "unavailable") {
-        const inTauri =
-          typeof globalThis !== "undefined" && "__TAURI_INTERNALS__" in globalThis;
-        setDesktopHeapMessage(
-          inTauri
-            ? "Desktop host is running but the heap bridge failed to load. Restart the app, or import an analysis JSON artifact."
-            : "Open heap dump needs the desktop app. In the browser, import an analysis JSON artifact instead.",
-        );
-        setStatusLines((current) => [
-          `[${formatTimestamp(new Date())}] desktop heap picker unavailable${
-            inTauri ? " (tauri without bridge)" : " (browser)"
-          }`,
-          ...current,
-        ]);
-        return;
-      }
-
-      setHeapOpenPhase("analyzing");
+    const result = await openDesktopHeapLean(setHeapOpenPhase);
+    if (result.status === "cancelled") {
+      setDesktopHeapMessage("Heap dump selection cancelled.");
       setStatusLines((current) => [
-        `[${formatTimestamp(new Date())}] heap selected: ${picked.displayName}`,
-        `[${formatTimestamp(new Date())}] running lean first-open analysis (histogram, leaks, classloaders, top instances)`,
+        `[${formatTimestamp(new Date())}] heap dump selection cancelled`,
         ...current,
       ]);
-      rememberDesktopHeapSource(picked.sourceId, picked.displayName);
-
-      const raw = await runDesktopAnalysis({
-        sourceId: picked.sourceId,
-        mode: "incident",
-        enableClassloaders: true,
-        enableTopInstances: true,
-        enableThreads: false,
-        enableStrings: false,
-        enableCollections: false,
-        enableByReferrer: false,
-        enableDuplicateArrays: false,
-      });
-      const artifact = parseAnalysisArtifact(raw);
-      const loadedAt = new Date();
-      setArtifact(picked.displayName, artifact);
-      resetDashboardState();
-      setShouldNavigateToDashboard(true);
-      addRecentLoad({
-        fileName: picked.displayName,
-        sizeLabel: `${artifact.summary.totalObjects.toLocaleString()} objects`,
-        loadedAtLabel: formatTimestamp(loadedAt),
-        heapPath: artifact.summary.heapPath,
-      });
-      setDesktopHeapMessage(
-        `Analyzed ${picked.displayName}: ${artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
-      );
-      setStatusLines((current) => [
-        `[${formatTimestamp(loadedAt)}] desktop analysis ready: ${picked.displayName}`,
-        ...current,
-      ]);
-    } catch (error) {
-      const message = formatHostError(error, "Failed to open heap dump");
-      console.error("[mnemosyne] open heap dump failed", error);
-      setDesktopHeapMessage(message);
-      setStatusLines((current) => [
-        `[${formatTimestamp(new Date())}] heap open error: ${message}`,
-        ...current,
-      ]);
-    } finally {
-      setHeapOpenPhase("idle");
+      return;
     }
+
+    if (result.status === "unavailable" || result.status === "error") {
+      setDesktopHeapMessage(result.message);
+      setStatusLines((current) => [
+        `[${formatTimestamp(new Date())}] heap open: ${result.message}`,
+        ...current,
+      ]);
+      return;
+    }
+
+    const loadedAt = new Date();
+    applyOpenedHeap(result.displayName, result.artifact);
+    setShouldNavigateToDashboard(true);
+    setDesktopHeapMessage(
+      `Analyzed ${result.displayName}: ${result.artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
+    );
+    setStatusLines((current) => [
+      `[${formatTimestamp(loadedAt)}] desktop analysis ready: ${result.displayName}`,
+      ...current,
+    ]);
   }
 
   const previewItems = [

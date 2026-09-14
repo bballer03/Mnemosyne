@@ -29,6 +29,7 @@ export type DesktopHeapBridge = {
   pickHeapFile?: () => Promise<PickHeapFileResult>;
   loadHeapFromSource?: (sourceId: string) => Promise<HeapLoadSummary>;
   runDesktopAnalysis?: (input: DesktopAnalysisInput) => Promise<unknown>;
+  unloadHeap?: () => Promise<void>;
   getDesktopLogPath?: () => Promise<string>;
   runCiCheck?: (input: {
     sourceId: string;
@@ -91,4 +92,12 @@ export async function getDesktopLogPath(): Promise<string | undefined> {
     return undefined;
   }
   return bridge.getDesktopLogPath();
+}
+
+export async function unloadHeap(): Promise<void> {
+  const bridge = getDesktopHeapBridge();
+  if (!bridge?.unloadHeap) {
+    return;
+  }
+  await bridge.unloadHeap();
 }
