@@ -475,7 +475,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Extend AST/parser minimally and reuse the current class resolver.
 - [x] Execute union/dedup under existing row/work budgets.
 - [x] Run query, CLI, MCP, and corpus tests.
-- [ ] Request a Terra review focused on ambiguity, compatibility, and work limits.
+- [x] Request a Terra review focused on ambiguity, compatibility, and work limits.
 
 ### Slice 22.C — Add one-to-three-hop `OBJECTS`
 
