@@ -63,6 +63,8 @@ pub struct HeapLoadSummary {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum PickHeapFileResult {
+    /// Field names must be camelCase for the React bridge (`sourceId` / `displayName`).
+    #[serde(rename_all = "camelCase")]
     Selected {
         source_id: String,
         display_name: String,
@@ -1331,5 +1333,25 @@ fn format_object_id(object_id: u64, id_size: usize) -> String {
 
 fn prettify_class_name(raw: &str) -> String {
     raw.replace('/', ".")
+}
+
+#[cfg(test)]
+mod pick_heap_file_result_tests {
+    use super::PickHeapFileResult;
+
+    #[test]
+    fn selected_serializes_camel_case_fields_for_ui_bridge() {
+        let value = serde_json::to_value(PickHeapFileResult::Selected {
+            source_id: "src-1".to_string(),
+            display_name: "fixture.hprof".to_string(),
+        })
+        .expect("serialize");
+
+        assert_eq!(value["status"], "selected");
+        assert_eq!(value["sourceId"], "src-1");
+        assert_eq!(value["displayName"], "fixture.hprof");
+        assert!(value.get("source_id").is_none());
+        assert!(value.get("display_name").is_none());
+    }
 }
 

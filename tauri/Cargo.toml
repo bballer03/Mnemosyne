@@ -10,7 +10,7 @@
 
 [package]
 name = "mnemosyne-desktop"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Mnemosyne desktop app - native JVM heap analysis"
 license = "Apache-2.0"

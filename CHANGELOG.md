@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-14
+
+### Fixed
+- Desktop Open heap dump: `PickHeapFileResult::Selected` now serializes `sourceId` / `displayName` (camelCase) for the React bridge. v0.4.1 returned snake_case fields, so analysis ran without a source id and the UI showed a generic failure.
+- Host invoke failures now preserve the real Tauri/Rust error string via `formatHostError` (Tauri often rejects with a plain string / `{ message }`, not `Error`).
+- Validation Console documents DevTools (`[mnemosyne]` console logs) for desktop debugging.
+
+### Changed
+- Workspace / Tauri / Homebrew versions bump to `0.4.2`. Homebrew SHA-256 placeholders until archives publish.
+
 ## [0.4.1] - 2026-09-14
 
 ### Fixed

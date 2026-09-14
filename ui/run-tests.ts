@@ -83,6 +83,7 @@ const testBatches = [
     "src/features/snapshots/SnapshotManagerPage.test.tsx",
     "src/features/flamegraph/FlamegraphPage.test.tsx",
     "src/host/tauri-bridge.test.ts",
+    "src/host/format-host-error.test.ts",
   ],
 ];
 

@@ -2,7 +2,7 @@ import "../test/setup";
 
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { injectHostBridges, isTauriRuntime } from "./tauri-bridge";
+import { injectHostBridges, isTauriRuntime, normalizePickHeapFileResult } from "./tauri-bridge";
 
 describe("tauri-bridge", () => {
   afterEach(() => {
@@ -22,5 +22,25 @@ describe("tauri-bridge", () => {
   it("no-ops inject outside Tauri and leaves bridges unset", async () => {
     await expect(injectHostBridges()).resolves.toBe(false);
     expect(window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__).toBeUndefined();
+  });
+
+  it("normalizes snake_case pick payloads from older hosts", () => {
+    expect(
+      normalizePickHeapFileResult({
+        status: "selected",
+        source_id: "src-opaque",
+        display_name: "fixture.hprof",
+      }),
+    ).toEqual({
+      status: "selected",
+      sourceId: "src-opaque",
+      displayName: "fixture.hprof",
+    });
+  });
+
+  it("rejects incomplete selected payloads", () => {
+    expect(() =>
+      normalizePickHeapFileResult({ status: "selected", source_id: "src-only" }),
+    ).toThrow(/incomplete selection/i);
   });
 });
