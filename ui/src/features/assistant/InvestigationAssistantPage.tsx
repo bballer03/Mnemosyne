@@ -5,11 +5,14 @@ import { getRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import {
   appendBoundedTurn,
+  askWithProviderFallback,
   buildRulesModeAnswer,
   displayHeapBasename,
   isOpaqueSourceId,
   isProviderChatAvailable,
+  OUTBOUND_METADATA_NOTICE,
   type AssistantChatTurn,
+  type AssistantProvenance,
 } from "./assistant-bridge-client";
 
 const pageStyle = {
@@ -48,13 +51,23 @@ function pickDefaultLeakId(
   return [...leaks].sort((a, b) => (b.suspectScore ?? 0) - (a.suspectScore ?? 0))[0]?.id;
 }
 
+function modeLabel(provenance: AssistantProvenance | undefined): string {
+  if (provenance === "provider") {
+    return "provider";
+  }
+  if (provenance === "fallback") {
+    return "fallback (rules)";
+  }
+  return "rules";
+}
+
 /**
- * M23.A investigation session workspace.
+ * M23 investigation session workspace.
  *
- * Composes loaded artifact facts + optional desktop source identity + local
- * rules-mode history. Provider transport is probed only; unavailable states
- * stay explicit. Absolute heap paths never render — basename / opaque sourceId
- * only.
+ * Rules mode remains the offline default. When `__MNEMOSYNE_ASSISTANT_BRIDGE__.chatSession`
+ * is present (M23.C Tauri wiring), Ask uses provider chat with provenance and falls
+ * back to rules on error/unavailable. Absolute heap paths never render — basename /
+ * opaque sourceId only. API keys are never printed.
  */
 export function InvestigationAssistantPage() {
   const artifact = useArtifactStore((state) => state.artifact);
@@ -66,6 +79,9 @@ export function InvestigationAssistantPage() {
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<AssistantChatTurn[]>([]);
   const [providerNotice, setProviderNotice] = useState<string | undefined>();
+  const [outboundNotice, setOutboundNotice] = useState<string | undefined>();
+  const [sessionId, setSessionId] = useState<string | undefined>();
+  const [asking, setAsking] = useState(false);
   const [workflowId] = useState<string | undefined>();
   const [workflowStep] = useState<string | undefined>();
 
@@ -78,8 +94,13 @@ export function InvestigationAssistantPage() {
     remembered?.displayName ?? artifact?.summary.heapPath ?? "no heap loaded",
   );
 
-  function handleAsk(event: FormEvent<HTMLFormElement>) {
+  const activeMode = modeLabel(history[history.length - 1]?.provenance);
+
+  async function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (asking) {
+      return;
+    }
     const form = event.currentTarget;
     const field = form.elements.namedItem("follow-up");
     const fieldValue =
@@ -91,7 +112,7 @@ export function InvestigationAssistantPage() {
       return;
     }
 
-    const turn = buildRulesModeAnswer(trimmed, {
+    const context = {
       heapDisplayName,
       sourceId: remembered?.sourceId,
       workflowId,
@@ -101,22 +122,61 @@ export function InvestigationAssistantPage() {
       focusLeakSeverity: focusedLeak?.severity,
       focusLeakDescription: focusedLeak?.description,
       totalObjects: artifact?.summary.totalObjects,
-    });
+    };
 
-    setHistory((prev) => appendBoundedTurn(prev, turn));
-    setQuestion("");
+    setAsking(true);
+    try {
+      const result = await askWithProviderFallback({
+        question: trimmed,
+        context,
+        sessionId,
+        sourceId: remembered?.sourceId,
+      });
+
+      if (result.sessionId) {
+        setSessionId(result.sessionId);
+      }
+      if (result.outboundNotice) {
+        setOutboundNotice(result.outboundNotice);
+      }
+      if (result.notice) {
+        setProviderNotice(result.notice);
+      } else if (result.turn.provenance === "provider") {
+        setProviderNotice(undefined);
+      }
+
+      setHistory((prev) => appendBoundedTurn(prev, result.turn));
+      setQuestion("");
+    } catch (error) {
+      const fallback = {
+        ...buildRulesModeAnswer(trimmed, context),
+        provenance: "fallback" as const,
+      };
+      setHistory((prev) => appendBoundedTurn(prev, fallback));
+      setProviderNotice(
+        `recovery=rules_mode_available; error=${
+          error instanceof Error ? error.message : "ask_failed"
+        }`,
+      );
+      setQuestion("");
+    } finally {
+      setAsking(false);
+    }
   }
 
   function handleCheckProvider() {
     if (!isProviderChatAvailable()) {
       setProviderNotice(
-        "Provider chat is unavailable without a connected assistant host bridge. Rules mode remains available offline. Native chatSession wiring lands in M23.C.",
+        "Provider chat is unavailable without a connected assistant host bridge. Rules mode remains available offline.",
       );
       return;
     }
     setProviderNotice(
-      "Assistant host bridge detected. Provider turns are not enabled in this slice yet — continue in rules mode, or wait for M23.C chat adapters.",
+      "Assistant host bridge detected. Ask uses chatSession with provider provenance; rules mode remains the offline fallback on error.",
     );
+    if (!outboundNotice) {
+      setOutboundNotice(OUTBOUND_METADATA_NOTICE);
+    }
   }
 
   return (
@@ -144,7 +204,7 @@ export function InvestigationAssistantPage() {
         Keep measured heap facts separate from advisory AI text. Rules mode is the offline default;
         deterministic workbench views stay one click away.
       </p>
-      <p style={{ margin: 0, color: "#67e8f9" }}>Mode: rules</p>
+      <p style={{ margin: 0, color: "#67e8f9" }}>Mode: {activeMode}</p>
 
       <section style={factPanelStyle} aria-label="Measured heap facts">
         <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Measured heap facts</h2>
@@ -218,6 +278,15 @@ export function InvestigationAssistantPage() {
         {providerNotice ? <span style={{ color: "#facc15" }}>{providerNotice}</span> : null}
       </div>
 
+      {(outboundNotice || isProviderChatAvailable()) && (
+        <p
+          aria-label="Outbound metadata notice"
+          style={{ margin: 0, color: "#94a3b8", fontSize: "0.85rem", maxWidth: "68ch" }}
+        >
+          {outboundNotice ?? OUTBOUND_METADATA_NOTICE}
+        </p>
+      )}
+
       <section style={aiPanelStyle} aria-label="AI guidance">
         <h2 style={{ margin: 0, fontSize: "1.05rem" }}>AI guidance</h2>
         <p style={{ margin: 0, color: "#c4b5fd", fontSize: "0.9rem" }}>
@@ -233,6 +302,7 @@ export function InvestigationAssistantPage() {
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               placeholder="e.g. What should I investigate first?"
+              disabled={asking}
               style={{
                 background: "#020617",
                 color: "#e2e8f0",
@@ -242,11 +312,16 @@ export function InvestigationAssistantPage() {
               }}
             />
           </label>
-          <button type="submit">Ask</button>
+          <button type="submit" disabled={asking}>
+            Ask
+          </button>
         </form>
 
         {history.length === 0 ? (
-          <p style={{ margin: 0, color: "#a78bfa" }}>No turns yet. Ask a question to start a bounded rules-mode session.</p>
+          <p style={{ margin: 0, color: "#a78bfa" }}>
+            No turns yet. Ask a question to start a bounded session (rules offline, provider when
+            the host bridge is connected).
+          </p>
         ) : (
           <ol style={{ margin: 0, paddingLeft: "1.2rem", display: "grid", gap: "0.75rem" }}>
             {history.map((turn, index) => (

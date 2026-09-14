@@ -1,6 +1,6 @@
 import "../../test/setup";
 
-import { act, cleanup, render, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -91,8 +91,10 @@ describe("InvestigationAssistantPage", () => {
     await user.click(view.getByRole("button", { name: /^ask$/i }));
 
     const ai = view.getByRole("region", { name: /ai guidance/i });
-    expect(ai.textContent ?? "").toMatch(/provenance:\s*rules/i);
-    expect(ai.textContent ?? "").toMatch(/What should I check first\?/i);
+    await waitFor(() => {
+      expect(ai.textContent ?? "").toMatch(/provenance:\s*rules/i);
+      expect(ai.textContent ?? "").toMatch(/What should I check first\?/i);
+    });
     expect(facts.textContent ?? "").not.toMatch(/What should I check first\?/i);
   });
 
@@ -110,7 +112,80 @@ describe("InvestigationAssistantPage", () => {
     await user.type(view.getByLabelText(/ask a follow-up/i), "Still works offline?");
     await user.click(view.getByRole("button", { name: /^ask$/i }));
     const ai = view.getByRole("region", { name: /ai guidance/i });
-    expect(ai.textContent ?? "").toMatch(/Still works offline\?/i);
+    await waitFor(() => {
+      expect(ai.textContent ?? "").toMatch(/Still works offline\?/i);
+    });
+  });
+
+  it("uses chatSession with provider provenance when the host bridge is wired", async () => {
+    const user = userEvent.setup();
+    seedArtifact();
+    rememberDesktopHeapSource("src-opaque", "fixture.hprof");
+
+    let chatCalls = 0;
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({
+        session_id: "mcp-ui-1",
+        display_name: "fixture.hprof",
+        outbound_metadata: {
+          sends: ["heap_summary_stats"],
+          never_sends: ["api_keys", "absolute_heap_paths"],
+        },
+      }),
+      chatSession: async (input) => {
+        chatCalls += 1;
+        expect(input.sessionId).toBe("mcp-ui-1");
+        expect(input.focusLeakId).toBe("leak-high");
+        return { summary: "Session guidance for leak-high.", model: "gpt-test" };
+      },
+    };
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const view = render(<RouterProvider router={router} />);
+
+    await user.click(view.getByRole("button", { name: /check provider availability/i }));
+    expect(view.getByText(/ask uses chatsession/i)).toBeInTheDocument();
+    expect(view.getByLabelText(/outbound metadata notice/i).textContent ?? "").toMatch(
+      /api keys|never/i,
+    );
+    expect(view.getByLabelText(/outbound metadata notice/i).textContent ?? "").not.toMatch(/sk-/i);
+    expect(document.body.textContent ?? "").not.toMatch(/\/secret\/path/);
+
+    await user.type(view.getByLabelText(/ask a follow-up/i), "Explain the focus");
+    await user.click(view.getByRole("button", { name: /^ask$/i }));
+
+    const ai = view.getByRole("region", { name: /ai guidance/i });
+    await waitFor(() => {
+      expect(ai.textContent ?? "").toMatch(/provenance:\s*provider/i);
+      expect(ai.textContent ?? "").toMatch(/Session guidance for leak-high/i);
+      expect(view.getByText(/mode:\s*provider/i)).toBeInTheDocument();
+    });
+    expect(chatCalls).toBe(1);
+  });
+
+  it("falls back to rules with recovery guidance on provider timeout", async () => {
+    const user = userEvent.setup();
+    seedArtifact();
+
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({ session_id: "mcp-ui-2" }),
+      chatSession: async () => {
+        throw new Error("provider_timeout");
+      },
+    };
+
+    const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
+    const view = render(<RouterProvider router={router} />);
+
+    await user.type(view.getByLabelText(/ask a follow-up/i), "Still recoverable?");
+    await user.click(view.getByRole("button", { name: /^ask$/i }));
+
+    await waitFor(() => {
+      expect(view.getByText(/recovery=rules_mode_available; error=provider_timeout/i)).toBeInTheDocument();
+      const ai = view.getByRole("region", { name: /ai guidance/i });
+      expect(ai.textContent ?? "").toMatch(/provenance:\s*fallback/i);
+      expect(ai.textContent ?? "").toMatch(/Still recoverable\?/i);
+    });
   });
 
   it("updates focus when the selected leak changes", async () => {
@@ -144,7 +219,9 @@ describe("InvestigationAssistantPage", () => {
       await user.type(input, `turn-${i}`);
       await user.click(view.getByRole("button", { name: /^ask$/i }));
       const ai = view.getByRole("region", { name: /ai guidance/i });
-      expect(ai.textContent ?? "").toContain(`Q: turn-${i}`);
+      await waitFor(() => {
+        expect(ai.textContent ?? "").toContain(`Q: turn-${i}`);
+      });
     }
 
     const ai = view.getByRole("region", { name: /ai guidance/i });

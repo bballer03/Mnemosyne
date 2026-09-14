@@ -6,7 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use mnemosyne_core::{
-    analysis::{inspect_object, ObjectInspection},
+    analysis::{
+        analyze_heap, focus_leaks, generate_ai_chat_turn_async, inspect_object, validate_leak_id,
+        AiChatTurn, AnalyzeRequest, LeakDetectionOptions, ObjectInspection,
+    },
     build_dominator_tree, build_histogram,
     diff::{
         object::types::{
@@ -17,9 +20,14 @@ use mnemosyne_core::{
     },
     graph::find_all_gc_paths_in_graph,
     hprof::{parse_hprof_file_with_options, ObjectGraph, ParseOptions},
+    mcp::session::{
+        effective_history_limit, new_session_id, timestamp_now, top_leak_ids, trim_history_to,
+        McpSessionStore, PersistedAiSession, SessionAnalysisSnapshot, SessionConversationSnapshot,
+        DEFAULT_SESSION_HISTORY, HARD_MAX_SESSION_HISTORY, MCP_SESSION_VERSION,
+    },
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
+    AllPathsRequest, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
 };
 use serde_json::{json, Value};
 
@@ -442,6 +450,266 @@ pub fn close_workflow_for_session(
         "workflow_id": workflow_id,
         "closed": true,
     }))
+}
+
+/// `MNEMOSYNE_AI_SESSION_DIR` overrides the default AI session store root —
+/// mirrors MCP `default_session_directory` / `[ai.sessions].directory`.
+const AI_SESSION_DIR_ENV: &str = "MNEMOSYNE_AI_SESSION_DIR";
+
+/// Default AI session store root for desktop — same layout as MCP sessions.
+pub fn default_ai_session_store_root() -> PathBuf {
+    if let Ok(dir) = std::env::var(AI_SESSION_DIR_ENV) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(mut dir) = dirs::data_local_dir() {
+        dir.push("mnemosyne");
+        dir.push("ai-sessions");
+        return dir;
+    }
+
+    let mut fallback = std::env::temp_dir();
+    fallback.push("mnemosyne");
+    fallback.push("ai-sessions");
+    fallback
+}
+
+pub fn default_ai_session_store() -> McpSessionStore {
+    McpSessionStore::new(default_ai_session_store_root())
+}
+
+/// Prefer `[ai.sessions].directory` when set; otherwise the desktop default root.
+pub fn ai_session_store_for_config(config: &AppConfig) -> McpSessionStore {
+    if let Some(dir) = config.ai.sessions.directory.as_ref() {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return McpSessionStore::new(PathBuf::from(trimmed));
+        }
+    }
+    default_ai_session_store()
+}
+
+/// Input for the M23.C assistant bridge's `createAiSession` host method.
+#[derive(Debug, Clone, Default)]
+pub struct CreateAiSessionInput {
+    pub heap_path: String,
+}
+
+fn display_name_for_path(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("heap.dump")
+        .to_string()
+}
+
+/// Desktop-facing create/resume payload: basename only (path opacity).
+fn opaque_ai_session_payload(session: &PersistedAiSession, include_history: bool) -> Value {
+    let mut payload = json!({
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "display_name": display_name_for_path(&session.heap_path),
+        "leak_count": session.analysis.leaks.len(),
+        "top_leaks": session.analysis.top_leaks,
+        "focus_leak_id": session.conversation.focus_leak_id,
+        "history_length": session.conversation.history.len(),
+        "history_max_turns": DEFAULT_SESSION_HISTORY,
+        "history_hard_max_turns": HARD_MAX_SESSION_HISTORY,
+        // Explicit outbound metadata contract for the UI redaction notice.
+        "outbound_metadata": {
+            "sends": [
+                "heap_summary_stats",
+                "focused_leak_id_class_severity_description",
+                "bounded_chat_history"
+            ],
+            "never_sends": ["api_keys", "absolute_heap_paths", "raw_heap_field_values"]
+        },
+    });
+    if include_history {
+        payload["history"] = json!(session.conversation.history);
+    }
+    payload
+}
+
+/// Compact get payload — mirrors MCP `get_ai_session` with path opacity.
+fn opaque_compact_ai_session_payload(session: &PersistedAiSession) -> Value {
+    json!({
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "display_name": display_name_for_path(&session.heap_path),
+        "leak_count": session.analysis.leaks.len(),
+        "focus_leak_id": session.conversation.focus_leak_id,
+        "history_length": session.conversation.history.len(),
+        "history_max_turns": DEFAULT_SESSION_HISTORY,
+        "history_hard_max_turns": HARD_MAX_SESSION_HISTORY,
+    })
+}
+
+/// Chat response without `wire` (prompt/response bodies stay off the UI surface).
+fn opaque_chat_response(ai: &mnemosyne_core::AiInsights) -> Value {
+    json!({
+        "summary": ai.summary,
+        "model": ai.model,
+        "recommendations": ai.recommendations,
+        "confidence": ai.confidence,
+    })
+}
+
+/// Create a persisted AI session — mirrors MCP `create_ai_session`.
+pub async fn create_ai_session_for_session(
+    store: &McpSessionStore,
+    config: &AppConfig,
+    input: CreateAiSessionInput,
+) -> Result<Value, String> {
+    if input.heap_path.trim().is_empty() {
+        return Err("heap_path is required for create_ai_session".to_string());
+    }
+
+    let mut request_config = config.clone();
+    request_config.ai.enabled = false;
+    let leak_options = LeakDetectionOptions::from(&request_config.analysis);
+
+    let analysis = analyze_heap(AnalyzeRequest {
+        heap_path: input.heap_path.clone(),
+        config: request_config,
+        leak_options: leak_options.clone(),
+        enable_ai: false,
+        histogram_group_by: HistogramGroupBy::Class,
+        ..AnalyzeRequest::default()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+
+    let now = timestamp_now();
+    let session = PersistedAiSession {
+        session_version: MCP_SESSION_VERSION,
+        session_id: new_session_id(),
+        created_at: now.clone(),
+        updated_at: now,
+        heap_path: input.heap_path,
+        analysis: SessionAnalysisSnapshot {
+            min_severity: leak_options.min_severity,
+            packages: leak_options.package_filters,
+            leak_types: leak_options.leak_types,
+            top_leaks: top_leak_ids(&analysis.leaks),
+            summary: analysis.summary,
+            leaks: analysis.leaks,
+        },
+        conversation: SessionConversationSnapshot {
+            focus_leak_id: None,
+            history: Vec::new(),
+        },
+    };
+
+    store
+        .save(&session)
+        .map_err(|error| format!("session persist failed: {error}"))?;
+    Ok(opaque_ai_session_payload(&session, false))
+}
+
+/// Touch + return a session — mirrors MCP `resume_ai_session`.
+pub fn resume_ai_session_for_session(
+    store: &McpSessionStore,
+    session_id: &str,
+) -> Result<Value, String> {
+    let mut session = store.load(session_id).map_err(|error| error.to_string())?;
+    session.updated_at = timestamp_now();
+    store
+        .save(&session)
+        .map_err(|error| format!("session persist failed: {error}"))?;
+    Ok(opaque_ai_session_payload(&session, true))
+}
+
+/// Read-only compact dump — mirrors MCP `get_ai_session`.
+pub fn get_ai_session_for_session(
+    store: &McpSessionStore,
+    session_id: &str,
+) -> Result<Value, String> {
+    let session = store.load(session_id).map_err(|error| error.to_string())?;
+    Ok(opaque_compact_ai_session_payload(&session))
+}
+
+/// Delete a persisted AI session — mirrors MCP `close_ai_session`.
+pub fn close_ai_session_for_session(
+    store: &McpSessionStore,
+    session_id: &str,
+) -> Result<Value, String> {
+    store
+        .delete(session_id)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "session_id": session_id,
+        "closed": true,
+    }))
+}
+
+/// Bounded chat turn — mirrors MCP `chat_session` (12 default / 32 hard max).
+pub async fn chat_session_for_session(
+    store: &McpSessionStore,
+    config: &AppConfig,
+    session_id: &str,
+    question: &str,
+    focus_leak_id: Option<&str>,
+) -> Result<Value, String> {
+    if question.trim().is_empty() {
+        return Err("question must not be empty".to_string());
+    }
+
+    let mut session = store.load(session_id).map_err(|error| error.to_string())?;
+
+    if let Some(target) = focus_leak_id {
+        validate_leak_id(&session.analysis.leaks, target).map_err(|error| error.to_string())?;
+    }
+
+    let active_focus = focus_leak_id.or(session.conversation.focus_leak_id.as_deref());
+    let focused = if let Some(target) = active_focus {
+        focus_leaks(&session.analysis.leaks, Some(target))
+    } else {
+        let shortlist = session.analysis.top_leaks.clone();
+        session
+            .analysis
+            .leaks
+            .iter()
+            .filter(|leak| shortlist.iter().any(|id| id == &leak.id))
+            .cloned()
+            .collect()
+    };
+
+    let mut ai_config = config.ai.clone();
+    ai_config.enabled = true;
+    let ai = generate_ai_chat_turn_async(
+        &session.analysis.summary,
+        &focused,
+        question,
+        &session.conversation.history,
+        active_focus,
+        &ai_config,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+
+    if let Some(target) = focus_leak_id {
+        session.conversation.focus_leak_id = Some(target.to_string());
+    }
+    trim_history_to(
+        &mut session.conversation.history,
+        AiChatTurn {
+            question: question.to_string(),
+            answer_summary: ai.summary.clone(),
+        },
+        effective_history_limit(ai_config.sessions.history_max_turns),
+    );
+    session.updated_at = timestamp_now();
+    store
+        .save(&session)
+        .map_err(|error| format!("session persist failed: {error}"))?;
+
+    Ok(opaque_chat_response(&ai))
 }
 
 pub fn list_snapshots_for_session(store: &SnapshotStore) -> Result<Vec<SnapshotManifest>, String> {
@@ -1417,6 +1685,317 @@ mod tests {
                 corrupt.contains("workflow_corrupt"),
                 "unexpected error: {corrupt}"
             );
+        }
+    }
+
+    mod ai_session_bridge {
+        use super::*;
+        use mnemosyne_core::{
+            config::AiMode,
+            hprof::test_fixtures::build_graph_fixture,
+            mcp::session::{DEFAULT_SESSION_HISTORY, HARD_MAX_SESSION_HISTORY, McpSessionStore},
+            AppConfig,
+        };
+        use std::io::Write;
+
+        fn session_store() -> McpSessionStore {
+            McpSessionStore::new(tempfile::tempdir().expect("temp dir must exist").keep())
+        }
+
+        fn write_fixture_heap() -> Result<(tempfile::NamedTempFile, String), String> {
+            let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+            file.write_all(&build_graph_fixture())
+                .map_err(|error| error.to_string())?;
+            let path = file
+                .path()
+                .to_string_lossy()
+                .into_owned();
+            Ok((file, path))
+        }
+
+        #[tokio::test]
+        async fn create_chat_get_close_round_trip_keeps_path_opaque() {
+            let store = session_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let absolute_marker = heap_path.clone();
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            config.ai.mode = AiMode::Rules;
+
+            let created = create_ai_session_for_session(
+                &store,
+                &config,
+                CreateAiSessionInput {
+                    heap_path: heap_path.clone(),
+                },
+            )
+            .await
+            .expect("create must succeed");
+
+            let session_id = created
+                .get("session_id")
+                .and_then(Value::as_str)
+                .expect("session_id")
+                .to_string();
+            let payload = created.to_string();
+            assert!(
+                !payload.contains(&absolute_marker),
+                "create payload must not leak absolute heap path"
+            );
+            assert!(created.get("display_name").and_then(Value::as_str).is_some());
+            assert_eq!(
+                created.get("history_max_turns"),
+                Some(&json!(DEFAULT_SESSION_HISTORY))
+            );
+            assert_eq!(
+                created.get("history_hard_max_turns"),
+                Some(&json!(HARD_MAX_SESSION_HISTORY))
+            );
+            assert!(created.get("outbound_metadata").is_some());
+
+            let chat = chat_session_for_session(
+                &store,
+                &config,
+                &session_id,
+                "What should I investigate first?",
+                None,
+            )
+            .await
+            .expect("chat must succeed");
+            assert!(chat.get("summary").and_then(Value::as_str).is_some());
+            assert!(chat.get("model").and_then(Value::as_str).is_some());
+            assert!(chat.get("wire").is_none(), "wire body must stay off UI");
+
+            let got = get_ai_session_for_session(&store, &session_id).expect("get must succeed");
+            assert_eq!(got.get("history_length"), Some(&json!(1)));
+            assert!(!got.to_string().contains(&absolute_marker));
+
+            let closed =
+                close_ai_session_for_session(&store, &session_id).expect("close must succeed");
+            assert_eq!(
+                closed,
+                json!({ "session_id": session_id, "closed": true })
+            );
+            let missing = get_ai_session_for_session(&store, &session_id)
+                .expect_err("closed session must be gone");
+            assert!(
+                missing.contains("session not found") || missing.contains("not found"),
+                "unexpected error: {missing}"
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_session_evicts_history_past_twelve_default() {
+            let store = session_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            config.ai.mode = AiMode::Rules;
+
+            let created = create_ai_session_for_session(
+                &store,
+                &config,
+                CreateAiSessionInput { heap_path },
+            )
+            .await
+            .expect("create");
+            let session_id = created
+                .get("session_id")
+                .and_then(Value::as_str)
+                .expect("session_id")
+                .to_string();
+
+            for i in 0..(DEFAULT_SESSION_HISTORY + 1) {
+                chat_session_for_session(
+                    &store,
+                    &config,
+                    &session_id,
+                    &format!("turn-{i}"),
+                    None,
+                )
+                .await
+                .expect("chat turn");
+            }
+
+            let resumed = resume_ai_session_for_session(&store, &session_id).expect("resume");
+            let history = resumed
+                .get("history")
+                .and_then(Value::as_array)
+                .expect("history");
+            assert_eq!(history.len(), DEFAULT_SESSION_HISTORY);
+            assert_eq!(
+                history[0].get("question").and_then(Value::as_str),
+                Some("turn-1")
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_session_hard_caps_history_at_thirty_two() {
+            let store = session_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            config.ai.mode = AiMode::Rules;
+            config.ai.sessions.history_max_turns = Some(100);
+
+            let created = create_ai_session_for_session(
+                &store,
+                &config,
+                CreateAiSessionInput { heap_path },
+            )
+            .await
+            .expect("create");
+            let session_id = created
+                .get("session_id")
+                .and_then(Value::as_str)
+                .expect("session_id")
+                .to_string();
+
+            for i in 0..(HARD_MAX_SESSION_HISTORY + 3) {
+                chat_session_for_session(
+                    &store,
+                    &config,
+                    &session_id,
+                    &format!("hard-{i}"),
+                    None,
+                )
+                .await
+                .expect("chat turn");
+            }
+
+            let resumed = resume_ai_session_for_session(&store, &session_id).expect("resume");
+            let history = resumed
+                .get("history")
+                .and_then(Value::as_array)
+                .expect("history");
+            assert_eq!(history.len(), HARD_MAX_SESSION_HISTORY);
+        }
+
+        #[tokio::test]
+        async fn chat_session_surfaces_provider_errors_for_recovery() {
+            let store = session_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            config.ai.mode = AiMode::Provider;
+            config.ai.api_key_env = Some("MNEMOSYNE_TEST_MISSING_AI_KEY".into());
+            // Ensure the env var is unset so provider mode fails honestly.
+            std::env::remove_var("MNEMOSYNE_TEST_MISSING_AI_KEY");
+
+            let created = create_ai_session_for_session(
+                &store,
+                &config,
+                CreateAiSessionInput { heap_path },
+            )
+            .await
+            .expect("create");
+            let session_id = created
+                .get("session_id")
+                .and_then(Value::as_str)
+                .expect("session_id")
+                .to_string();
+
+            let error = chat_session_for_session(
+                &store,
+                &config,
+                &session_id,
+                "Why is this retaining?",
+                None,
+            )
+            .await
+            .expect_err("missing API key must fail");
+            assert!(
+                error.to_lowercase().contains("api key")
+                    || error.to_lowercase().contains("provider")
+                    || error.to_lowercase().contains("missing"),
+                "unexpected error: {error}"
+            );
+            assert!(
+                !error.to_lowercase().contains("sk-"),
+                "error must not print secret material"
+            );
+        }
+
+        #[tokio::test]
+        async fn chat_session_updates_focus_leak_id() {
+            let store = session_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let mut config = AppConfig::default();
+            config.ai.enabled = true;
+            config.ai.mode = AiMode::Rules;
+
+            let created = create_ai_session_for_session(
+                &store,
+                &config,
+                CreateAiSessionInput { heap_path },
+            )
+            .await
+            .expect("create");
+            let session_id = created
+                .get("session_id")
+                .and_then(Value::as_str)
+                .expect("session_id")
+                .to_string();
+            let focus = created
+                .get("top_leaks")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str)
+                .map(str::to_string);
+
+            // Fixture may have zero leaks; focus switch still must accept None.
+            chat_session_for_session(
+                &store,
+                &config,
+                &session_id,
+                "Explain the focus",
+                focus.as_deref(),
+            )
+            .await
+            .expect("chat");
+
+            let got = get_ai_session_for_session(&store, &session_id).expect("get");
+            if let Some(id) = focus {
+                assert_eq!(got.get("focus_leak_id"), Some(&json!(id)));
+            }
+        }
+
+        #[test]
+        fn ai_session_store_for_config_prefers_explicit_directory() {
+            let dir = tempfile::tempdir().expect("temp");
+            let mut config = AppConfig::default();
+            config.ai.sessions.directory = Some(dir.path().display().to_string());
+            let store = ai_session_store_for_config(&config);
+            let session = PersistedAiSession {
+                session_version: MCP_SESSION_VERSION,
+                session_id: "mcp-test-store".into(),
+                created_at: "1".into(),
+                updated_at: "1".into(),
+                heap_path: "fixture.hprof".into(),
+                analysis: SessionAnalysisSnapshot {
+                    min_severity: mnemosyne_core::analysis::LeakSeverity::Low,
+                    packages: Vec::new(),
+                    leak_types: Vec::new(),
+                    top_leaks: Vec::new(),
+                    summary: mnemosyne_core::HeapSummary {
+                        heap_path: "fixture.hprof".into(),
+                        total_objects: 0,
+                        total_size_bytes: 0,
+                        classes: Vec::new(),
+                        generated_at: std::time::SystemTime::UNIX_EPOCH,
+                        header: None,
+                        total_records: 0,
+                        record_stats: Vec::new(),
+                    },
+                    leaks: Vec::new(),
+                },
+                conversation: SessionConversationSnapshot {
+                    focus_leak_id: None,
+                    history: Vec::new(),
+                },
+            };
+            store.save(&session).expect("save into configured directory");
+            assert!(dir.path().join("mcp-test-store.json").exists());
         }
     }
 }

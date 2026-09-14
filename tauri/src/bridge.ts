@@ -61,4 +61,19 @@ if (isTauri) {
     removeSnapshot: (key) => invoke("remove_snapshot", { key }),
     openSnapshot: (key) => invoke("open_snapshot", { key }),
   };
+
+  // M23.C — thin adapters over shipped MCP AI session / chat_session behavior.
+  hostWindow.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+    createAiSession: (input) =>
+      invoke("create_ai_session", { sourceId: input?.sourceId }),
+    resumeAiSession: (sessionId) => invoke("resume_ai_session", { sessionId }),
+    getAiSession: (sessionId) => invoke("get_ai_session", { sessionId }),
+    closeAiSession: (sessionId) => invoke("close_ai_session", { sessionId }),
+    chatSession: (input) =>
+      invoke("chat_session", {
+        sessionId: input.sessionId,
+        question: input.question,
+        focusLeakId: input.focusLeakId,
+      }),
+  };
 }

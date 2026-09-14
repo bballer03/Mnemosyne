@@ -5,10 +5,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   DEFAULT_HISTORY_MAX_TURNS,
   HARD_MAX_HISTORY_TURNS,
+  OUTBOUND_METADATA_NOTICE,
   appendBoundedTurn,
+  askWithProviderFallback,
   buildRulesModeAnswer,
+  createAiSession,
   displayHeapBasename,
   isProviderChatAvailable,
+  providerRecoveryGuidance,
   runProviderChat,
   type AssistantChatTurn,
   type AssistantSessionContext,
@@ -134,5 +138,102 @@ describe("assistant-bridge-client provider availability", () => {
       question: "Why is this retaining?",
     });
     expect(result).toEqual({ status: "error", error: "provider_timeout" });
+  });
+
+  it("formats machine-readable recovery guidance for timeouts", () => {
+    expect(providerRecoveryGuidance("provider_timeout")).toBe(
+      "recovery=rules_mode_available; error=provider_timeout",
+    );
+  });
+});
+
+describe("assistant-bridge-client create + ask fallback", () => {
+  const context: AssistantSessionContext = {
+    heapDisplayName: "fixture.hprof",
+    focusLeakId: "leak-1",
+    totalObjects: 10,
+  };
+
+  it("creates an opaque session and returns outbound metadata notice", async () => {
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({
+        session_id: "mcp-1",
+        display_name: "fixture.hprof",
+        outbound_metadata: {
+          sends: ["heap_summary_stats", "focused_leak_id_class_severity_description"],
+          never_sends: ["api_keys", "absolute_heap_paths"],
+        },
+      }),
+      chatSession: async () => ({ summary: "ok", model: "rules" }),
+    };
+
+    const created = await createAiSession({ sourceId: "src-opaque" });
+    expect(created.status).toBe("ready");
+    if (created.status === "ready") {
+      expect(created.data.sessionId).toBe("mcp-1");
+      expect(created.data.outboundNotice).toMatch(/api_keys/i);
+      expect(created.data.outboundNotice).not.toMatch(/sk-/i);
+      expect(created.data.displayName).toBe("fixture.hprof");
+    }
+  });
+
+  it("uses chatSession with provider provenance when the bridge succeeds", async () => {
+    let chatCalls = 0;
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({ session_id: "mcp-2", display_name: "fixture.hprof" }),
+      chatSession: async (input) => {
+        chatCalls += 1;
+        expect(input.sessionId).toBe("mcp-2");
+        expect(input.focusLeakId).toBe("leak-1");
+        return { summary: "Provider guidance about leak-1.", model: "gpt-test" };
+      },
+    };
+
+    const result = await askWithProviderFallback({
+      question: "What next?",
+      context,
+    });
+
+    expect(chatCalls).toBe(1);
+    expect(result.turn.provenance).toBe("provider");
+    expect(result.turn.model).toBe("gpt-test");
+    expect(result.turn.answerSummary).toMatch(/Provider guidance/);
+    expect(result.sessionId).toBe("mcp-2");
+    expect(result.outboundNotice ?? OUTBOUND_METADATA_NOTICE).toBeTruthy();
+  });
+
+  it("falls back to rules with recovery guidance on provider error", async () => {
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({ session_id: "mcp-3" }),
+      chatSession: async () => {
+        throw new Error("provider_timeout");
+      },
+    };
+
+    const result = await askWithProviderFallback({
+      question: "What next?",
+      context,
+      sessionId: "mcp-3",
+    });
+
+    expect(result.turn.provenance).toBe("fallback");
+    expect(result.turn.model).toBe("rules");
+    expect(result.notice).toBe("recovery=rules_mode_available; error=provider_timeout");
+    expect(result.turn.answerSummary).not.toMatch(/sk-/i);
+  });
+
+  it("rejects summaries that look like API keys", async () => {
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      chatSession: async () => ({
+        summary: "use key sk-abcdefghijklmnopqrstuvwxyz",
+        model: "gpt-test",
+      }),
+    };
+
+    const result = await runProviderChat({
+      sessionId: "mcp-4",
+      question: "leak?",
+    });
+    expect(result.status).toBe("error");
   });
 });

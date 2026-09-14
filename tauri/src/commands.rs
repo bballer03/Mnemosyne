@@ -22,14 +22,16 @@ use mnemosyne_core::{
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_desktop_session::{
-    close_workflow_for_session, default_snapshot_store, default_workflow_store,
-    describe_workflow_for_session, diff_objects_for_session, find_all_gc_paths_for_session,
-    get_workflow_for_session, graph_has_field_data, install_field_data_cache_if_still_current,
-    inspect_object_for_session, list_snapshots_for_session, next_step_for_session,
-    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
-    regroup_histogram_for_session, remove_snapshot_for_session, save_snapshot_for_session,
-    start_workflow_for_session, DiffObjectsSessionInput, FieldDataCacheCapture,
-    StartWorkflowSessionInput,
+    ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
+    close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
+    default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
+    find_all_gc_paths_for_session, get_ai_session_for_session, get_workflow_for_session,
+    graph_has_field_data, install_field_data_cache_if_still_current, inspect_object_for_session,
+    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
+    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
+    remove_snapshot_for_session, resume_ai_session_for_session, save_snapshot_for_session,
+    start_workflow_for_session, CreateAiSessionInput, DiffObjectsSessionInput,
+    FieldDataCacheCapture, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1056,6 +1058,93 @@ pub async fn get_workflow(workflow_id: String) -> Result<Value, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn close_workflow(workflow_id: String) -> Result<Value, String> {
     close_workflow_for_session(&default_workflow_store(), &workflow_id)
+}
+
+/// M23.C — create a persisted AI session over the currently loaded heap.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn create_ai_session(
+    source_id: Option<String>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let heap_path = if let Some(id) = source_id.as_ref() {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        let resolved = sources
+            .get(id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?;
+        // When a heap is already loaded, the source must address that same file.
+        if let Ok(loaded) = require_loaded_heap_path(&state) {
+            if loaded != resolved {
+                return Err(format!(
+                    "Loaded heap does not match requested source '{id}'"
+                ));
+            }
+        }
+        resolved
+    } else {
+        require_loaded_heap_path(&state)?
+    };
+
+    let config = read_config(&state)?;
+    let store = ai_session_store_for_config(&config);
+    create_ai_session_for_session(
+        &store,
+        &config,
+        CreateAiSessionInput { heap_path },
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn resume_ai_session(
+    session_id: String,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let config = read_config(&state)?;
+    let store = ai_session_store_for_config(&config);
+    resume_ai_session_for_session(&store, &session_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_ai_session(
+    session_id: String,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let config = read_config(&state)?;
+    let store = ai_session_store_for_config(&config);
+    get_ai_session_for_session(&store, &session_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn close_ai_session(
+    session_id: String,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let config = read_config(&state)?;
+    let store = ai_session_store_for_config(&config);
+    close_ai_session_for_session(&store, &session_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn chat_session(
+    session_id: String,
+    question: String,
+    focus_leak_id: Option<String>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let config = read_config(&state)?;
+    let store = ai_session_store_for_config(&config);
+    chat_session_for_session(
+        &store,
+        &config,
+        &session_id,
+        &question,
+        focus_leak_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
