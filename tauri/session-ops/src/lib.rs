@@ -432,10 +432,22 @@ pub async fn next_step_for_session(
     workflow_step_response(&state)
 }
 
-/// Read-only dump of a persisted workflow instance — mirrors MCP `get_workflow`.
+/// Read-only dump of a persisted workflow instance — mirrors MCP `get_workflow`,
+/// but projects `heap_path` to a basename for desktop IPC (Terra path opacity).
 pub fn get_workflow_for_session(store: &WorkflowStore, workflow_id: &str) -> Result<Value, String> {
     let state = store.load(workflow_id).map_err(|error| error.to_string())?;
-    serde_json::to_value(state).map_err(|error| error.to_string())
+    let mut value = serde_json::to_value(state).map_err(|error| error.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(path) = obj.get("heap_path").and_then(|v| v.as_str()) {
+            let basename = Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("heap.dump")
+                .to_string();
+            obj.insert("heap_path".to_string(), Value::String(basename));
+        }
+    }
+    Ok(value)
 }
 
 /// Delete a persisted workflow instance — mirrors MCP `close_workflow`.
@@ -1556,6 +1568,14 @@ mod tests {
                 Some(&json!("thread_local_review"))
             );
             assert_eq!(loaded.get("kind"), Some(&json!("TUNE_GC")));
+            let projected = loaded
+                .get("heap_path")
+                .and_then(Value::as_str)
+                .expect("heap_path");
+            assert!(
+                !projected.contains('/') && !projected.contains('\\'),
+                "desktop get_workflow must project basename only, got {projected}"
+            );
 
             let closed =
                 close_workflow_for_session(&store, &workflow_id).expect("close must succeed");

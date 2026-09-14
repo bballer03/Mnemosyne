@@ -206,8 +206,21 @@ function formatOutboundNotice(raw: unknown): string {
 
 /** Machine-readable recovery hint for provider/timeout failures. */
 export function providerRecoveryGuidance(error: string): string {
-  const normalized = error.trim() || "provider_error";
-  return `recovery=rules_mode_available; error=${normalized}`;
+  return `recovery=rules_mode_available; error=${sanitizeProviderError(error)}`;
+}
+
+/** Strip path-like and secret-like fragments before surfacing provider errors in UI. */
+export function sanitizeProviderError(error: string): string {
+  const trimmed = error.trim() || "provider_error";
+  const withoutPaths = trimmed
+    .replace(/[A-Za-z]:\\[^\s"']+/g, "[redacted-path]")
+    .replace(/\/(?:Users|home|var|tmp|opt|mnt)\/[^\s"']+/g, "[redacted-path]")
+    .replace(/\\\\[^\s"']+/g, "[redacted-path]");
+  const withoutSecrets = withoutPaths
+    .replace(/(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi, "$1=[redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted-key]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]");
+  return withoutSecrets.slice(0, 240);
 }
 
 export async function createAiSession(input?: {

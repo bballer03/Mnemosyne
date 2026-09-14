@@ -145,6 +145,16 @@ describe("assistant-bridge-client provider availability", () => {
       "recovery=rules_mode_available; error=provider_timeout",
     );
   });
+
+  it("redacts path- and secret-like fragments from recovery guidance", () => {
+    const guidance = providerRecoveryGuidance(
+      "failed at /home/user/secret/app.hprof with api_key=sk-live-ABCDEFGHIJKLMNOP",
+    );
+    expect(guidance).toContain("recovery=rules_mode_available");
+    expect(guidance).not.toContain("/home/user");
+    expect(guidance).not.toContain("sk-live");
+    expect(guidance).toMatch(/\[redacted/);
+  });
 });
 
 describe("assistant-bridge-client create + ask fallback", () => {
