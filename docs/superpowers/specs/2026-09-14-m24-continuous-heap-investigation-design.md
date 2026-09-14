@@ -45,6 +45,7 @@ Only: **Open Heap**, **Recent Heaps**, **Import Artifact**. No investigation chr
 ### Workbench (after open)
 
 - Persistent heap identity (basename + opaque `sourceId`)
+- **Open another** and **Close** always available in workbench chrome (not Home-only)
 - Analysis status / mode / provenance
 - Findings queue
 - Global search (bounded; no invented OQL)
@@ -84,8 +85,8 @@ Named “perspectives” as layout presets only (nice-to-have after M24). Not th
 
 | Slice | Goal | Acceptance (one-liner) |
 |---|---|---|
-| **24.A** Workspace shell | Enter a persistent shell on open/import | Shell shows heap identity, mode, provenance, and honest loading/error states |
-| **24.B** Open → triage | Reopen recent; progress/cancel; actionable triage | User can open/reopen, cancel bounded analysis, and get triage or recovery guidance |
+| **24.A** Workspace shell | Enter a persistent shell on open/import; Open another / Close reachable | Shell shows heap identity, mode, provenance, Open another/Close, and honest loading/error states |
+| **24.B** Open → triage | Reopen recent; progress/cancel; actionable triage; transactional replace | User can open/reopen/open-another/close, cancel bounded analysis, and get triage or recovery guidance |
 | **24.C** Synchronized investigation | Shared selection across core panes | Selection + filters/sort/back-forward preserved across Histogram/Dominators/Inspector/GC Paths |
 | **24.D** Guided continuity | Findings + Assistant as advisory | Assistant deep-links into deterministic panes; rules mode works offline; AI labelled |
 | **24.E** Compare + proof | Two-heap compare in same shell + evidence | Match quality visible; keyboard-complete paths; packaged native open→triage evidence (not WSL-only) |
