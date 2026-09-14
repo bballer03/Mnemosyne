@@ -36,6 +36,11 @@ describe("routeFreeTextToWorkflow", () => {
     expect(routeFreeTextToWorkflow("compare this heap to yesterday's")).toBe("compare_snapshots");
   });
 
+  it("routes classloader phrasing to classloader_leak", () => {
+    expect(routeFreeTextToWorkflow("find classloader leaks from redeploy")).toBe("classloader_leak");
+    expect(routeFreeTextToWorkflow("show duplicate classes across loaders")).toBe("classloader_leak");
+  });
+
   it("defaults to triage_memory_leak for unmatched free text", () => {
     expect(routeFreeTextToWorkflow("what's wrong with this heap?")).toBe("triage_memory_leak");
   });
