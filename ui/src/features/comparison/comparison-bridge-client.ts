@@ -23,7 +23,7 @@
 // `nextStep` (14.D scope) join this same bridge or get their own is left
 // for that slice to decide.
 //
-// Tauri wiring (M17 Slice 17.B): `tauri/src/bridge.ts` injects
+// Tauri wiring (M17 Slice 17.B; injection moved to UI host): `ui/src/host/tauri-bridge.ts` injects
 // `__MNEMOSYNE_COMPARISON_BRIDGE__.diffObjects` → native `diff_objects`
 // command over `DiffMode::Object`. The file-load path remains the primary
 // browser fallback; this client-side probe activates live diff when the
