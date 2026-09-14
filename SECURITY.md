@@ -46,6 +46,8 @@ When reporting security issues:
 
 Tagged GitHub Releases may include Tauri desktop installers (`.msi`/`.exe` on Windows,
 `.dmg`/`.app` on macOS, `.deb`/`.AppImage`/`.rpm` on Linux) alongside the CLI archives.
+Post-M21 releases may also attach `Mnemosyne-<version>-windows-x64-portable.zip`
+(**portable with WebView2 prerequisite** — no JVM, but not JVM-free alone).
 
 ### Code signing status
 

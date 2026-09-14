@@ -342,9 +342,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - CI and native-host evidence verify the primary zip launches on a clean supported Windows image with its WebView runtime available. If that cannot be guaranteed without a prerequisite, label the zip “portable with WebView2 prerequisite” and do not describe it as the primary unzip-and-click path.
 
 - [ ] Add archive-manifest tests before packaging logic.
-- [ ] Build the unbundled release executable in CI and package only required runtime files.
+- [x] Build the unbundled release executable in CI and package only required runtime files.
 - [ ] Verify the executable version matches the tag and the archive contains no secrets or build paths.
-- [ ] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
+- [x] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
 - [ ] Run the asset verifier.
 - [ ] Request a Terra review focused on true portability and hidden runtime assumptions.
 
@@ -364,7 +364,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Add app-bundle manifest tests.
 - [ ] Zip the built `.app` with a tool that preserves bundle metadata.
 - [ ] Verify `Info.plist` version/identifier and executable presence.
-- [ ] Keep unsigned Gatekeeper instructions visible when credentials are absent.
+- [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
 - [ ] Run the asset verifier.
 - [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
 
@@ -384,7 +384,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Add asset-manifest tests for both architectures and an explicitly unsupported runner case.
 - [ ] Verify AppImage output exists, is executable, and reports expected architecture.
 - [ ] Normalize the asset name before release upload.
-- [ ] Do not call a build launch-tested unless it runs on a matching native host.
+- [x] Do not call a build launch-tested unless it runs on a matching native host.
 - [ ] Run the asset verifier.
 - [ ] Request a Terra review focused on architecture correctness and runtime dependencies.
 
@@ -403,9 +403,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Unsigned SmartScreen/Gatekeeper warnings and Linux WebKit dependencies remain explicit.
 
 - [ ] Add docs checks that required asset names and “No Java/JVM required” appear consistently.
-- [ ] Replace installer-first wording with the primary portable path and retain package alternatives below it.
+- [x] Replace installer-first wording with the primary portable path and retain package alternatives below it.
 - [ ] Add first-run heap-open screenshots only from synthetic fixtures.
-- [ ] Verify all links and release filename examples.
+- [x] Verify all links and release filename examples.
 - [ ] Request a Terra review focused on a fresh user's ability to succeed without source-build knowledge.
 
 ### Slice 21.F — Release dry run and native-host launch matrix
@@ -424,7 +424,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Run the release dry run at the exact workflow revision.
 - [ ] Launch each portable asset only on a matching native host and record OS/build hash.
 - [ ] Exercise M20 “Open heap dump” with a synthetic fixture on each launched build.
-- [ ] Leave unavailable platform rows explicitly “not launch-tested.”
+- [x] Leave unavailable platform rows explicitly “not launch-tested.”
 - [ ] Run `gitnexus_detect_changes(scope: "all")`.
 - [ ] Request final Terra milestone review; Sol records the M21 closeout verdict.
 

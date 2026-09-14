@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- M21 portable-install honesty polish (docs + packaging readme only): README/user-guide/troubleshooting/SECURITY state unzip→double-click as the goal, label the Windows portable zip **portable with WebView2 prerequisite** (JVM-free alone is not enough), add AppImage WebKit and macOS Gatekeeper/launch caveats, and state that **WSL cannot prove packaged GUI smoke**. `scripts/release/package_windows_portable.ps1` embeds the same README-PORTABLE.txt wording.
+
 ### Added
 - MCP agent-loop completion (M18.A–18.E) — `ci_check` (optional `baseline` / `baseline_snapshot`), `diff_heaps.cross_reference_leaks`, `save_snapshot` / `remove_snapshot`, `generate_flamegraph` with opaque managed artifacts (`read_artifact` / `delete_artifact`, 16 MiB cap, 256 KiB inline, 24h TTL). Slice **18.F** (live transcripts) still open.
 - Desktop guided UX bridge completion (M17) — **shipped with caveats**: Slices **17.A–17.C** shipped — `tauri/src/bridge.ts` injects all four M14 host bridges with seven native-backed methods over existing `mnemosyne_core` behavior (`inspectObject`/`findAllGcPaths`, `diffObjects`, `describeWorkflow`/`startWorkflow`/`nextStep`/`listSnapshots`). Pre-M14 bridge methods unchanged; `getWorkflow`/`closeWorkflow` explicitly not wired (no `ui/src` callers). Command wiring evidenced by `cargo test --features test-fixtures` in `tauri/session-ops/` (24/24 pass). Slice **17.D partial:** packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence deferred to **M21**. See [docs/design/milestone-17-desktop-guided-ux-bridges.md](docs/design/milestone-17-desktop-guided-ux-bridges.md).

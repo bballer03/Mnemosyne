@@ -530,6 +530,20 @@ Treat fix output as a lead, not proof. When in doubt:
 - make sure the `leak-id` came from the same heap and filter set
 - inspect provenance markers before turning a suggestion into code
 
+## 5a. Desktop app (GUI) install honesty
+
+Goal: unzip/mount → double-click. No Java/JVM. Platform webview runtimes still apply.
+
+| Symptom | Likely cause | What to do |
+| --- | --- | --- |
+| Windows portable `Mnemosyne.exe` fails immediately with a WebView/runtime error | Missing **WebView2** (zip is **portable with WebView2 prerequisite**) | Install Microsoft Edge WebView2 Runtime (Evergreen), then retry. Do not assume JVM-free alone is enough. |
+| SmartScreen blocks first Windows launch | Unsigned installer/exe (default when CI signing secrets are absent) | See [SECURITY.md](../SECURITY.md#desktop-app-distribution-m16): More info → Run anyway, or unblock in Properties. |
+| macOS “cannot be opened” / Gatekeeper | Unsigned `.app` / `.dmg` | Right-click → Open → confirm once ([SECURITY.md](../SECURITY.md#desktop-app-distribution-m16)). |
+| Linux AppImage or `.deb` fails to start | Missing **WebKitGTK** (common on minimal distros) | Install WebKitGTK 4.1 for your distro (e.g. `libwebkit2gtk-4.1-0` on Debian/Ubuntu), then retry. CI AppImage ≠ launch-tested. |
+| “It works in CI / WSL so the GUI must launch” | **WSL cannot prove packaged GUI smoke** | Use a matching native Windows, macOS, or Linux host for launch claims. |
+
+Full per-OS steps: [README Desktop app](../README.md#desktop-app-gui).
+
 ## 6. Getting Help
 
 If you are stuck after the checks above, the most useful next step is to file a precise issue rather than a generic "it failed" report.

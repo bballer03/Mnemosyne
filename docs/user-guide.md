@@ -27,7 +27,19 @@ What makes it different from a basic heap-summary tool is that the lightweight p
 
 ## 2. Installation
 
-Mnemosyne currently ships through five distribution channels. Use the one that matches your environment, then refer to [../README.md](../README.md) for the full install steps and release-specific details.
+Mnemosyne ships CLI and (on post-M16 tags) desktop GUI channels. Use the path that matches your environment; full release filenames and signing notes live in [../README.md](../README.md).
+
+### Desktop app (GUI) — unzip → double-click goal
+
+**Goal:** download → unzip/mount → double-click. No Java/JVM or developer toolchain.
+
+**Honesty:**
+- **JVM-free alone is not enough.** Windows needs the **WebView2** runtime; Linux AppImage/deb paths need **WebKitGTK** on many distros; macOS unsigned builds may hit **Gatekeeper**.
+- Prefer `Mnemosyne-<version>-windows-x64-portable.zip` on Windows when attached to the release: unzip → double-click `Mnemosyne.exe`, labeled **portable with WebView2 prerequisite**.
+- Prefer the AppImage on Linux (`chmod +x`, then run) and the `.dmg` / `.app` on macOS; keep MSI/setup, `.deb`, and `.rpm` for managed installs.
+- **WSL cannot prove packaged GUI smoke.** Treat WSL work as command/unit/build evidence only; launch claims need matching native hosts.
+
+First-run intent (when the desktop shell is available): open the app → choose an `.hprof` → select an analysis profile → investigate. See the README Desktop section for per-OS steps and [../SECURITY.md](../SECURITY.md#desktop-app-distribution-m16) for SmartScreen/Gatekeeper workarounds.
 
 ### Cargo install
 
@@ -35,7 +47,7 @@ Mnemosyne currently ships through five distribution channels. Use the one that m
 cargo install mnemosyne-cli
 ```
 
-### GitHub Releases
+### GitHub Releases (CLI)
 
 Download the tagged `mnemosyne-cli` archive for your platform from the repository Releases page. The README covers the current release artifacts and supported targets.
 

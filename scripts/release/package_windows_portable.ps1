@@ -26,13 +26,16 @@ $readme = @"
 Mnemosyne portable (Windows x64)
 Version: $Version
 
-Unzip this archive and double-click Mnemosyne.exe.
+Goal: unzip this archive and double-click Mnemosyne.exe.
+No Java/JVM or developer toolchain required.
 
 Prerequisite: Microsoft Edge WebView2 Runtime (Evergreen).
+JVM-free alone is not enough — WebView2 must be present.
 Windows 10/11 images that already include WebView2 can unzip-and-click.
 If the app fails to start with a WebView/runtime error, install WebView2 from Microsoft, then retry.
 
 This package is labeled: portable with WebView2 prerequisite.
+It is not a silent offline single-file drop-in and is not launch-proven from WSL.
 "@
 Set-Content -Path (Join-Path $stage "README-PORTABLE.txt") -Value $readme -Encoding UTF8
 
