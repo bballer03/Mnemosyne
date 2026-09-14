@@ -2,7 +2,7 @@ import {
   getRememberedDesktopHeapSource,
   rememberDesktopHeapSource,
 } from "../artifact-loader/desktop-heap-session";
-import { pickHeapFile } from "../artifact-loader/desktop-heap-client";
+import { getDesktopHeapBridge, pickHeapFile } from "../artifact-loader/desktop-heap-client";
 
 export type CiCheckInput = {
   sourceId: string;
@@ -37,21 +37,8 @@ export type CiCheckResponse = {
   evaluation_complete: boolean;
 };
 
-type DesktopPolicyBridge = {
-  runCiCheck?: (input: CiCheckInput) => Promise<unknown>;
-};
-
-declare global {
-  interface Window {
-    __MNEMOSYNE_DESKTOP_HEAP_BRIDGE__?: DesktopPolicyBridge & Record<string, unknown>;
-  }
-}
-
-function getBridge(): DesktopPolicyBridge | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-  return window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
+function getBridge() {
+  return getDesktopHeapBridge();
 }
 
 export function isCiCheckAvailable(): boolean {

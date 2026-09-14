@@ -25,10 +25,10 @@ export type DesktopAnalysisInput = {
   minCollectionCapacity?: number;
 };
 
-type DesktopHeapBridge = {
-  pickHeapFile: () => Promise<PickHeapFileResult>;
-  loadHeapFromSource: (sourceId: string) => Promise<HeapLoadSummary>;
-  runDesktopAnalysis: (input: DesktopAnalysisInput) => Promise<unknown>;
+export type DesktopHeapBridge = {
+  pickHeapFile?: () => Promise<PickHeapFileResult>;
+  loadHeapFromSource?: (sourceId: string) => Promise<HeapLoadSummary>;
+  runDesktopAnalysis?: (input: DesktopAnalysisInput) => Promise<unknown>;
   runCiCheck?: (input: {
     sourceId: string;
     policyToml: string;
@@ -59,7 +59,7 @@ export function getDesktopHeapBridge(): DesktopHeapBridge | undefined {
 
 export async function pickHeapFile(): Promise<PickHeapFileResult> {
   const bridge = getDesktopHeapBridge();
-  if (!bridge) {
+  if (!bridge?.pickHeapFile) {
     return { status: "unavailable" };
   }
 
@@ -68,7 +68,7 @@ export async function pickHeapFile(): Promise<PickHeapFileResult> {
 
 export async function loadHeapFromSource(sourceId: string): Promise<HeapLoadSummary> {
   const bridge = getDesktopHeapBridge();
-  if (!bridge) {
+  if (!bridge?.loadHeapFromSource) {
     throw new Error("Desktop heap loading is unavailable in this environment.");
   }
 
@@ -77,7 +77,7 @@ export async function loadHeapFromSource(sourceId: string): Promise<HeapLoadSumm
 
 export async function runDesktopAnalysis(input: DesktopAnalysisInput): Promise<unknown> {
   const bridge = getDesktopHeapBridge();
-  if (!bridge) {
+  if (!bridge?.runDesktopAnalysis) {
     throw new Error("Desktop analysis is unavailable in this environment.");
   }
 
