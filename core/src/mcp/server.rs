@@ -1,12 +1,14 @@
 use crate::{
     analysis::{
-        analyze_heap, analyze_heap_from_graph, detect_duplicate_classes, detect_leaks, focus_leaks,
-        generate_ai_chat_turn_async, generate_ai_insights_async, validate_leak_id, AiChatTurn,
-        AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind, LeakSeverity,
+        analyze_heap, analyze_heap_from_graph, analyze_heap_with_graph, detect_duplicate_classes,
+        detect_leaks, focus_leaks, generate_ai_chat_turn_async, generate_ai_insights_async,
+        validate_leak_id, AiChatTurn, AnalysisMode, AnalyzeRequest, LeakDetectionOptions, LeakKind,
+        LeakSeverity,
     },
     config::AppConfig,
     diff::{DiffMode, DiffRequest, DiffResult, IdentityStrategy},
     errors::{CoreError, CoreResult},
+    evaluate,
     fix::{propose_fix_for_leaks_with_config, propose_fix_with_config, FixRequest, FixStyle},
     graph::{
         find_all_gc_paths, find_all_gc_paths_in_graph, find_gc_path, find_gc_path_in_graph,
@@ -14,15 +16,16 @@ use crate::{
     },
     hprof::{parse_heap, parse_hprof_overview_file, HeapParseJob, OverviewOptions},
     mapper::{map_to_code, MapToCodeRequest},
+    mcp::artifact::{default_artifact_dir, ArtifactStore},
     mcp::session::{
         new_session_id, timestamp_now, top_leak_ids, McpSessionStore, PersistedAiSession,
         SessionAnalysisSnapshot, SessionConversationSnapshot, MCP_SESSION_VERSION,
     },
     query::{execute_query, parse_query},
+    report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     snapshot::{SnapshotPayload, SnapshotStore},
     workflow::{WorkflowKind, WorkflowState, WorkflowStore},
-    evaluate, Policy, PolicyInput, PolicyResult, Predicate, Severity, HistogramGroupBy,
-    ParseOptions,
+    HistogramGroupBy, ParseOptions, Policy, PolicyInput, PolicyResult, Predicate, Severity,
 };
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,7 @@ pub struct McpServerOptions {
 /// responses on stdout.
 pub async fn serve(options: McpServerOptions, config: AppConfig) -> CoreResult<()> {
     info!(host = %options.host, port = options.port, "starting MCP server over stdio");
+    ArtifactStore::new(default_artifact_dir()).cleanup_expired();
 
     let stdin = io::stdin();
     let reader = BufReader::new(stdin);
@@ -321,6 +325,24 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": detail })),
             },
+            CoreError::Unsupported(detail)
+                if detail.starts_with("artifact_size_limit_exceeded:") =>
+            {
+                diff_feature_error_details("artifact_size_limit_exceeded", detail)
+            }
+            CoreError::Unsupported(detail)
+                if matches!(detail.as_str(), "artifact_not_found" | "artifact_expired") =>
+            {
+                Self {
+                    code: if detail == "artifact_expired" {
+                        "artifact_expired"
+                    } else {
+                        "artifact_not_found"
+                    },
+                    message,
+                    details: Some(json!({ "detail": detail })),
+                }
+            }
             CoreError::Unsupported(detail) => Self {
                 code: "unsupported",
                 message,
@@ -726,6 +748,61 @@ struct SaveSnapshotParams {
 #[derive(Debug, Deserialize)]
 struct RemoveSnapshotParams {
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GenerateFlamegraphParams {
+    heap_path: String,
+    #[serde(default)]
+    snapshot: Option<String>,
+    #[serde(default = "default_flame_root")]
+    root: FlameRoot,
+    #[serde(default)]
+    format: McpFlameFormat,
+    #[serde(default = "default_flame_min_fraction")]
+    min_fraction: f64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default = "default_flame_max_frames")]
+    max_frames: usize,
+    #[serde(default)]
+    mode: AnalysisMode,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadArtifactParams {
+    artifact_id: String,
+    #[serde(default)]
+    offset_bytes: u64,
+    #[serde(default = "default_artifact_read_max")]
+    max_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteArtifactParams {
+    artifact_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+enum McpFlameFormat {
+    #[default]
+    Svg,
+    FoldedStack,
+    Json,
+}
+
+fn default_flame_min_fraction() -> f64 {
+    0.001
+}
+fn default_flame_max_frames() -> usize {
+    5_000
+}
+fn default_flame_root() -> FlameRoot {
+    FlameRoot::Dominator
+}
+fn default_artifact_read_max() -> u64 {
+    crate::mcp::artifact::ARTIFACT_INLINE_MAX_BYTES
 }
 
 #[derive(Debug, Deserialize)]
@@ -1141,10 +1218,7 @@ fn load_ci_check_policy(params: &CiCheckParams) -> CoreResult<Policy> {
 }
 
 fn ci_check_policy_label(params: &CiCheckParams) -> &str {
-    params
-        .policy_path
-        .as_deref()
-        .unwrap_or("(inline policy)")
+    params.policy_path.as_deref().unwrap_or("(inline policy)")
 }
 
 fn is_explicit_overview_mode_mismatch(violation: &crate::Violation) -> bool {
@@ -1615,6 +1689,34 @@ fn tool_catalog() -> Value {
                 "output_schema": "{ removed: true, key: string }"
             },
             {
+                "name": "generate_flamegraph",
+                "description": "Render a deep-only flamegraph into a managed artifact; inline artifacts are returned only up to 256 KiB.",
+                "params": [
+                    { "name": "heap_path", "type": "string", "required": true },
+                    { "name": "snapshot", "type": "string", "required": false },
+                    { "name": "root", "type": "string", "required": false, "default": "dominator", "enum": ["dominator", "class-hierarchy", "gc-root-path"] },
+                    { "name": "format", "type": "string", "required": false, "default": "svg", "enum": ["svg", "folded-stack", "json"] },
+                    { "name": "min_fraction", "type": "number", "required": false, "default": 0.001 },
+                    { "name": "title", "type": "string", "required": false },
+                    { "name": "max_frames", "type": "number", "required": false, "default": 5000 },
+                    analysis_mode_param()
+                ]
+            },
+            {
+                "name": "read_artifact",
+                "description": "Read a bounded chunk from a managed artifact.",
+                "params": [
+                    { "name": "artifact_id", "type": "string", "required": true },
+                    { "name": "offset_bytes", "type": "number", "required": false, "default": 0 },
+                    { "name": "max_bytes", "type": "number", "required": false, "default": 262144 }
+                ]
+            },
+            {
+                "name": "delete_artifact",
+                "description": "Immediately delete a managed artifact.",
+                "params": [{ "name": "artifact_id", "type": "string", "required": true }]
+            },
+            {
                 "name": "detect_classloader_leaks",
                 "description": "Cross-loader duplicate-class detection -- the classic Tomcat/Jetty/Spring hot-redeploy leak pattern.",
                 "params": [
@@ -1721,6 +1823,65 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             let store = snapshot_store();
             store.remove(&store_key)?;
             Ok(json!({ "removed": true, "key": store_key }))
+        }
+        "generate_flamegraph" => {
+            let params: GenerateFlamegraphParams = serde_json::from_value(packet.params)?;
+            let mode = resolve_heap_mode(&params.heap_path, params.mode)?;
+            if mode == AnalysisMode::Overview {
+                return Err(CoreError::FeatureUnavailableInOverviewMode {
+                    feature: "generate_flamegraph".into(),
+                    hint: "rerun with mode=deep; flamegraphs require object-graph analysis".into(),
+                });
+            }
+            let (graph, dominator) = if let Some(snapshot) = params.snapshot.as_deref() {
+                let payload = snapshot_store().load_checked(snapshot, &params.heap_path)?;
+                (payload.object_graph, payload.dominator_tree)
+            } else {
+                let request = AnalyzeRequest {
+                    heap_path: params.heap_path.clone(),
+                    config: config.clone(),
+                    ..AnalyzeRequest::default()
+                };
+                let (_, graph, dominator) = analyze_heap_with_graph(request).await?;
+                (graph, dominator)
+            };
+            let stacks = collapse(
+                params.root,
+                &graph,
+                &dominator,
+                &CollapseOptions {
+                    min_fraction: params.min_fraction,
+                    max_frames: params.max_frames,
+                },
+            );
+            let (format, media_type, format_name) = match params.format {
+                McpFlameFormat::Svg => (FlameFormat::Svg, "image/svg+xml", "svg"),
+                McpFlameFormat::FoldedStack => {
+                    (FlameFormat::FoldedStack, "text/plain", "folded-stack")
+                }
+                McpFlameFormat::Json => (FlameFormat::Json, "application/json", "json"),
+            };
+            let title = params.title.clone();
+            let store = ArtifactStore::new(default_artifact_dir());
+            let response = store.create(format_name, media_type, |writer| {
+                render(&stacks, format, title.as_deref(), writer)
+            })?;
+            Ok(serde_json::to_value(response)?)
+        }
+        "read_artifact" => {
+            let params: ReadArtifactParams = serde_json::from_value(packet.params)?;
+            let store = ArtifactStore::new(default_artifact_dir());
+            Ok(serde_json::to_value(store.read(
+                &params.artifact_id,
+                params.offset_bytes,
+                params.max_bytes,
+            )?)?)
+        }
+        "delete_artifact" => {
+            let params: DeleteArtifactParams = serde_json::from_value(packet.params)?;
+            let store = ArtifactStore::new(default_artifact_dir());
+            store.delete(&params.artifact_id)?;
+            Ok(json!({ "deleted": true, "artifact_id": params.artifact_id }))
         }
         "parse_heap" => {
             let params: ParseHeapParams = serde_json::from_value(packet.params)?;
@@ -3576,13 +3737,9 @@ mod tests {
         let file = write_fixture();
         let heap_path = file.path().to_string_lossy().into_owned();
 
-        let result = diff_heaps_result(
-            &heap_path,
-            &heap_path,
-            json!({ "mode": "object" }),
-        )
-        .await
-        .expect("diff_heaps object mode should succeed");
+        let result = diff_heaps_result(&heap_path, &heap_path, json!({ "mode": "object" }))
+            .await
+            .expect("diff_heaps object mode should succeed");
 
         let object_diff = result
             .get("object_diff")
@@ -5238,11 +5395,16 @@ mod tests {
             "baseline",
             "baseline_snapshot",
         ] {
-            assert!(names.contains(&expected), "ci_check params missing {expected}");
+            assert!(
+                names.contains(&expected),
+                "ci_check params missing {expected}"
+            );
         }
         assert_eq!(
             tool.get("output_schema"),
-            Some(&json!("{ result: PolicyResult, exit_code: number, fail_on: string }"))
+            Some(&json!(
+                "{ result: PolicyResult, exit_code: number, fail_on: string }"
+            ))
         );
     }
 
@@ -5265,12 +5427,10 @@ mod tests {
 
         assert_eq!(result.get("exit_code"), Some(&json!(0)));
         let policy_result = result.get("result").expect("structured result");
-        assert!(
-            policy_result
-                .get("violations")
-                .and_then(Value::as_array)
-                .is_some_and(|violations| violations.is_empty())
-        );
+        assert!(policy_result
+            .get("violations")
+            .and_then(Value::as_array)
+            .is_some_and(|violations| violations.is_empty()));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5295,11 +5455,9 @@ mod tests {
             .pointer("/result/violations")
             .and_then(Value::as_array)
             .expect("violations array");
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.get("rule_id") == Some(&json!("heap-budget")))
-        );
+        assert!(violations
+            .iter()
+            .any(|violation| violation.get("rule_id") == Some(&json!("heap-budget"))));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5373,7 +5531,9 @@ mod tests {
             value
                 .pointer("/error_details/message")
                 .and_then(Value::as_str)
-                .is_some_and(|message| message.contains("object_growth_threshold_requires_baseline")),
+                .is_some_and(
+                    |message| message.contains("object_growth_threshold_requires_baseline")
+                ),
             "{value}"
         );
     }
@@ -5534,11 +5694,9 @@ mod tests {
             .pointer("/result/violations")
             .and_then(Value::as_array)
             .expect("violations array");
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.get("rule_id") == Some(&json!("no-critical-leaks")))
-        );
+        assert!(violations
+            .iter()
+            .any(|violation| violation.get("rule_id") == Some(&json!("no-critical-leaks"))));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -6006,5 +6164,63 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("heap_path is required"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn generate_flamegraph_rejects_overview_mode_with_structured_error() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&build_overview_only_fixture()).unwrap();
+
+        let err = handle_request(
+            RpcRequest {
+                id: json!(1),
+                method: "generate_flamegraph".into(),
+                params: json!({
+                    "heap_path": file.path().to_string_lossy(),
+                    "mode": "overview",
+                }),
+            },
+            &AppConfig::default(),
+        )
+        .await
+        .unwrap_err();
+
+        let response = RpcResponse::from_core_error(json!(1), &err);
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("feature_unavailable_in_overview_mode"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/feature"),
+            Some(&json!("generate_flamegraph"))
+        );
+    }
+
+    #[test]
+    fn artifact_size_error_exposes_machine_readable_limits() {
+        let error = CoreError::Unsupported(
+            "artifact_size_limit_exceeded: exceeded render limit (limit_bytes=16777216, observed_bytes=16777217, format=svg)"
+                .into(),
+        );
+        let response = RpcResponse::from_core_error(json!(1), &error);
+        let value = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            value.pointer("/error_details/code"),
+            Some(&json!("artifact_size_limit_exceeded"))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/limit_bytes"),
+            Some(&json!(16_777_216))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/observed_bytes"),
+            Some(&json!(16_777_217))
+        );
+        assert_eq!(
+            value.pointer("/error_details/details/format"),
+            Some(&json!("svg"))
+        );
     }
 }
