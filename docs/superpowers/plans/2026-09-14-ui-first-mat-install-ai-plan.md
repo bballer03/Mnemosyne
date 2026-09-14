@@ -367,10 +367,10 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Signing/notarization status is written into the asset manifest from observed codesign results.
 
 - [ ] Add app-bundle manifest tests.
-- [ ] Zip the built `.app` with a tool that preserves bundle metadata.
+- [x] Zip the built `.app` with a tool that preserves bundle metadata. (`normalize_desktop_assets.py` zips `Mnemosyne.app` → frozen `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` when `--macos-arch` is set; wired in `release.yml` after Tauri build. **Not** launch-tested; deeper Info.plist/executable-bit checks still open.)
 - [ ] Verify `Info.plist` version/identifier and executable presence.
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
-- [x] Run the asset verifier. (same CI warn-mode step as 21.B; frozen macOS app-zip names not yet normalized — findings expected)
+- [x] Run the asset verifier. (CI warn-mode after in-place normalize; frozen macOS app-zip names produced when `.app` exists — not fail-closed / not launch proof)
 - [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
 
 ### Slice 21.D — Make AppImage the primary portable Linux path
@@ -388,9 +388,9 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 
 - [ ] Add asset-manifest tests for both architectures and an explicitly unsupported runner case.
 - [ ] Verify AppImage output exists, is executable, and reports expected architecture.
-- [ ] Normalize the asset name before release upload.
+- [x] Normalize the asset name before release upload. (`normalize_desktop_assets.py`: Tauri `Mnemosyne_<ver>_{amd64,aarch64,arm64}.AppImage` → frozen `Mnemosyne-<ver>-linux-{x86_64,aarch64}.AppImage`; build job `--out-dir dist-normalized` + release job `--in-place`. **Not** launch-tested.)
 - [x] Do not call a build launch-tested unless it runs on a matching native host.
-- [x] Run the asset verifier. (same CI warn-mode step as 21.B; AppImage name normalization still open — findings expected)
+- [x] Run the asset verifier. (CI warn-mode after normalize; not fail-closed / not launch proof)
 - [ ] Request a Terra review focused on architecture correctness and runtime dependencies.
 
 ### Slice 21.E — Rewrite installation and first-run documentation

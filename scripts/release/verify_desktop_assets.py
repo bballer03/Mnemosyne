@@ -84,14 +84,19 @@ def fallback_filenames(version: str) -> set[str]:
     return {
         f"Mnemosyne_{version}_x64_en-US.msi",
         f"Mnemosyne_{version}_x64-setup.exe",
+        # Frozen fallback DMG names (normalize_desktop_assets.py).
+        f"Mnemosyne-{version}-macos-aarch64.dmg",
+        f"Mnemosyne-{version}-macos-x64.dmg",
+        # Transitional Tauri DMG names (pre-normalize / accidental upload).
         f"Mnemosyne_{version}_aarch64.dmg",
         f"Mnemosyne_{version}_x64.dmg",
         f"Mnemosyne_{version}_amd64.deb",
         f"Mnemosyne_{version}_arm64.deb",
         f"Mnemosyne-{version}-1.x86_64.rpm",
         f"Mnemosyne-{version}-1.aarch64.rpm",
-        # Transitional Tauri AppImage names until 21.D normalization lands in CI.
+        # Transitional Tauri AppImage names (allowed if normalize missed a file).
         f"Mnemosyne_{version}_amd64.AppImage",
+        f"Mnemosyne_{version}_aarch64.AppImage",
         f"Mnemosyne_{version}_arm64.AppImage",
     }
 

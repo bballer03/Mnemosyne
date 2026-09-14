@@ -339,12 +339,37 @@ jobs:
           # attaches these bundles to the same tagged release the CLI
           # archives publish to, via artifactPaths + upload-artifact.
 
+      # M21.C/D — map Tauri output names → frozen primaries (AppImage, macOS app zip)
+      # and frozen fallback DMGs. WSL-safe rename/zip only; not launch-tested.
+      - name: Normalize desktop asset names
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist-normalized
+          arch_args=()
+          case "${TARGET}" in
+            aarch64-apple-darwin) arch_args=(--macos-arch aarch64) ;;
+            x86_64-apple-darwin) arch_args=(--macos-arch x64) ;;
+          esac
+          python3 scripts/release/normalize_desktop_assets.py \
+            --version "${TAG_VERSION}" \
+            --search-root tauri/target \
+            --out-dir dist-normalized \
+            "${arch_args[@]}"
+          echo "Normalized desktop assets (not launch proof):"
+          if [[ -d dist-normalized ]]; then
+            find dist-normalized -type f | sed 's|.*/||' | sort || true
+          fi
+
       - name: Upload desktop bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ matrix.target }}
           path: |
             ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '\n') }}
+            dist-normalized/*
           if-no-files-found: error
 
       - name: Package Windows portable zip
@@ -445,10 +470,26 @@ jobs:
           merge-multiple: true
           path: dist
 
+      # M21.C/D — Rename any leftover Tauri basenames under dist/ to frozen names
+      # before checksums. Build job also writes dist-normalized/*; this catches
+      # artifacts that arrived only via tauri-action artifactPaths. Not launch proof.
+
+      - name: Normalize desktop asset names in dist
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/normalize_desktop_assets.py \
+            --version "${TAG_VERSION}" \
+            --dist dist \
+            --in-place
+          echo "dist/ after normalize (basenames; not launch proof):"
+          find dist -type f | sed 's|.*/||' | sort
+
       # M21.B/C/D — Checksums + warn-mode name verify (WSL-safe; not launch proof).
       # Emits SHA256SUMS (+ asset-manifest.json) for desktop-like files in dist/.
-      # Verifier runs with --allow-warnings until macOS/AppImage name normalization
-      # and a strict fail-closed gate land (21.C/D/F). Green here ≠ GUI launch-tested.
+      # Verifier still uses --allow-warnings until a strict fail-closed gate (21.F)
+      # and native-host evidence land. Green here ≠ GUI launch-tested.
 
       - name: Generate desktop SHA256SUMS
         env:
@@ -469,8 +510,8 @@ jobs:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
         run: |
           set -euo pipefail
-          # Warn-only: missing frozen primaries / transitional Tauri names are
-          # expected until 21.C/D normalize uploads. Does not fail the release.
+          # Warn-only until strict gate + native launch matrix (21.F). Normalize
+          # should produce frozen AppImage/macOS names when builds succeeded.
           python3 scripts/release/verify_desktop_assets.py \
             --dist dist \
             --version "${TAG_VERSION}" \

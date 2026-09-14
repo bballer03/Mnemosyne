@@ -1,6 +1,6 @@
 # Milestone 21 — Eclipse-Style Portable Installability
 
-> **Status:** 🟡 Partial — Slice **21.A** asset-name freeze + WSL-safe verifier shipped; **21.B/C/D** CI emits desktop `SHA256SUMS` + `asset-manifest.json` and runs verifier in **warn mode** (not fail-closed). Windows portable packaging script/CI step exist with WebView2 honesty. **Not claimed:** native Windows/macOS/Linux launch matrix, strict checksum/manifest gate on every release, or AppImage/macOS name normalization in upload.
+> **Status:** 🟡 Partial — Slice **21.A** asset-name freeze + WSL-safe verifier shipped; **21.B** Windows portable zip + checksums/warn-mode verify; **21.C/D** `normalize_desktop_assets.py` maps Tauri AppImage/DMG names → frozen names and zips `Mnemosyne.app` when present (wired in `release.yml`). Verifier still **warn mode** (not fail-closed). **Not claimed:** native Windows/macOS/Linux launch matrix, strict checksum/manifest gate on every release, or GUI smoke.
 > **Parent plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) (M21)
 > **Last updated:** 2026-09-14
 
@@ -8,7 +8,7 @@
 
 Release assets support download → unzip/mount → double-click without a JVM or developer toolchain, with honest WebView/WebKit prerequisites and no claim that CI build success equals launch success.
 
-## Frozen primary click-to-run names (21.A)
+## Frozen primary click-to-run names (21.A / 21.C / 21.D)
 
 `<version>` is the release tag without a leading `v`.
 
@@ -20,7 +20,16 @@ Release assets support download → unzip/mount → double-click without a JVM o
 | Linux x86_64 AppImage | `Mnemosyne-<version>-linux-x86_64.AppImage` |
 | Linux aarch64 AppImage | `Mnemosyne-<version>-linux-aarch64.AppImage` |
 
-Documented **fallback** installers (allowed by the verifier, not required for the portable gate) keep today’s Tauri-ish names: `.msi` / `-setup.exe`, `.dmg`, `.deb` / `.rpm`, plus transitional `Mnemosyne_<version>_amd64.AppImage` / `_arm64.AppImage` until Slice 21.D normalizes uploads.
+### Frozen fallback installers (allowed, not required for the portable gate)
+
+| Role | Frozen fallback filename | Typical Tauri source (normalized away) |
+| --- | --- | --- |
+| macOS Apple Silicon DMG | `Mnemosyne-<version>-macos-aarch64.dmg` | `Mnemosyne_<version>_aarch64.dmg` |
+| macOS Intel DMG | `Mnemosyne-<version>-macos-x64.dmg` | `Mnemosyne_<version>_x64.dmg` |
+| Windows MSI / NSIS | `Mnemosyne_<version>_x64_en-US.msi`, `Mnemosyne_<version>_x64-setup.exe` | (unchanged Tauri names) |
+| Linux deb / rpm | `Mnemosyne_<version>_amd64.deb` / `_arm64.deb`, `Mnemosyne-<version>-1.x86_64.rpm` / `.aarch64.rpm` | (unchanged) |
+
+`scripts/release/normalize_desktop_assets.py` renames AppImage + DMG sources above and, when `--macos-arch` is set, zips `Mnemosyne.app` → the frozen macOS app zip. Transitional Tauri AppImage/DMG basenames remain **allowed** by the verifier if a normalize miss leaves them on disk.
 
 ## Verifier (WSL-safe)
 
@@ -37,6 +46,23 @@ python3 scripts/release/verify_desktop_assets.py \
   --allow-warnings
 ```
 
+Normalize (Tauri → frozen; no launch claim):
+
+```bash
+# After a local/CI Tauri build tree:
+python3 scripts/release/normalize_desktop_assets.py \
+  --version 0.3.1 \
+  --search-root tauri/target \
+  --out-dir dist-normalized \
+  --macos-arch aarch64   # or x64; omit on Linux
+
+# In-place rename under an assembled release dist/:
+python3 scripts/release/normalize_desktop_assets.py \
+  --version 0.3.1 \
+  --dist dist \
+  --in-place
+```
+
 Checksum generation (desktop-like files only; no launch claim):
 
 ```bash
@@ -47,11 +73,12 @@ python3 scripts/release/generate_sha256sums.py \
   --manifest auto
 ```
 
-Tests (synthetic `dist/` only — no GUI launch):
+Tests (synthetic trees only — no GUI launch):
 
 ```bash
 python3 scripts/tests/test_verify_desktop_assets.py
 python3 scripts/tests/test_generate_sha256sums.py
+python3 scripts/tests/test_normalize_desktop_assets.py
 ```
 
 The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required). With `--allow-warnings`, findings are printed but exit status stays 0.
@@ -59,15 +86,15 @@ The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-li
 ## Packaging honesty already on this branch
 
 - `scripts/release/package_windows_portable.ps1` builds `Mnemosyne-<version>-windows-x64-portable.zip` and labels it **portable with WebView2 prerequisite**.
-- `release.yml` packages/uploads that zip on the Windows desktop matrix leg.
+- `scripts/release/normalize_desktop_assets.py` + `release.yml` normalize AppImage/DMG names and produce macOS app zips when `.app` exists after Tauri build.
 - `release.yml` generates desktop `SHA256SUMS` + `asset-manifest.json` and runs warn-mode verify before attaching `dist/*` to the GitHub Release.
 - Docs already state WSL cannot prove packaged GUI smoke.
 
 ## Remaining M21 gaps (not closed here)
 
-- Fail the release job when required frozen primaries / checksums are absent (strict gate after 21.C/D name normalization).
-- Normalize macOS app zip and Linux AppImage upload names to the frozen table (21.C / 21.D).
+- Fail the release job when required frozen primaries / checksums are absent (strict gate — 21.F).
 - Native-host launch matrix + evidence doc (21.F); no WSL launch claim.
+- Full macOS bundle integrity checks (Info.plist / executable bits) and AppImage arch metadata probes beyond rename.
 - Docs polish / Terra reviews per plan slices 21.B–21.F.
 
 ## Non-goals
