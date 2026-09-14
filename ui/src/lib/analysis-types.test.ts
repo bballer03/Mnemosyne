@@ -746,4 +746,44 @@ describe("parseAnalysisArtifact", () => {
     expect(parsed.referrerReport).toBeUndefined();
     expect(parsed.threadReport).toBeUndefined();
   });
+
+  it("parses array_report duplicate groups from snake_case JSON (M19.A)", () => {
+    const parsed = parseAnalysisArtifact({
+      ...buildArtifactWithOptionalAnalyzers(),
+      array_report: {
+        total_arrays: 12,
+        unique_contents: 8,
+        total_duplicate_waste: 4096,
+        duplicate_groups: [
+          {
+            element_type: "byte",
+            content_hash: 3735928559,
+            length: 64,
+            count: 3,
+            total_wasted_bytes: 2048,
+          },
+        ],
+      },
+    });
+
+    expect(parsed.arrayReport).toEqual({
+      totalArrays: 12,
+      uniqueContents: 8,
+      totalDuplicateWaste: 4096,
+      duplicateGroups: [
+        {
+          elementType: "byte",
+          contentHash: 3735928559,
+          length: 64,
+          count: 3,
+          totalWastedBytes: 2048,
+        },
+      ],
+    });
+  });
+
+  it("leaves arrayReport undefined on older artifacts without array_report (no fabricated zeroes)", () => {
+    const parsed = parseAnalysisArtifact(buildArtifactWithOptionalAnalyzers());
+    expect(parsed.arrayReport).toBeUndefined();
+  });
 });

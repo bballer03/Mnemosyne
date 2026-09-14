@@ -133,6 +133,19 @@ export type AnalysisArtifact = {
       retainedBytes?: number;
     }>;
   };
+  /** M15/M19: duplicate primitive-array content (`array_report` in JSON). Absent on older artifacts. */
+  arrayReport?: {
+    totalArrays: number;
+    uniqueContents: number;
+    duplicateGroups: Array<{
+      elementType: string;
+      contentHash: number;
+      length: number;
+      count: number;
+      totalWastedBytes: number;
+    }>;
+    totalDuplicateWaste: number;
+  };
   collectionReport?: {
     totalCollections: number;
     totalWasteBytes: number;
@@ -371,6 +384,45 @@ function parseUnreachableSection(
         ),
       };
     }),
+  };
+}
+
+function parseArrayReportSection(
+  section: Record<string, unknown>,
+): NonNullable<AnalysisArtifact["arrayReport"]> {
+  const duplicateGroups = readArray(section.duplicate_groups, "array_report.duplicate_groups");
+
+  return {
+    totalArrays: readNumber(section.total_arrays, "array_report.total_arrays"),
+    uniqueContents: readNumber(section.unique_contents, "array_report.unique_contents"),
+    duplicateGroups: duplicateGroups.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new Error(
+          `Invalid Mnemosyne analysis artifact: expected array_report.duplicate_groups[${index}] to be an object`,
+        );
+      }
+
+      return {
+        elementType: readString(
+          entry.element_type,
+          `array_report.duplicate_groups[${index}].element_type`,
+        ),
+        contentHash: readNumber(
+          entry.content_hash,
+          `array_report.duplicate_groups[${index}].content_hash`,
+        ),
+        length: readNumber(entry.length, `array_report.duplicate_groups[${index}].length`),
+        count: readNumber(entry.count, `array_report.duplicate_groups[${index}].count`),
+        totalWastedBytes: readNumber(
+          entry.total_wasted_bytes,
+          `array_report.duplicate_groups[${index}].total_wasted_bytes`,
+        ),
+      };
+    }),
+    totalDuplicateWaste: readNumber(
+      section.total_duplicate_waste,
+      "array_report.total_duplicate_waste",
+    ),
   };
 }
 
@@ -905,6 +957,11 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     "string_report",
     parseStringReportSection,
   );
+  const arrayReport = readOptionalSection(
+    input.array_report,
+    "array_report",
+    parseArrayReportSection,
+  );
   const collectionReport = readOptionalSection(
     input.collection_report,
     "collection_report",
@@ -974,6 +1031,7 @@ export function parseAnalysisArtifact(input: unknown): AnalysisArtifact {
     histogram,
     unreachable,
     stringReport,
+    arrayReport,
     collectionReport,
     topInstances,
     classloaderReport,

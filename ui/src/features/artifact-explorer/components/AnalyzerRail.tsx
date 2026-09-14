@@ -49,6 +49,11 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
       ? "present"
       : "empty"
     : "absent";
+  const arrayState = artifact.arrayReport
+    ? artifact.arrayReport.duplicateGroups.length > 0
+      ? "present"
+      : "empty"
+    : "absent";
   const collectionState = artifact.collectionReport
     ? artifact.collectionReport.oversizedCollections.length > 0 || Object.keys(artifact.collectionReport.summaryByType).length > 0
       ? "present"
@@ -91,6 +96,14 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
           : stringState === "empty"
             ? "String analysis is present but has no duplicate groups or top-string rows to show."
             : "String analysis was not serialized into this artifact."}
+      </AnalyzerCard>
+
+      <AnalyzerCard title="Duplicate Arrays" state={arrayState}>
+        {arrayState === "present"
+          ? `${artifact.arrayReport?.duplicateGroups.length ?? 0} duplicate groups wasting ${artifact.arrayReport?.totalDuplicateWaste ?? 0} bytes across ${artifact.arrayReport?.totalArrays ?? 0} arrays.`
+          : arrayState === "empty"
+            ? "Array analysis is present but has no duplicate groups to show."
+            : "Duplicate-array analysis was not serialized into this artifact."}
       </AnalyzerCard>
 
       <AnalyzerCard title="Collections" state={collectionState}>

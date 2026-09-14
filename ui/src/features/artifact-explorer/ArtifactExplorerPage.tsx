@@ -5,6 +5,7 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
+import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
 import { HistogramExplorerPanel } from "./components/HistogramExplorerPanel";
 import { ReferrerPanel } from "./components/ReferrerPanel";
 import { SelectedBucketDetail } from "./components/SelectedBucketDetail";
@@ -93,6 +94,10 @@ export function ArtifactExplorerPage() {
         <section aria-label="Classloader explorer panel" style={panelStyle}>
           <ClassloaderExplorerPanel artifact={artifact} />
         </section>
+      </section>
+
+      <section aria-label="Duplicate array panel" style={panelStyle}>
+        <DuplicateArrayPanel artifact={artifact} />
       </section>
     </main>
   );
