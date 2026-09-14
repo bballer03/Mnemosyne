@@ -34,6 +34,7 @@ fn main() {
             commands::list_snapshots,
             commands::save_snapshot,
             commands::remove_snapshot,
+            commands::open_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

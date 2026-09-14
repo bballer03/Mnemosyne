@@ -8,9 +8,11 @@ import {
 } from "../artifact-loader/desktop-heap-session";
 import {
   isListSnapshotsAvailable,
+  isOpenSnapshotAvailable,
   isRemoveSnapshotAvailable,
   isSaveSnapshotAvailable,
   runListSnapshots,
+  runOpenSnapshot,
   runRemoveSnapshot,
   runSaveSnapshot,
   type SnapshotManifest,
@@ -105,6 +107,35 @@ export function SnapshotManagerPage() {
     }
   }
 
+  async function handleOpen(snapshot: SnapshotManifest) {
+    if (!isOpenSnapshotAvailable()) {
+      setActionStatus("Opening snapshots requires the desktop host bridge.");
+      return;
+    }
+
+    const short = snapshot.heapSha256.slice(0, 12);
+    setBusy(true);
+    try {
+      setActionStatus(`Opening ${short}…`);
+      const result = await runOpenSnapshot(snapshot.heapSha256);
+      if (result.status === "unavailable") {
+        setActionStatus("Opening snapshots requires the desktop host bridge.");
+        return;
+      }
+      if (result.status === "error") {
+        setActionStatus(result.error);
+        return;
+      }
+
+      rememberDesktopHeapSource(result.data.sourceId, result.data.displayName);
+      setActionStatus(
+        `Opened ${result.data.displayName} (${result.data.objectCount.toLocaleString()} objects).`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleRemove(snapshot: SnapshotManifest) {
     if (!isRemoveSnapshotAvailable()) {
       setActionStatus("Removing snapshots requires the desktop host bridge.");
@@ -161,8 +192,9 @@ export function SnapshotManagerPage() {
       </p>
       <h1 style={{ margin: 0, fontSize: "clamp(1.6rem, 3vw, 2.2rem)" }}>Snapshots</h1>
       <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
-        Cache, list, and remove heap snapshot manifests from the desktop session store. Removal is
-        limited to store keys (SHA-256), never arbitrary filesystem paths.
+        Cache, open, list, and remove heap snapshot manifests from the desktop session store.
+        Opening loads the cached graph into the live session; removal is limited to store keys
+        (SHA-256), never arbitrary filesystem paths.
       </p>
 
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -233,7 +265,22 @@ export function SnapshotManagerPage() {
                   >
                     {snapshot.heapSha256.slice(0, 12)}…
                   </td>
-                  <td style={{ padding: "0.55rem 0.6rem 0.55rem 0", borderTop: "1px solid #1e293b" }}>
+                  <td
+                    style={{
+                      padding: "0.55rem 0.6rem 0.55rem 0",
+                      borderTop: "1px solid #1e293b",
+                      display: "flex",
+                      gap: "0.5rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void handleOpen(snapshot)}
+                      disabled={busy}
+                    >
+                      Open
+                    </button>
                     <button
                       type="button"
                       onClick={() => void handleRemove(snapshot)}

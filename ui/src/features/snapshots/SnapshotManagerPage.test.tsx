@@ -4,7 +4,11 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
 
-import { clearRememberedDesktopHeapSource, rememberDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
+import {
+  getRememberedDesktopHeapSource,
+  clearRememberedDesktopHeapSource,
+  rememberDesktopHeapSource,
+} from "../artifact-loader/desktop-heap-session";
 import { SnapshotManagerPage } from "./SnapshotManagerPage";
 
 const FULL_KEY = "abcdef0123456789deadbeefabcdef0123456789deadbeefabcdef0123456789";
@@ -110,6 +114,52 @@ describe("SnapshotManagerPage", () => {
       expect(view.getByText("fixture.hprof")).toBeInTheDocument();
     });
     expect(view.getByRole("status")).toHaveTextContent(/saved abcdef012345/i);
+  });
+
+  it("opens a snapshot into the desktop session and remembers the source", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      listSnapshots: async () => [
+        {
+          schema_version: 1,
+          heap_sha256: FULL_KEY,
+          heap_path: "fixture.hprof",
+          created_at: "2026-09-14T00:00:00Z",
+          mnemosyne_version: "0.3.0",
+          object_count: 42,
+          has_field_data: false,
+        },
+      ],
+      openSnapshot: async (key: string) => {
+        expect(key).toBe(FULL_KEY);
+        return {
+          displayName: "fixture.hprof",
+          sourceId: "src-opened",
+          objectCount: 42,
+          classCount: 3,
+          gcRootCount: 1,
+        };
+      },
+    };
+
+    const view = render(
+      <MemoryRouter>
+        <SnapshotManagerPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(view.getByText("fixture.hprof")).toBeInTheDocument();
+    });
+
+    fireEvent.click(view.getByRole("button", { name: /^open$/i }));
+
+    await waitFor(() => {
+      expect(view.getByRole("status")).toHaveTextContent(/opened fixture\.hprof \(42 objects\)/i);
+    });
+    expect(getRememberedDesktopHeapSource()).toEqual({
+      sourceId: "src-opened",
+      displayName: "fixture.hprof",
+    });
   });
 
   it("removes a snapshot after confirmation", async () => {

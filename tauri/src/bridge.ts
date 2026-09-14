@@ -57,5 +57,6 @@ if (isTauri) {
         input: { sourceId, retainFieldData },
       }),
     removeSnapshot: (key) => invoke("remove_snapshot", { key }),
+    openSnapshot: (key) => invoke("open_snapshot", { key }),
   };
 }

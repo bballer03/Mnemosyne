@@ -6,10 +6,12 @@ import {
   isDescribeWorkflowAvailable,
   isListSnapshotsAvailable,
   isNextStepAvailable,
+  isOpenSnapshotAvailable,
   isStartWorkflowAvailable,
   runDescribeWorkflow,
   runListSnapshots,
   runNextStep,
+  runOpenSnapshot,
   runStartWorkflow,
 } from "./workflow-bridge-client";
 
@@ -23,6 +25,7 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isStartWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
+    expect(isOpenSnapshotAvailable()).toBe(false);
   });
 
   it("report true only for methods the bridge actually implements", () => {
@@ -34,6 +37,7 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isDescribeWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
+    expect(isOpenSnapshotAvailable()).toBe(false);
   });
 });
 
@@ -225,5 +229,71 @@ describe("runListSnapshots", () => {
 
     const result = await runListSnapshots();
     expect(result.status).toBe("error");
+  });
+});
+
+describe("runOpenSnapshot", () => {
+  it("returns unavailable when the bridge is absent", async () => {
+    expect(await runOpenSnapshot("abc")).toEqual({ status: "unavailable" });
+  });
+
+  it("parses the display-safe HeapLoadSummary camelCase payload", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async (key) => {
+        expect(key).toBe("deadbeef");
+        return {
+          displayName: "fixture.hprof",
+          sourceId: "src-1",
+          objectCount: 42,
+          classCount: 3,
+          gcRootCount: 1,
+        };
+      },
+    };
+
+    const result = await runOpenSnapshot("deadbeef");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data).toEqual({
+      displayName: "fixture.hprof",
+      sourceId: "src-1",
+      objectCount: 42,
+      classCount: 3,
+      gcRootCount: 1,
+    });
+  });
+
+  it("strips accidental absolute displayName down to basename", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => ({
+        displayName: "/var/tmp/heaps/fixture.hprof",
+        sourceId: "src-1",
+        objectCount: 10,
+        classCount: 2,
+        gcRootCount: 1,
+      }),
+    };
+
+    const result = await runOpenSnapshot("deadbeef");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data.displayName).toBe("fixture.hprof");
+  });
+
+  it("surfaces bridge rejections as an error status", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => {
+        throw new Error("snapshot_not_found");
+      },
+    };
+
+    expect(await runOpenSnapshot("deadbeef")).toEqual({
+      status: "error",
+      error: "snapshot_not_found",
+    });
   });
 });

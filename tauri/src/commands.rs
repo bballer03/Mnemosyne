@@ -25,10 +25,10 @@ use mnemosyne_desktop_session::{
     default_snapshot_store, default_workflow_store, describe_workflow_for_session,
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
     install_field_data_cache_if_still_current, inspect_object_for_session,
-    list_snapshots_for_session, next_step_for_session, parse_identity_strategy,
-    parse_object_id, regroup_histogram_for_session, remove_snapshot_for_session,
-    save_snapshot_for_session, start_workflow_for_session, DiffObjectsSessionInput,
-    FieldDataCacheCapture, StartWorkflowSessionInput,
+    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
+    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
+    remove_snapshot_for_session, save_snapshot_for_session, start_workflow_for_session,
+    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1089,6 +1089,53 @@ pub async fn save_snapshot(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn remove_snapshot(key: String) -> Result<Value, String> {
     remove_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
+}
+
+/// Load a cached snapshot by SHA-256 store key into the live desktop session.
+///
+/// Registers an opaque `sourceId` → `manifest.heap_path` for later save/ci_check
+/// and returns a display-safe summary (basename + counts only — no absolute paths).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn open_snapshot(
+    key: String,
+    state: State<'_, HeapSession>,
+) -> Result<HeapLoadSummary, String> {
+    let (manifest, graph, _dominator) = spawn_blocking(move || {
+        open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    let heap_path = manifest.heap_path;
+    let display_name = display_name_for_path(&heap_path);
+    let source_id = Uuid::new_v4().to_string();
+
+    {
+        let mut sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources.insert(source_id.clone(), heap_path.clone());
+    }
+
+    let summary = HeapLoadSummary {
+        display_name,
+        source_id: Some(source_id),
+        object_count: graph.object_count(),
+        class_count: graph.classes.len(),
+        gc_root_count: graph.gc_roots.len(),
+    };
+
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    state.bump_session_epoch();
+    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
+    *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+    *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
+
+    Ok(summary)
 }
 
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {

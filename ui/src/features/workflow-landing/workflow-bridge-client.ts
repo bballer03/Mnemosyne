@@ -68,6 +68,7 @@ export type WorkflowHostBridge = {
   listSnapshots?: () => Promise<unknown>;
   saveSnapshot?: (sourceId: string, retainFieldData?: boolean) => Promise<unknown>;
   removeSnapshot?: (key: string) => Promise<unknown>;
+  openSnapshot?: (key: string) => Promise<unknown>;
 };
 
 declare global {
@@ -109,6 +110,15 @@ export type SnapshotManifest = {
   mnemosyneVersion: string;
   objectCount: number;
   hasFieldData: boolean;
+};
+
+/** Display-safe summary from desktop `open_snapshot` (no absolute paths). */
+export type OpenSnapshotSummary = {
+  displayName: string;
+  sourceId: string;
+  objectCount: number;
+  classCount: number;
+  gcRootCount: number;
 };
 
 export type WorkflowBridgeResult<T> =
@@ -273,6 +283,10 @@ export function isRemoveSnapshotAvailable(): boolean {
   return Boolean(getWorkflowBridge()?.removeSnapshot);
 }
 
+export function isOpenSnapshotAvailable(): boolean {
+  return Boolean(getWorkflowBridge()?.openSnapshot);
+}
+
 export async function runDescribeWorkflow(
   kind: WorkflowKindId,
 ): Promise<WorkflowBridgeResult<WorkflowDescriptionResult>> {
@@ -399,6 +413,46 @@ export async function runRemoveSnapshot(
     return {
       status: "error",
       error: error instanceof Error ? error.message : "Unknown removeSnapshot bridge failure.",
+    };
+  }
+}
+
+function parseOpenSnapshotSummary(value: unknown): OpenSnapshotSummary {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid workflow bridge payload: openSnapshot result must be an object.");
+  }
+
+  const displayName = displayHeapName(readString(value.displayName, "displayName"));
+  const sourceId = readString(value.sourceId, "sourceId");
+  if (!sourceId.trim()) {
+    throw new TypeError("Invalid workflow bridge payload: expected sourceId to be a non-empty string.");
+  }
+
+  return {
+    displayName,
+    sourceId,
+    objectCount: readNumber(value.objectCount, "objectCount"),
+    classCount: readNumber(value.classCount, "classCount"),
+    gcRootCount: readNumber(value.gcRootCount, "gcRootCount"),
+  };
+}
+
+export async function runOpenSnapshot(
+  key: string,
+): Promise<WorkflowBridgeResult<OpenSnapshotSummary>> {
+  const bridge = getWorkflowBridge();
+
+  if (!bridge?.openSnapshot) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const raw = await bridge.openSnapshot(key);
+    return { status: "ready", data: parseOpenSnapshotSummary(raw) };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown openSnapshot bridge failure.",
     };
   }
 }

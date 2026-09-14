@@ -16,10 +16,10 @@ use mnemosyne_core::{
         run_diff, DiffMode, DiffRequest, DiffResult, IdentityStrategy, ObjectDiffReport,
     },
     graph::find_all_gc_paths_in_graph,
-    hprof::{parse_hprof_file_with_options, ParseOptions},
+    hprof::{parse_hprof_file_with_options, ObjectGraph, ParseOptions},
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, GcPathResult, HistogramGroupBy, HistogramResult,
+    AllPathsRequest, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
 };
 use serde_json::{json, Value};
 
@@ -424,7 +424,7 @@ pub fn list_snapshots_for_session(store: &SnapshotStore) -> Result<Vec<SnapshotM
 }
 
 /// Validates that `key` is a snapshot-store SHA-256 hash, not an arbitrary
-/// filesystem path — mirrors MCP `remove_snapshot` deletion scope.
+/// filesystem path — shared by `remove_snapshot` / `open_snapshot` (MCP store-key scope).
 pub fn validated_store_snapshot_key(key: &str) -> Result<String, String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -432,11 +432,11 @@ pub fn validated_store_snapshot_key(key: &str) -> Result<String, String> {
     }
     if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
         return Err(
-            "remove_snapshot accepts a store key (SHA-256 hash) only, not a file path".to_string(),
+            "snapshot store accepts a store key (SHA-256 hash) only, not a file path".to_string(),
         );
     }
     if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("remove_snapshot key must be a 64-character SHA-256 hex hash".to_string());
+        return Err("snapshot key must be a 64-character SHA-256 hex hash".to_string());
     }
     Ok(trimmed.to_ascii_lowercase())
 }
@@ -465,6 +465,24 @@ pub fn remove_snapshot_for_session(store: &SnapshotStore, key: &str) -> Result<V
         .remove(&store_key)
         .map_err(|error| error.to_string())?;
     Ok(json!({ "removed": true, "key": store_key }))
+}
+
+/// Load a cached snapshot by validated SHA-256 store key for desktop session install.
+///
+/// Returns the manifest plus the deserialized graph/dominator pair. Callers that
+/// install into `HeapSession` typically keep the graph (and discard or rebuild
+/// the dominator on demand), matching `load_heap` / `run_desktop_analysis`.
+pub fn open_snapshot_for_session(
+    store: &SnapshotStore,
+    key: &str,
+) -> Result<(SnapshotManifest, ObjectGraph, DominatorTree), String> {
+    let store_key = validated_store_snapshot_key(key)?;
+    let payload = store.load(&store_key).map_err(|error| error.to_string())?;
+    Ok((
+        payload.manifest,
+        payload.object_graph,
+        payload.dominator_tree,
+    ))
 }
 
 #[cfg(all(test, feature = "test-fixtures"))]
@@ -970,6 +988,59 @@ mod tests {
             assert_eq!(manifests.len(), 1);
             assert_eq!(manifests[0].heap_path, heap_path);
             assert_eq!(manifests[0].object_count, graph.object_count());
+        }
+
+        #[test]
+        fn open_snapshot_for_session_loads_graph_by_sha256_key() {
+            let store = SnapshotStore::new(
+                tempfile::tempdir()
+                    .expect("temp dir must exist")
+                    .keep(),
+            );
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
+                .expect("fixture must parse");
+            let dominator = build_dominator_tree(&graph);
+            let saved = store
+                .save(&heap_path, &graph, &dominator)
+                .expect("snapshot must save");
+
+            let (manifest, loaded_graph, _loaded_dominator) =
+                open_snapshot_for_session(&store, &saved.heap_sha256)
+                    .expect("open must succeed");
+
+            assert_eq!(manifest.heap_sha256, saved.heap_sha256);
+            assert_eq!(manifest.heap_path, heap_path);
+            assert_eq!(loaded_graph.object_count(), graph.object_count());
+            assert_eq!(loaded_graph.classes.len(), graph.classes.len());
+            assert_eq!(manifest.object_count, graph.object_count());
+        }
+
+        #[test]
+        fn open_snapshot_for_session_rejects_path_like_keys() {
+            let store = SnapshotStore::new(
+                tempfile::tempdir()
+                    .expect("temp dir must exist")
+                    .keep(),
+            );
+            let error = open_snapshot_for_session(&store, "/tmp/not-a-key.hprof")
+                .expect_err("path key must fail");
+            assert!(error.contains("SHA-256 hash") || error.contains("not a file path"));
+        }
+
+        #[test]
+        fn open_snapshot_for_session_missing_key_returns_structured_error() {
+            let store = SnapshotStore::new(
+                tempfile::tempdir()
+                    .expect("temp dir must exist")
+                    .keep(),
+            );
+            let missing = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let error = open_snapshot_for_session(&store, missing).expect_err("missing must fail");
+            assert!(
+                error.contains("snapshot_not_found") || error.contains("not found"),
+                "unexpected error: {error}"
+            );
         }
 
         #[test]
