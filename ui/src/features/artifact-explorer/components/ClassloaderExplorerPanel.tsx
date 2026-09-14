@@ -79,7 +79,8 @@ export function ClassloaderExplorerPanel({ artifact }: { artifact: AnalysisArtif
               <thead>
                 <tr style={{ textAlign: "left", color: "#94a3b8" }}>
                   <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Loader</th>
-                  <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Loaded / unique classes</th>
+                  <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Loaded classes</th>
+                  <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Unique classes</th>
                   <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Retained</th>
                   <th style={{ padding: "0 0.6rem 0.5rem 0" }}>Ancestor chain</th>
                 </tr>
@@ -92,7 +93,10 @@ export function ClassloaderExplorerPanel({ artifact }: { artifact: AnalysisArtif
                       <div style={{ color: "#64748b", fontSize: "0.82rem" }}>{`0x${loader.objectId.toString(16)}`}</div>
                     </td>
                     <td style={{ padding: "0.6rem 0.6rem 0.6rem 0", borderTop: "1px solid #1e293b", verticalAlign: "top" }}>
-                      {loader.loadedClassCount.toLocaleString()} / {loader.uniqueClassCount.toLocaleString()}
+                      {loader.loadedClassCount.toLocaleString()}
+                    </td>
+                    <td style={{ padding: "0.6rem 0.6rem 0.6rem 0", borderTop: "1px solid #1e293b", verticalAlign: "top" }}>
+                      {loader.uniqueClassCount.toLocaleString()}
                     </td>
                     <td style={{ padding: "0.6rem 0.6rem 0.6rem 0", borderTop: "1px solid #1e293b", verticalAlign: "top" }}>
                       {formatBytes(loader.retainedBytes)}

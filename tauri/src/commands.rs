@@ -25,21 +25,53 @@ use mnemosyne_desktop_session::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 use tokio::task::spawn_blocking;
+use uuid::Uuid;
 
 use crate::state::HeapSession;
 
 const NO_HEAP_LOADED: &str = "No heap loaded";
 const LOCK_ERROR: &str = "Heap session lock poisoned";
+const UNKNOWN_SOURCE: &str = "Unknown heap source";
+const INVALID_HEAP_EXTENSION: &str =
+    "Selected file must use a .hprof or .bin extension";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeapLoadSummary {
-    heap_path: String,
+    /// Filename only — never an absolute path (Terra 20.B/20.C path gate).
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
     object_count: usize,
     class_count: usize,
     gc_root_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum PickHeapFileResult {
+    Selected {
+        source_id: String,
+        display_name: String,
+    },
+    Cancelled,
+    Unavailable,
+}
+
+fn display_name_for_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("heap.dump")
+        .to_string()
+}
+
+fn is_supported_heap_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".hprof") || lower.ends_with(".bin")
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +131,76 @@ pub struct ExplainLeakResult {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn pick_heap_file(
+    app: AppHandle,
+    state: State<'_, HeapSession>,
+) -> Result<PickHeapFileResult, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("Heap dumps", &["hprof", "bin"])
+        .blocking_pick_file();
+
+    let Some(file_path) = picked else {
+        return Ok(PickHeapFileResult::Cancelled);
+    };
+
+    let path = match file_path.into_path() {
+        Ok(path) => path,
+        Err(_) => return Ok(PickHeapFileResult::Unavailable),
+    };
+
+    let path_string = path.to_string_lossy().into_owned();
+    if !is_supported_heap_path(&path_string) {
+        return Err(INVALID_HEAP_EXTENSION.to_string());
+    }
+
+    let source_id = Uuid::new_v4().to_string();
+    let display_name = display_name_for_path(&path_string);
+    let mut sources = state
+        .selected_sources
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    sources.insert(source_id.clone(), path_string);
+
+    Ok(PickHeapFileResult::Selected {
+        source_id,
+        display_name,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn load_heap_from_source(
+    source_id: String,
+    state: State<'_, HeapSession>,
+) -> Result<HeapLoadSummary, String> {
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+
+    load_heap_internal(path, Some(source_id), &state).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<HeapLoadSummary, String> {
+    if !is_supported_heap_path(&path) {
+        return Err(INVALID_HEAP_EXTENSION.to_string());
+    }
+    load_heap_internal(path, None, &state).await
+}
+
+async fn load_heap_internal(
+    path: String,
+    source_id: Option<String>,
+    state: &State<'_, HeapSession>,
+) -> Result<HeapLoadSummary, String> {
     let graph = spawn_blocking({
         let path = path.clone();
         move || parse_hprof_file(&path).map_err(|error| error.to_string())
@@ -108,7 +209,8 @@ pub async fn load_heap(path: String, state: State<'_, HeapSession>) -> Result<He
     .map_err(|error| error.to_string())??;
 
     let summary = HeapLoadSummary {
-        heap_path: path.clone(),
+        display_name: display_name_for_path(&path),
+        source_id,
         object_count: graph.object_count(),
         class_count: graph.classes.len(),
         gc_root_count: graph.gc_roots.len(),

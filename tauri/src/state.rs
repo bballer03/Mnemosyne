@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Mutex, RwLock,
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, RwLock,
+    },
 };
 
 use mnemosyne_core::config::AppConfig;
@@ -24,6 +27,8 @@ pub struct HeapSession {
     pub session_epoch: AtomicU64,
     pub config: RwLock<AppConfig>,
     pub heap_path: RwLock<Option<String>>,
+    /// Opaque source IDs → absolute paths retained only on the native side.
+    pub selected_sources: Mutex<HashMap<String, String>>,
 }
 
 impl HeapSession {
@@ -35,6 +40,7 @@ impl HeapSession {
             session_epoch: AtomicU64::new(0),
             config: RwLock::new(AppConfig::default()),
             heap_path: RwLock::new(None),
+            selected_sources: Mutex::new(HashMap::new()),
         }
     }
 

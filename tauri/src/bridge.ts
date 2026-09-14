@@ -5,6 +5,11 @@ const isTauri = hostWindow !== undefined && "__TAURI_INTERNALS__" in globalThis;
 if (isTauri) {
   const { invoke } = await import("@tauri-apps/api/core");
 
+  hostWindow.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+    pickHeapFile: () => invoke("pick_heap_file"),
+    loadHeapFromSource: (sourceId) => invoke("load_heap_from_source", { sourceId }),
+  };
+
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
     queryHeap: (input) => invoke("query_heap", { input }),
     getReferences: (objectId) => invoke("get_references", { objectId }),

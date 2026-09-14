@@ -15,6 +15,7 @@ import { LeakGcPathPage } from "../features/leak-workspace/LeakGcPathPage";
 import { LeakSourceMapPage } from "../features/leak-workspace/LeakSourceMapPage";
 import { LeakWorkspaceOverview } from "../features/leak-workspace/LeakWorkspaceOverview";
 import { LeakWorkspaceLayout } from "../features/leak-workspace/LeakWorkspaceLayout";
+import { WorkbenchPlaceholderPage } from "../features/workbench/WorkbenchPlaceholderPage";
 
 // M14 Slice 14.D note: the persistent top-nav (`TopNav`) is NOT wired in
 // here as a shared layout route wrapping every entry below. That was tried
@@ -45,6 +46,33 @@ export const routes: RouteObject[] = [
   {
     path: "/compare",
     element: <ComparisonPage />,
+  },
+  {
+    path: "/workbench/policies",
+    element: (
+      <WorkbenchPlaceholderPage
+        title="Policies"
+        summary="Policy-check workbench for shipped policy-engine findings. Dedicated UI lands in M20.F."
+      />
+    ),
+  },
+  {
+    path: "/workbench/snapshots",
+    element: (
+      <WorkbenchPlaceholderPage
+        title="Snapshots"
+        summary="Cached heap snapshot management surface. Native list_snapshots already exists; full UI lands next."
+      />
+    ),
+  },
+  {
+    path: "/workbench/flamegraphs",
+    element: (
+      <WorkbenchPlaceholderPage
+        title="Flamegraphs"
+        summary="Allocation / retained-size flamegraph explorer for managed artifacts. UI panel lands after policy/snapshot slices."
+      />
+    ),
   },
   {
     path: "/heap-explorer",

@@ -41,6 +41,9 @@ const POWER_ROUTES: NavItem[] = [
   { to: "/heap-explorer/query-console", label: "Query Console" },
   { to: "/heap-explorer/threads", label: "Threads" },
   { to: "/compare", label: "Compare" },
+  { to: "/workbench/policies", label: "Policies" },
+  { to: "/workbench/snapshots", label: "Snapshots" },
+  { to: "/workbench/flamegraphs", label: "Flamegraphs" },
 ];
 
 /**
