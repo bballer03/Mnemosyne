@@ -244,10 +244,10 @@ def normalize_desktop_assets(
             try:
                 kind = _place(path, dest, in_place=in_place, dry_run=False)
                 result.actions.append(
-                    NormalizeAction(kind, str(path), str(dest), "tauri→frozen")
+                    NormalizeAction(kind, str(path), str(dest), "tauri->frozen")
                 )
             except OSError as exc:
-                result.errors.append(f"{path} → {dest}: {exc}")
+                result.errors.append(f"{path} -> {dest}: {exc}")
 
     # 2) Zip macOS .app → frozen app zip when arch is known.
     if macos_arch is not None:
@@ -291,7 +291,7 @@ def normalize_desktop_assets(
                         )
                     )
                 except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-                    result.errors.append(f"zip {app} → {dest_zip}: {exc}")
+                    result.errors.append(f"zip {app} -> {dest_zip}: {exc}")
 
     # 3) Optional: copy already-frozen files from search_root into out_dir.
     if not in_place and out_dir is not None and search_root is not None:
@@ -321,11 +321,11 @@ def normalize_desktop_assets(
 
 def format_report(result: NormalizeResult) -> str:
     lines = [
-        f"M21.C/D normalize desktop assets — version={result.version}",
+        f"M21.C/D normalize desktop assets - version={result.version}",
         f"actions: {len(result.actions)} errors: {len(result.errors)}",
     ]
     for action in result.actions:
-        lines.append(f"  [{action.kind}] {action.source} → {action.dest} ({action.detail})")
+        lines.append(f"  [{action.kind}] {action.source} -> {action.dest} ({action.detail})")
     for err in result.errors:
         lines.append(f"  [error] {err}")
     lines.append("Note: normalize success is not launch-tested proof.")

@@ -363,6 +363,10 @@ jobs:
         env:
           TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
           TARGET: ${{ matrix.target }}
+          # Windows runners default to cp1252; ASCII report + UTF-8 mode avoid
+          # UnicodeEncodeError when printing normalize actions.
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: |
           set -euo pipefail
           mkdir -p dist-normalized
