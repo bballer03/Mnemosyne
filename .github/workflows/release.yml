@@ -421,12 +421,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ matrix.target }}
-          # join(..., '\n') is a literal backslash-n in GHA expressions and collapses
-          # Windows MSI+NSIS into one bogus path. Use a real newline separator.
-          # Also keep broad globs + dist-normalized so frozen/renamed assets upload.
+          # Do not use join(artifactPaths, '\n') — in GHA expressions '\n' is literal
+          # backslash-n, and embedding a real newline inside ${{ }} breaks workflow YAML.
+          # Globs + dist-normalized cover Tauri outputs and M21 frozen renames.
           path: |
-            ${{ join(fromJSON(steps.tauri-build.outputs.artifactPaths), '
-') }}
             tauri/target/**/bundle/msi/*.msi
             tauri/target/**/bundle/nsis/*-setup.exe
             tauri/target/**/bundle/dmg/*.dmg
