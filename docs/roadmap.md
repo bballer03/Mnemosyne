@@ -1,9 +1,11 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-14 (UI-first M23 guided-investigation evidence closeout pending Terra/Sol; M17 17.D GUI smoke → M21)
+> **Last updated:** 2026-09-14 (docs sync: UI-first M20–M23 progress on `sync/m15g-m16bcd`; final Terra/Sol closeouts pending)  
 > **Owner:** Tech PM Agent  
-> **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)
-> **Historical archive:** [roadmap-archive.md](roadmap-archive.md)
+> **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
+> **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
+>
+> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. Those numbers **collide** with the older post-M16 candidate rows still listed below (Bounded MAT / Credibility / Advanced OQL / Extension Runtime). Prefer the UI-first plan + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
 
 Mnemosyne has closed M1 through M7 and shipped `v0.3.0` (2026-04-26) across GitHub Releases, GHCR, and Homebrew. The active roadmap is now a Tech PM **post-v0.3.0 refresh**: an honest MAT parity matrix, an explicit differentiator inventory, a backlog of candidate M8+ milestones, and a recommended next milestone for orchestration to schedule.
 
@@ -284,8 +286,8 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Status:** 🟡 **Shipped with caveats** — [design doc](design/milestone-17-desktop-guided-ux-bridges.md); [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md). Slices **17.A–17.C** shipped: all seven required M14 bridge methods (`inspectObject`, `findAllGcPaths`, `diffObjects`, `describeWorkflow`, `startWorkflow`, `nextStep`, `listSnapshots`) are injected in `tauri/src/bridge.ts` and backed by native Tauri commands over existing `mnemosyne_core` behavior. **Evidence:** `cargo test --features test-fixtures` in `tauri/session-ops/` — 24/24 pass. Slice **17.D partial:** command-layer tests and docs closeout only — packaged-desktop GUI smoke not run on this WSL host (WebKitGTK/GTK deps absent); per-platform launch evidence deferred to **M21**.
 - **Goal:** Wire M14's live bridge capabilities into the Tauri desktop using existing core behavior — achieved at the command/bridge layer for all four capability groups (inspector, multi-path GC, comparison, workflow/snapshots); end-to-end packaged-desktop GUI verification remains open.
 - **Why it mattered:** M16 distributed the M14 UI, but pre-M17 the desktop host injected only the two legacy bridges, forcing honest unavailable states on guided and power surfaces.
-- **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. `getWorkflow`/`closeWorkflow` explicitly not wired (no `ui/src` callers). Browser-without-bridge fallback unchanged.
-- **Slices:** 17.A ✅ inspector/all-paths; 17.B ✅ object comparison; 17.C ✅ workflow/snapshot commands; 17.D 🟡 partial (command-layer evidence only; GUI smoke → M21).
+- **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. Browser-without-bridge fallback unchanged. **Follow-on (UI-first M23.B):** `getWorkflow`/`closeWorkflow` later wired for desktop continuity — see [UI-first plan](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md).
+- **Slices:** 17.A ✅ inspector/all-paths; 17.B ✅ object comparison; 17.C ✅ workflow/snapshot commands; 17.D 🟡 partial (command-layer evidence only; GUI smoke → M21 / UI-first M21).
 
 ### M18 — MCP Agent and IDE Loop Completion — ✅ Shipped (18.F transcripts documented)
 
@@ -352,9 +354,9 @@ B1 (full OQL expansion) and B9 (custom plugin/extension runtime) are promoted fr
 
 **Status update (2026-09-14):** M8, M9, M10, M10-B, M11, M13, M14, M15, M16 shipped; **M17 shipped with caveats** (17.A–17.C command/bridge wiring ✅; 17.D packaged GUI smoke → M21). M16/M17 desktop artifacts remain unsigned by default with no evidenced tagged CI artifact upload; macOS/Linux remain not launch-tested; packaged GUI smoke on WSL blocked by WebKitGTK/GTK deps. M12 remains blocked on the specified native-Linux + Eclipse MAT reference environment. Parallel **UI-first plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) renumbers post-M19 product work as M20 workbench / M21 portable install / M22 bounded OQL / **M23 AI-first guided investigation** (slices 23.A–C shipped; 23.D evidence note recorded; final Terra/Sol verdict pending — see [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md)). Do not confuse that M23 with the older conditional “Extension Runtime” M23 row below. Legacy M18+ candidate rows remain in this document for history; treat STATUS + the UI-first plan as runtime truth for the active worktree.
 
-**Recommendation:** Schedule **M18** next, then M19–M21 in order. Hold M22 and M23 behind explicit demand/adoption gates. The detailed scope, slices, dependencies, risks, and acceptance gates are in the [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
+**Recommendation (active worktree):** Finish remaining **UI-first** gaps in order — M22.D operator polish → M21 native-host/portable evidence (where hosts allow) → milestone Terra/Sol closeouts. Treat older “Schedule M18 next” text below as historical sequencing from the post-M16 plan; M18/M19 already shipped on this branch.
 
-**Ranking rationale:**
+**Ranking rationale (historical post-M16 plan):**
 
 1. **Complete shipped product loops before adding analysis depth:** M17 fixes desktop surfaces users can already see but cannot run; M18 removes agent shell-outs for capabilities the CLI/core already have.
 2. **Surface and orchestrate existing backend value:** M19 gives M15 data a UI and adds the missing classloader workflow without inventing a new analyzer.

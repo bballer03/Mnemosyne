@@ -14,17 +14,18 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
 | Duplicate arrays / plugins / classloaders | artifact sections | **shipped** | Loaded vs unique columns split; breadcrumbs (`5af03f9`) |
 | Compare / leak workspace | bridges | **shipped** | |
-| Snapshots list/save/remove | `list_snapshots` / `save_snapshot` / `remove_snapshot` | **shipped** | SHA-256 key-only remove; heap column shows basename (`2dbe4f8`, `9ca7a1b`) |
-| Snapshot open (load graph into session from key) | store load | **deferred** | 20.G explicit deferral; list/save/remove only |
-| Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass called out (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
+| Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove; basename in UI; open installs graph + opaque `sourceId` (`2dbe4f8`, `352b3d5`) |
+| Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
 | Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | SVG via blob URL; root selector (`2dbe4f8`); 16 MiB / overview-unavailability UI parity tests still thin (rely on core/MCP) |
 | Portable Windows zip | release CI script | **partial** | Labeled WebView2 prerequisite; clean-image unzip evidence **not proven** (M21) |
-| Bounded OQL MAT corpus | core query tests | **partial** | M22.A first slice: MAT-referenced catalog + thin runner; only mat-referenced cases close rows |
+| Bounded OQL MAT corpus | core query tests | **partial** | M22.A first slice + DISTINCT / hop cases; only mat-referenced cases close equivalency rows |
 | Multi-class `FROM` | core query | **shipped** | M22.B — max 8 patterns, ID dedup (`4d477c6`) |
-| Multi-hop `OBJECTS` | core query | **shipped** | M22.C — 1–3 hops; reject 4+ (`e3d18a0`) |
+| Multi-hop `OBJECTS` | core query | **shipped** | M22.C — 1–3 hops; reject 4+; Terra cycle/hop fixes (`e3d18a0`, `d06f152`) |
+| `SELECT DISTINCT OBJECTS` | core query | **shipped** | Bounded collapse by target id (`2b4f33c`) |
 | Packaged GUI smoke (WSL) | Tauri bundle | **deferred** | Command/unit/browser evidence only here; launch → M21 native hosts |
-| Investigation session (`/assistant`) | rules + optional host `chatSession` | **shipped** | Rules default; fact/AI separation; deep links to power views (`f3ad203`, `3ab1ef5`); live workflow binding still thin |
-| Desktop AI session adapters | Tauri over MCP AI session | **shipped** | create/resume/get/close/chat; 12/32 bounds; rules fallback on error — **not** live-provider proof on WSL |
+| Investigation session (`/assistant`) | rules + optional host `chatSession` | **shipped** | Rules default; fact/AI separation; deep links (`f3ad203`, `3ab1ef5`, `22ff57b`, `d391953`) |
+| Desktop AI session adapters | Tauri over MCP AI session | **shipped** | create/resume/get/close/chat; 12/32 bounds; rules fallback — **not** live-provider proof on WSL |
+| Workflow get/close/resume | Tauri + WorkflowCard | **shipped** | MCP-parity get/close; resume UI (`532df7c`); basename projection on get (`d391953`) |
 | AI-first guidance vs MAT analysis | advisory only | **partial** | Guidance never claims MAT-equivalent replacement; see M23 evidence NOT-proven table |
 
 ## Honesty bar
