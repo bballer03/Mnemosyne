@@ -181,7 +181,10 @@ fn parse_object_id_input(raw: &str) -> CoreResult<ObjectId> {
         .or_else(|| trimmed.strip_prefix("0X"))
     {
         u64::from_str_radix(hex, 16).ok()
-    } else if trimmed.chars().any(|character| matches!(character, 'A'..='F' | 'a'..='f')) {
+    } else if trimmed
+        .chars()
+        .any(|character| matches!(character, 'A'..='F' | 'a'..='f'))
+    {
         u64::from_str_radix(trimmed, 16).ok()
     } else {
         trimmed.parse::<u64>().ok()
@@ -323,21 +326,18 @@ fn run_inspect_retention(state: &mut WorkflowState, input: &Value) -> CoreResult
         .get("loader_object_id")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
-            workflow_step_input_mismatch(
-                "selection.loader_object_id missing from workflow context",
-            )
+            workflow_step_input_mismatch("selection.loader_object_id missing from workflow context")
         })?;
 
     let graph = parse_hprof_file_with_options(&state.heap_path, ParseOptions::default())?;
     let dominator = build_dominator_tree(&graph);
-    let inspection = inspect_object(&graph, Some(&dominator), loader_object_id, false).ok_or_else(
-        || {
+    let inspection =
+        inspect_object(&graph, Some(&dominator), loader_object_id, false).ok_or_else(|| {
             workflow_step_input_mismatch(format!(
                 "loader object id {loader_object_id} was not found in heap dump '{}'",
                 state.heap_path
             ))
-        },
-    )?;
+        })?;
 
     let id_width = usize::from(graph.identifier_size) * 2;
     let object_id_hex = format!("0x{loader_object_id:0id_width$X}");

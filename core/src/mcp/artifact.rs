@@ -1,14 +1,14 @@
 use crate::errors::{CoreError, CoreResult};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 pub const ARTIFACT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const ARTIFACT_MAX_BYTES: u64 = 16_777_216;
@@ -458,11 +458,7 @@ mod tests {
             .unwrap();
 
         let error = store
-            .read(
-                &response.artifact_id,
-                0,
-                ARTIFACT_INLINE_MAX_BYTES + 1,
-            )
+            .read(&response.artifact_id, 0, ARTIFACT_INLINE_MAX_BYTES + 1)
             .unwrap_err()
             .to_string();
         assert!(error.contains("max_bytes may not exceed 262144"));

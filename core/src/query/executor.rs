@@ -208,15 +208,13 @@ fn resolve_matched_ids_at_depth(
             }
             Ok(ids)
         }
-        ClassPattern::Exact(_) | ClassPattern::Glob(_) => {
-            resolve_class_pattern_candidates(
-                graph,
-                dominator,
-                query,
-                std::slice::from_ref(&query.from.class_pattern),
-                regexes,
-            )
-        }
+        ClassPattern::Exact(_) | ClassPattern::Glob(_) => resolve_class_pattern_candidates(
+            graph,
+            dominator,
+            query,
+            std::slice::from_ref(&query.from.class_pattern),
+            regexes,
+        ),
         ClassPattern::Multi(patterns) => {
             if patterns.len() > MAX_MULTI_CLASS_FROM_LIST_SIZE {
                 return Err(QueryError::Unsupported(format!(
@@ -597,9 +595,9 @@ fn parse_objects_field_hops<'a>(
 }
 
 fn source_has_instance_field(graph: &ObjectGraph, object_id: ObjectId, field_name: &str) -> bool {
-    graph
-        .get_object(object_id)
-        .is_some_and(|object| lookup_instance_field_type(graph, object.class_id, field_name).is_some())
+    graph.get_object(object_id).is_some_and(|object| {
+        lookup_instance_field_type(graph, object.class_id, field_name).is_some()
+    })
 }
 
 fn resolve_objects_single_hop(

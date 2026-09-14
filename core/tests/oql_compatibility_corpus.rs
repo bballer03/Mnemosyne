@@ -514,8 +514,7 @@ fn mat_referenced_cases_have_handbook_links() {
                 }
                 if case.equivalency == "documentation-referenced" {
                     assert!(
-                        case
-                            .documentation_reference_note
+                        case.documentation_reference_note
                             .as_deref()
                             .is_some_and(|s| !s.is_empty()),
                         "documentation-referenced case `{}` needs documentation_reference_note",
@@ -525,8 +524,7 @@ fn mat_referenced_cases_have_handbook_links() {
             }
             "non-equivalency" => {
                 assert!(
-                    case
-                        .non_equivalency_reason
+                    case.non_equivalency_reason
                         .as_deref()
                         .is_some_and(|s| !s.is_empty()),
                     "non-equivalency case `{}` needs non_equivalency_reason",
@@ -551,18 +549,15 @@ fn corpus_cases_match_parse_and_execute_expectations() {
         let parse_result = parse_query(&case.query);
         match case.expect.parse.as_str() {
             "ok" => {
-                let query = parse_result.unwrap_or_else(|err| {
-                    panic!("case `{}` should parse, got: {err}", case.id)
-                });
+                let query = parse_result
+                    .unwrap_or_else(|err| panic!("case `{}` should parse, got: {err}", case.id));
 
                 match case.expect.execute.as_deref() {
                     None => {}
                     Some("ok") => {
-                        let fixture = case
-                            .expect
-                            .fixture
-                            .as_deref()
-                            .unwrap_or_else(|| panic!("case `{}` execute=ok needs fixture", case.id));
+                        let fixture = case.expect.fixture.as_deref().unwrap_or_else(|| {
+                            panic!("case `{}` execute=ok needs fixture", case.id)
+                        });
                         let graph = fixture_graph(fixture);
                         let dominator = build_dominator_tree(&graph);
                         let result = execute_query(&query, &graph, Some(&dominator))
@@ -594,13 +589,9 @@ fn corpus_cases_match_parse_and_execute_expectations() {
                         }
                     }
                     Some("error") => {
-                        let fixture = case
-                            .expect
-                            .fixture
-                            .as_deref()
-                            .unwrap_or_else(|| {
-                                panic!("case `{}` execute=error needs fixture", case.id)
-                            });
+                        let fixture = case.expect.fixture.as_deref().unwrap_or_else(|| {
+                            panic!("case `{}` execute=error needs fixture", case.id)
+                        });
                         let graph = fixture_graph(fixture);
                         let dominator = build_dominator_tree(&graph);
                         let error = execute_query(&query, &graph, Some(&dominator))
@@ -617,10 +608,8 @@ fn corpus_cases_match_parse_and_execute_expectations() {
                 }
             }
             "error" => {
-                let error = parse_result.expect_err(&format!(
-                    "case `{}` should fail at parse",
-                    case.id
-                ));
+                let error =
+                    parse_result.expect_err(&format!("case `{}` should fail at parse", case.id));
                 if let Some(needle) = &case.expect.error_contains {
                     assert!(
                         error.to_string().contains(needle),

@@ -261,10 +261,8 @@ fn parse_query_still_rejects_trailing_union_keyword() {
 
 #[test]
 fn parse_query_supports_two_literal_class_patterns() {
-    let query = parse_query(
-        r#"SELECT @objectId FROM "com.example.User", "com.example.Admin""#,
-    )
-    .expect("two-class FROM should parse");
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.Admin""#)
+        .expect("two-class FROM should parse");
 
     assert_eq!(
         query.from,
@@ -280,10 +278,8 @@ fn parse_query_supports_two_literal_class_patterns() {
 
 #[test]
 fn parse_query_supports_mixed_exact_and_glob_class_patterns() {
-    let query = parse_query(
-        r#"SELECT @objectId FROM "com.example.User", "com.example.*""#,
-    )
-    .expect("mixed-pattern FROM should parse");
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.*""#)
+        .expect("mixed-pattern FROM should parse");
 
     assert_eq!(
         query.from.class_pattern,
@@ -350,9 +346,8 @@ fn parse_query_supports_two_hop_objects_field_path() {
 
 #[test]
 fn parse_query_supports_three_hop_objects_field_path() {
-    let query =
-        parse_query(r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node""#)
-            .expect("three-hop OBJECTS should parse");
+    let query = parse_query(r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node""#)
+        .expect("three-hop OBJECTS should parse");
 
     assert_eq!(
         query.select,
@@ -394,9 +389,8 @@ fn parse_query_supports_distinct_objects() {
 
 #[test]
 fn parse_query_supports_distinct_objects_multi_hop_within_cap() {
-    let query =
-        parse_query(r#"SELECT DISTINCT OBJECTS n.parent.link FROM "com.example.Node""#)
-            .expect("DISTINCT OBJECTS multi-hop within cap should parse");
+    let query = parse_query(r#"SELECT DISTINCT OBJECTS n.parent.link FROM "com.example.Node""#)
+        .expect("DISTINCT OBJECTS multi-hop within cap should parse");
 
     assert_eq!(
         query.select,
@@ -410,7 +404,9 @@ fn parse_query_rejects_distinct_without_objects() {
         .expect_err("DISTINCT * should be rejected as out of bound");
 
     assert!(
-        error.to_string().contains("DISTINCT is only supported with OBJECTS"),
+        error
+            .to_string()
+            .contains("DISTINCT is only supported with OBJECTS"),
         "unexpected parse error: {error}"
     );
 }

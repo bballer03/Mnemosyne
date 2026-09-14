@@ -1136,10 +1136,9 @@ fn distinct_objects_projection_preserves_first_seen_unique_order() {
     let graph = build_objects_projection_graph();
     let dominator = build_dominator_tree(&graph);
     // depth > 5 matches nodes with parents 0x2300 (twice) then 0x2400.
-    let query = parse_query(
-        r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE depth > 5"#,
-    )
-    .expect("DISTINCT OBJECTS should parse");
+    let query =
+        parse_query(r#"SELECT DISTINCT OBJECTS n.parent FROM "com.example.Node" WHERE depth > 5"#)
+            .expect("DISTINCT OBJECTS should parse");
 
     let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
 
@@ -1259,8 +1258,9 @@ fn objects_projection_on_primitive_field_returns_clear_error() {
 fn objects_projection_two_hop_returns_final_referent() {
     let graph = build_multi_hop_objects_graph();
     let dominator = build_dominator_tree(&graph);
-    let query = parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#)
-        .expect("query should parse");
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#)
+            .expect("query should parse");
 
     let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
 
@@ -1297,25 +1297,20 @@ fn objects_projection_three_hop_returns_final_referent() {
 fn objects_projection_four_hop_returns_structured_limit_error() {
     let graph = build_objects_projection_graph();
     let dominator = build_dominator_tree(&graph);
-    let parse_error = parse_query(
-        r#"SELECT OBJECTS n.parent.link.target.extra FROM "com.example.Node""#,
-    )
-    .expect_err("four-hop OBJECTS should fail at parse time");
+    let parse_error =
+        parse_query(r#"SELECT OBJECTS n.parent.link.target.extra FROM "com.example.Node""#)
+            .expect_err("four-hop OBJECTS should fail at parse time");
 
-    assert!(
-        parse_error
-            .to_string()
-            .contains("multi-hop OBJECTS exceeds limit")
-    );
+    assert!(parse_error
+        .to_string()
+        .contains("multi-hop OBJECTS exceeds limit"));
 
     use mnemosyne_core::query::{
         FieldRef, FromClause, Query, SelectClause, MAX_OBJECTS_FIELD_HOPS,
     };
 
     let built = Query {
-        select: SelectClause::Objects(FieldRef::InstanceField(
-            "n.parent.link.target.extra".into(),
-        )),
+        select: SelectClause::Objects(FieldRef::InstanceField("n.parent.link.target.extra".into())),
         from: FromClause {
             class_pattern: mnemosyne_core::query::ClassPattern::Exact("com.example.Node".into()),
             instanceof: false,
@@ -1326,8 +1321,12 @@ fn objects_projection_four_hop_returns_structured_limit_error() {
     let error = execute_query(&built, &graph, Some(&dominator))
         .expect_err("executor should reject over-limit OBJECTS paths");
 
-    assert!(error.to_string().contains("multi-hop OBJECTS exceeds limit"));
-    assert!(error.to_string().contains(&MAX_OBJECTS_FIELD_HOPS.to_string()));
+    assert!(error
+        .to_string()
+        .contains("multi-hop OBJECTS exceeds limit"));
+    assert!(error
+        .to_string()
+        .contains(&MAX_OBJECTS_FIELD_HOPS.to_string()));
 }
 
 #[test]
@@ -1407,10 +1406,8 @@ fn objects_projection_rejects_unprefixed_four_hop_field_path() {
 
     // Without an alias prefix, every segment is a hop — four real fields
     // must not silently strip into a three-hop path.
-    let query = parse_query(
-        r#"SELECT OBJECTS parent.link.target.extra FROM "com.example.Node""#,
-    )
-    .expect("four unprefixed segments still parse under alias+hop ceiling");
+    let query = parse_query(r#"SELECT OBJECTS parent.link.target.extra FROM "com.example.Node""#)
+        .expect("four unprefixed segments still parse under alias+hop ceiling");
 
     let error = execute_query(&query, &graph, Some(&dominator))
         .expect_err("unprefixed four-hop OBJECTS must fail at execute time");
@@ -2742,10 +2739,9 @@ fn build_multi_class_from_graph() -> ObjectGraph {
 #[test]
 fn multi_class_from_returns_objects_from_two_literal_classes() {
     let graph = build_multi_class_from_graph();
-    let query = parse_query(
-        r#"SELECT @objectId, @className FROM "com.example.User", "com.example.Admin""#,
-    )
-    .expect("query should parse");
+    let query =
+        parse_query(r#"SELECT @objectId, @className FROM "com.example.User", "com.example.Admin""#)
+            .expect("query should parse");
 
     let result = execute_query(&query, &graph, None).expect("query should execute");
 
@@ -2765,10 +2761,8 @@ fn multi_class_from_returns_objects_from_two_literal_classes() {
 #[test]
 fn multi_class_from_supports_mixed_exact_and_glob_patterns() {
     let graph = build_multi_class_from_graph();
-    let query = parse_query(
-        r#"SELECT @objectId FROM "com.example.Admin", "com.example.*""#,
-    )
-    .expect("query should parse");
+    let query = parse_query(r#"SELECT @objectId FROM "com.example.Admin", "com.example.*""#)
+        .expect("query should parse");
 
     let result = execute_query(&query, &graph, None).expect("query should execute");
 
@@ -2787,10 +2781,9 @@ fn multi_class_from_supports_mixed_exact_and_glob_patterns() {
 #[test]
 fn multi_class_from_deduplicates_objects_matched_by_multiple_patterns() {
     let graph = build_multi_class_from_graph();
-    let query = parse_query(
-        r#"SELECT @objectId FROM "com.example.User", "com.example.*" WHERE kind = 1"#,
-    )
-    .expect("query should parse");
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.*" WHERE kind = 1"#)
+            .expect("query should parse");
 
     let result = execute_query(&query, &graph, None).expect("query should execute");
 
@@ -2810,10 +2803,9 @@ fn multi_class_from_deduplicates_objects_matched_by_multiple_patterns() {
 #[test]
 fn multi_class_from_applies_limit_after_deduplication() {
     let graph = build_multi_class_from_graph();
-    let query = parse_query(
-        r#"SELECT @objectId FROM "com.example.User", "com.example.Admin" LIMIT 2"#,
-    )
-    .expect("query should parse");
+    let query =
+        parse_query(r#"SELECT @objectId FROM "com.example.User", "com.example.Admin" LIMIT 2"#)
+            .expect("query should parse");
 
     let result = execute_query(&query, &graph, None).expect("query should execute");
 
