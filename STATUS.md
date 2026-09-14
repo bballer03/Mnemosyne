@@ -1,6 +1,6 @@
 # Functional Status
 
-_Last updated: 2026-09-14 (v0.4.0 release prep on main after #78: M20–M23 command-layer shipped; M21 fail-closed packaging gates; native launch / MAT golden / Sol closeouts still open — see docs/evidence/m21-m22-remaining.md)_
+_Last updated: 2026-09-14 (v0.4.0 published: CLI + desktop assets + GHCR; Homebrew SHAs filled; native launch / MAT golden / Sol closeouts still open — see docs/evidence/m21-m22-remaining.md)_
 
 This document captures where the current alpha build stands versus the roadmap described in `README.md` and `ARCHITECTURE.md`. Use it to see what already works, what is partially there, and which gaps remain before we can call the heap analyzer "functionally complete".
 
