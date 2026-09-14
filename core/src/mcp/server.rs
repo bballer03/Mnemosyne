@@ -2032,12 +2032,13 @@ async fn handle_request(packet: RpcRequest, config: &AppConfig) -> CoreResult<Va
             if let Some(target) = params.focus_leak_id {
                 session.conversation.focus_leak_id = Some(target);
             }
-            crate::mcp::session::trim_history(
+            crate::mcp::session::trim_history_to(
                 &mut session.conversation.history,
                 AiChatTurn {
                     question: params.question,
                     answer_summary: ai.summary.clone(),
                 },
+                crate::mcp::session::effective_history_limit(ai_config.sessions.history_max_turns),
             );
             session.updated_at = timestamp_now();
             persist_session(&store, &session)?;

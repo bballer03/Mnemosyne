@@ -63,10 +63,21 @@ pub struct AiPromptConfig {
     pub template_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiSessionConfig {
     pub directory: Option<String>,
+    /// Max retained chat turns for CLI/MCP sessions. Default 12; hard-capped at 32 (M19.F).
+    pub history_max_turns: Option<usize>,
+}
+
+impl Default for AiSessionConfig {
+    fn default() -> Self {
+        Self {
+            directory: None,
+            history_max_turns: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

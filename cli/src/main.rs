@@ -1855,8 +1855,11 @@ async fn handle_chat(args: ChatArgs, base_config: &AppConfig) -> Result<()> {
             question: input.to_string(),
             answer_summary: ai.summary.clone(),
         });
-        if session.history.len() > 3 {
-            let excess = session.history.len() - 3;
+        let history_limit = mnemosyne_core::mcp::session::effective_history_limit(
+            config.ai.sessions.history_max_turns,
+        );
+        if session.history.len() > history_limit {
+            let excess = session.history.len() - history_limit;
             session.history.drain(0..excess);
         }
     }

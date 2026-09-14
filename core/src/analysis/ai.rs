@@ -733,9 +733,10 @@ fn build_chat_toon_prompt(
 }
 
 fn push_chat_history(buf: &mut String, history: &[AiChatTurn], config: &AiConfig) {
+    let configured = crate::mcp::session::effective_history_limit(config.sessions.history_max_turns);
     let keep = match config.max_tokens {
         Some(limit) if limit <= 256 => 0,
-        _ => history.len().min(3),
+        _ => history.len().min(configured),
     };
     if keep == 0 {
         return;

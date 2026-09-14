@@ -470,6 +470,7 @@ struct PartialAiPromptConfig {
 #[derive(Debug, Default, Deserialize)]
 struct PartialAiSessionConfig {
     directory: Option<String>,
+    history_max_turns: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]

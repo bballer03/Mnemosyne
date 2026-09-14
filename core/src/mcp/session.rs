@@ -11,7 +11,20 @@ use std::{
 };
 
 pub const MCP_SESSION_VERSION: u32 = 1;
-pub const MAX_SESSION_HISTORY: usize = 3;
+/// Default retained chat turns for CLI and MCP AI sessions (M19.F).
+pub const DEFAULT_SESSION_HISTORY: usize = 12;
+/// Hard maximum retained chat turns; config cannot exceed this.
+pub const HARD_MAX_SESSION_HISTORY: usize = 32;
+/// Alias kept for call sites that previously imported the old name.
+pub const MAX_SESSION_HISTORY: usize = DEFAULT_SESSION_HISTORY;
+
+/// Clamp a configured history limit into `[1, HARD_MAX_SESSION_HISTORY]`.
+/// `None` uses [`DEFAULT_SESSION_HISTORY`].
+pub fn effective_history_limit(configured: Option<usize>) -> usize {
+    configured
+        .unwrap_or(DEFAULT_SESSION_HISTORY)
+        .clamp(1, HARD_MAX_SESSION_HISTORY)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionAnalysisSnapshot {
@@ -177,9 +190,14 @@ fn validate_session_id(session_id: &str) -> CoreResult<()> {
 }
 
 pub fn trim_history(history: &mut Vec<AiChatTurn>, turn: AiChatTurn) {
+    trim_history_to(history, turn, DEFAULT_SESSION_HISTORY);
+}
+
+pub fn trim_history_to(history: &mut Vec<AiChatTurn>, turn: AiChatTurn, max_turns: usize) {
     history.push(turn);
-    if history.len() > MAX_SESSION_HISTORY {
-        let excess = history.len() - MAX_SESSION_HISTORY;
+    let limit = effective_history_limit(Some(max_turns));
+    if history.len() > limit {
+        let excess = history.len() - limit;
         history.drain(0..excess);
     }
 }
@@ -336,33 +354,47 @@ mod tests {
     }
 
     #[test]
-    fn append_turn_trims_history_to_three_entries() {
-        let mut history = vec![
-            AiChatTurn {
-                question: "q1".into(),
-                answer_summary: "a1".into(),
-            },
-            AiChatTurn {
-                question: "q2".into(),
-                answer_summary: "a2".into(),
-            },
-            AiChatTurn {
-                question: "q3".into(),
-                answer_summary: "a3".into(),
-            },
-        ];
-
-        trim_history(
-            &mut history,
-            AiChatTurn {
-                question: "q4".into(),
-                answer_summary: "a4".into(),
-            },
-        );
-
-        assert_eq!(history.len(), 3);
+    fn append_turn_trims_history_to_default_twelve_entries() {
+        let mut history = Vec::new();
+        for i in 1..=13 {
+            trim_history(
+                &mut history,
+                AiChatTurn {
+                    question: format!("q{i}"),
+                    answer_summary: format!("a{i}"),
+                },
+            );
+        }
+        assert_eq!(history.len(), 12);
         assert_eq!(history[0].question, "q2");
-        assert_eq!(history[2].question, "q4");
+        assert_eq!(history[11].question, "q13");
+    }
+
+    #[test]
+    fn append_turn_respects_hard_max_of_thirty_two() {
+        let mut history = Vec::new();
+        for i in 1..=40 {
+            trim_history_to(
+                &mut history,
+                AiChatTurn {
+                    question: format!("q{i}"),
+                    answer_summary: format!("a{i}"),
+                },
+                999,
+            );
+        }
+        assert_eq!(history.len(), 32);
+        assert_eq!(history[0].question, "q9");
+        assert_eq!(history[31].question, "q40");
+    }
+
+    #[test]
+    fn effective_history_limit_defaults_and_clamps() {
+        assert_eq!(effective_history_limit(None), 12);
+        assert_eq!(effective_history_limit(Some(0)), 1);
+        assert_eq!(effective_history_limit(Some(12)), 12);
+        assert_eq!(effective_history_limit(Some(32)), 32);
+        assert_eq!(effective_history_limit(Some(100)), 32);
     }
 
     #[test]
