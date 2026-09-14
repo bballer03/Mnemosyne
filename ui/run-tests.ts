@@ -68,9 +68,20 @@ const testBatches = [
     "src/features/workflow-landing/WorkflowCard.test.tsx",
     "src/features/workflow-landing/TriageSummaryCard.test.tsx",
     "src/features/workflow-landing/WorkflowCards.test.tsx",
+  ],
+  [
+    // Split from the batch above: on CI (Bun 1.4.x) NaturalLanguageInputBar
+    // + landing suites after heavy WorkflowCard/TopNav work can hang until
+    // the job is SIGTERM'd (~90s). Fresh process keeps the gate reliable.
     "src/features/workflow-landing/NaturalLanguageInputBar.test.tsx",
     "src/features/workflow-landing/RecentHeapsList.test.tsx",
     "src/features/workflow-landing/GuidedLanding.test.tsx",
+  ],
+  [
+    // M20 workbench surfaces (policies / snapshots / flamegraphs).
+    "src/features/policy/PolicyCheckPage.test.tsx",
+    "src/features/snapshots/SnapshotManagerPage.test.tsx",
+    "src/features/flamegraph/FlamegraphPage.test.tsx",
   ],
 ];
 
