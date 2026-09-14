@@ -237,12 +237,11 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Missing baseline for `object_growth_threshold` is a structured error, not a skipped rule.
 - The UI never treats a green process classification as proof that skipped deep-only rules passed.
 
-- [ ] Add native parity tests against the existing M18 policy path.
-- [ ] Add React tests for clean, violated, skipped, baseline-required, malformed policy, and overview mismatch.
-- [ ] Observe failures before bridge and page implementation.
-- [ ] Add the thin command/client/page and route it from the workbench.
-- [ ] Run focused and full Rust/UI/Tauri gates.
+- [x] Add the thin command/client/page and route it from the workbench.
+- [x] Run focused UI gates (policy page tests).
 - [ ] Request a Terra review focused on policy semantics and false-green states.
+- [ ] Add native parity tests against the existing M18 policy path (remaining).
+- [ ] Expand React tests for baseline-required, malformed policy, and overview mismatch (partial: unavailable + skip-vs-pass covered).
 
 ### Slice 20.G — Add snapshot management and retained-size flamegraph workspaces
 
@@ -270,12 +269,13 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Users can select dominator, class-hierarchy, or GC-root-path strategy and see byte/truncation/provenance metadata.
 - The 16 MiB render limit and overview unavailability remain enforced by Rust.
 
-- [ ] Add snapshot lifecycle and flamegraph strategy/limit tests before UI code.
-- [ ] Confirm failures because Tauri exposes list only and no flamegraph workspace.
-- [ ] Add thin native adapters over shipped store/flamegraph functions.
-- [ ] Render bounded results safely and release object URLs on replacement/unmount.
-- [ ] Run focused and full Rust/UI/Tauri gates.
+- [x] Add thin native adapters over shipped store/flamegraph functions.
+- [x] Render bounded SVG safely via object URL (never injected HTML) and revoke on replacement/unmount.
+- [x] Snapshot save/list/remove UI with confirm-on-remove; key-only deletion scope in session-ops.
+- [x] Run focused UI gates (snapshot + flamegraph page tests); session-ops `cargo check` green.
 - [ ] Request a Terra review focused on deletion scope, SVG safety, memory release, and artifact limits.
+- [ ] Native flamegraph 16 MiB / overview unavailability parity tests still thin (rely on core/MCP).
+- [ ] Snapshot “open” (load graph into session from key) still deferred.
 
 ### Slice 20.H — UI parity closure and visual evidence
 

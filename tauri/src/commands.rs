@@ -5,15 +5,19 @@ use std::{
 
 use mnemosyne_core::{
     analysis::{
-        analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest, ObjectInspection,
+        analyze_heap, analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest,
+        ObjectInspection,
     },
     diff::ObjectDiffReport,
+    evaluate,
     focus_leaks, generate_ai_insights_async, parse_hprof_file, parse_hprof_file_with_options,
+    parse_hprof_overview_file,
     propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
-    AllPathsRequest, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
-    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, ParseOptions, ProvenanceMarker,
-    SourceMapResult, HistogramResult,
+    report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
+    AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
+    HistogramGroupBy, LeakDetectionOptions, MapToCodeRequest, OverviewOptions, ParseOptions,
+    Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult, HistogramResult,
 };
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
@@ -22,8 +26,9 @@ use mnemosyne_desktop_session::{
     diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
     install_field_data_cache_if_still_current, inspect_object_for_session,
     list_snapshots_for_session, next_step_for_session, parse_identity_strategy,
-    parse_object_id, regroup_histogram_for_session, start_workflow_for_session,
-    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
+    parse_object_id, regroup_histogram_for_session, remove_snapshot_for_session,
+    save_snapshot_for_session, start_workflow_for_session, DiffObjectsSessionInput,
+    FieldDataCacheCapture, StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -206,6 +211,303 @@ pub async fn run_desktop_analysis(
 
     let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
     Ok(sanitize_analyze_response_value(raw, &display_name))
+}
+
+fn desktop_ci_check_exit_code(result: &mnemosyne_core::PolicyResult, fail_on: Severity) -> i32 {
+    if result.violations.iter().any(|violation| {
+        violation.severity == Severity::Critical
+            && violation.actual.is_null()
+            && violation.expected.is_null()
+            && violation
+                .message
+                .contains("cannot run in explicit overview mode")
+    }) {
+        4
+    } else if result
+        .violations
+        .iter()
+        .any(|violation| violation.severity >= fail_on)
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn parse_fail_on(value: Option<&str>) -> Result<Severity, String> {
+    match value.unwrap_or("error").to_ascii_lowercase().as_str() {
+        "info" => Ok(Severity::Info),
+        "warning" => Ok(Severity::Warning),
+        "error" => Ok(Severity::Error),
+        "critical" => Ok(Severity::Critical),
+        other => Err(format!("unsupported failOn severity: {other}")),
+    }
+}
+
+fn parse_analysis_mode(value: Option<&str>) -> Result<AnalysisMode, String> {
+    match value.unwrap_or("deep").to_ascii_lowercase().as_str() {
+        "auto" => Ok(AnalysisMode::Auto),
+        "deep" => Ok(AnalysisMode::Deep),
+        "overview" => Ok(AnalysisMode::Overview),
+        other => Err(format!("unsupported analysis mode: {other}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCiCheckInput {
+    source_id: String,
+    policy_toml: String,
+    #[serde(default)]
+    fail_on: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    baseline_source_id: Option<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn run_ci_check(
+    input: DesktopCiCheckInput,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+
+    let baseline_path = if let Some(baseline_id) = input.baseline_source_id.as_ref() {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        Some(
+            sources
+                .get(baseline_id)
+                .cloned()
+                .ok_or_else(|| "Unknown baseline heap source".to_string())?,
+        )
+    } else {
+        None
+    };
+
+    let policy = Policy::from_toml_str(&input.policy_toml).map_err(map_native_error)?;
+    let fail_on = parse_fail_on(input.fail_on.as_deref())?;
+    let requested_mode = parse_analysis_mode(input.mode.as_deref())?;
+
+    let needs_baseline = policy
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.predicate, Predicate::ObjectGrowthThreshold));
+    if needs_baseline && baseline_path.is_none() {
+        return Err(
+            "object_growth_threshold_requires_baseline: pass a baseline heap source for growth rules."
+                .to_string(),
+        );
+    }
+
+    let resolved_mode = match requested_mode {
+        AnalysisMode::Auto => {
+            let size = std::fs::metadata(&path)
+                .map_err(map_native_error)?
+                .len();
+            AnalysisMode::Auto.resolve(size)
+        }
+        mode => mode,
+    };
+
+    let object_diff = if let Some(baseline) = baseline_path.as_deref() {
+        let result = mnemosyne_core::diff::run_diff(mnemosyne_core::DiffRequest {
+            before_path: baseline.into(),
+            after_path: path.clone().into(),
+            mode: mnemosyne_core::DiffMode::Object,
+            identity_strategy: mnemosyne_core::IdentityStrategy::default(),
+            retained_bucket_bits: 10,
+            min_retained_bytes:
+                mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_MIN_RETAINED_BYTES,
+            retained_change_threshold:
+                mnemosyne_core::diff::object::types::DEFAULT_RETAINED_CHANGE_THRESHOLD,
+            top_n: mnemosyne_core::diff::object::types::DEFAULT_OBJECT_DIFF_TOP_N,
+            retain_field_data: false,
+            cross_reference_leaks: false,
+        })
+        .await
+        .map_err(map_native_error)?;
+        match result {
+            mnemosyne_core::diff::DiffResult::Object(diff) => diff.object_diff,
+            mnemosyne_core::diff::DiffResult::Class(_) => {
+                return Err("expected object diff for baseline comparison".to_string());
+            }
+        }
+    } else {
+        None
+    };
+
+    let result = match resolved_mode {
+        AnalysisMode::Overview => {
+            let summary = parse_hprof_overview_file(&path, &OverviewOptions::default())
+                .map_err(map_native_error)?;
+            evaluate(
+                &policy,
+                &PolicyInput::Overview(&summary),
+                requested_mode,
+                object_diff.as_ref(),
+            )
+        }
+        AnalysisMode::Deep => {
+            let config = state
+                .config
+                .read()
+                .map_err(|_| LOCK_ERROR.to_string())?
+                .clone();
+            let enable_classloaders = policy
+                .rules
+                .iter()
+                .any(|rule| matches!(rule.predicate, Predicate::ClassloaderLeakCount));
+            let analysis = analyze_heap(AnalyzeRequest {
+                heap_path: path,
+                config,
+                leak_options: LeakDetectionOptions::default(),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                enable_classloaders,
+                enable_threads: false,
+                enable_strings: false,
+                enable_collections: false,
+                enable_top_instances: false,
+                enable_by_referrer: false,
+                enable_duplicate_arrays: false,
+                top_n: 10,
+                min_collection_capacity: 16,
+                min_duplicate_count: 2,
+            })
+            .await
+            .map_err(map_native_error)?;
+            evaluate(
+                &policy,
+                &PolicyInput::Deep(&analysis),
+                requested_mode,
+                object_diff.as_ref(),
+            )
+        }
+        AnalysisMode::Auto => unreachable!("resolved mode must not remain auto"),
+    };
+
+    Ok(serde_json::json!({
+        "result": result,
+        "exit_code": desktop_ci_check_exit_code(&result, fail_on),
+        "fail_on": fail_on,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopFlamegraphInput {
+    source_id: String,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn generate_desktop_flamegraph(
+    input: DesktopFlamegraphInput,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+
+    let root = match input.root.as_deref().unwrap_or("dominator") {
+        "dominator" => FlameRoot::Dominator,
+        "class-hierarchy" | "class_hierarchy" => FlameRoot::ClassHierarchy,
+        "gc-root-path" | "gc_root_path" => FlameRoot::GcRootPath,
+        other => return Err(format!("unsupported flamegraph root: {other}")),
+    };
+    let format = match input.format.as_deref().unwrap_or("svg") {
+        "svg" => FlameFormat::Svg,
+        "folded" | "folded-stack" | "folded_stack" => FlameFormat::FoldedStack,
+        "json" => FlameFormat::Json,
+        other => return Err(format!("unsupported flamegraph format: {other}")),
+    };
+
+    let config = state
+        .config
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone();
+
+    let (graph, dominator) = {
+        let (_, graph, dominator) =
+            mnemosyne_core::analysis::analyze_heap_with_graph(AnalyzeRequest {
+                heap_path: path.clone(),
+                config,
+                leak_options: LeakDetectionOptions::default(),
+                enable_ai: false,
+                histogram_group_by: HistogramGroupBy::Class,
+                ..AnalyzeRequest::default()
+            })
+            .await
+            .map_err(map_native_error)?;
+        (graph, dominator)
+    };
+
+    {
+        let _session = state
+            .session_mutation
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        state.bump_session_epoch();
+        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph.clone());
+        *state.field_data_graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state.heap_path.write().map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+    }
+
+    let stacks = collapse(
+        root,
+        &graph,
+        &dominator,
+        &CollapseOptions::default(),
+    );
+    let mut buffer = Vec::new();
+    render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
+    let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
+
+    match format {
+        FlameFormat::Svg => Ok(serde_json::json!({
+            "format": "svg",
+            "content": rendered,
+            "byteLength": rendered.len(),
+        })),
+        FlameFormat::FoldedStack => Ok(serde_json::json!({
+            "format": "folded",
+            "content": rendered,
+            "byteLength": rendered.len(),
+        })),
+        FlameFormat::Json => {
+            let value: Value =
+                serde_json::from_str(&rendered).map_err(|error| error.to_string())?;
+            Ok(serde_json::json!({
+                "format": "json",
+                "content": value,
+                "byteLength": rendered.len(),
+            }))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -744,6 +1046,45 @@ pub async fn next_step(workflow_id: String, input: Option<Value>) -> Result<Valu
 #[tauri::command]
 pub async fn list_snapshots() -> Result<Vec<SnapshotManifest>, String> {
     list_snapshots_for_session(&default_snapshot_store())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotInput {
+    source_id: String,
+    #[serde(default)]
+    retain_field_data: Option<bool>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn save_snapshot(
+    input: SaveSnapshotInput,
+    state: State<'_, HeapSession>,
+) -> Result<SnapshotManifest, String> {
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+
+    let retain_field_data = input.retain_field_data.unwrap_or(false);
+    let heap_path = path.clone();
+    spawn_blocking(move || {
+        save_snapshot_for_session(&default_snapshot_store(), &heap_path, retain_field_data)
+            .map_err(map_native_error)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn remove_snapshot(key: String) -> Result<Value, String> {
+    remove_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
 }
 
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {

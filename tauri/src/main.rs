@@ -13,6 +13,8 @@ fn main() {
             commands::pick_heap_file,
             commands::load_heap_from_source,
             commands::run_desktop_analysis,
+            commands::run_ci_check,
+            commands::generate_desktop_flamegraph,
             commands::load_heap,
             commands::unload_heap,
             commands::get_references,
@@ -30,6 +32,8 @@ fn main() {
             commands::start_workflow,
             commands::next_step,
             commands::list_snapshots,
+            commands::save_snapshot,
+            commands::remove_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

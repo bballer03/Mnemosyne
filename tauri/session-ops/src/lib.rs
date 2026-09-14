@@ -16,6 +16,7 @@ use mnemosyne_core::{
         run_diff, DiffMode, DiffRequest, DiffResult, IdentityStrategy, ObjectDiffReport,
     },
     graph::find_all_gc_paths_in_graph,
+    hprof::{parse_hprof_file_with_options, ParseOptions},
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
     AllPathsRequest, GcPathResult, HistogramGroupBy, HistogramResult,
@@ -420,6 +421,50 @@ pub async fn next_step_for_session(
 
 pub fn list_snapshots_for_session(store: &SnapshotStore) -> Result<Vec<SnapshotManifest>, String> {
     store.list().map_err(|error| error.to_string())
+}
+
+/// Validates that `key` is a snapshot-store SHA-256 hash, not an arbitrary
+/// filesystem path — mirrors MCP `remove_snapshot` deletion scope.
+pub fn validated_store_snapshot_key(key: &str) -> Result<String, String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("snapshot key must not be empty".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+        return Err(
+            "remove_snapshot accepts a store key (SHA-256 hash) only, not a file path".to_string(),
+        );
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("remove_snapshot key must be a 64-character SHA-256 hex hash".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+pub fn save_snapshot_for_session(
+    store: &SnapshotStore,
+    heap_path: &str,
+    retain_field_data: bool,
+) -> Result<SnapshotManifest, String> {
+    let graph = parse_hprof_file_with_options(
+        heap_path,
+        ParseOptions {
+            retain_field_data,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let dominator = build_dominator_tree(&graph);
+    store
+        .save(heap_path, &graph, &dominator)
+        .map_err(|error| error.to_string())
+}
+
+pub fn remove_snapshot_for_session(store: &SnapshotStore, key: &str) -> Result<Value, String> {
+    let store_key = validated_store_snapshot_key(key)?;
+    store
+        .remove(&store_key)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({ "removed": true, "key": store_key }))
 }
 
 #[cfg(all(test, feature = "test-fixtures"))]

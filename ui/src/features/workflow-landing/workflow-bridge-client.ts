@@ -66,6 +66,8 @@ export type WorkflowHostBridge = {
   startWorkflow?: (kind: WorkflowKindId, params?: StartWorkflowParams) => Promise<unknown>;
   nextStep?: (workflowId: string, input?: unknown) => Promise<unknown>;
   listSnapshots?: () => Promise<unknown>;
+  saveSnapshot?: (sourceId: string, retainFieldData?: boolean) => Promise<unknown>;
+  removeSnapshot?: (key: string) => Promise<unknown>;
 };
 
 declare global {
@@ -257,6 +259,14 @@ export function isListSnapshotsAvailable(): boolean {
   return Boolean(getWorkflowBridge()?.listSnapshots);
 }
 
+export function isSaveSnapshotAvailable(): boolean {
+  return Boolean(getWorkflowBridge()?.saveSnapshot);
+}
+
+export function isRemoveSnapshotAvailable(): boolean {
+  return Boolean(getWorkflowBridge()?.removeSnapshot);
+}
+
 export async function runDescribeWorkflow(
   kind: WorkflowKindId,
 ): Promise<WorkflowBridgeResult<WorkflowDescriptionResult>> {
@@ -333,6 +343,56 @@ export async function runListSnapshots(): Promise<WorkflowBridgeResult<SnapshotM
     return {
       status: "error",
       error: error instanceof Error ? error.message : "Unknown listSnapshots bridge failure.",
+    };
+  }
+}
+
+export async function runSaveSnapshot(
+  sourceId: string,
+  retainFieldData = false,
+): Promise<WorkflowBridgeResult<SnapshotManifest>> {
+  const bridge = getWorkflowBridge();
+
+  if (!bridge?.saveSnapshot) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const raw = await bridge.saveSnapshot(sourceId, retainFieldData);
+    return { status: "ready", data: parseSnapshotManifest(raw, "saveSnapshot") };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown saveSnapshot bridge failure.",
+    };
+  }
+}
+
+export async function runRemoveSnapshot(
+  key: string,
+): Promise<WorkflowBridgeResult<{ removed: boolean; key: string }>> {
+  const bridge = getWorkflowBridge();
+
+  if (!bridge?.removeSnapshot) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const raw = await bridge.removeSnapshot(key);
+    if (!isRecord(raw)) {
+      throw new TypeError("Invalid workflow bridge payload: removeSnapshot result must be an object.");
+    }
+    return {
+      status: "ready",
+      data: {
+        removed: readBoolean(raw.removed, "removed"),
+        key: readString(raw.key, "key"),
+      },
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown removeSnapshot bridge failure.",
     };
   }
 }

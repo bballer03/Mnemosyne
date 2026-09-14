@@ -9,6 +9,8 @@ if (isTauri) {
     pickHeapFile: () => invoke("pick_heap_file"),
     loadHeapFromSource: (sourceId) => invoke("load_heap_from_source", { sourceId }),
     runDesktopAnalysis: (input) => invoke("run_desktop_analysis", { input }),
+    runCiCheck: (input) => invoke("run_ci_check", { input }),
+    generateFlamegraph: (input) => invoke("generate_desktop_flamegraph", { input }),
   };
 
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
@@ -50,5 +52,10 @@ if (isTauri) {
       }),
     nextStep: (workflowId, input) => invoke("next_step", { workflowId, input }),
     listSnapshots: () => invoke("list_snapshots"),
+    saveSnapshot: (sourceId, retainFieldData) =>
+      invoke("save_snapshot", {
+        input: { sourceId, retainFieldData },
+      }),
+    removeSnapshot: (key) => invoke("remove_snapshot", { key }),
   };
 }

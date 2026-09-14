@@ -29,6 +29,18 @@ type DesktopHeapBridge = {
   pickHeapFile: () => Promise<PickHeapFileResult>;
   loadHeapFromSource: (sourceId: string) => Promise<HeapLoadSummary>;
   runDesktopAnalysis: (input: DesktopAnalysisInput) => Promise<unknown>;
+  runCiCheck?: (input: {
+    sourceId: string;
+    policyToml: string;
+    failOn?: string;
+    mode?: string;
+    baselineSourceId?: string;
+  }) => Promise<unknown>;
+  generateFlamegraph?: (input: {
+    sourceId: string;
+    root?: string;
+    format?: string;
+  }) => Promise<{ format: string; content: string; byteLength: number }>;
 };
 
 declare global {

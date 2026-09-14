@@ -4,6 +4,7 @@ import { useInRouterContext, useNavigate } from "react-router-dom";
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { ArtifactDropzone } from "./ArtifactDropzone";
 import { pickHeapFile, runDesktopAnalysis } from "./desktop-heap-client";
+import { rememberDesktopHeapSource } from "./desktop-heap-session";
 import { parseAnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "./use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
@@ -200,6 +201,7 @@ export function ArtifactLoaderPage() {
         `[${formatTimestamp(new Date())}] running incident-response analysis`,
         ...current,
       ]);
+      rememberDesktopHeapSource(picked.sourceId, picked.displayName);
 
       const raw = await runDesktopAnalysis({
         sourceId: picked.sourceId,
