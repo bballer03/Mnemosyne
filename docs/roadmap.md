@@ -287,13 +287,13 @@ These are **candidates** for orchestration to schedule. Each closes a parity gap
 - **Boundary preserved:** No new analyzers, signing, auto-update, or bridge redesign. `getWorkflow`/`closeWorkflow` explicitly not wired (no `ui/src` callers). Browser-without-bridge fallback unchanged.
 - **Slices:** 17.A ✅ inspector/all-paths; 17.B ✅ object comparison; 17.C ✅ workflow/snapshot commands; 17.D 🟡 partial (command-layer evidence only; GUI smoke → M21).
 
-### M18 — MCP Agent and IDE Loop Completion — 🔲 Pending
+### M18 — MCP Agent and IDE Loop Completion — 🟡 Shipped with caveats (18.F transcripts pending)
 
-- **Status:** 🔲 **Pending candidate** — [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md); future design gate: `docs/design/milestone-18-mcp-agent-loop-completion.md`.
+- **Status:** 🟡 **18.A–18.E shipped on branch** — `ci_check` (+ baseline / `baseline_snapshot`), `diff_heaps.cross_reference_leaks`, `save_snapshot` / `remove_snapshot`, `generate_flamegraph` + managed `read_artifact` / `delete_artifact` (`core/src/mcp/artifact.rs`). **18.F** (captured MCP transcripts + docs polish) still open. Plan: [post-M16 product plan](superpowers/plans/2026-09-13-post-m16-ai-native-mat-plan.md).
 - **Goal:** Let agents run `ci-check` with optional baseline, leak-annotated diffs, snapshot save/remove, and flamegraph generation through structured MCP calls.
 - **Why now:** These core/CLI capabilities already ship; MCP omission forces IDE agents to shell out and breaks Mnemosyne's MCP-first invariant.
 - **Boundary:** Thin MCP adapters only where core behavior exists. No shell execution, policy duplication, transport rewrite, or token streaming.
-- **Slices:** single-heap policy tool; baseline growth; `diff_heaps.cross_reference_leaks`; snapshot mutation; flamegraph artifacts; real MCP transcripts.
+- **Slices:** 18.A–18.E ✅; 18.F 🔲 transcripts/docs.
 
 ### M19 — Guided Analysis and Investigation Continuity — 🔲 Pending
 
