@@ -60,10 +60,28 @@ export function effectiveHistoryLimit(configured?: number): number {
   if (configured === undefined) {
     return DEFAULT_HISTORY_MAX_TURNS;
   }
+  if (!Number.isFinite(configured) || !Number.isInteger(configured)) {
+    return DEFAULT_HISTORY_MAX_TURNS;
+  }
   if (configured < 1) {
     return 1;
   }
   return Math.min(configured, HARD_MAX_HISTORY_TURNS);
+}
+
+/** Opaque desktop source ids must not look like filesystem paths. */
+export function isOpaqueSourceId(sourceId: string): boolean {
+  const trimmed = sourceId.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+    return false;
+  }
+  if (/^[A-Za-z]:/.test(trimmed)) {
+    return false;
+  }
+  return true;
 }
 
 export function appendBoundedTurn(

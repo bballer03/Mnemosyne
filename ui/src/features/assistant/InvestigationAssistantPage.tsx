@@ -7,6 +7,7 @@ import {
   appendBoundedTurn,
   buildRulesModeAnswer,
   displayHeapBasename,
+  isOpaqueSourceId,
   isProviderChatAvailable,
   type AssistantChatTurn,
 } from "./assistant-bridge-client";
@@ -106,14 +107,16 @@ export function InvestigationAssistantPage() {
     setQuestion("");
   }
 
-  function handleTryProvider() {
+  function handleCheckProvider() {
     if (!isProviderChatAvailable()) {
       setProviderNotice(
-        "Provider chat is unavailable without a connected assistant host bridge. Rules mode remains available offline.",
+        "Provider chat is unavailable without a connected assistant host bridge. Rules mode remains available offline. Native chatSession wiring lands in M23.C.",
       );
       return;
     }
-    setProviderNotice(undefined);
+    setProviderNotice(
+      "Assistant host bridge detected. Provider turns are not enabled in this slice yet — continue in rules mode, or wait for M23.C chat adapters.",
+    );
   }
 
   return (
@@ -146,7 +149,9 @@ export function InvestigationAssistantPage() {
       <section style={factPanelStyle} aria-label="Measured heap facts">
         <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Measured heap facts</h2>
         <div>Heap: {heapDisplayName}</div>
-        {remembered?.sourceId ? <div>Source id: {remembered.sourceId}</div> : null}
+        {remembered?.sourceId && isOpaqueSourceId(remembered.sourceId) ? (
+          <div>Source id: {remembered.sourceId.slice(0, 8)}…</div>
+        ) : null}
         {typeof artifact?.summary.totalObjects === "number" ? (
           <div>Objects: {artifact.summary.totalObjects}</div>
         ) : (
@@ -207,8 +212,8 @@ export function InvestigationAssistantPage() {
       </nav>
 
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-        <button type="button" onClick={handleTryProvider}>
-          Try provider mode
+        <button type="button" onClick={handleCheckProvider}>
+          Check provider availability
         </button>
         {providerNotice ? <span style={{ color: "#facc15" }}>{providerNotice}</span> : null}
       </div>

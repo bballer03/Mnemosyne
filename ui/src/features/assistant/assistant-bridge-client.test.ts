@@ -90,6 +90,23 @@ describe("assistant-bridge-client history eviction", () => {
     expect(history).toHaveLength(HARD_MAX_HISTORY_TURNS);
     expect(history[0]?.question).toBe("q5");
   });
+
+  it("rejects NaN and non-integer limits instead of allowing unbounded growth", () => {
+    let history: AssistantChatTurn[] = [];
+    for (let i = 0; i < DEFAULT_HISTORY_MAX_TURNS + 3; i++) {
+      history = appendBoundedTurn(
+        history,
+        {
+          question: `q${i}`,
+          answerSummary: `a${i}`,
+          provenance: "rules",
+          model: "rules",
+        },
+        Number.NaN,
+      );
+    }
+    expect(history).toHaveLength(DEFAULT_HISTORY_MAX_TURNS);
+  });
 });
 
 describe("assistant-bridge-client provider availability", () => {

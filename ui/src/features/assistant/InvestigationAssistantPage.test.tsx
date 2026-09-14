@@ -103,7 +103,7 @@ describe("InvestigationAssistantPage", () => {
     const router = createMemoryRouter(routes, { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
 
-    await user.click(view.getByRole("button", { name: /try provider mode/i }));
+    await user.click(view.getByRole("button", { name: /check provider availability/i }));
     expect(view.getByText(/provider chat is unavailable/i)).toBeInTheDocument();
     expect(view.getByText(/mode:\s*rules/i)).toBeInTheDocument();
 
