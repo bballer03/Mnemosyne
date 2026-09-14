@@ -266,9 +266,9 @@ These camelCase signatures are the host interface consumed by `ui/src`; each mus
 
 ### Slice 18.F — Agent-loop transcripts and docs
 
-- [ ] Capture one real MCP transcript for policy-with-baseline and one for snapshot-to-diff-to-flamegraph.
-- [ ] Update tool discovery docs from actual registered schemas.
-- [ ] Confirm no transcript contains local absolute paths or heap-derived sensitive values.
+- [x] Capture one real MCP transcript for policy-with-baseline and one for snapshot-to-diff-to-flamegraph.
+- [x] Update tool discovery docs from actual registered schemas.
+- [x] Confirm no transcript contains local absolute paths or heap-derived sensitive values.
 
 **Dependencies:** M10-B and M7 policy/flamegraph paths shipped; M9 snapshot store shipped. M17 is sequenced first for immediate desktop usefulness but is not a code dependency.
 
