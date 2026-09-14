@@ -445,14 +445,36 @@ jobs:
           merge-multiple: true
           path: dist
 
-      # M21.A — Asset-name / integrity verifier (WSL-safe; not launch proof).
-      # Frozen primary names + `scripts/release/verify_desktop_assets.py` are
-      # documented in docs/design/milestone-21-eclipse-style-installability.md.
-      # Do NOT treat a green desktop build or this comment as GUI launch-tested.
-      # Strict CI gate (fail release when required primaries / SHA256SUMS absent)
-      # waits on checksum generation + macOS/Linux name normalization (21.C/D/F).
-      # Local check against a staged dist/:
-      #   python3 scripts/release/verify_desktop_assets.py --dist dist --version "$TAG"
+      # M21.B/C/D — Checksums + warn-mode name verify (WSL-safe; not launch proof).
+      # Emits SHA256SUMS (+ asset-manifest.json) for desktop-like files in dist/.
+      # Verifier runs with --allow-warnings until macOS/AppImage name normalization
+      # and a strict fail-closed gate land (21.C/D/F). Green here ≠ GUI launch-tested.
+
+      - name: Generate desktop SHA256SUMS
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/generate_sha256sums.py \
+            --dist dist \
+            --desktop-only \
+            --version "${TAG_VERSION}" \
+            --output dist/SHA256SUMS \
+            --manifest auto
+          echo "SHA256SUMS (desktop artifacts; not launch proof):"
+          cat dist/SHA256SUMS
+
+      - name: Verify desktop assets (warn mode)
+        env:
+          TAG_VERSION: ${{ needs.validate-version.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          # Warn-only: missing frozen primaries / transitional Tauri names are
+          # expected until 21.C/D normalize uploads. Does not fail the release.
+          python3 scripts/release/verify_desktop_assets.py \
+            --dist dist \
+            --version "${TAG_VERSION}" \
+            --allow-warnings
 
       - name: Resolve release notes path
         id: notes

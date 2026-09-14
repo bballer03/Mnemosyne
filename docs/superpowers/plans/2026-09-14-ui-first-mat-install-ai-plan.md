@@ -328,7 +328,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Write verifier tests for complete, missing, duplicate, and misnamed asset sets. (`scripts/tests/test_verify_desktop_assets.py`)
 - [x] Run the tests and observe failure because no manifest verifier exists. (TDD red then green in same WSL-safe pass; tests cover missing/duplicate/misnamed.)
 - [x] Define required names for Windows portable zip, macOS app zip/dmg, and Linux AppImage. (frozen table in `docs/design/milestone-21-eclipse-style-installability.md`)
-- [ ] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (verifier supports SHA256SUMS when present / `--require-checksums`; CI generation + strict release fail gate not wired yet — note only in `release.yml`)
+- [x] Generate SHA-256 checksums and a machine-readable asset manifest in release CI. (`scripts/release/generate_sha256sums.py` → `dist/SHA256SUMS` + `asset-manifest.json` on desktop files; warn-mode `verify_desktop_assets.py --allow-warnings`. **Strict fail-closed gate still open** until 21.C/D name normalization.)
 - [x] Run verifier tests against a synthetic `dist/`.
 - [ ] Request a Terra review focused on release failure modes and artifact provenance.
 
@@ -350,7 +350,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [x] Build the unbundled release executable in CI and package only required runtime files.
 - [ ] Verify the executable version matches the tag and the archive contains no secrets or build paths.
 - [x] Preserve conditional Authenticode behavior without labeling unsigned zips signed.
-- [ ] Run the asset verifier.
+- [x] Run the asset verifier. (CI warn mode via `--allow-warnings` after SHA256SUMS generation; not fail-closed / not launch proof)
 - [ ] Request a Terra review focused on true portability and hidden runtime assumptions.
 
 ### Slice 21.C — Publish a macOS app path
@@ -370,7 +370,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Zip the built `.app` with a tool that preserves bundle metadata.
 - [ ] Verify `Info.plist` version/identifier and executable presence.
 - [x] Keep unsigned Gatekeeper instructions visible when credentials are absent.
-- [ ] Run the asset verifier.
+- [x] Run the asset verifier. (same CI warn-mode step as 21.B; frozen macOS app-zip names not yet normalized — findings expected)
 - [ ] Request a Terra review focused on bundle integrity and signing truthfulness.
 
 ### Slice 21.D — Make AppImage the primary portable Linux path
@@ -390,7 +390,7 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - [ ] Verify AppImage output exists, is executable, and reports expected architecture.
 - [ ] Normalize the asset name before release upload.
 - [x] Do not call a build launch-tested unless it runs on a matching native host.
-- [ ] Run the asset verifier.
+- [x] Run the asset verifier. (same CI warn-mode step as 21.B; AppImage name normalization still open — findings expected)
 - [ ] Request a Terra review focused on architecture correctness and runtime dependencies.
 
 ### Slice 21.E — Rewrite installation and first-run documentation

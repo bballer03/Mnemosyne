@@ -70,3 +70,8 @@ ui/*-results.txt
 ui/%OUT%
 .worktrees/
 .superpowers/
+ui/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]

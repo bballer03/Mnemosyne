@@ -1,6 +1,6 @@
 # Milestone 21 — Eclipse-Style Portable Installability
 
-> **Status:** 🟡 Partial — Slice **21.A** asset-name freeze + WSL-safe verifier shipped; Windows portable packaging script/CI step exist from earlier honesty work. **Not claimed:** native Windows/macOS/Linux launch matrix, CI checksum/manifest gate on every release, or AppImage/macOS name normalization in upload.
+> **Status:** 🟡 Partial — Slice **21.A** asset-name freeze + WSL-safe verifier shipped; **21.B/C/D** CI emits desktop `SHA256SUMS` + `asset-manifest.json` and runs verifier in **warn mode** (not fail-closed). Windows portable packaging script/CI step exist with WebView2 honesty. **Not claimed:** native Windows/macOS/Linux launch matrix, strict checksum/manifest gate on every release, or AppImage/macOS name normalization in upload.
 > **Parent plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) (M21)
 > **Last updated:** 2026-09-14
 
@@ -29,25 +29,43 @@ python3 scripts/release/verify_desktop_assets.py \
   --dist dist \
   --version 0.3.1 \
   --require-checksums   # optional: fail if SHA256SUMS absent
+
+# CI warn mode (does not fail the release job):
+python3 scripts/release/verify_desktop_assets.py \
+  --dist dist \
+  --version 0.3.1 \
+  --allow-warnings
+```
+
+Checksum generation (desktop-like files only; no launch claim):
+
+```bash
+python3 scripts/release/generate_sha256sums.py \
+  --dist dist \
+  --desktop-only \
+  --version 0.3.1 \
+  --manifest auto
 ```
 
 Tests (synthetic `dist/` only — no GUI launch):
 
 ```bash
 python3 scripts/tests/test_verify_desktop_assets.py
+python3 scripts/tests/test_generate_sha256sums.py
 ```
 
-The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required).
+The verifier flags **missing**, **duplicate** basenames, **misnamed** desktop-like files, and **checksum** gaps/mismatches when a `SHA256SUMS` file is present (or required). With `--allow-warnings`, findings are printed but exit status stays 0.
 
 ## Packaging honesty already on this branch
 
 - `scripts/release/package_windows_portable.ps1` builds `Mnemosyne-<version>-windows-x64-portable.zip` and labels it **portable with WebView2 prerequisite**.
 - `release.yml` packages/uploads that zip on the Windows desktop matrix leg.
+- `release.yml` generates desktop `SHA256SUMS` + `asset-manifest.json` and runs warn-mode verify before attaching `dist/*` to the GitHub Release.
 - Docs already state WSL cannot prove packaged GUI smoke.
 
 ## Remaining M21 gaps (not closed here)
 
-- Generate SHA-256 checksums + machine-readable manifest in release CI and fail the release job when required primaries/checksums are absent.
+- Fail the release job when required frozen primaries / checksums are absent (strict gate after 21.C/D name normalization).
 - Normalize macOS app zip and Linux AppImage upload names to the frozen table (21.C / 21.D).
 - Native-host launch matrix + evidence doc (21.F); no WSL launch claim.
 - Docs polish / Terra reviews per plan slices 21.B–21.F.

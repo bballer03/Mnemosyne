@@ -307,6 +307,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Fail when no checksum file is present",
     )
+    parser.add_argument(
+        "--allow-warnings",
+        action="store_true",
+        help=(
+            "Print findings but exit 0 (warn mode for CI until frozen names + "
+            "strict gate land). Never claims launch success."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args(argv)
 
@@ -325,13 +333,22 @@ def main(argv: list[str] | None = None) -> int:
             "expected_primary": result.expected_primary,
             "present_primary": result.present_primary,
             "findings": [asdict(f) for f in result.findings],
+            "allow_warnings": args.allow_warnings,
             "launch_tested": False,
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(format_report(result))
+        if args.allow_warnings and not result.ok:
+            print(
+                "WARN mode (--allow-warnings): findings above do not fail the process; "
+                "not launch-tested.",
+                file=sys.stderr,
+            )
 
-    return 0 if result.ok else 1
+    if result.ok:
+        return 0
+    return 0 if args.allow_warnings else 1
 
 
 if __name__ == "__main__":

@@ -122,6 +122,23 @@ class VerifyDesktopAssetsTests(unittest.TestCase):
             (dist / f"Mnemosyne-{VERSION}-macos-x64-app.zip").unlink()
             self.assertEqual(vda.main(["--dist", str(dist), "--version", VERSION]), 1)
 
+    def test_allow_warnings_exits_zero_with_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = _complete_dist(Path(tmp), with_checksums=False)
+            (dist / f"Mnemosyne-{VERSION}-macos-x64-app.zip").unlink()
+            self.assertEqual(
+                vda.main(
+                    [
+                        "--dist",
+                        str(dist),
+                        "--version",
+                        VERSION,
+                        "--allow-warnings",
+                    ]
+                ),
+                0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
