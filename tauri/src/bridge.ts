@@ -51,6 +51,8 @@ if (isTauri) {
         afterSnapshotKey: params?.afterSnapshotKey,
       }),
     nextStep: (workflowId, input) => invoke("next_step", { workflowId, input }),
+    getWorkflow: (workflowId) => invoke("get_workflow", { workflowId }),
+    closeWorkflow: (workflowId) => invoke("close_workflow", { workflowId }),
     listSnapshots: () => invoke("list_snapshots"),
     saveSnapshot: (sourceId, retainFieldData) =>
       invoke("save_snapshot", {

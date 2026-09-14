@@ -3,12 +3,16 @@ import "../../test/setup";
 import { afterEach, describe, expect, it } from "bun:test";
 
 import {
+  isCloseWorkflowAvailable,
   isDescribeWorkflowAvailable,
+  isGetWorkflowAvailable,
   isListSnapshotsAvailable,
   isNextStepAvailable,
   isOpenSnapshotAvailable,
   isStartWorkflowAvailable,
+  runCloseWorkflow,
   runDescribeWorkflow,
+  runGetWorkflow,
   runListSnapshots,
   runNextStep,
   runOpenSnapshot,
@@ -24,6 +28,8 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isDescribeWorkflowAvailable()).toBe(false);
     expect(isStartWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
+    expect(isGetWorkflowAvailable()).toBe(false);
+    expect(isCloseWorkflowAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
     expect(isOpenSnapshotAvailable()).toBe(false);
   });
@@ -36,6 +42,8 @@ describe("workflow-bridge-client availability probes", () => {
     expect(isStartWorkflowAvailable()).toBe(true);
     expect(isDescribeWorkflowAvailable()).toBe(false);
     expect(isNextStepAvailable()).toBe(false);
+    expect(isGetWorkflowAvailable()).toBe(false);
+    expect(isCloseWorkflowAvailable()).toBe(false);
     expect(isListSnapshotsAvailable()).toBe(false);
     expect(isOpenSnapshotAvailable()).toBe(false);
   });
@@ -295,5 +303,89 @@ describe("runOpenSnapshot", () => {
       status: "error",
       error: "snapshot_not_found",
     });
+  });
+});
+
+describe("runGetWorkflow / runCloseWorkflow", () => {
+  it("returns unavailable when the bridge lacks get/close", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {};
+    expect(await runGetWorkflow("wf-1")).toEqual({ status: "unavailable" });
+    expect(await runCloseWorkflow("wf-1")).toEqual({ status: "unavailable" });
+  });
+
+  it("parses get_workflow WorkflowState with basename-only heap path", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      getWorkflow: async (workflowId) => {
+        expect(workflowId).toBe("wf-9");
+        return {
+          schema_version: 1,
+          workflow_id: "wf-9",
+          kind: "CLASSLOADER_LEAK",
+          created_at: "1700000000",
+          updated_at: "1700000001",
+          heap_path: "/var/tmp/heaps/fixture.hprof",
+          current_step: "select",
+          step_history: [
+            {
+              step_name: "detect",
+              input: null,
+              output_summary: { duplicate_class_names: ["com/example/Dup"] },
+              timestamp: "1700000000",
+            },
+          ],
+          context: {},
+        };
+      },
+    };
+
+    const result = await runGetWorkflow("wf-9");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+
+    expect(result.data).toEqual({
+      workflowId: "wf-9",
+      kind: "classloader_leak",
+      currentStep: "select",
+      heapDisplayName: "fixture.hprof",
+      stepHistory: [
+        {
+          stepName: "detect",
+          outputSummary: { duplicate_class_names: ["com/example/Dup"] },
+        },
+      ],
+      stepResult: { duplicate_class_names: ["com/example/Dup"] },
+      nextExpectedInput: [],
+    });
+  });
+
+  it("surfaces workflow_corrupt from get_workflow as an error status", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      getWorkflow: async () => {
+        throw new Error("workflow_corrupt: failed to load workflow 'wf-bad'");
+      },
+    };
+
+    expect(await runGetWorkflow("wf-bad")).toEqual({
+      status: "error",
+      error: "workflow_corrupt: failed to load workflow 'wf-bad'",
+    });
+  });
+
+  it("parses close_workflow confirmation", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      closeWorkflow: async (workflowId) => {
+        expect(workflowId).toBe("wf-9");
+        return { workflow_id: "wf-9", closed: true };
+      },
+    };
+
+    const result = await runCloseWorkflow("wf-9");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("expected ready status");
+    }
+    expect(result.data).toEqual({ workflowId: "wf-9", closed: true });
   });
 });

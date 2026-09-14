@@ -22,13 +22,14 @@ use mnemosyne_core::{
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_desktop_session::{
-    default_snapshot_store, default_workflow_store, describe_workflow_for_session,
-    diff_objects_for_session, find_all_gc_paths_for_session, graph_has_field_data,
-    install_field_data_cache_if_still_current, inspect_object_for_session,
-    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
-    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
-    remove_snapshot_for_session, save_snapshot_for_session, start_workflow_for_session,
-    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
+    close_workflow_for_session, default_snapshot_store, default_workflow_store,
+    describe_workflow_for_session, diff_objects_for_session, find_all_gc_paths_for_session,
+    get_workflow_for_session, graph_has_field_data, install_field_data_cache_if_still_current,
+    inspect_object_for_session, list_snapshots_for_session, next_step_for_session,
+    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
+    regroup_histogram_for_session, remove_snapshot_for_session, save_snapshot_for_session,
+    start_workflow_for_session, DiffObjectsSessionInput, FieldDataCacheCapture,
+    StartWorkflowSessionInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1045,6 +1046,16 @@ pub async fn next_step(workflow_id: String, input: Option<Value>) -> Result<Valu
         input.unwrap_or(Value::Null),
     )
     .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_workflow(workflow_id: String) -> Result<Value, String> {
+    get_workflow_for_session(&default_workflow_store(), &workflow_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn close_workflow(workflow_id: String) -> Result<Value, String> {
+    close_workflow_for_session(&default_workflow_store(), &workflow_id)
 }
 
 #[tauri::command]

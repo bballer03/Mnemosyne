@@ -31,6 +31,8 @@ fn main() {
             commands::describe_workflow,
             commands::start_workflow,
             commands::next_step,
+            commands::get_workflow,
+            commands::close_workflow,
             commands::list_snapshots,
             commands::save_snapshot,
             commands::remove_snapshot,

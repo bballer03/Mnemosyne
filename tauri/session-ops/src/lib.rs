@@ -139,7 +139,10 @@ pub fn parse_inspect_object_id(input: &str) -> Option<u64> {
         return u64::from_str_radix(hex, 16).ok();
     }
 
-    if trimmed.chars().any(|character| matches!(character, 'A'..='F' | 'a'..='f')) {
+    if trimmed
+        .chars()
+        .any(|character| matches!(character, 'A'..='F' | 'a'..='f'))
+    {
         return u64::from_str_radix(trimmed, 16).ok();
     }
 
@@ -246,7 +249,9 @@ pub async fn diff_objects_for_session(
         Ok(DiffResult::Object(diff)) => diff
             .object_diff
             .ok_or_else(|| "object diff produced no report".to_string()),
-        Ok(DiffResult::Class(_)) => Err("internal error: object diff returned class result".to_string()),
+        Ok(DiffResult::Class(_)) => {
+            Err("internal error: object diff returned class result".to_string())
+        }
         Err(error) => Err(error.to_string()),
     }
 }
@@ -419,6 +424,26 @@ pub async fn next_step_for_session(
     workflow_step_response(&state)
 }
 
+/// Read-only dump of a persisted workflow instance — mirrors MCP `get_workflow`.
+pub fn get_workflow_for_session(store: &WorkflowStore, workflow_id: &str) -> Result<Value, String> {
+    let state = store.load(workflow_id).map_err(|error| error.to_string())?;
+    serde_json::to_value(state).map_err(|error| error.to_string())
+}
+
+/// Delete a persisted workflow instance — mirrors MCP `close_workflow`.
+pub fn close_workflow_for_session(
+    store: &WorkflowStore,
+    workflow_id: &str,
+) -> Result<Value, String> {
+    store
+        .remove(workflow_id)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "workflow_id": workflow_id,
+        "closed": true,
+    }))
+}
+
 pub fn list_snapshots_for_session(store: &SnapshotStore) -> Result<Vec<SnapshotManifest>, String> {
     store.list().map_err(|error| error.to_string())
 }
@@ -446,13 +471,8 @@ pub fn save_snapshot_for_session(
     heap_path: &str,
     retain_field_data: bool,
 ) -> Result<SnapshotManifest, String> {
-    let graph = parse_hprof_file_with_options(
-        heap_path,
-        ParseOptions {
-            retain_field_data,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    let graph = parse_hprof_file_with_options(heap_path, ParseOptions { retain_field_data })
+        .map_err(|error| error.to_string())?;
     let dominator = build_dominator_tree(&graph);
     store
         .save(heap_path, &graph, &dominator)
@@ -507,9 +527,7 @@ mod tests {
         std::io::Write::write_all(&mut file, bytes).map_err(|error| error.to_string())?;
         parse_hprof_file_with_options(
             file.path().to_str().expect("temp path must be valid UTF-8"),
-            ParseOptions {
-                retain_field_data,
-            },
+            ParseOptions { retain_field_data },
         )
         .map_err(|error| error.to_string())
     }
@@ -591,7 +609,10 @@ mod tests {
             &mut stale_slot,
             graph.clone(),
         ));
-        assert!(stale_slot.is_some(), "epoch mismatch must not overwrite cache");
+        assert!(
+            stale_slot.is_some(),
+            "epoch mismatch must not overwrite cache"
+        );
 
         let mut path_slot = Some(graph_fixture());
         assert!(!install_field_data_cache_if_still_current(
@@ -601,7 +622,10 @@ mod tests {
             &mut path_slot,
             graph,
         ));
-        assert!(path_slot.is_some(), "heap path mismatch must not overwrite cache");
+        assert!(
+            path_slot.is_some(),
+            "heap path mismatch must not overwrite cache"
+        );
     }
 
     #[test]
@@ -635,7 +659,10 @@ mod tests {
 
         assert_eq!(result.object_id, "0x00002000");
         assert_eq!(result.path_length, result.path.len());
-        assert!(result.all_paths.as_ref().is_some_and(|paths| !paths.is_empty()));
+        assert!(result
+            .all_paths
+            .as_ref()
+            .is_some_and(|paths| !paths.is_empty()));
         assert!(!result.truncated);
     }
 
@@ -729,11 +756,7 @@ mod tests {
         }
 
         fn diff_store() -> SnapshotStore {
-            SnapshotStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            )
+            SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep())
         }
 
         #[tokio::test]
@@ -798,9 +821,9 @@ mod tests {
             };
 
             let report = match run_diff(request).await {
-                Ok(DiffResult::Object(diff)) => diff
-                    .object_diff
-                    .expect("object diff must include a report"),
+                Ok(DiffResult::Object(diff)) => {
+                    diff.object_diff.expect("object diff must include a report")
+                }
                 Ok(DiffResult::Class(_)) => panic!("expected object diff result"),
                 Err(error) => panic!("diff failed: {error}"),
             };
@@ -843,7 +866,10 @@ mod tests {
             .expect("strategy diff must succeed");
 
             assert_eq!(report.strategy, IdentityStrategy::ClassRetained);
-            assert_eq!(report.match_quality.strategy, IdentityStrategy::ClassRetained);
+            assert_eq!(
+                report.match_quality.strategy,
+                IdentityStrategy::ClassRetained
+            );
             assert!(report.match_quality.collision_rate >= 0.0);
             assert!(report.added.len() <= 10);
             assert!(report.removed.len() <= 10);
@@ -903,11 +929,7 @@ mod tests {
             .await
             .expect("diff must succeed");
 
-            for delta in report
-                .added
-                .iter()
-                .chain(report.retained_changed.iter())
-            {
+            for delta in report.added.iter().chain(report.retained_changed.iter()) {
                 assert!(delta.leak_severity.is_none());
             }
         }
@@ -917,20 +939,14 @@ mod tests {
         use super::*;
         use mnemosyne_core::{
             hprof::{
-                parse_hprof_file_with_options,
-                test_fixtures::build_graph_fixture,
-                ParseOptions,
+                parse_hprof_file_with_options, test_fixtures::build_graph_fixture, ParseOptions,
             },
             workflow::{WorkflowKind, WorkflowStore, WORKFLOW_SCHEMA_VERSION},
         };
         use std::io::Write;
 
         fn workflow_store() -> WorkflowStore {
-            WorkflowStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            )
+            WorkflowStore::new(tempfile::tempdir().expect("temp dir must exist").keep())
         }
 
         fn write_fixture_heap() -> Result<(tempfile::NamedTempFile, String), String> {
@@ -950,15 +966,14 @@ mod tests {
             let description =
                 describe_workflow_for_session("triage_memory_leak").expect("describe must succeed");
             assert_eq!(description.kind, WorkflowKind::TriageMemoryLeak);
-            let names: Vec<&str> = description.steps.iter().map(|step| step.name.as_str()).collect();
+            let names: Vec<&str> = description
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect();
             assert_eq!(
                 names,
-                vec![
-                    "detect",
-                    "investigate_suspect",
-                    "explain",
-                    "propose_fix"
-                ]
+                vec!["detect", "investigate_suspect", "explain", "propose_fix"]
             );
         }
 
@@ -970,11 +985,8 @@ mod tests {
 
         #[test]
         fn list_snapshots_for_session_returns_saved_manifests() {
-            let store = SnapshotStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            );
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
             let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
             let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
                 .map_err(|error| error.to_string())
@@ -992,11 +1004,8 @@ mod tests {
 
         #[test]
         fn open_snapshot_for_session_loads_graph_by_sha256_key() {
-            let store = SnapshotStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            );
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
             let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
             let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
                 .expect("fixture must parse");
@@ -1006,8 +1015,7 @@ mod tests {
                 .expect("snapshot must save");
 
             let (manifest, loaded_graph, _loaded_dominator) =
-                open_snapshot_for_session(&store, &saved.heap_sha256)
-                    .expect("open must succeed");
+                open_snapshot_for_session(&store, &saved.heap_sha256).expect("open must succeed");
 
             assert_eq!(manifest.heap_sha256, saved.heap_sha256);
             assert_eq!(manifest.heap_path, heap_path);
@@ -1018,11 +1026,8 @@ mod tests {
 
         #[test]
         fn open_snapshot_for_session_rejects_path_like_keys() {
-            let store = SnapshotStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            );
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
             let error = open_snapshot_for_session(&store, "/tmp/not-a-key.hprof")
                 .expect_err("path key must fail");
             assert!(error.contains("SHA-256 hash") || error.contains("not a file path"));
@@ -1030,11 +1035,8 @@ mod tests {
 
         #[test]
         fn open_snapshot_for_session_missing_key_returns_structured_error() {
-            let store = SnapshotStore::new(
-                tempfile::tempdir()
-                    .expect("temp dir must exist")
-                    .keep(),
-            );
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
             let missing = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             let error = open_snapshot_for_session(&store, missing).expect_err("missing must fail");
             assert!(
@@ -1059,7 +1061,10 @@ mod tests {
 
             let response = workflow_step_response(&state).expect("response must build");
             assert_eq!(response.get("workflow_id"), Some(&json!("wf-test")));
-            assert_eq!(response.get("current_step"), Some(&json!("investigate_suspect")));
+            assert_eq!(
+                response.get("current_step"),
+                Some(&json!("investigate_suspect"))
+            );
             assert!(response
                 .get("next_expected_input")
                 .and_then(Value::as_array)
@@ -1090,7 +1095,10 @@ mod tests {
                 .pointer("/step_result/leaks")
                 .and_then(Value::as_array)
                 .expect("detect step should return leaks");
-            assert!(!leaks.is_empty(), "fixture heap should surface at least one leak");
+            assert!(
+                !leaks.is_empty(),
+                "fixture heap should surface at least one leak"
+            );
         }
 
         #[tokio::test]
@@ -1120,13 +1128,9 @@ mod tests {
                 .expect("leak id")
                 .to_string();
 
-            let step = next_step_for_session(
-                &store,
-                &workflow_id,
-                json!({ "leak_id": leak_id }),
-            )
-            .await
-            .expect("next step must succeed");
+            let step = next_step_for_session(&store, &workflow_id, json!({ "leak_id": leak_id }))
+                .await
+                .expect("next step must succeed");
 
             assert_eq!(step.get("current_step"), Some(&json!("explain")));
         }
@@ -1148,6 +1152,271 @@ mod tests {
                 .expect_err("missing heap path must fail");
 
             assert!(error.contains("heap_path is required"));
+        }
+
+        /// Cross-loader duplicate shape (mirrors `core/tests/workflow_classloader_leak.rs`).
+        fn build_classloader_duplicate_fixture() -> Vec<u8> {
+            fn push_u32(buf: &mut Vec<u8>, value: u32) {
+                buf.extend_from_slice(&value.to_be_bytes());
+            }
+            fn push_u64(buf: &mut Vec<u8>, value: u64) {
+                buf.extend_from_slice(&value.to_be_bytes());
+            }
+            fn write_id(buf: &mut Vec<u8>, id: u64) {
+                push_u32(buf, id as u32);
+            }
+            fn push_record(records: &mut Vec<Vec<u8>>, tag: u8, body: Vec<u8>) {
+                let mut record = Vec::with_capacity(9 + body.len());
+                record.push(tag);
+                push_u32(&mut record, 0);
+                push_u32(&mut record, body.len() as u32);
+                record.extend_from_slice(&body);
+                records.push(record);
+            }
+
+            let mut header = Vec::new();
+            header.extend_from_slice(b"JAVA PROFILE 1.0.2\0");
+            push_u32(&mut header, 4);
+            push_u64(&mut header, 0);
+
+            let mut records = Vec::new();
+            let mut add_string = |id: u64, value: &str| {
+                let mut body = Vec::new();
+                write_id(&mut body, id);
+                body.extend_from_slice(value.as_bytes());
+                push_record(&mut records, 0x01, body);
+            };
+            add_string(1, "java/lang/Object");
+            add_string(2, "com/example/webapp/WebappLoader");
+            add_string(3, "com/example/webapp/RequestHandler");
+
+            let mut add_load_class = |serial: u32, class_obj_id: u64, name_id: u64| {
+                let mut body = Vec::new();
+                push_u32(&mut body, serial);
+                write_id(&mut body, class_obj_id);
+                push_u32(&mut body, 0);
+                write_id(&mut body, name_id);
+                push_record(&mut records, 0x02, body);
+            };
+            add_load_class(1, 0x100, 1);
+            add_load_class(2, 0x200, 2);
+            add_load_class(3, 0x300, 3);
+            add_load_class(4, 0x301, 3);
+
+            let mut heap = Vec::new();
+            for (class_obj_id, super_id, loader_id, size) in [
+                (0x100u64, 0u64, 0u64, 0u32),
+                (0x200, 0x100, 0, 16),
+                (0x300, 0x100, 0x1000, 8),
+                (0x301, 0x100, 0x2000, 8),
+            ] {
+                heap.push(0x20);
+                write_id(&mut heap, class_obj_id);
+                push_u32(&mut heap, 0);
+                write_id(&mut heap, super_id);
+                write_id(&mut heap, loader_id);
+                for _ in 0..4 {
+                    write_id(&mut heap, 0);
+                }
+                push_u32(&mut heap, size);
+                heap.extend_from_slice(&0u16.to_be_bytes());
+                heap.extend_from_slice(&0u16.to_be_bytes());
+                heap.extend_from_slice(&0u16.to_be_bytes());
+            }
+            for (obj_id, class_obj_id) in [
+                (0x1000u64, 0x200u64),
+                (0x2000, 0x200),
+                (0x3000, 0x300),
+                (0x3001, 0x301),
+            ] {
+                heap.push(0x21);
+                write_id(&mut heap, obj_id);
+                push_u32(&mut heap, 0);
+                write_id(&mut heap, class_obj_id);
+                push_u32(&mut heap, 0);
+            }
+            for obj_id in [0x1000u64, 0x2000, 0x3000, 0x3001] {
+                heap.push(0x05);
+                write_id(&mut heap, obj_id);
+            }
+            push_record(&mut records, 0x0C, heap);
+
+            let mut bytes = header;
+            for record in records {
+                bytes.extend_from_slice(&record);
+            }
+            bytes
+        }
+
+        fn write_classloader_fixture_heap() -> Result<(tempfile::NamedTempFile, String), String> {
+            let mut file = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+            file.write_all(&build_classloader_duplicate_fixture())
+                .map_err(|error| error.to_string())?;
+            let path = file
+                .path()
+                .to_str()
+                .expect("temp path must be valid UTF-8")
+                .to_string();
+            Ok((file, path))
+        }
+
+        #[tokio::test]
+        async fn get_and_close_workflow_round_trip_matches_mcp_semantics() {
+            let store = workflow_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+
+            let start = start_workflow_for_session(
+                &store,
+                StartWorkflowSessionInput {
+                    kind: "tune_gc".into(),
+                    heap_path: Some(heap_path),
+                    ..StartWorkflowSessionInput::default()
+                },
+            )
+            .await
+            .expect("start must succeed");
+            let workflow_id = start
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .expect("workflow_id")
+                .to_string();
+
+            let loaded = get_workflow_for_session(&store, &workflow_id).expect("get must succeed");
+            assert_eq!(loaded.get("workflow_id"), Some(&json!(workflow_id)));
+            assert_eq!(
+                loaded.get("current_step"),
+                Some(&json!("thread_local_review"))
+            );
+            assert_eq!(loaded.get("kind"), Some(&json!("TUNE_GC")));
+
+            let closed =
+                close_workflow_for_session(&store, &workflow_id).expect("close must succeed");
+            assert_eq!(
+                closed,
+                json!({ "workflow_id": workflow_id, "closed": true })
+            );
+
+            let missing = get_workflow_for_session(&store, &workflow_id)
+                .expect_err("closed workflow must be gone");
+            assert!(
+                missing.contains("workflow_not_found"),
+                "unexpected error: {missing}"
+            );
+        }
+
+        #[tokio::test]
+        async fn classloader_leak_get_resume_advance_and_close() {
+            let store = workflow_store();
+            let (_heap_file, heap_path) = write_classloader_fixture_heap().expect("heap fixture");
+
+            let start = start_workflow_for_session(
+                &store,
+                StartWorkflowSessionInput {
+                    kind: "classloader_leak".into(),
+                    heap_path: Some(heap_path),
+                    ..StartWorkflowSessionInput::default()
+                },
+            )
+            .await
+            .expect("start must succeed");
+            let workflow_id = start
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .expect("workflow_id")
+                .to_string();
+            assert_eq!(start.get("current_step"), Some(&json!("select")));
+
+            let resumed = get_workflow_for_session(&store, &workflow_id).expect("get must succeed");
+            assert_eq!(resumed.get("current_step"), Some(&json!("select")));
+            assert_eq!(resumed.get("kind"), Some(&json!("CLASSLOADER_LEAK")));
+
+            let class_name = resumed
+                .pointer("/step_history/0/output_summary/duplicate_class_names/0")
+                .and_then(Value::as_str)
+                .expect("detect should surface a duplicate class")
+                .to_string();
+
+            let advanced =
+                next_step_for_session(&store, &workflow_id, json!({ "class_name": class_name }))
+                    .await
+                    .expect("resume advance must succeed");
+            assert_eq!(
+                advanced.get("current_step"),
+                Some(&json!("inspect_retention"))
+            );
+
+            let after = get_workflow_for_session(&store, &workflow_id).expect("get after advance");
+            assert_eq!(after.get("current_step"), Some(&json!("inspect_retention")));
+
+            close_workflow_for_session(&store, &workflow_id).expect("close must succeed");
+            let missing = get_workflow_for_session(&store, &workflow_id)
+                .expect_err("closed workflow must be gone");
+            assert!(missing.contains("workflow_not_found"));
+        }
+
+        #[tokio::test]
+        async fn get_workflow_surfaces_already_complete_and_corrupt_states() {
+            let store = workflow_store();
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+
+            let start = start_workflow_for_session(
+                &store,
+                StartWorkflowSessionInput {
+                    kind: "tune_gc".into(),
+                    heap_path: Some(heap_path),
+                    ..StartWorkflowSessionInput::default()
+                },
+            )
+            .await
+            .expect("start must succeed");
+            let workflow_id = start
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .expect("workflow_id")
+                .to_string();
+
+            // Drive to complete via successive empty next_step calls.
+            let mut current = start
+                .get("current_step")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_string();
+            while current != "complete" {
+                let step = next_step_for_session(&store, &workflow_id, Value::Null)
+                    .await
+                    .expect("advance toward complete");
+                current = step
+                    .get("current_step")
+                    .and_then(Value::as_str)
+                    .expect("current_step")
+                    .to_string();
+            }
+
+            let completed = get_workflow_for_session(&store, &workflow_id).expect("get complete");
+            assert_eq!(completed.get("current_step"), Some(&json!("complete")));
+
+            let already = next_step_for_session(&store, &workflow_id, Value::Null)
+                .await
+                .expect_err("complete workflow must reject advance");
+            assert!(
+                already.contains("workflow_already_complete"),
+                "unexpected error: {already}"
+            );
+
+            let corrupt_root = tempfile::tempdir().expect("temp dir must exist").keep();
+            let corrupt_store = WorkflowStore::new(corrupt_root.clone());
+            std::fs::create_dir_all(&corrupt_root).expect("create store root");
+            std::fs::write(
+                corrupt_root.join("wf-corrupt-test.json"),
+                b"{ not valid json",
+            )
+            .expect("write corrupt payload");
+            let corrupt = get_workflow_for_session(&corrupt_store, "wf-corrupt-test")
+                .expect_err("corrupt payload must fail");
+            assert!(
+                corrupt.contains("workflow_corrupt"),
+                "unexpected error: {corrupt}"
+            );
         }
     }
 }

@@ -65,6 +65,8 @@ export type WorkflowHostBridge = {
   describeWorkflow?: (kind: WorkflowKindId) => Promise<unknown>;
   startWorkflow?: (kind: WorkflowKindId, params?: StartWorkflowParams) => Promise<unknown>;
   nextStep?: (workflowId: string, input?: unknown) => Promise<unknown>;
+  getWorkflow?: (workflowId: string) => Promise<unknown>;
+  closeWorkflow?: (workflowId: string) => Promise<unknown>;
   listSnapshots?: () => Promise<unknown>;
   saveSnapshot?: (sourceId: string, retainFieldData?: boolean) => Promise<unknown>;
   removeSnapshot?: (key: string) => Promise<unknown>;
@@ -100,6 +102,18 @@ export type WorkflowStepResult = {
   currentStep: string;
   stepResult: unknown;
   nextExpectedInput: unknown;
+};
+
+/** Display-safe projection of MCP/desktop `get_workflow` WorkflowState. */
+export type WorkflowStateView = WorkflowStepResult & {
+  kind: WorkflowKindId;
+  heapDisplayName: string;
+  stepHistory: Array<{ stepName: string; outputSummary: unknown }>;
+};
+
+export type CloseWorkflowResult = {
+  workflowId: string;
+  closed: boolean;
 };
 
 export type SnapshotManifest = {
@@ -221,6 +235,74 @@ function parseWorkflowStepResult(value: unknown): WorkflowStepResult {
   };
 }
 
+const KIND_WIRE_TO_ID: Record<string, WorkflowKindId> = {
+  TRIAGE_MEMORY_LEAK: "triage_memory_leak",
+  triage_memory_leak: "triage_memory_leak",
+  TUNE_GC: "tune_gc",
+  tune_gc: "tune_gc",
+  TRAVERSE_OBJECT_GRAPH: "traverse_object_graph",
+  traverse_object_graph: "traverse_object_graph",
+  COMPARE_SNAPSHOTS: "compare_snapshots",
+  compare_snapshots: "compare_snapshots",
+  CLASSLOADER_LEAK: "classloader_leak",
+  classloader_leak: "classloader_leak",
+};
+
+function parseWorkflowKindId(value: unknown, field: string): WorkflowKindId {
+  const raw = readString(value, field);
+  const kind = KIND_WIRE_TO_ID[raw];
+  if (!kind) {
+    throw new TypeError(`Invalid workflow bridge payload: unsupported ${field} '${raw}'.`);
+  }
+  return kind;
+}
+
+function parseWorkflowStateView(value: unknown): WorkflowStateView {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid workflow bridge payload: getWorkflow result must be an object.");
+  }
+
+  if (!Array.isArray(value.step_history)) {
+    throw new TypeError("Invalid workflow bridge payload: expected step_history to be an array.");
+  }
+
+  const stepHistory = value.step_history.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new TypeError(
+        `Invalid workflow bridge payload: expected step_history[${index}] to be an object.`,
+      );
+    }
+    return {
+      stepName: readString(entry.step_name, `step_history[${index}].step_name`),
+      outputSummary: entry.output_summary ?? null,
+    };
+  });
+
+  const lastSummary =
+    stepHistory.length > 0 ? stepHistory[stepHistory.length - 1]?.outputSummary ?? null : null;
+
+  return {
+    workflowId: readString(value.workflow_id, "workflow_id"),
+    kind: parseWorkflowKindId(value.kind, "kind"),
+    currentStep: readString(value.current_step, "current_step"),
+    heapDisplayName: displayHeapName(readString(value.heap_path, "heap_path")),
+    stepHistory,
+    stepResult: lastSummary,
+    nextExpectedInput: [],
+  };
+}
+
+function parseCloseWorkflowResult(value: unknown): CloseWorkflowResult {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid workflow bridge payload: closeWorkflow result must be an object.");
+  }
+
+  return {
+    workflowId: readString(value.workflow_id, "workflow_id"),
+    closed: readBoolean(value.closed, "closed"),
+  };
+}
+
 function displayHeapName(path: string): string {
   const parts = path.split(/[/\\]/);
   return parts[parts.length - 1] || path;
@@ -269,6 +351,14 @@ export function isStartWorkflowAvailable(): boolean {
 
 export function isNextStepAvailable(): boolean {
   return Boolean(getWorkflowBridge()?.nextStep);
+}
+
+export function isGetWorkflowAvailable(): boolean {
+  return Boolean(getWorkflowBridge()?.getWorkflow);
+}
+
+export function isCloseWorkflowAvailable(): boolean {
+  return Boolean(getWorkflowBridge()?.closeWorkflow);
 }
 
 export function isListSnapshotsAvailable(): boolean {
@@ -345,6 +435,46 @@ export async function runNextStep(
     return {
       status: "error",
       error: error instanceof Error ? error.message : "Unknown nextStep bridge failure.",
+    };
+  }
+}
+
+export async function runGetWorkflow(
+  workflowId: string,
+): Promise<WorkflowBridgeResult<WorkflowStateView>> {
+  const bridge = getWorkflowBridge();
+
+  if (!bridge?.getWorkflow) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const raw = await bridge.getWorkflow(workflowId);
+    return { status: "ready", data: parseWorkflowStateView(raw) };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown getWorkflow bridge failure.",
+    };
+  }
+}
+
+export async function runCloseWorkflow(
+  workflowId: string,
+): Promise<WorkflowBridgeResult<CloseWorkflowResult>> {
+  const bridge = getWorkflowBridge();
+
+  if (!bridge?.closeWorkflow) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const raw = await bridge.closeWorkflow(workflowId);
+    return { status: "ready", data: parseCloseWorkflowResult(raw) };
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown closeWorkflow bridge failure.",
     };
   }
 }

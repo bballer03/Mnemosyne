@@ -586,10 +586,10 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - Workflow step records link to the relevant Inspector, GC Paths, Classloaders, Compare, or Source views.
 - No new workflow kind is introduced in this slice.
 
-- [ ] Add lifecycle parity tests for get/close in Tauri and `classloader_leak` resume.
-- [ ] Add UI tests for resume, complete, close, corrupt, and already-complete states.
-- [ ] Add only missing lifecycle adapters over the shipped `WorkflowStore`.
-- [ ] Run focused and full Rust/UI/Tauri gates.
+- [x] Add lifecycle parity tests for get/close in Tauri and `classloader_leak` resume.
+- [x] Add UI tests for resume, complete, close, corrupt, and already-complete states.
+- [x] Add only missing lifecycle adapters over the shipped `WorkflowStore`.
+- [x] Run focused and full Rust/UI/Tauri gates. (session-ops `--features test-fixtures` green; focused UI workflow tests + `tsc --noEmit` green; full `cargo check --manifest-path tauri/Cargo.toml` blocked on WSL missing WebKitGTK — same host constraint as M20/M21.)
 - [ ] Request a Terra review focused on persistence and state cleanup.
 
 ### Slice 23.C — Add bounded chat and explanation follow-through

@@ -1,9 +1,10 @@
 # Milestone 23 — AI-First Guided Investigation Polish
 
-**Status:** in progress — Slice **23.A** first vertical slice (session workspace UI)  
+**Status:** in progress — Slice **23.B** desktop workflow get/close/resume  
 **Plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) § M23  
 **Branch:** `sync/m15g-m16bcd`  
-**Design gate (23.A):** READY — React-only composition over shipped artifact / workflow / AI-session contracts; no new analyzer or AI provider.
+**Design gate (23.A):** READY — React-only composition over shipped artifact / workflow / AI-session contracts; no new analyzer or AI provider.  
+**Design gate (23.B):** READY — thin desktop adapters over shipped `WorkflowStore::load`/`remove` (MCP `get_workflow`/`close_workflow` semantics); resume UI on `WorkflowCard`; no new workflow kinds.
 
 ## Objective
 
@@ -53,13 +54,33 @@ Make existing workflows and AI sessions feel native inside the workbench without
 
 **Deferred to later slices:**
 
-- **23.B** — Workflow get/close lifecycle parity in desktop + resume UI.
 - **23.C** — Tauri create/resume/get/close/chat adapters over shipped AI session behavior (12/32, timeouts, redaction).
 - **23.D** — End-to-end evidence + docs closeout.
 
+## Slice 23.B — Desktop workflow continuity (get / close / resume)
+
+**Verdict:** READY for thin adapter + UI implementation.
+
+**Files:**
+
+| Path | Role |
+| --- | --- |
+| `tauri/session-ops/src/lib.rs` | `get_workflow_for_session` / `close_workflow_for_session` over `WorkflowStore` |
+| `tauri/src/commands.rs` / `main.rs` / `bridge.ts` | Tauri commands + `__MNEMOSYNE_WORKFLOW_BRIDGE__` methods |
+| `ui/.../workflow-bridge-client.ts` | Typed get/close clients; basename-only heap path |
+| `ui/.../WorkflowCard.tsx` | Resume-by-id, close, step deep-links (incl. `classloader_leak`) |
+
+**Acceptance (23.B):**
+
+- Users can start, inspect (`get`), resume (get → continue), and close shipped workflows, including `classloader_leak`.
+- Step deep-links reach Classloaders / Inspector / GC Paths / Compare where applicable.
+- No new workflow kind; MCP wire semantics preserved (`workflow_not_found` / `workflow_corrupt` / `workflow_already_complete`).
+
+**Impact note (manual; no GitNexus index in this worktree):** Low — additive session-ops + Tauri command registration + WorkflowCard UI. d=1 dependents: bridge consumers and WorkflowCard tests only.
+
 ## GitNexus
 
-This worktree has no local `.gitnexus` index (`npx gitnexus analyze` not run here). Blast radius for 23.A is additive: new `ui/src/features/assistant/*` plus `router.tsx` / optional `TopNav` link. No Rust symbols modified.
+This worktree has no local `.gitnexus` index (`npx gitnexus analyze` not run here). Blast radius for 23.A is additive: new `ui/src/features/assistant/*` plus `router.tsx` / optional `TopNav` link. No Rust symbols modified for 23.A. 23.B adds thin wrappers only; does not change `core::workflow` symbols.
 
 ## Impact note (manual)
 
