@@ -1347,11 +1347,37 @@ fn objects_projection_omits_rows_when_multi_hop_hits_null_ref() {
 }
 
 #[test]
-fn objects_projection_omits_rows_when_multi_hop_hits_cycle() {
+fn objects_projection_preserves_single_hop_self_reference() {
+    let mut graph = build_objects_projection_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Node.parent -> self is a valid single-hop self-reference projection.
+    let node_id = 0x4100u64;
+    let node = graph.objects.get_mut(&node_id).expect("node fixture");
+    node.field_data = node_projection_field_bytes(node_id, 4, 1, 0x6100);
+    node.references = vec![node_id, 0x6100];
+
+    let query =
+        parse_query(r#"SELECT OBJECTS n.parent FROM "com.example.Node" WHERE @objectId = 16640"#)
+            .expect("query should parse");
+    let result = execute_query(&query, &graph, Some(&dominator)).expect("query should execute");
+
+    assert_eq!(result.total_matched, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            CellValue::Id(node_id),
+            CellValue::Str("com.example.Node".into()),
+        ]]
+    );
+}
+
+#[test]
+fn objects_projection_omits_rows_when_multi_hop_cycle_blocks_further_hops() {
     let mut graph = build_multi_hop_objects_graph();
     let dominator = build_dominator_tree(&graph);
 
-    // ParentNode.link -> self creates a cycle on the second hop.
+    // ParentNode.link -> self: hop2 revisits before the final hop, so omit.
     graph
         .objects
         .get_mut(&0x2100)
@@ -1364,7 +1390,7 @@ fn objects_projection_omits_rows_when_multi_hop_hits_cycle() {
         .references = vec![0x2100];
 
     let query = parse_query(
-        r#"SELECT OBJECTS n.parent.link FROM "com.example.Node" WHERE count = 1"#,
+        r#"SELECT OBJECTS n.parent.link.target FROM "com.example.Node" WHERE count = 1"#,
     )
     .expect("query should parse");
 
@@ -1372,6 +1398,28 @@ fn objects_projection_omits_rows_when_multi_hop_hits_cycle() {
 
     assert_eq!(result.total_matched, 0);
     assert!(result.rows.is_empty());
+}
+
+#[test]
+fn objects_projection_rejects_unprefixed_four_hop_field_path() {
+    let graph = build_multi_hop_objects_graph();
+    let dominator = build_dominator_tree(&graph);
+
+    // Without an alias prefix, every segment is a hop — four real fields
+    // must not silently strip into a three-hop path.
+    let query = parse_query(
+        r#"SELECT OBJECTS parent.link.target.extra FROM "com.example.Node""#,
+    )
+    .expect("four unprefixed segments still parse under alias+hop ceiling");
+
+    let error = execute_query(&query, &graph, Some(&dominator))
+        .expect_err("unprefixed four-hop OBJECTS must fail at execute time");
+    assert!(
+        error
+            .to_string()
+            .contains("multi-hop OBJECTS exceeds limit"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

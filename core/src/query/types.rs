@@ -51,9 +51,10 @@ pub struct FromClause {
 pub const MAX_MULTI_CLASS_FROM_LIST_SIZE: usize = 8;
 
 /// Maximum object-reference field hops in `SELECT OBJECTS` (M22 Slice 22.C).
-/// A path such as `n.parent.link.target` traverses three hops after the
-/// optional alias prefix; a fourth hop is rejected with a structured limit
-/// error at parse time and, defense-in-depth, at execution time.
+/// A path such as `n.parent.link.target` traverses three hops after a
+/// non-field alias prefix; a fourth hop is rejected with a structured limit
+/// error. Unprefixed paths count every segment as a hop (so
+/// `parent.link.target.extra` is four hops and is rejected).
 pub const MAX_OBJECTS_FIELD_HOPS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

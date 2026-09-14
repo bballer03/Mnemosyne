@@ -549,8 +549,10 @@ fn ch_len(ch: char) -> usize {
 }
 
 /// Rejects `SELECT OBJECTS` field paths longer than
-/// `MAX_OBJECTS_FIELD_HOPS` at parse time (M22 Slice 22.C). Uses the same
-/// alias-prefix convention as the executor's `parse_objects_field_hops`.
+/// `MAX_OBJECTS_FIELD_HOPS + 1` segments at parse time (M22 Slice 22.C).
+/// The optional MAT-style alias prefix may add one leading segment; the
+/// executor then decides whether that leading segment is an alias or a hop
+/// based on the source object's fields (defense-in-depth hop cap).
 fn validate_objects_field_hops(field: &FieldRef) -> Result<(), QueryParseError> {
     let FieldRef::InstanceField(path) = field else {
         return Ok(());
@@ -560,13 +562,9 @@ fn validate_objects_field_hops(field: &FieldRef) -> Result<(), QueryParseError> 
         .split('.')
         .filter(|segment| !segment.is_empty())
         .collect();
-    let hop_count = match segments.as_slice() {
-        [] => 0,
-        [_] => 1,
-        [_, hops @ ..] => hops.len(),
-    };
 
-    if hop_count > MAX_OBJECTS_FIELD_HOPS {
+    // Absolute ceiling: optional alias + MAX hops.
+    if segments.len() > MAX_OBJECTS_FIELD_HOPS + 1 {
         return Err(QueryParseError::new(format!(
             "multi-hop OBJECTS exceeds limit of {MAX_OBJECTS_FIELD_HOPS} field hops: '{path}'"
         )));

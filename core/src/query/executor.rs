@@ -525,16 +525,23 @@ fn resolve_objects_projection_target(
         ));
     };
 
-    let hop_fields = parse_objects_field_hops(path)?;
+    let hop_fields = parse_objects_field_hops(path, graph, object_id)?;
     let mut current_id = object_id;
     let mut visited: HashSet<ObjectId> = HashSet::new();
     visited.insert(object_id);
 
-    for field_name in hop_fields {
+    for (index, field_name) in hop_fields.iter().enumerate() {
         let Some(next_id) = resolve_objects_single_hop(graph, current_id, field_name)? else {
             return Ok(None);
         };
+        let is_last_hop = index + 1 == hop_fields.len();
         if !visited.insert(next_id) {
+            // Preserve a final self-reference / cycle terminus as a real
+            // projected target. Only omit when a revisit would continue
+            // traversal (more hops remain) — Terra M22.C.
+            if is_last_hop {
+                return Ok(Some(next_id));
+            }
             return Ok(None);
         }
         current_id = next_id;
@@ -543,12 +550,18 @@ fn resolve_objects_projection_target(
     Ok(Some(current_id))
 }
 
-/// Parses an `OBJECTS` field path into 1–3 hop field names. A lone
-/// identifier is one hop; when two or more dot-separated segments are
-/// present the first is treated as the MAT-style alias prefix (`n` in
-/// `n.parent`) and the remainder are the hop chain -- matching the
-/// single-hop behavior this slice extends rather than introducing.
-fn parse_objects_field_hops(path: &str) -> Result<Vec<&str>, QueryError> {
+/// Parses an `OBJECTS` field path into 1–3 hop field names.
+///
+/// When the first segment is **not** an instance field on the source object,
+/// it is treated as a MAT-style alias prefix (`n` in `n.parent`) and stripped.
+/// When the first segment *is* a field on the source object, every segment is a
+/// hop — so unprefixed `parent.link.target.extra` counts as four hops and is
+/// rejected rather than silently alias-stripping into a three-hop path.
+fn parse_objects_field_hops<'a>(
+    path: &'a str,
+    graph: &ObjectGraph,
+    object_id: ObjectId,
+) -> Result<Vec<&'a str>, QueryError> {
     let segments: Vec<&str> = path
         .split('.')
         .filter(|segment| !segment.is_empty())
@@ -562,9 +575,17 @@ fn parse_objects_field_hops(path: &str) -> Result<Vec<&str>, QueryError> {
 
     let hops = if segments.len() == 1 {
         vec![segments[0]]
+    } else if source_has_instance_field(graph, object_id, segments[0]) {
+        segments
     } else {
         segments[1..].to_vec()
     };
+
+    if hops.is_empty() {
+        return Err(QueryError::Unsupported(
+            "OBJECTS requires at least one field hop after an alias prefix".into(),
+        ));
+    }
 
     if hops.len() > MAX_OBJECTS_FIELD_HOPS {
         return Err(QueryError::Unsupported(format!(
@@ -573,6 +594,12 @@ fn parse_objects_field_hops(path: &str) -> Result<Vec<&str>, QueryError> {
     }
 
     Ok(hops)
+}
+
+fn source_has_instance_field(graph: &ObjectGraph, object_id: ObjectId, field_name: &str) -> bool {
+    graph
+        .get_object(object_id)
+        .is_some_and(|object| lookup_instance_field_type(graph, object.class_id, field_name).is_some())
 }
 
 fn resolve_objects_single_hop(

@@ -492,12 +492,12 @@ The 2026-09-13 gap inventory predates M18/M19 closure. Implementers must verify 
 - More than three segments returns a structured deterministic limit error.
 - Null, missing, duplicate, and cyclic targets do not fabricate rows.
 
-- [ ] Add failing tests for two/three hops, four-hop rejection, cycles, nulls, missing fields, duplicates, and budget exhaustion.
-- [ ] Represent field chains explicitly in the AST.
-- [ ] Traverse under the existing result/work budget with a visited set per source path.
-- [ ] Preserve single-hop output and error behavior.
-- [ ] Run query, CLI, MCP, and corpus tests.
-- [ ] Request a Terra review focused on traversal explosion and semantic drift.
+- [x] Add failing tests for two/three hops, four-hop rejection, cycles, nulls, missing fields, duplicates, and budget exhaustion.
+- [x] Represent field chains explicitly in the AST.
+- [x] Traverse under the existing result/work budget with a visited set per source path.
+- [x] Preserve single-hop output and error behavior.
+- [x] Run query, CLI, MCP, and corpus tests. (parser/executor green; corpus covers multi-hop cases)
+- [ ] Request a Terra review focused on traversal explosion and semantic drift. (queued after late completion notification)
 
 ### Slice 22.D — Finish small operator and MAT-like UI polish
 
