@@ -13,6 +13,11 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { useComparisonStore } from "../comparison/comparison-store";
 import { useLeakWorkspaceStore } from "../leak-workspace/leak-workspace-store";
+import {
+  runOpenSnapshot,
+  type SnapshotWorkspaceHydrate,
+  type WorkflowBridgeResult,
+} from "../workflow-landing/workflow-bridge-client";
 import { useInvestigationStore } from "./investigation-store";
 import type { WorkspaceCompatibility } from "./workspace-persistence";
 
@@ -152,32 +157,50 @@ export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact,
   });
 }
 
-/**
- * Snapshot open installs a host graph but does not return an AnalysisArtifact.
- * Clear heap-bound React facts so graph B can never remain beside artifact A.
- */
-export function applyOpenedSnapshotSession(
-  displayName: string,
-  sourceId: string,
-  objectCount: number,
-) {
-  useInvestigationStore.getState().bumpRevisionOnArtifactChange();
-  rememberDesktopHeapSource(sourceId, displayName);
-  useArtifactStore.setState({
-    artifactName: undefined,
-    artifact: undefined,
+export function applySnapshotWorkspaceHydrate(hydrate: SnapshotWorkspaceHydrate) {
+  const { snapshot, analysis, mode, capabilities } = hydrate;
+  const nextRevision = useInvestigationStore.getState().revision + 1;
+  const recentLoad = {
+    fileName: snapshot.displayName,
+    sizeLabel: `${analysis.summary.totalObjects.toLocaleString()} objects`,
+    loadedAtLabel: recentTimestamp(),
+    heapPath: snapshot.displayName,
+    sourceId: snapshot.sourceId,
+  };
+
+  useArtifactStore.setState((state) => ({
+    artifactName: snapshot.displayName,
+    artifact: analysis,
     loadError: undefined,
-  });
+    recentLoads: [
+      recentLoad,
+      ...state.recentLoads.filter((item) => item.fileName !== snapshot.displayName),
+    ].slice(0, 4),
+  }));
   useDashboardStore.getState().reset();
   useComparisonStore.getState().reset();
   useLeakWorkspaceStore.getState().reset();
-  useArtifactStore.getState().addRecentLoad({
-    fileName: displayName,
-    sizeLabel: `${objectCount.toLocaleString()} objects`,
-    loadedAtLabel: recentTimestamp(),
-    heapPath: displayName,
-    sourceId,
-  });
+  const persistenceIdentity = {
+    kind: "snapshot" as const,
+    key: snapshot.key,
+  };
+  useInvestigationStore.getState().commitSnapshotHydrate(
+    persistenceIdentity,
+    buildArtifactCompatibility(analysis, nextRevision),
+    mode,
+    capabilities,
+  );
+  rememberDesktopHeapSource(snapshot.sourceId, snapshot.displayName);
+}
+
+export async function openSnapshotWorkspace(
+  key: string,
+): Promise<WorkflowBridgeResult<SnapshotWorkspaceHydrate>> {
+  const result = await runOpenSnapshot(key);
+  if (result.status === "ready") {
+    applySnapshotWorkspaceHydrate(result.data);
+  }
+  return result;
 }
 
 /** Close investigation: unload host graph (if any) and clear heap-bound UI state. */

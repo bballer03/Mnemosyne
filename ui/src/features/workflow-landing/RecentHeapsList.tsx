@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-import { applyOpenedSnapshotSession } from "../investigation/workspace-actions";
+import { openSnapshotWorkspace } from "../investigation/workspace-actions";
 import {
   isListSnapshotsAvailable,
   isOpenSnapshotAvailable,
   runListSnapshots,
-  runOpenSnapshot,
   type SnapshotManifest,
 } from "./workflow-bridge-client";
 
@@ -75,7 +74,7 @@ export function RecentHeapsList() {
     setBusyKey(entry.heapSha256);
     setActionStatus(`Opening ${entry.heapPath}…`);
     try {
-      const result = await runOpenSnapshot(entry.heapSha256);
+      const result = await openSnapshotWorkspace(entry.heapSha256);
       if (result.status === "unavailable") {
         setActionStatus("Opening snapshots requires the desktop host bridge.");
         return;
@@ -85,14 +84,9 @@ export function RecentHeapsList() {
         return;
       }
 
-      applyOpenedSnapshotSession(
-        result.data.displayName,
-        result.data.sourceId,
-        result.data.objectCount,
-      );
       setActionStatus(
-        `Opened ${result.data.displayName} (${result.data.objectCount.toLocaleString()} objects). ` +
-          "Snapshot graph is active; prior artifact views were cleared because this bridge does not return an analysis artifact.",
+        `Opened ${result.data.snapshot.displayName} ` +
+          `(${result.data.analysis.summary.totalObjects.toLocaleString()} objects) from its cached snapshot.`,
       );
     } finally {
       setBusyKey(undefined);

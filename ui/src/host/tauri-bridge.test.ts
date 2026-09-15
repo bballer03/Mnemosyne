@@ -2,7 +2,9 @@ import "../test/setup";
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
+import { useArtifactStore } from "../features/artifact-loader/use-artifact-store";
 import { useInvestigationStore } from "../features/investigation/investigation-store";
+import { openSnapshotWorkspace } from "../features/investigation/workspace-actions";
 import {
   cancelOperation,
   injectHostBridges,
@@ -71,6 +73,7 @@ describe("tauri-bridge", () => {
     delete window.__MNEMOSYNE_COMPARISON_BRIDGE__;
     delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
     delete window.__MNEMOSYNE_ASSISTANT_BRIDGE__;
+    useArtifactStore.getState().reset();
   });
 
   it("treats missing __TAURI_INTERNALS__ as non-Tauri", () => {
@@ -287,6 +290,13 @@ describe("tauri-bridge", () => {
       latestData: { heap_sha256: "latest-snapshot" },
     },
     {
+      name: "snapshot reopen",
+      command: "open_snapshot",
+      kind: "snapshot",
+      call: () => window.__MNEMOSYNE_WORKFLOW_BRIDGE__?.openSnapshot?.("snapshot-key"),
+      latestData: { generation: "latest-snapshot-hydrate" },
+    },
+    {
       name: "flamegraph",
       command: "generate_desktop_flamegraph",
       kind: "flamegraph",
@@ -374,6 +384,52 @@ describe("tauri-bridge", () => {
       expect(useInvestigationStore.getState().revision).toBe(5);
     });
   }
+
+  it("leaves prior facts and selection intact when a snapshot hydrate is stale", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    let resolveOpen!: (value: unknown) => void;
+    const deferredOpen = new Promise<unknown>((resolve) => {
+      resolveOpen = resolve;
+    });
+    let context: OperationContext | undefined;
+    invokeOverride = async (command, args) => {
+      if (command !== "open_snapshot") {
+        return { command, args };
+      }
+      context = operationContextFromArgs(args);
+      return deferredOpen;
+    };
+    useArtifactStore.getState().setArtifact("prior.hprof", {
+      summary: {
+        heapPath: "prior.hprof",
+        totalObjects: 1,
+        totalSizeBytes: 8,
+        totalRecords: 1,
+      },
+      leaks: [],
+      recommendations: [],
+      elapsedSeconds: 0,
+      graph: { nodeCount: 1, edgeCount: 0, dominatorCount: 0, dominators: [] },
+      provenance: [],
+    });
+    useInvestigationStore.setState({ objectId: "object-prior" });
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    const pending = openSnapshotWorkspace("snapshot-key");
+    expect(context).toBeDefined();
+    useInvestigationStore.setState({ revision: 5, activeOperation: undefined });
+    resolveOpen({ ...context!, data: { generation: "stale-hydrate" } });
+
+    await expect(pending).resolves.toMatchObject({ status: "error" });
+    expect(useArtifactStore.getState()).toMatchObject({
+      artifactName: "prior.hprof",
+      artifact: { summary: { heapPath: "prior.hprof" } },
+    });
+    expect(useInvestigationStore.getState()).toMatchObject({
+      revision: 5,
+      objectId: "object-prior",
+    });
+  });
 
   it("rejects a response envelope whose identity differs from the active request", async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};

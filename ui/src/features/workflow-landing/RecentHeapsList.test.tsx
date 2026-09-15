@@ -50,7 +50,7 @@ describe("RecentHeapsList", () => {
     expect(page.getByText(/^yes$/i)).toBeInTheDocument();
   });
 
-  it("opens a snapshot, clears the prior artifact, and reports the graph-only state", async () => {
+  it("opens a snapshot and hydrates its matching analysis facts", async () => {
     const user = userEvent.setup();
     act(() => {
       useArtifactStore.getState().setArtifact("older.json", {
@@ -85,11 +85,37 @@ describe("RecentHeapsList", () => {
         },
       ],
       openSnapshot: async () => ({
-        displayName: "fixture.hprof",
-        sourceId: "src-snapshot",
-        objectCount: 4200,
-        classCount: 12,
-        gcRootCount: 3,
+        snapshot: {
+          key: "abc123",
+          displayName: "fixture.hprof",
+          sourceId: "src-snapshot",
+          schemaVersion: 1,
+          createdAt: "1700000000",
+        },
+        mode: "deep",
+        capabilities: {
+          graph: true,
+          dominators: true,
+          fieldData: true,
+          snapshotBacked: true,
+        },
+        analysis: {
+          summary: {
+            heap_path: "fixture.hprof",
+            total_objects: 4200,
+            total_size_bytes: 8,
+            classes: [],
+            generated_at: "2026-09-15T00:00:00Z",
+            header: null,
+            total_records: 0,
+            record_stats: [],
+          },
+          leaks: [],
+          recommendations: [],
+          elapsed: { secs: 0, nanos: 0 },
+          graph: { node_count: 4200, edge_count: 0, dominators: [] },
+          provenance: [],
+        },
       }),
     };
 
@@ -99,10 +125,10 @@ describe("RecentHeapsList", () => {
 
     await waitFor(() => {
       expect(page.getByRole("status")).toHaveTextContent(
-        /opened fixture\.hprof.*artifact views were cleared/i,
+        /opened fixture\.hprof \(4,200 objects\).*cached snapshot/i,
       );
     });
-    expect(useArtifactStore.getState().artifact).toBeUndefined();
+    expect(useArtifactStore.getState().artifact?.summary.totalObjects).toBe(4200);
     expect(getRememberedDesktopHeapSource()).toEqual({
       sourceId: "src-snapshot",
       displayName: "fixture.hprof",

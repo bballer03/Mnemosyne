@@ -59,9 +59,20 @@ export type ActiveOperation = OperationContext & {
   elapsedMs: number;
 };
 
+export type WorkspaceAnalysisMode = "deep";
+
+export type WorkspaceAnalysisCapabilities = {
+  graph: true;
+  dominators: true;
+  fieldData: boolean;
+  snapshotBacked: true;
+};
+
 type InvestigationState = InvestigationSelection & {
   workspaceId: string;
   activeOperation?: ActiveOperation;
+  analysisMode?: WorkspaceAnalysisMode;
+  capabilities?: WorkspaceAnalysisCapabilities;
   histogramView: HistogramViewState;
   persistenceIdentity?: WorkspacePersistenceIdentity;
   notes: WorkspaceNote[];
@@ -81,6 +92,12 @@ type InvestigationState = InvestigationSelection & {
   activatePersistence: (
     identity: WorkspacePersistenceIdentity,
     compatibility: WorkspaceCompatibility,
+  ) => WorkspaceRestoreResult | undefined;
+  commitSnapshotHydrate: (
+    identity: WorkspacePersistenceIdentity,
+    compatibility: Omit<WorkspaceCompatibility, "identity">,
+    mode: WorkspaceAnalysisMode,
+    capabilities: WorkspaceAnalysisCapabilities,
   ) => WorkspaceRestoreResult | undefined;
   deactivatePersistence: () => void;
   upsertNote: (note: WorkspaceNote) => void;
@@ -195,6 +212,8 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   workspaceId: createWorkspaceId(),
   revision: 0,
   activeOperation: undefined,
+  analysisMode: undefined,
+  capabilities: undefined,
   ...clearedSelection,
   histogramView: { ...defaultHistogramView },
   persistenceIdentity: undefined,
@@ -369,6 +388,48 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     });
     return restored;
   },
+  commitSnapshotHydrate: (identity, compatibility, mode, capabilities) => {
+    savePersistedWorkspace(get());
+    const loadResult = workspacePersistence().load(identity);
+    const baseState = {
+      revision: compatibility.revision,
+      activeOperation: undefined,
+      analysisMode: mode,
+      capabilities,
+      persistenceIdentity: identity,
+      ...clearedSelection,
+      histogramView: { ...defaultHistogramView },
+      notes: [],
+      bookmarks: [],
+      lastPersistenceNotice:
+        loadResult.status === "missing" || loadResult.status === "unavailable"
+          ? undefined
+          : loadResult.status === "ready"
+            ? undefined
+            : `Workspace metadata was not restored: ${loadResult.status}`,
+    };
+    if (loadResult.status !== "ready") {
+      set(baseState);
+      return undefined;
+    }
+
+    const restored = restoreCompatibleWorkspace(loadResult.record, {
+      ...compatibility,
+      identity,
+    });
+    set({
+      ...baseState,
+      ...restored.selection,
+      originPane: restored.layout.activePane,
+      histogramView: { ...restored.filters.histogram },
+      notes: restored.notes,
+      bookmarks: restored.bookmarks,
+      lastPersistenceNotice: formatDroppedSelectionNotice(
+        restored.droppedSelectionIds,
+      ),
+    });
+    return restored;
+  },
   deactivatePersistence: () => {
     savePersistedWorkspace(get());
     set({
@@ -406,6 +467,8 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     set((state) => ({
       revision: state.revision + 1,
       activeOperation: undefined,
+      analysisMode: undefined,
+      capabilities: undefined,
       ...clearedSelection,
       histogramView: { ...defaultHistogramView },
       persistenceIdentity: undefined,

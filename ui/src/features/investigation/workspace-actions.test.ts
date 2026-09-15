@@ -3,6 +3,7 @@ import "../../test/setup";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import type { AnalysisArtifact } from "../../lib/analysis-types";
+import type { SnapshotWorkspaceHydrate } from "../workflow-landing/workflow-bridge-client";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import {
   clearRememberedDesktopHeapSource,
@@ -12,9 +13,15 @@ import {
 import { useInvestigationStore } from "./investigation-store";
 import {
   applyOpenedHeap,
+  applySnapshotWorkspaceHydrate,
   closeInvestigationWorkspace,
   openDesktopHeapLean,
+  openSnapshotWorkspace,
 } from "./workspace-actions";
+import {
+  WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+  createWorkspacePersistence,
+} from "./workspace-persistence";
 
 function buildArtifact(options: {
   objectIds?: string[];
@@ -73,6 +80,8 @@ beforeEach(() => {
   useInvestigationStore.setState({
     revision: 0,
     activeOperation: undefined,
+    analysisMode: undefined,
+    capabilities: undefined,
     objectId: undefined,
     classKey: undefined,
     leakId: undefined,
@@ -95,6 +104,7 @@ afterEach(() => {
   useArtifactStore.getState().reset();
   clearRememberedDesktopHeapSource();
   delete window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
+  delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
 });
 
 describe("openDesktopHeapLean", () => {
@@ -221,5 +231,102 @@ describe("workspace persistence lifecycle", () => {
 
     expect(useInvestigationStore.getState().persistenceIdentity).toBeUndefined();
     expect(window.sessionStorage.length).toBe(0);
+  });
+});
+
+describe("snapshot workspace hydrate", () => {
+  it("commits facts, mode, capabilities, and compatible selection together", () => {
+    const artifact = buildArtifact({
+      objectIds: ["object-snapshot"],
+      classKeys: ["class-snapshot"],
+    });
+    const hydrate: SnapshotWorkspaceHydrate = {
+      snapshot: {
+        key: "snapshot-key",
+        displayName: "snapshot.hprof",
+        sourceId: "snapshot-source",
+        schemaVersion: 1,
+        createdAt: "1700000000",
+      },
+      mode: "deep",
+      capabilities: {
+        graph: true,
+        dominators: true,
+        fieldData: false,
+        snapshotBacked: true,
+      },
+      analysis: artifact,
+    };
+    createWorkspacePersistence().save({
+      schemaVersion: WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+      identity: { kind: "snapshot", key: "snapshot-key" },
+      revision: 11,
+      layout: { activePane: "inspector" },
+      filters: {
+        histogram: {
+          searchText: "snapshot",
+          groupBy: "class",
+          sortKey: "retained",
+          sortDirection: "desc",
+          pageOffset: 0,
+        },
+      },
+      selection: {
+        revision: 11,
+        objectId: "object-snapshot",
+        classKey: "class-snapshot",
+      },
+      notes: [],
+      bookmarks: [],
+    });
+
+    applySnapshotWorkspaceHydrate(hydrate);
+
+    expect(useArtifactStore.getState()).toMatchObject({
+      artifactName: "snapshot.hprof",
+      artifact,
+    });
+    expect(useInvestigationStore.getState()).toMatchObject({
+      revision: 1,
+      analysisMode: "deep",
+      capabilities: hydrate.capabilities,
+      persistenceIdentity: { kind: "snapshot", key: "snapshot-key" },
+      objectId: "object-snapshot",
+      classKey: "class-snapshot",
+    });
+    expect(getRememberedDesktopHeapSource()).toMatchObject({
+      sourceId: "snapshot-source",
+      displayName: "snapshot.hprof",
+    });
+  });
+
+  it("leaves the prior workspace intact when snapshot open fails", async () => {
+    const artifact = buildArtifact({ objectIds: ["object-prior"] });
+    applyOpenedHeap("prior.hprof", artifact, "prior-source");
+    rememberDesktopHeapSource("prior-source", "prior.hprof");
+    useInvestigationStore.getState().setObjectId("object-prior", "inspector");
+    const revision = useInvestigationStore.getState().revision;
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => {
+        throw new Error("snapshot unavailable");
+      },
+    };
+
+    const result = await openSnapshotWorkspace("snapshot-key");
+
+    expect(result.status).toBe("error");
+    expect(useArtifactStore.getState()).toMatchObject({
+      artifactName: "prior.hprof",
+      artifact,
+    });
+    expect(useInvestigationStore.getState()).toMatchObject({
+      revision,
+      objectId: "object-prior",
+      persistenceIdentity: { kind: "workspace", key: "prior-source" },
+    });
+    expect(getRememberedDesktopHeapSource()).toMatchObject({
+      sourceId: "prior-source",
+      displayName: "prior.hprof",
+    });
   });
 });

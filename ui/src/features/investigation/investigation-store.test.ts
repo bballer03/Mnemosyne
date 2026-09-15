@@ -51,6 +51,8 @@ describe("useInvestigationStore", () => {
       workspaceId: "workspace-1",
       revision: 0,
       activeOperation: undefined,
+      analysisMode: undefined,
+      capabilities: undefined,
       objectId: undefined,
       classKey: undefined,
       leakId: undefined,
