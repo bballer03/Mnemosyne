@@ -1254,6 +1254,38 @@ Meaning:
 - `max_tokens`: provider response budget, and a low-budget hint for prompt trimming
 - `timeout_secs`: provider request timeout
 
+### Safe activation checklist
+
+1. Keep the credential out of Mnemosyne TOML. `api_key_env` contains a variable name such as `OPENAI_API_KEY`, never the key value.
+2. Store the config in a user-only location and restrict its permissions:
+
+   ```bash
+   install -d -m 700 ~/.config/mnemosyne
+   chmod 600 ~/.config/mnemosyne/config.toml
+   ```
+
+3. Inject the key with an OS keychain, credential manager, service secret, or a non-echoing shell prompt:
+
+   ```bash
+   read -rsp "OpenAI API key: " OPENAI_API_KEY && echo
+   export OPENAI_API_KEY
+   test -n "${OPENAI_API_KEY:-}" && echo "OPENAI_API_KEY=true" || echo "OPENAI_API_KEY=false"
+   ```
+
+4. Run provider mode from the same environment, then clear an interactive shell value when finished:
+
+   ```bash
+   mnemosyne-cli --config ~/.config/mnemosyne/config.toml chat heap.hprof
+   # or: mnemosyne-cli --config ~/.config/mnemosyne/config.toml serve
+   unset OPENAI_API_KEY
+   ```
+
+Do not pass keys as command-line arguments, paste them into chat/evidence, or commit them in `.env`, TOML, shell scripts, or MCP client settings. Mnemosyne does not automatically load `.env` files. `mnemosyne-cli config` reports the configured environment-variable name, not the variable's value; the value is resolved only when provider mode sends a request.
+
+For MCP, start `mnemosyne-cli serve` from an environment that can resolve `api_key_env`, or use the client/host's secret-reference mechanism. Avoid literal secrets in versioned JSON. Provider HTTP failures remain structured as `provider_error` or `provider_timeout` in MCP responses; switching the config back to `mode = "rules"` restores the offline default.
+
+The current desktop Assistant bridge forwards `chatSession` to the native session adapter, but its `HeapSession` starts with `AppConfig::default()` and does not load the CLI config chain. Therefore this guide does not claim external-provider desktop chat is currently operator-configurable; the evidenced provider path is CLI/MCP. Desktop remains on rules mode unless a native host supplies a non-default in-memory config.
+
 Optional task toggles:
 
 ```toml
