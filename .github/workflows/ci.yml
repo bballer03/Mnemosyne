@@ -91,3 +91,48 @@ jobs:
           tags: mnemosyne:ci-test
           build-args: |
             VERSION=ci-test
+
+  # Tauri is excluded from the root Cargo workspace, so `cargo check --workspace`
+  # never compiles the desktop host. Catch compile/link regressions on PR/main
+  # before tagged release builds (which bundle installers on 5 OS/arch targets).
+  desktop-check:
+    name: Desktop Tauri Check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "tauri -> target"
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.5"
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Build UI (Tauri frontend assets)
+        working-directory: ui
+        run: bun run build
+
+      - name: Cargo check desktop host
+        working-directory: tauri
+        run: cargo check --locked
+
+      - name: Cargo test desktop host (unit)
+        working-directory: tauri
+        run: cargo test --locked --bins -- --nocapture
