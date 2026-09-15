@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Keep named OQL deferrals explicit: `eval(...)`, arbitrary-depth nesting, and other unscheduled grammar.
+- Keep named OQL deferrals explicit: `eval(...)`, arbitrary-depth nesting, class lists beyond the shipped eight-pattern bound, and other unscheduled grammar.
 - Strings/collections/arrays/threads/referrers/classloaders remain opt-in with memory/cost disclosure.
 - Reuse `AnalyzeRequest` flags and existing analyzer reports; no duplicate frontend analyzer.
 - Preserve HTML escaping and provenance on every export.
@@ -97,7 +97,7 @@
 
 - [ ] **Step 2: Add failing panel tests for examples and syntax**
 
-  Assert that vetted examples can replace the editor text, the supported syntax list is visible beside the editor, and named deferrals explicitly include `eval(...)`, arbitrary-depth nesting, multi-class `FROM`, and arbitrary-depth/multi-hop traversal beyond the shipped bounds.
+  Assert that vetted examples can replace the editor text, the supported syntax list is visible beside the editor, and named deferrals explicitly include `eval(...)`, arbitrary-depth nesting, class lists beyond the shipped eight-pattern `FROM` bound, and traversal beyond the shipped three-hop `OBJECTS` bound.
 
 - [ ] **Step 3: Run the panel test and verify RED**
 

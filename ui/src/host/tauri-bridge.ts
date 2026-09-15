@@ -35,12 +35,17 @@ async function invokeOrThrow<T>(
   invoke: InvokeFn,
   cmd: string,
   args?: Record<string, unknown>,
+  options?: { logRawError?: boolean },
 ): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
   } catch (error) {
     const message = formatHostError(error, `${cmd} failed`);
-    console.error(`[mnemosyne] ${cmd} failed`, error);
+    if (options?.logRawError === false) {
+      console.error(`[mnemosyne] ${cmd} failed`);
+    } else {
+      console.error(`[mnemosyne] ${cmd} failed`, error);
+    }
     throw new Error(message);
   }
 }
@@ -166,6 +171,8 @@ export async function injectHostBridges(): Promise<boolean> {
   const { invoke } = await import("@tauri-apps/api/core");
   const call = <T>(cmd: string, args?: Record<string, unknown>) =>
     invokeOrThrow<T>(invoke as InvokeFn, cmd, args);
+  const callWithoutRawError = <T>(cmd: string, args?: Record<string, unknown>) =>
+    invokeOrThrow<T>(invoke as InvokeFn, cmd, args, { logRawError: false });
   await subscribeToOperationProgress();
 
   hostWindow.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
@@ -187,7 +194,9 @@ export async function injectHostBridges(): Promise<boolean> {
 
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
     queryHeap: (input) =>
-      invokeOperation("query", (context) => call("query_heap", { input: { ...input, context } })),
+      invokeOperation("query", (context) =>
+        callWithoutRawError("query_heap", { input: { ...input, context } }),
+      ),
     getReferences: (objectId) => call("get_references", { objectId }),
     getReferrers: (objectId) => call("get_referrers", { objectId }),
     inspectObject: (objectId, retainFieldData) =>

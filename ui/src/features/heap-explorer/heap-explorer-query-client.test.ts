@@ -326,6 +326,46 @@ describe("heap explorer query client", () => {
     });
   });
 
+  it("returns structured one-based coordinates for parser byte offsets", async () => {
+    const query = "SELECT *\nFROM Cache";
+    setHeapExplorerBridge({
+      queryHeap: async () => {
+        throw new Error("expected class pattern at byte 14");
+      },
+    });
+
+    expect(await runHeapQuery({ heapPath: "heap.hprof", query })).toEqual({
+      status: "error",
+      error: "expected class pattern at byte 14",
+      location: {
+        byteOffset: 14,
+        line: 2,
+        column: 6,
+      },
+    });
+  });
+
+  it("maps UTF-8 parser offsets without treating bytes as JavaScript indexes", async () => {
+    const query = 'SELECT *\nFROM "é"';
+    setHeapExplorerBridge({
+      queryHeap: async () => {
+        throw new Error("expected end of query at byte 18");
+      },
+    });
+
+    const result = await runHeapQuery({ heapPath: "heap.hprof", query });
+
+    expect(result).toMatchObject({
+      status: "error",
+      location: {
+        byteOffset: 18,
+        line: 2,
+        column: 9,
+      },
+    });
+    expect(result).not.toHaveProperty("query");
+  });
+
   it("getObjectReferences returns unavailable when no bridge exists", async () => {
     expect(await getObjectReferences("0xabc")).toEqual({
       status: "unavailable",

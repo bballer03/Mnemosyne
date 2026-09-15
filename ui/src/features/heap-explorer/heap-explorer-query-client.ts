@@ -10,6 +10,12 @@ export type HeapQueryResult = {
   rows: HeapQueryCell[][];
 };
 
+export type HeapQueryErrorLocation = {
+  byteOffset: number;
+  line: number;
+  column: number;
+};
+
 export type ObjectReferenceEntry = {
   objectId: string;
   className: string;
@@ -273,6 +279,32 @@ function parseHeapQueryResult(value: unknown): HeapQueryResult {
   return {
     columns: readStringArray(value.columns, "query.columns"),
     rows: readRows(value.rows, "query.rows"),
+  };
+}
+
+function parseHeapQueryErrorLocation(
+  query: string,
+  message: string,
+): HeapQueryErrorLocation | undefined {
+  const match = /\bat byte (\d+)\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+
+  const byteOffset = Number(match[1]);
+  const encodedQuery = new TextEncoder().encode(query);
+  if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > encodedQuery.length) {
+    return undefined;
+  }
+
+  const prefix = new TextDecoder().decode(encodedQuery.slice(0, byteOffset));
+  const lines = prefix.split(/\r\n|\r|\n/);
+  const currentLine = lines[lines.length - 1] ?? "";
+
+  return {
+    byteOffset,
+    line: lines.length,
+    column: Array.from(currentLine).length + 1,
   };
 }
 
@@ -643,9 +675,13 @@ export async function runHeapQuery(input: HeapQueryInput) {
       data: parseHeapQueryResult(raw),
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown heap query failure.";
+    const location = parseHeapQueryErrorLocation(input.query, message);
+
     return {
       status: "error" as const,
-      error: error instanceof Error ? error.message : "Unknown heap query failure.",
+      error: message,
+      ...(location ? { location } : {}),
     };
   }
 }

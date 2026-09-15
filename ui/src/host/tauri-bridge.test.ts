@@ -181,6 +181,44 @@ describe("tauri-bridge", () => {
     });
   });
 
+  it("never logs query text or stores it in operation progress state", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const query = "SELECT PRIVATE_QUERY_SENTINEL";
+    let rejectQuery!: (reason: Error) => void;
+    invokeOverride = async (command) => {
+      if (command !== "query_heap") {
+        return { command };
+      }
+      return new Promise((_resolve, reject) => {
+        rejectQuery = reject;
+      });
+    };
+    const originalConsoleError = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+
+    try {
+      await expect(injectHostBridges()).resolves.toBe(true);
+      const pending = window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?.queryHeap?.({
+        heapPath: "fixture.hprof",
+        query,
+      });
+
+      expect(JSON.stringify(useInvestigationStore.getState().activeOperation)).not.toContain(query);
+      rejectQuery(new Error(`native rejected ${query}`));
+      await expect(pending!).rejects.toThrow(query);
+      const renderedLogs = logged
+        .flat()
+        .map((value) => (value instanceof Error ? value.message : String(value)))
+        .join("\n");
+      expect(renderedLogs).not.toContain(query);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   it("sends the active operation id to cancel_operation", async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
 
