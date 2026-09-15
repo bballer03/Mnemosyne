@@ -1,8 +1,8 @@
-# UI capability matrix (M20–M26)
+# UI capability matrix (M20–M27)
 
 Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
@@ -18,8 +18,8 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Path/ref synchronized navigation | investigation store | **shipped** | M25.C: refs/referrers/dominators/GC-path nodes set shared `objectId` (`76b5e5f`) |
 | Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
 | Duplicate arrays / plugins / classloaders | artifact sections + CLI | **shipped** | UI Loaded vs Unique (`5af03f9`); CLI Unique Classes column from existing `unique_class_count` (M22.D) |
-| Compare / leak workspace | bridges | **shipped** | `/compare` remains a separate comparison surface. M24.E in-workbench compare is **deferred** post-v0.5.0 and does not block the continuous shell cut. |
-| Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove; basename in UI; open installs graph + opaque `sourceId` (`2dbe4f8`, `352b3d5`) |
+| Compare / leak workspace | existing comparison bridge + investigation store | **shipped** | M27.C shares current/baseline pickers, strategy/top-N/leak controls, match quality, and delta results between persistent chrome and the `/compare` adapter; after-side rows open Inspector. |
+| Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove and basename-only React display. M27.B atomically installs cached graph-derived facts, deep mode/capabilities, opaque snapshot identity, and compatible selection (`d6d73ef`). |
 | Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
 | Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | SVG via blob URL; root selector (`2dbe4f8`); 16 MiB / overview-unavailability UI parity tests still thin (rely on core/MCP) |
 | Portable Windows zip | release CI script | **partial** | Labeled WebView2 prerequisite; clean-image unzip evidence **not proven** (M21) |
@@ -34,12 +34,12 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Desktop AI session adapters | Tauri over MCP AI session | **shipped** | create/resume/get/close/chat; 12/32 bounds; rules fallback — **not** live-provider proof on WSL |
 | Workflow get/close/resume | Tauri + WorkflowCard | **shipped** | MCP-parity get/close; resume UI (`532df7c`); basename projection on get (`d391953`) |
 | AI-first guidance vs MAT analysis | advisory only | **partial** | Guidance never claims MAT-equivalent replacement; see M23 evidence NOT-proven table |
-| Continuous heap lifecycle | investigation store + desktop host | **shipped** | M24.A/B: persistent heap identity with **Open / Open another / Close**; failed replacement opens preserve the current session; recent/snapshot opens commit transactionally. |
+| Continuous heap lifecycle | investigation store + desktop host | **shipped** | M24.A/B: persistent heap identity with **Open / Open another / Close**. M27.A/B adds strict display-safe workspace metadata persistence and full transactional snapshot hydrate; failed opens preserve the current session. |
 | Shared investigation selection | investigation store | **shipped** | M24.C: `objectId` / `classKey` / `leakId` selection synchronizes histogram, dominators, inspector, and deep-linked routes without stale-object precedence. |
 | Findings + Assistant advisory | rules-derived findings + investigation selection | **shipped** | M24.D: collapsible, Rules-labelled advisory pane with deterministic deep-links; findings remain guidance over deterministic analysis. |
 | Correlated operation progress / stale-result rejection | operation registry + Tauri envelopes + investigation store | **shipped** | M26: open/analyze/query/diff/snapshot/flamegraph/GC-path/field-data inspect echo workspace/revision/operation identity; generation-N race tests reject late progress/success. Determinate values appear only when bounded; other phases are explicitly indeterminate. |
 | Cooperative Cancel | core checkpoints + registry commit guards + HeapSessionBar | **partial** | M26 proves prompt cooperative stop in parser/dominator/analysis checkpoints and prevents publication for every protocol-wired family. Query/diff/GC traversal/flame rendering/snapshot I/O have boundary/commit guards but no inner loop checkpoint. `run_ci_check`, explain/fix, source mapping, and workflow/AI lifecycle are not protocol-wired. |
-| In-workbench compare | existing comparison backend and `/compare` route | **deferred** | M24.E gated to post-v0.5.0 / the next slice. The standalone `/compare` route stays shipped and unchanged. |
+| In-workbench compare | existing comparison backend + shared compare components | **shipped** | M27.C delivers the post-v0.5.0 slice in investigation chrome. `/compare` remains a thin adapter; no new analyzer was added. |
 
 ## Honesty bar
 
@@ -47,5 +47,6 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 - This WSL host yields **command-layer / browser-fallback** evidence only. Do not treat green unit tests as packaged GUI launch proof or as a live AI provider round-trip.
 - Screenshot gallery per workbench family was **not** captured in the 20.H closeout; visual proof is absent, not implied.
 - M23 assistant Ask is **advisory** with explicit provenance; deterministic power tools remain the analysis path.
-- M24 findings remain **Rules-derived advisory** content, and compare remains an honest standalone surface until the post-v0.5.0 in-workbench slice.
+- M24 findings remain **Rules-derived advisory** content. M27 comparison is integrated into persistent chrome, but packaged-GUI interaction remains **NOT proven** on WSL.
 - M26 focused tests prove correlation, rejection, cleanup, and controlled core checkpoints. They do **not** prove packaged-GUI behavior, native Tauri compilation on WSL, or prompt interruption inside every indeterminate operation.
+- M27 focused tests prove display-safe persistence, atomic snapshot hydrate, shared compare rendering, option forwarding, and after-side selection. They do **not** prove packaged-GUI behavior or real multi-GB comparison performance.

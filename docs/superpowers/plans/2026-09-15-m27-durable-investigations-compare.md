@@ -91,7 +91,7 @@ Selection restoration is revision-aware and evidence-based. The adapter receives
 - Produces: `createWorkspacePersistence(storage?: Storage): WorkspacePersistence`, with `load(identity)`, `save(record)`, and `remove(identity)`.
 - Consumes: `HistogramViewState` and `InvestigationOriginPane` from `investigation-store.ts` as type-only imports.
 
-- [ ] **Step 1: Write failing schema allow-list tests**
+- [x] **Step 1: Write failing schema allow-list tests**
 
 ```ts
 it("accepts only versioned display-safe metadata", () => {
@@ -108,13 +108,13 @@ it.each([
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `cd ui && bun test src/features/investigation/workspace-persistence.test.ts --max-concurrency=1`
 
 Expected: FAIL because `workspace-persistence.ts` and its exported parser do not exist.
 
-- [ ] **Step 3: Implement the V1 types and strict parser**
+- [x] **Step 3: Implement the V1 types and strict parser**
 
 ```ts
 export const WORKSPACE_PERSISTENCE_SCHEMA_VERSION = 1 as const;
@@ -132,7 +132,7 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
 
 Validation bounds for V1: identity/target IDs `1..512` characters, note IDs/bookmark IDs `1..128`, note text `0..2000`, bookmark label `0..200`, at most `100` notes and `100` bookmarks, histogram page offset a non-negative safe integer, and all enum values from the existing store unions.
 
-- [ ] **Step 4: Add failing compatibility and migration tests**
+- [x] **Step 4: Add failing compatibility and migration tests**
 
 ```ts
 it("rebinds compatible IDs and reports stale IDs", () => {
@@ -159,7 +159,7 @@ it("does not guess how to migrate an unknown schema", () => {
 });
 ```
 
-- [ ] **Step 5: Implement compatibility filtering and session storage**
+- [x] **Step 5: Implement compatibility filtering and session storage**
 
 ```ts
 export type WorkspacePersistence = {
@@ -176,13 +176,13 @@ export function createWorkspacePersistence(
 }
 ```
 
-- [ ] **Step 6: Run focused tests and verify GREEN**
+- [x] **Step 6: Run focused tests and verify GREEN**
 
 Run: `cd ui && bun test src/features/investigation/workspace-persistence.test.ts --max-concurrency=1`
 
 Expected: all adapter tests PASS with no route mount and no console warnings.
 
-- [ ] **Step 7: Commit the adapter**
+- [x] **Step 7: Commit the adapter**
 
 ```bash
 git add ui/src/features/investigation/workspace-persistence.ts \
@@ -204,7 +204,7 @@ git commit -m "feat(ui): add safe workspace persistence"
 - Produces: `upsertNote(note)`, `removeNote(noteId)`, `upsertBookmark(bookmark)`, and `removeBookmark(bookmarkId)`.
 - Preserves: every M26 operation/revision action and existing selector name.
 
-- [ ] **Step 1: Write failing store restoration tests**
+- [x] **Step 1: Write failing store restoration tests**
 
 ```ts
 it("restores compatible metadata for one opaque workspace identity", () => {
@@ -232,13 +232,13 @@ it("restores compatible metadata for one opaque workspace identity", () => {
 });
 ```
 
-- [ ] **Step 2: Run the store test and verify RED**
+- [x] **Step 2: Run the store test and verify RED**
 
 Run: `cd ui && bun test src/features/investigation/investigation-store.test.ts --max-concurrency=1`
 
 Expected: FAIL because persistence activation and metadata actions do not exist.
 
-- [ ] **Step 3: Add minimal additive store state/actions**
+- [x] **Step 3: Add minimal additive store state/actions**
 
 ```ts
 activatePersistence: (identity, compatibility) => {
@@ -264,7 +264,7 @@ activatePersistence: (identity, compatibility) => {
 
 Each existing filter/selection mutation and each note/bookmark mutation writes a newly constructed V1 envelope only when `persistenceIdentity` is active. `activeOperation` is never included. `deactivatePersistence()` saves the current metadata and unbinds the identity without deleting its session record.
 
-- [ ] **Step 4: Add note/bookmark identity-isolation tests**
+- [x] **Step 4: Add note/bookmark identity-isolation tests**
 
 ```ts
 it("keeps notes and bookmarks isolated by opaque identity", () => {
@@ -277,13 +277,13 @@ it("keeps notes and bookmarks isolated by opaque identity", () => {
 });
 ```
 
-- [ ] **Step 5: Run store and adapter tests**
+- [x] **Step 5: Run store and adapter tests**
 
 Run: `cd ui && bun test src/features/investigation/workspace-persistence.test.ts src/features/investigation/investigation-store.test.ts --max-concurrency=1`
 
 Expected: all tests PASS; existing M26 operation tests remain green.
 
-- [ ] **Step 6: Commit store wiring**
+- [x] **Step 6: Commit store wiring**
 
 ```bash
 git add ui/src/features/investigation/investigation-store.ts \
@@ -303,7 +303,7 @@ git commit -m "feat(ui): persist investigation metadata"
 - Preserves: failed/cancelled opens do not switch persistence identity or alter the current workspace.
 - Defers: snapshot-first hydration and snapshot-key activation to M27.B.
 
-- [ ] **Step 1: Write a failing return-to-workspace test**
+- [x] **Step 1: Write a failing return-to-workspace test**
 
 ```ts
 it("restores only selections present in the reopened artifact", () => {
@@ -318,13 +318,13 @@ it("restores only selections present in the reopened artifact", () => {
 });
 ```
 
-- [ ] **Step 2: Run the workspace-actions test and verify RED**
+- [x] **Step 2: Run the workspace-actions test and verify RED**
 
 Run: `cd ui && bun test src/features/investigation/workspace-actions.test.ts --max-concurrency=1`
 
 Expected: FAIL because `applyOpenedHeap` does not activate or restore persisted metadata.
 
-- [ ] **Step 3: Activate persistence after artifact commit**
+- [x] **Step 3: Activate persistence after artifact commit**
 
 ```ts
 useInvestigationStore.getState().bumpRevisionOnArtifactChange();
@@ -340,7 +340,7 @@ if (sourceId) {
 
 Browser-only imported JSON has no opaque host identity, so it remains intentionally session-memory-only. `applyOpenedSnapshotSession` stays unchanged in M27.A because the current bridge does not return a complete hydrate envelope or stable snapshot identity; M27.B owns that transaction.
 
-- [ ] **Step 4: Run the focused M27.A matrix**
+- [x] **Step 4: Run the focused M27.A matrix**
 
 Run:
 
@@ -356,7 +356,7 @@ bun run build
 
 Expected: all focused tests PASS, TypeScript emits no errors, and the production UI build completes.
 
-- [ ] **Step 5: Commit lifecycle integration**
+- [x] **Step 5: Commit lifecycle integration**
 
 ```bash
 git add ui/src/features/investigation/workspace-actions.ts \
@@ -364,7 +364,7 @@ git add ui/src/features/investigation/workspace-actions.ts \
 git commit -m "feat(ui): restore compatible workspace state"
 ```
 
-- [ ] **Step 6: Pre-push scope check**
+- [x] **Step 6: Pre-push scope check**
 
 Run: `git diff --check && git status --short && git log --oneline -4`
 
@@ -412,7 +412,7 @@ On accepted success, the host swaps graph + dominator + heap identity inside one
 - Preserves: `analyze_heap_from_graph` and all parse-based analysis behavior.
 - Requires: a graph-derived `HeapSummary` with `header: None`, `total_records: 0`, empty `record_stats`, basename-only `heap_path`, and `ProvenanceKind::Partial`.
 
-- [ ] **Step 1: Write a failing source-independent snapshot analysis test**
+- [x] **Step 1: Write a failing source-independent snapshot analysis test**
 
 ```rust
 #[tokio::test]
@@ -442,13 +442,13 @@ async fn snapshot_analysis_survives_missing_source_heap() {
 }
 ```
 
-- [ ] **Step 2: Run the focused core test and verify RED**
+- [x] **Step 2: Run the focused core test and verify RED**
 
 Run: `cargo test -p mnemosyne-core snapshot_analysis_survives_missing_source_heap -- --nocapture`
 
 Expected: FAIL because `analyze_snapshot_from_graph_controlled` does not exist.
 
-- [ ] **Step 3: Implement graph-derived facts with cancellation checkpoints**
+- [x] **Step 3: Implement graph-derived facts with cancellation checkpoints**
 
 ```rust
 pub async fn analyze_snapshot_from_graph_controlled(
@@ -467,13 +467,13 @@ pub async fn analyze_snapshot_from_graph_controlled(
 
 The derived class totals use graph object shallow sizes, not raw HPROF record lengths. The provenance detail states that distinction. No absolute manifest path enters the response.
 
-- [ ] **Step 4: Run focused core tests and verify GREEN**
+- [x] **Step 4: Run focused core tests and verify GREEN**
 
 Run: `cargo test -p mnemosyne-core snapshot_analysis_ -- --nocapture`
 
 Expected: all snapshot-analysis tests PASS, including cancellation before publication.
 
-- [ ] **Step 5: Commit source-independent snapshot facts**
+- [x] **Step 5: Commit source-independent snapshot facts**
 
 ```bash
 git add core/src/analysis/engine.rs
@@ -492,7 +492,7 @@ git commit -m "feat(core): derive snapshot workspace facts"
 - Produces: `open_snapshot(...) -> Result<OperationEnvelope<SnapshotWorkspaceHydrate>, String>`.
 - Preserves: SHA-256 key validation and `SnapshotStore` lookup semantics.
 
-- [ ] **Step 1: Write failing hydrate-contract tests beside `open_snapshot_for_session`**
+- [x] **Step 1: Write failing hydrate-contract tests beside `open_snapshot_for_session`**
 
 ```rust
 #[test]
@@ -512,13 +512,13 @@ fn snapshot_hydrate_contains_identity_mode_capabilities_and_facts() {
 }
 ```
 
-- [ ] **Step 2: Run the focused session test and verify RED**
+- [x] **Step 2: Run the focused session test and verify RED**
 
 Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures snapshot_hydrate_ -- --nocapture`
 
 Expected: FAIL because the hydrate contract/builder does not exist.
 
-- [ ] **Step 3: Build facts before the host commit gate**
+- [x] **Step 3: Build facts before the host commit gate**
 
 ```rust
 let (manifest, graph, dominator) = open_snapshot_for_session(&store, &key)?;
@@ -533,11 +533,11 @@ let hydrate = build_snapshot_workspace_hydrate(&manifest, source_id, response)?;
 
 Use incident-safe defaults: classloaders and top instances enabled; field-heavy analyzers disabled. `fieldData` reports the cached manifest capability and does not trigger a second parse.
 
-- [ ] **Step 4: Atomically install the host session only after facts succeed**
+- [x] **Step 4: Atomically install the host session only after facts succeed**
 
 Acquire the session mutation guard and all required state locks before mutation. Run the graph/dominator/path/source replacement inside `OperationRegistration::commit_if_current`; if the gate rejects, return `operation_cancelled` without changing any slot. Do not clear the existing session on a failed load, analysis error, or rejected old operation.
 
-- [ ] **Step 5: Run focused host tests and verify GREEN**
+- [x] **Step 5: Run focused host tests and verify GREEN**
 
 Run:
 
@@ -549,7 +549,7 @@ cargo check --manifest-path tauri/Cargo.toml
 
 Expected: snapshot loader/hydrate tests PASS and the Tauri command compiles with the widened response.
 
-- [ ] **Step 6: Commit the host hydrate envelope**
+- [x] **Step 6: Commit the host hydrate envelope**
 
 ```bash
 git add tauri/session-ops/src/lib.rs tauri/src/commands.rs
@@ -572,7 +572,7 @@ git commit -m "feat(desktop): hydrate snapshots transactionally"
 - Produces: `applyOpenedSnapshotHydrate(hydrate)`, replacing graph-only `applyOpenedSnapshotSession`.
 - Consumes: M26 `OperationEnvelope` validation in `invokeOperation`; no UI-side loader.
 
-- [ ] **Step 1: Write failing bridge parser tests for the complete hydrate**
+- [x] **Step 1: Write failing bridge parser tests for the complete hydrate**
 
 ```ts
 it("parses one snapshot workspace hydrate", async () => {
@@ -594,13 +594,13 @@ it("rejects a hydrate missing facts before workspace mutation", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the bridge test and verify RED**
+- [x] **Step 2: Run the bridge test and verify RED**
 
 Run: `cd ui && bun test src/features/workflow-landing/workflow-bridge-client.test.ts --max-concurrency=1`
 
 Expected: FAIL because `runOpenSnapshot` still accepts only the graph summary.
 
-- [ ] **Step 3: Parse identity, mode/capabilities, and facts as one value**
+- [x] **Step 3: Parse identity, mode/capabilities, and facts as one value**
 
 ```ts
 function parseSnapshotWorkspaceHydrate(value: unknown): SnapshotWorkspaceHydrate {
@@ -611,7 +611,7 @@ function parseSnapshotWorkspaceHydrate(value: unknown): SnapshotWorkspaceHydrate
 
 Do not place raw graph payloads or paths in browser persistence.
 
-- [ ] **Step 4: Write failing atomic apply and compatibility tests**
+- [x] **Step 4: Write failing atomic apply and compatibility tests**
 
 ```ts
 it("commits snapshot facts, mode, capabilities, and compatible selection together", () => {
@@ -632,11 +632,11 @@ it("commits snapshot facts, mode, capabilities, and compatible selection togethe
 });
 ```
 
-- [ ] **Step 5: Add the single snapshot commit action**
+- [x] **Step 5: Add the single snapshot commit action**
 
 The action bumps revision once, installs the parsed artifact, resets heap-bound adapter stores, restores metadata against compatibility sets from the new facts, remembers the opaque host source, and adds the recent entry. The old graph-only clear path is removed.
 
-- [ ] **Step 6: Add failure and old-revision race tests**
+- [x] **Step 6: Add failure and old-revision race tests**
 
 Use deferred promises around the real bridge client, `beginOperation("snapshot")`, and the M26 envelope checks:
 
@@ -658,7 +658,7 @@ it("keeps the prior workspace when an old revision returns late", async () => {
 });
 ```
 
-- [ ] **Step 7: Run focused store/action/bridge tests and verify GREEN**
+- [x] **Step 7: Run focused store/action/bridge tests and verify GREEN**
 
 Run:
 
@@ -672,7 +672,7 @@ bun test src/features/workflow-landing/workflow-bridge-client.test.ts \
 
 Expected: all focused tests PASS without mounting a route.
 
-- [ ] **Step 8: Commit the UI hydrate transaction**
+- [x] **Step 8: Commit the UI hydrate transaction**
 
 ```bash
 git add ui/src/features/workflow-landing/workflow-bridge-client.ts \
@@ -697,11 +697,11 @@ git commit -m "feat(ui): commit snapshot hydrate atomically"
 - Removes: graph-only success copy and `applyOpenedSnapshotSession`.
 - Preserves: browser/unavailable/list/remove/save behavior.
 
-- [ ] **Step 1: Update focused component tests to require hydrated facts**
+- [x] **Step 1: Update focused component tests to require hydrated facts**
 
 Each `openSnapshot` fixture returns the complete hydrate. Assertions require the new artifact and restored snapshot identity to be present after success. Add one rejected-open assertion proving the prior artifact remains unchanged.
 
-- [ ] **Step 2: Run component tests and verify RED**
+- [x] **Step 2: Run component tests and verify RED**
 
 Run:
 
@@ -714,7 +714,7 @@ bun test src/features/snapshots/SnapshotManagerPage.test.tsx \
 
 Expected: FAIL while the components still call the graph-only action.
 
-- [ ] **Step 3: Apply the complete hydrate only on `ready`**
+- [x] **Step 3: Apply the complete hydrate only on `ready`**
 
 ```ts
 applyOpenedSnapshotHydrate(result.data);
@@ -724,7 +724,7 @@ setActionStatus(
 );
 ```
 
-- [ ] **Step 4: Run the complete M27.B focused matrix**
+- [x] **Step 4: Run the complete M27.B focused matrix**
 
 Run:
 
@@ -742,7 +742,7 @@ bun run build
 
 Expected: focused tests PASS, lint is clean, and the TypeScript production build succeeds. No full production route is mounted.
 
-- [ ] **Step 5: Commit snapshot entry-point wiring**
+- [x] **Step 5: Commit snapshot entry-point wiring**
 
 ```bash
 git add ui/src/features/snapshots/SnapshotManagerPage.tsx \
@@ -752,7 +752,7 @@ git add ui/src/features/snapshots/SnapshotManagerPage.tsx \
 git commit -m "feat(ui): reopen snapshots with full facts"
 ```
 
-- [ ] **Step 6: Pre-push scope check**
+- [x] **Step 6: Pre-push scope check**
 
 Run: `git diff --check && git status --short && git log --oneline -8`
 
@@ -796,7 +796,7 @@ Only `Added` and `RetainedChanged` rows have an after-side object. Their Inspect
 - Changes: `DiffObjectsInput` requires the selected strategy, bounded top-N, and leak-cross-reference flag.
 - Preserves: diff-report JSON upload and explicit bridge-unavailable behavior.
 
-- [ ] **Step 1: Write failing store/bridge option-forwarding tests**
+- [x] **Step 1: Write failing store/bridge option-forwarding tests**
 
 ```ts
 it("forwards the selected comparison options unchanged", async () => {
@@ -826,13 +826,13 @@ it("forwards the selected comparison options unchanged", async () => {
 });
 ```
 
-- [ ] **Step 2: Run focused bridge tests and verify RED**
+- [x] **Step 2: Run focused bridge tests and verify RED**
 
 Run: `cd ui && bun test src/features/comparison/comparison-bridge-client.test.ts --max-concurrency=1`
 
 Expected: TypeScript/test failure because `DiffObjectsInput` does not expose `crossReferenceLeaks` and the required option contract is absent.
 
-- [ ] **Step 3: Add minimal comparison option state and bridge contract**
+- [x] **Step 3: Add minimal comparison option state and bridge contract**
 
 ```ts
 const initialState = {
@@ -853,7 +853,7 @@ export type DiffObjectsInput = {
 
 The store setters clamp top-N to an integer in `1..500`. `reset()` restores all three defaults.
 
-- [ ] **Step 4: Write failing picker tests for current/baseline snapshots and controls**
+- [x] **Step 4: Write failing picker tests for current/baseline snapshots and controls**
 
 ```ts
 it("lists snapshot basenames and seeds current from the exact snapshot identity", async () => {
@@ -902,13 +902,13 @@ it("submits strategy, top-N, and leak cross-reference", async () => {
 });
 ```
 
-- [ ] **Step 5: Run picker tests and verify RED**
+- [x] **Step 5: Run picker tests and verify RED**
 
 Run: `cd ui && bun test src/features/comparison/ComparisonPicker.test.tsx --max-concurrency=1`
 
 Expected: FAIL because live compare still uses opaque text fields, does not list snapshots, and does not expose the three options.
 
-- [ ] **Step 6: Implement the display-safe snapshot controls**
+- [x] **Step 6: Implement the display-safe snapshot controls**
 
 Use `runListSnapshots()` once per picker mount when both list and diff bridges are available. Render explicit loading, empty, unavailable, and error states. The current and baseline `<select>` values are snapshot keys; labels use only `manifest.heapPath`, which the existing parser has already reduced to a basename. Seed the current side with:
 
@@ -931,7 +931,7 @@ await runDiffObjects({
 });
 ```
 
-- [ ] **Step 7: Run picker, bridge, and store tests and verify GREEN**
+- [x] **Step 7: Run picker, bridge, and store tests and verify GREEN**
 
 Run:
 
@@ -944,7 +944,7 @@ bun test src/features/comparison/comparison-bridge-client.test.ts \
 
 Expected: all focused controls and forwarding tests PASS; the JSON-upload and unavailable-state tests remain green.
 
-- [ ] **Step 8: Commit live comparison controls**
+- [x] **Step 8: Commit live comparison controls**
 
 ```bash
 git add ui/src/features/comparison/comparison-store.ts \
@@ -971,7 +971,7 @@ git commit -m "feat(ui): add snapshot comparison controls"
 - Consumes: `useArtifactStore` in chrome mode so no compare control renders without an active artifact.
 - Preserves: `/compare`, report JSON loading, no-differences copy, and all existing comparison-store state.
 
-- [ ] **Step 1: Write a failing focused workbench-panel test**
+- [x] **Step 1: Write a failing focused workbench-panel test**
 
 ```ts
 it("opens current-vs-baseline compare beside an active investigation", async () => {
@@ -996,13 +996,13 @@ it("does not render chrome controls without an active artifact", () => {
 });
 ```
 
-- [ ] **Step 2: Run the panel test and verify RED**
+- [x] **Step 2: Run the panel test and verify RED**
 
 Run: `cd ui && bun test src/features/comparison/ComparisonWorkbenchPanel.test.tsx --max-concurrency=1`
 
 Expected: FAIL because the shared workbench panel does not exist.
 
-- [ ] **Step 3: Extract one results renderer and add the chrome panel**
+- [x] **Step 3: Extract one results renderer and add the chrome panel**
 
 ```tsx
 export function ComparisonResults() {
@@ -1014,7 +1014,7 @@ export function ComparisonResults() {
 
 Chrome mode renders a compact closed button first and mounts `ComparisonPicker`/`ComparisonResults` only after the user expands it. Route mode is always expanded and keeps the report-file adapter visible.
 
-- [ ] **Step 4: Make `/compare` a thin adapter and wire chrome placement**
+- [x] **Step 4: Make `/compare` a thin adapter and wire chrome placement**
 
 `ComparisonPage` keeps its heading/navigation and renders only:
 
@@ -1024,7 +1024,7 @@ Chrome mode renders a compact closed button first and mounts `ComparisonPicker`/
 
 `InvestigationChromeLayout` renders `<ComparisonWorkbenchPanel variant="chrome" />` below `HeapSessionBar`/`FindingsAdvisoryPane`, except on `/compare` where the route adapter already owns the shared panel. Use `useLocation()` for that duplicate-surface guard.
 
-- [ ] **Step 5: Run focused panel/page tests and verify GREEN**
+- [x] **Step 5: Run focused panel/page tests and verify GREEN**
 
 Run:
 
@@ -1037,7 +1037,7 @@ bun test src/features/comparison/ComparisonWorkbenchPanel.test.tsx \
 
 Expected: all tests PASS using minimal `MemoryRouter` trees; no test imports or mounts production `routes`.
 
-- [ ] **Step 6: Commit workbench integration**
+- [x] **Step 6: Commit workbench integration**
 
 ```bash
 git add ui/src/features/comparison/ComparisonResults.tsx \
@@ -1060,7 +1060,7 @@ git commit -m "feat(ui): integrate compare into workbench"
 - Produces: Inspector links for `Added` and `RetainedChanged` example objects.
 - Preserves: `Removed` rows as evidence-only because no after-side object exists.
 
-- [ ] **Step 1: Write failing after-side navigation tests**
+- [x] **Step 1: Write failing after-side navigation tests**
 
 ```ts
 it.each(["Added", "RetainedChanged"] as const)(
@@ -1096,13 +1096,13 @@ it("does not offer after-side navigation for removed rows", () => {
 });
 ```
 
-- [ ] **Step 2: Run the table test and verify RED**
+- [x] **Step 2: Run the table test and verify RED**
 
 Run: `cd ui && bun test src/features/comparison/ObjectDeltaTable.test.tsx --max-concurrency=1`
 
 Expected: FAIL because delta rows render example IDs as text only.
 
-- [ ] **Step 3: Add the after-side Inspector link**
+- [x] **Step 3: Add the after-side Inspector link**
 
 For `kind !== "Removed"`, render:
 
@@ -1117,7 +1117,7 @@ For `kind !== "Removed"`, render:
 </Link>
 ```
 
-- [ ] **Step 4: Run the table and shared-selection tests and verify GREEN**
+- [x] **Step 4: Run the table and shared-selection tests and verify GREEN**
 
 Run:
 
@@ -1130,7 +1130,7 @@ bun test src/features/comparison/ObjectDeltaTable.test.tsx \
 
 Expected: all tests PASS and removed rows remain non-navigable.
 
-- [ ] **Step 5: Commit Inspector drill-down**
+- [x] **Step 5: Commit Inspector drill-down**
 
 ```bash
 git add ui/src/features/comparison/ObjectDeltaTable.tsx \
@@ -1152,7 +1152,7 @@ git commit -m "feat(ui): inspect after-side diff objects"
 - Records: packaged GUI launch as `NOT PROVEN` on WSL; unit/build evidence is not launch evidence.
 - Preserves: M28 as next work only; no M28 implementation begins.
 
-- [ ] **Step 1: Run the complete focused M27.C matrix**
+- [x] **Step 1: Run the complete focused M27.C matrix**
 
 ```bash
 cd ui
@@ -1169,7 +1169,7 @@ bun run build
 
 Expected: focused tests PASS, lint is clean, and the production TypeScript build succeeds. No test mounts the full production route tree.
 
-- [ ] **Step 2: Re-run the M27.B host/core evidence needed for milestone closeout**
+- [x] **Step 2: Re-run the M27.B host/core evidence needed for milestone closeout**
 
 ```bash
 cargo test -p mnemosyne-core snapshot_analysis_ -- --nocapture
@@ -1179,7 +1179,7 @@ cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures
 
 Expected: source-independent snapshot facts and session snapshot reopen tests PASS. Do not claim a packaged GUI launch or native Tauri bundle from these commands.
 
-- [ ] **Step 3: Record evidence and synchronize milestone status**
+- [x] **Step 3: Record evidence and synchronize milestone status**
 
 The evidence file names M27.A display-safe persistence tests, M27.B transactional hydrate tests, M27.C picker/options/match-quality/Inspector tests, lint/build results, and the unchanged analyzer chain. It includes this explicit row:
 
@@ -1189,7 +1189,7 @@ The evidence file names M27.A display-safe persistence tests, M27.B transactiona
 
 Mark completed A/B/C plan checkboxes, set M27 shipped-with-caveat in `STATUS.md`, update the capability matrix comparison/durability rows, and change roadmap “next” to M28 without starting it.
 
-- [ ] **Step 4: Run documentation and diff checks**
+- [x] **Step 4: Run documentation and diff checks**
 
 Run:
 
@@ -1201,7 +1201,7 @@ git log --oneline -12
 
 Expected: only M27.C implementation/tests and M27 closeout docs are changed or newly committed; untracked `.claude/skills/gitnexus-*` remain ignored.
 
-- [ ] **Step 5: Commit M27 closeout**
+- [x] **Step 5: Commit M27 closeout**
 
 ```bash
 git add docs/evidence/m27-durable-investigations.md \
@@ -1210,7 +1210,7 @@ git add docs/evidence/m27-durable-investigations.md \
 git commit -m "docs(m27): record durable compare evidence"
 ```
 
-- [ ] **Step 6: Push the completed milestone**
+- [x] **Step 6: Push the completed milestone**
 
 Run: `git push origin feature/mat-maturity-m25-plus`
 
