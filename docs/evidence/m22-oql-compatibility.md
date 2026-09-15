@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-15  
 **Branch:** `docs/older-partials-closeout-spec`  
-**Tip:** set after evidence commit (`git rev-parse --short HEAD`)  
+**Tip:** `81a75b8`
 **Corpus:** `core/tests/fixtures/oql/mat-compatibility.json` (version 1)  
 **Runner:** `cargo test -p mnemosyne-core --test oql_compatibility_corpus`  
 **Spec:** [docs/superpowers/specs/2026-09-15-older-partials-closeout-design.md](../superpowers/specs/2026-09-15-older-partials-closeout-design.md)  
