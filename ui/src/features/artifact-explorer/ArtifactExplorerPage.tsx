@@ -28,6 +28,8 @@ export function ArtifactExplorerPage() {
   const { artifact, artifactName } = useArtifactStore();
   const selectedClassKey = useInvestigationStore((state) => state.classKey);
   const setClassKey = useInvestigationStore((state) => state.setClassKey);
+  const histogramView = useInvestigationStore((state) => state.histogramView);
+  const setHistogramView = useInvestigationStore((state) => state.setHistogramView);
   const [selectedHistogramKey, setSelectedHistogramKey] = useState<string | undefined>(
     artifact?.histogram?.entries[0]?.key,
   );
@@ -121,6 +123,8 @@ export function ArtifactExplorerPage() {
             }}
             selectedKey={selectedHistogramKey}
             onSelectKey={handleSelectHistogramKey}
+            histogramView={histogramView}
+            setHistogramView={setHistogramView}
           />
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>

@@ -9,11 +9,17 @@ import {
   type HistogramGroupByMode,
   type HistogramResultView,
 } from "../../heap-explorer/heap-explorer-query-client";
+import type {
+  HistogramSortKey,
+  HistogramViewState,
+} from "../../investigation/investigation-store";
 import {
   buildHierarchyForest,
   supportsDeterministicParentRelation,
   type HierarchyNode,
 } from "./histogram-hierarchy";
+
+const HISTOGRAM_PAGE_SIZE = 100;
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -40,6 +46,8 @@ type HistogramExplorerPanelProps = {
   artifact: AnalysisArtifact;
   selectedKey?: string;
   onSelectKey: (key: string | undefined) => void;
+  histogramView: HistogramViewState;
+  setHistogramView: (patch: Partial<HistogramViewState>) => void;
   /** When live regroup replaces the artifact histogram, parent owns the view. */
   liveHistogram?: HistogramResultView;
   onLiveHistogramChange?: (histogram: HistogramResultView | undefined, source: "artifact" | "live") => void;
@@ -52,11 +60,12 @@ export function HistogramExplorerPanel({
   artifact,
   selectedKey,
   onSelectKey,
+  histogramView,
+  setHistogramView,
   liveHistogram,
   onLiveHistogramChange,
   histogramSource = "artifact",
 }: HistogramExplorerPanelProps) {
-  const [searchText, setSearchText] = useState("");
   const [regroupError, setRegroupError] = useState<string | undefined>();
   const [regroupBusy, setRegroupBusy] = useState(false);
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(() => new Set());
@@ -64,23 +73,45 @@ export function HistogramExplorerPanel({
 
   const activeHistogram = liveHistogram ?? artifact.histogram;
   const artifactGroupBy = normalizeHistogramGroupBy(artifact.histogram?.groupBy) ?? "class";
-  const selectedGroupBy =
-    normalizeHistogramGroupBy(activeHistogram?.groupBy) ?? artifactGroupBy;
+  const selectedGroupBy = histogramView.groupBy;
 
   const filteredEntries = useMemo(() => {
     if (!activeHistogram) {
       return [];
     }
 
-    const normalizedSearch = searchText.trim().toLowerCase();
+    const normalizedSearch = histogramView.searchText.trim().toLowerCase();
+    const direction = histogramView.sortDirection === "asc" ? 1 : -1;
 
     return activeHistogram.entries
       .filter((entry) => entry.key.toLowerCase().includes(normalizedSearch))
       .slice()
       .sort((left, right) => {
-        return right.retainedSize - left.retainedSize || right.shallowSize - left.shallowSize || left.key.localeCompare(right.key);
+        let comparison: number;
+
+        switch (histogramView.sortKey) {
+          case "class":
+            comparison = left.key.localeCompare(right.key);
+            break;
+          case "instances":
+            comparison = left.instanceCount - right.instanceCount;
+            break;
+          case "shallow":
+            comparison = left.shallowSize - right.shallowSize;
+            break;
+          case "retained":
+            comparison = left.retainedSize - right.retainedSize;
+            break;
+        }
+
+        return comparison * direction || left.key.localeCompare(right.key);
       });
-  }, [activeHistogram, searchText]);
+  }, [
+    activeHistogram,
+    histogramView.searchText,
+    histogramView.sortDirection,
+    histogramView.sortKey,
+  ]);
 
   const hierarchySupported = supportsDeterministicParentRelation(
     activeHistogram?.groupBy,
@@ -94,6 +125,30 @@ export function HistogramExplorerPanel({
 
     return buildHierarchyForest(filteredEntries);
   }, [filteredEntries, hierarchySupported]);
+
+  const pagedItemCount = hierarchySupported ? hierarchyForest.length : filteredEntries.length;
+  const lastPageOffset =
+    pagedItemCount === 0
+      ? 0
+      : Math.floor((pagedItemCount - 1) / HISTOGRAM_PAGE_SIZE) * HISTOGRAM_PAGE_SIZE;
+  const pageOffset = Math.min(
+    Math.max(0, histogramView.pageOffset),
+    lastPageOffset,
+  );
+  const pagedEntries = filteredEntries.slice(
+    pageOffset,
+    pageOffset + HISTOGRAM_PAGE_SIZE,
+  );
+  const pagedHierarchyRoots = hierarchyForest.slice(
+    pageOffset,
+    pageOffset + HISTOGRAM_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    if (pageOffset !== histogramView.pageOffset) {
+      setHistogramView({ pageOffset });
+    }
+  }, [histogramView.pageOffset, pageOffset, setHistogramView]);
 
   useEffect(() => {
     if (!activeHistogram) {
@@ -113,11 +168,13 @@ export function HistogramExplorerPanel({
     setRegroupError(undefined);
 
     if (next === artifactGroupBy && histogramSource === "live") {
+      setHistogramView({ groupBy: next });
       onLiveHistogramChange?.(undefined, "artifact");
       return;
     }
 
     if (next === artifactGroupBy && histogramSource === "artifact") {
+      setHistogramView({ groupBy: next });
       return;
     }
 
@@ -142,6 +199,7 @@ export function HistogramExplorerPanel({
       return;
     }
 
+    setHistogramView({ groupBy: next });
     onLiveHistogramChange?.(result.data, "live");
   }
 
@@ -179,7 +237,10 @@ export function HistogramExplorerPanel({
     );
   }
 
-  const maxRetainedSize = filteredEntries[0]?.retainedSize ?? 0;
+  const maxRetainedSize = filteredEntries.reduce(
+    (maximum, entry) => Math.max(maximum, entry.retainedSize),
+    0,
+  );
   const sourceLabel =
     histogramSource === "live"
       ? "Live regroup (session heap)"
@@ -235,6 +296,47 @@ export function HistogramExplorerPanel({
         </select>
       </label>
 
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: "0.75rem",
+        }}
+      >
+        <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1" }}>
+          <span>Sort by</span>
+          <select
+            aria-label="Histogram sort by"
+            value={histogramView.sortKey}
+            onChange={(event) => {
+              setHistogramView({ sortKey: event.target.value as HistogramSortKey });
+            }}
+            style={searchInputStyle}
+          >
+            <option value="retained">Retained size</option>
+            <option value="shallow">Shallow size</option>
+            <option value="instances">Instance count</option>
+            <option value="class">Class or bucket key</option>
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1" }}>
+          <span>Direction</span>
+          <select
+            aria-label="Histogram sort direction"
+            value={histogramView.sortDirection}
+            onChange={(event) => {
+              setHistogramView({
+                sortDirection: event.target.value as HistogramViewState["sortDirection"],
+              });
+            }}
+            style={searchInputStyle}
+          >
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
+          </select>
+        </label>
+      </div>
+
       {!regroupAvailable ? (
         <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6, fontSize: "0.9rem" }}>
           Showing the precomputed artifact grouping. Live regroup (including superclass) needs the
@@ -253,8 +355,8 @@ export function HistogramExplorerPanel({
         <input
           aria-label="Search histogram"
           type="text"
-          value={searchText}
-          onChange={(event) => setSearchText(event.target.value)}
+          value={histogramView.searchText}
+          onChange={(event) => setHistogramView({ searchText: event.target.value })}
           placeholder="class, package, loader, or superclass"
           style={searchInputStyle}
         />
@@ -269,7 +371,7 @@ export function HistogramExplorerPanel({
           <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
             Retained vs shallow (parent-linked hierarchy)
           </div>
-          {hierarchyForest.map((node) => (
+          {pagedHierarchyRoots.map((node) => (
             <HierarchyEntryButton
               key={node.entry.key}
               node={node}
@@ -285,7 +387,7 @@ export function HistogramExplorerPanel({
       ) : (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>Retained vs shallow</div>
-          {filteredEntries.map((entry) => (
+          {pagedEntries.map((entry) => (
             <HistogramEntryButton
               key={entry.key}
               entry={entry}
@@ -296,6 +398,46 @@ export function HistogramExplorerPanel({
           ))}
         </div>
       )}
+
+      {filteredEntries.length > 0 ? (
+        <nav
+          aria-label="Histogram pagination"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Previous histogram page"
+            disabled={pageOffset === 0}
+            onClick={() => {
+              setHistogramView({
+                pageOffset: Math.max(0, pageOffset - HISTOGRAM_PAGE_SIZE),
+              });
+            }}
+          >
+            Previous
+          </button>
+          <span aria-live="polite" style={{ color: "#94a3b8" }}>
+            Showing {pageOffset + 1}–{Math.min(pageOffset + HISTOGRAM_PAGE_SIZE, pagedItemCount)} of{" "}
+            {pagedItemCount}
+          </span>
+          <button
+            type="button"
+            aria-label="Next histogram page"
+            disabled={pageOffset + HISTOGRAM_PAGE_SIZE >= pagedItemCount}
+            onClick={() => {
+              setHistogramView({ pageOffset: pageOffset + HISTOGRAM_PAGE_SIZE });
+            }}
+          >
+            Next
+          </button>
+        </nav>
+      ) : null}
     </div>
   );
 }

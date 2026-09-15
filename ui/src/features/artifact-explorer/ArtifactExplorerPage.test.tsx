@@ -8,6 +8,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { artifactExplorerRoutes } from "../../test/app-route-trees";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }): AnalysisArtifact {
   return {
@@ -120,7 +121,22 @@ function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }):
   };
 }
 
-function seedArtifactWithHistogram() {
+function seedArtifactWithHistogram(
+  entries: NonNullable<AnalysisArtifact["histogram"]>["entries"] = [
+    {
+      key: "com.example.Cache",
+      instanceCount: 4,
+      shallowSize: 64,
+      retainedSize: 1024,
+    },
+    {
+      key: "java.util.concurrent.ConcurrentHashMap",
+      instanceCount: 2,
+      shallowSize: 48,
+      retainedSize: 768,
+    },
+  ],
+) {
   act(() => {
     useArtifactStore.setState({
       artifactName: "fixture.json",
@@ -130,20 +146,7 @@ function seedArtifactWithHistogram() {
           groupBy: "class",
           totalInstances: 42,
           totalShallowSize: 4096,
-          entries: [
-            {
-              key: "com.example.Cache",
-              instanceCount: 4,
-              shallowSize: 64,
-              retainedSize: 1024,
-            },
-            {
-              key: "java.util.concurrent.ConcurrentHashMap",
-              instanceCount: 2,
-              shallowSize: 48,
-              retainedSize: 768,
-            },
-          ],
+          entries,
         },
       }),
     });
@@ -164,6 +167,19 @@ describe("ArtifactExplorerPage", () => {
   beforeEach(() => {
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        classKey: undefined,
+        objectId: undefined,
+        leakId: undefined,
+        originPane: undefined,
+        histogramView: {
+          searchText: "",
+          groupBy: "class",
+          sortKey: "retained",
+          sortDirection: "desc",
+          pageOffset: 0,
+        },
+      });
     });
   });
 
@@ -172,6 +188,19 @@ describe("ArtifactExplorerPage", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        classKey: undefined,
+        objectId: undefined,
+        leakId: undefined,
+        originPane: undefined,
+        histogramView: {
+          searchText: "",
+          groupBy: "class",
+          sortKey: "retained",
+          sortDirection: "desc",
+          pageOffset: 0,
+        },
+      });
     });
   });
 
@@ -207,6 +236,35 @@ describe("ArtifactExplorerPage", () => {
 
     expect(histogramRegion.getByText(/java\.util\.concurrent\.ConcurrentHashMap/i)).toBeInTheDocument();
     expect(histogramRegion.queryByText(/com\.example\.Cache/i)).toBeNull();
+    expect(useInvestigationStore.getState().histogramView.searchText).toBe("concurrent");
+  });
+
+  it("pages through bounded rows without changing the shared class selection", async () => {
+    const user = userEvent.setup();
+    const entries = Array.from({ length: 101 }, (_, index) => ({
+      key: `row-${index.toString().padStart(3, "0")}`,
+      instanceCount: 1,
+      shallowSize: 10,
+      retainedSize: 10,
+    }));
+    seedArtifactWithHistogram(entries);
+    act(() => {
+      useInvestigationStore.setState({ classKey: "row-100", originPane: "histogram" });
+    });
+
+    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
+    const view = render(<RouterProvider router={router} />);
+    const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
+
+    expect(histogramRegion.getByText("Showing 1–100 of 101")).toBeInTheDocument();
+    expect(histogramRegion.queryByLabelText("Select row-100")).toBeNull();
+
+    await user.click(histogramRegion.getByRole("button", { name: "Next histogram page" }));
+
+    expect(histogramRegion.getByText("Showing 101–101 of 101")).toBeInTheDocument();
+    expect(histogramRegion.getByLabelText("Select row-100")).toHaveAttribute("aria-pressed", "true");
+    expect(useInvestigationStore.getState().classKey).toBe("row-100");
+    expect(useInvestigationStore.getState().histogramView.pageOffset).toBe(100);
   });
 
   it("marks the chosen histogram row as selected", async () => {

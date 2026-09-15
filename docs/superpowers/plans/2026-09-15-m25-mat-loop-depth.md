@@ -149,25 +149,25 @@
 - Render at most `100` histogram rows per page; controls move the bounded window and announce `Showing X–Y of Z`.
 - Sort all filtered entries before slicing; deterministic tie-breaker is `entry.key`.
 
-- [ ] **Step 1: Write failing direct-component tests**
+- [x] **Step 1: Write failing direct-component tests**
 
   Assert sort by class/count/shallow/retained in both directions, search before pagination, no more than 100 row buttons mounted for a 1,000-entry fixture, and page controls preserve `classKey`.
 
-- [ ] **Step 2: Run the two focused suites**
+- [x] **Step 2: Run the two focused suites**
 
   Run: `cd ui && bun test src/features/artifact-explorer/components/HistogramExplorerPanel.test.tsx src/features/artifact-explorer/ArtifactExplorerPage.test.tsx --max-concurrency=1`
 
   Expected: FAIL because controls are local and every filtered row mounts.
 
-- [ ] **Step 3: Implement bounded sorting and paging**
+- [x] **Step 3: Implement bounded sorting and paging**
 
   Keep superclass hierarchy honest: parent-linked hierarchy remains expandable, while flat superclass data stays flat. Pagination applies to flat lists; parent-linked data renders only the current bounded root window and expanded descendants.
 
-- [ ] **Step 4: Re-run focused suites**
+- [x] **Step 4: Re-run focused suites**
 
   Expected: PASS with 100 or fewer flat histogram row buttons mounted.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/features/artifact-explorer/ArtifactExplorerPage.tsx ui/src/features/artifact-explorer/ArtifactExplorerPage.test.tsx ui/src/features/artifact-explorer/components/HistogramExplorerPanel.tsx ui/src/features/artifact-explorer/components/HistogramExplorerPanel.test.tsx
