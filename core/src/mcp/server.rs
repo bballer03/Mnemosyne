@@ -212,6 +212,11 @@ impl RpcErrorDetails {
                 message,
                 details: Some(json!({ "detail": detail })),
             },
+            CoreError::OperationCancelled => Self {
+                code: "operation_cancelled",
+                message,
+                details: None,
+            },
             CoreError::NotImplemented(detail) => Self {
                 code: "not_implemented",
                 message,

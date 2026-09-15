@@ -13,6 +13,7 @@ pub mod hprof;
 pub mod llm;
 pub mod mapper;
 pub mod mcp;
+pub mod operation;
 pub mod plugin;
 pub mod policy;
 pub mod prompts;
@@ -53,6 +54,10 @@ pub use hprof::{
     DEFAULT_TOP_N_INSTANCES,
 };
 pub use mapper::{CodeLocation, GitMetadata, MapToCodeRequest, SourceMapResult};
+pub use operation::{
+    CancellationToken, NoopOperationObserver, OperationObserver, OperationPhase,
+    OperationProgressSnapshot,
+};
 pub use plugin::{
     AnalyzerFinding, AnalyzerPlugin, AnalyzerResult, PluginRegistry, ReportFormatterPlugin,
 };

@@ -100,25 +100,25 @@
 - Host `OperationProgress { context, kind, phase, completed: Option<u64>, total: Option<u64>, unit: Option<String>, indeterminate: bool, elapsed_ms: u64 }`
 - Tauri event name: `mnemosyne://operation-progress`.
 
-- [ ] **Step 1: Write failing serialization and monotonicity tests**
+- [x] **Step 1: Write failing serialization and monotonicity tests**
 
   Assert camelCase wire names, exact context echo, known phase strings, and rejection/coalescing of progress that moves backward within one phase.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml operation_progress`
 
   Expected: FAIL until types exist.
 
-- [ ] **Step 3: Implement additive protocol types in the correct dependency direction**
+- [x] **Step 3: Implement additive protocol types in the correct dependency direction**
 
   Core owns generic control/progress and imports neither Tauri nor `session-ops`. `session-ops` owns workspace/revision wire context. Implement the Tauri event emitter adapter in `commands.rs`.
 
-- [ ] **Step 4: Re-run focused tests**
+- [x] **Step 4: Re-run focused tests**
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add core/src/operation.rs core/src/lib.rs core/src/errors.rs tauri/session-ops/src/lib.rs tauri/src/commands.rs

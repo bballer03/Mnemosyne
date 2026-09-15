@@ -36,6 +36,9 @@ pub enum CoreError {
     #[error("AI provider request timed out: {detail}")]
     AiProviderTimeout { detail: String },
 
+    #[error("Operation cancelled")]
+    OperationCancelled,
+
     #[error("Operation not yet implemented: {0}")]
     NotImplemented(String),
 

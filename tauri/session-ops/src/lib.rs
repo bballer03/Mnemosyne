@@ -33,6 +33,9 @@ use mnemosyne_core::{
 };
 use serde_json::{json, Value};
 
+mod operation;
+pub use operation::{OperationContext, OperationProgress, OperationProgressCoalescer};
+
 pub const DEFAULT_CLASS_INSTANCES_LIMIT: usize = 100;
 pub const MAX_CLASS_INSTANCES_LIMIT: usize = 200;
 pub const DEFAULT_DOMINATOR_CHILDREN_LIMIT: usize = 50;

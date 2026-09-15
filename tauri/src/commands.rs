@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::{path::PathBuf, sync::atomic::Ordering};
 
 use mnemosyne_core::snapshot::SnapshotManifest;
@@ -12,9 +13,10 @@ use mnemosyne_core::{
     parse_hprof_file_with_options, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
-    AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
-    HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest, OverviewOptions,
-    ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult,
+    AllPathsRequest, AnalysisMode, CancellationToken, FixRequest, FixResponse, FixStyle,
+    GcPathRequest, GcPathResult, HistogramGroupBy, HistogramResult, LeakDetectionOptions,
+    MapToCodeRequest, OperationObserver, OperationProgressSnapshot, OverviewOptions, ParseOptions,
+    Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult,
 };
 use mnemosyne_desktop_session::{
     ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
@@ -27,12 +29,13 @@ use mnemosyne_desktop_session::{
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
     remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
     save_snapshot_for_session, start_workflow_for_session, CreateAiSessionInput,
-    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
-    DEFAULT_CLASS_INSTANCES_LIMIT, DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+    DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationProgress,
+    OperationProgressCoalescer, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
+    DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
@@ -1605,5 +1608,71 @@ mod pick_heap_file_result_tests {
         assert_eq!(value["displayName"], "fixture.hprof");
         assert!(value.get("source_id").is_none());
         assert!(value.get("display_name").is_none());
+    }
+}
+
+pub const OPERATION_PROGRESS_EVENT: &str = "mnemosyne://operation-progress";
+
+/// Bridges dependency-neutral core progress into correlated Tauri events.
+pub struct TauriOperationObserver {
+    app: AppHandle,
+    context: OperationContext,
+    kind: String,
+    cancellation: CancellationToken,
+    coalescer: Mutex<OperationProgressCoalescer>,
+}
+
+impl TauriOperationObserver {
+    pub fn new(
+        app: AppHandle,
+        context: OperationContext,
+        kind: impl Into<String>,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            app,
+            context,
+            kind: kind.into(),
+            cancellation,
+            coalescer: Mutex::new(OperationProgressCoalescer::default()),
+        }
+    }
+}
+
+impl OperationObserver for TauriOperationObserver {
+    fn progress(&self, snapshot: OperationProgressSnapshot) {
+        let event =
+            OperationProgress::from_snapshot(self.context.clone(), self.kind.clone(), snapshot);
+        let phase = event.phase;
+        let elapsed_ms = event.elapsed_ms;
+        let event = match self.coalescer.lock() {
+            Ok(mut coalescer) => coalescer.coalesce(event),
+            Err(_) => {
+                tracing::warn!(
+                    operation_id = %self.context.operation_id,
+                    ?phase,
+                    elapsed_ms,
+                    error_code = "operation_progress_coalescer_unavailable",
+                    "operation progress event dropped"
+                );
+                return;
+            }
+        };
+
+        if let Some(event) = event {
+            if self.app.emit(OPERATION_PROGRESS_EVENT, event).is_err() {
+                tracing::warn!(
+                    operation_id = %self.context.operation_id,
+                    ?phase,
+                    elapsed_ms,
+                    error_code = "operation_progress_emit_failed",
+                    "operation progress event dropped"
+                );
+            }
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
     }
 }
