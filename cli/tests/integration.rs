@@ -3199,6 +3199,137 @@ fn test_serve_chat_session_reads_persisted_session_from_stdio() {
 }
 
 #[test]
+fn test_serve_chat_session_provider_mode_round_trips_through_local_http() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let response_body = serde_json::json!({
+        "choices": [
+            {
+                "message": {
+                    "content": "TOON v1\nsection response\n  model=mcp-provider-test\n  confidence_pct=82\n  summary=Provider MCP chat response\nsection recommendations\n  item#0=Inspect the persisted focus\n"
+                }
+            }
+        ]
+    })
+    .to_string();
+
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        panic!("mock provider received no request before timeout");
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("mock provider accept failed: {err}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        let mut buf = [0_u8; 8192];
+        let read = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..read]).into_owned();
+
+        assert!(
+            request.contains("POST /v1/chat/completions HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request.contains("authorization: Bearer dummy-key"),
+            "{request}"
+        );
+        assert!(request.contains("intent=chat_leak_follow_up"), "{request}");
+        assert!(
+            request.contains("question=What should I fix first?"),
+            "{request}"
+        );
+        assert!(request.contains("heap_path=<REDACTED>"), "{request}");
+        assert!(!request.contains("seeded-session.hprof"), "{request}");
+
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+
+    let (mut cmd, sandbox) = cli_command();
+    let sessions_dir = sandbox.path().join("sessions");
+    let session = persisted_session_fixture("session-provider-chat-1");
+    seed_persisted_ai_session(&sessions_dir, &session);
+    let config_path = sandbox.path().join("serve-session-provider-chat.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[ai]\nenabled = true\nmode = \"provider\"\nprovider = \"local\"\nmodel = \"mcp-provider-test\"\nendpoint = \"http://{addr}/v1\"\napi_key_env = \"MNEMOSYNE_TEST_LOCAL_KEY\"\ntimeout_secs = 2\n\n[ai.privacy]\nredact_heap_path = true\n\n[ai.sessions]\ndirectory = \"{}\"\n",
+            toml_path_arg(&sessions_dir)
+        ),
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "id": 32,
+        "method": "chat_session",
+        "params": {
+            "session_id": session.session_id,
+            "question": "What should I fix first?"
+        }
+    })
+    .to_string()
+        + "\n";
+
+    let output = cmd
+        .env("MNEMOSYNE_TEST_LOCAL_KEY", "dummy-key")
+        .args(["--config", config_path.to_string_lossy().as_ref(), "serve"])
+        .write_stdin(request)
+        .output()
+        .unwrap();
+
+    server.join().unwrap();
+    assert!(output.status.success(), "{}", stdout_string(&output.stderr));
+    let stdout = stdout_string(&output.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        1
+    );
+    let json = parse_first_json_value(&stdout);
+    assert_eq!(json.get("success"), Some(&Value::Bool(true)));
+    assert_eq!(json.get("id"), Some(&serde_json::json!(32)));
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("model"))
+            .and_then(Value::as_str),
+        Some("mcp-provider-test")
+    );
+    assert_eq!(
+        json.get("result")
+            .and_then(|value| value.get("summary"))
+            .and_then(Value::as_str),
+        Some("Provider MCP chat response")
+    );
+    assert!(json
+        .get("result")
+        .and_then(|value| value.get("wire"))
+        .and_then(|value| value.get("prompt"))
+        .and_then(Value::as_str)
+        .is_some_and(|prompt| {
+            prompt.contains("heap_path=<REDACTED>") && !prompt.contains("seeded-session.hprof")
+        }));
+}
+
+#[test]
 fn test_serve_get_ai_session_reads_persisted_session_from_stdio() {
     let (mut cmd, sandbox) = cli_command();
     let sessions_dir = sandbox.path().join("sessions");

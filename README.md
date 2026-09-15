@@ -280,11 +280,35 @@ cargo build --release
 ```
 
 ### 7. Set up environment variables (optional, for AI features)
-```bash
-export OPENAI_API_KEY="your-api-key-here"
-# or use a .env file
-echo "OPENAI_API_KEY=your-api-key-here" > .env
+AI is disabled by default, and enabling it without selecting a mode still uses the offline-safe `rules` mode. To opt in to an external provider, put only the environment-variable **name** in Mnemosyne's config:
+
+```toml
+[ai]
+enabled = true
+mode = "provider"
+provider = "openai"
+model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[ai.privacy]
+redact_heap_path = true
+audit_log = false
 ```
+
+Supply the secret to the process through your shell or secret manager. Do not put the key itself in TOML, command-line arguments, chat, logs, or committed files:
+
+```bash
+read -rsp "OpenAI API key: " OPENAI_API_KEY && echo
+export OPENAI_API_KEY
+mnemosyne-cli --config ~/.config/mnemosyne/config.toml chat heap.hprof
+unset OPENAI_API_KEY
+```
+
+Mnemosyne does **not** automatically load `.env` files. For long-lived use, prefer an OS keychain, credential manager, or service secret injection. `api_key_env` is resolved only when provider mode makes an HTTP request; OpenAI and Anthropic default to `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, while `local` requires an explicit OpenAI-compatible `endpoint` and does not require a key unless that endpoint does.
+
+The CLI and `mnemosyne-cli serve` MCP process use the same config lookup and environment overrides. Start the MCP server from an environment that has access to the named secret; never hardcode the secret into checked-in MCP client configuration. The current desktop Assistant bridge uses its native in-memory default config and does not load this CLI config chain, so external-provider desktop chat is not claimed here; use CLI/MCP for provider mode until desktop provider configuration is explicitly wired.
+
+See [docs/user-guide.md#6-ai-provider-setup](docs/user-guide.md#6-ai-provider-setup) and [docs/evidence/live-ai-provider.md](docs/evidence/live-ai-provider.md) for the full safe setup and current proof boundary.
 
 Mnemosyne automatically looks for additional settings in the following order:
 
