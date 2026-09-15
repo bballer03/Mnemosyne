@@ -372,9 +372,391 @@ Expected: only M27.A plan/adapter/store/action files are changed or committed; M
 
 ### M27.B — Snapshot-first reopen
 
-- [ ] Expand the plan around existing `openSnapshot`/`open_snapshot_for_session`; no parallel snapshot loader.
-- [ ] Return one hydrate envelope containing snapshot identity, mode/capabilities, analysis facts, and revision/op context.
-- [ ] Race-test failure/old-revision behavior so the prior workspace remains intact.
+#### Frozen hydrate contract
+
+Snapshot reopen extends the existing `openSnapshot` → `open_snapshot` → `open_snapshot_for_session` path. No second snapshot loader, command, or store lookup is introduced. The host completes all graph-backed fact derivation before entering the M26 commit gate, then installs the graph/dominator pair and returns one correlated operation envelope:
+
+```ts
+type SnapshotWorkspaceHydrate = {
+  snapshot: {
+    key: string;
+    displayName: string;
+    sourceId: string;
+    schemaVersion: number;
+    createdAt: string;
+  };
+  mode: "deep";
+  capabilities: {
+    graph: true;
+    dominators: true;
+    fieldData: boolean;
+    snapshotBacked: true;
+  };
+  analysis: AnalysisArtifact;
+};
+
+type SnapshotWorkspaceHydrateEnvelope = OperationEnvelope<SnapshotWorkspaceHydrate>;
+```
+
+`analysis.summary.heapPath` is a basename only. Snapshot-derived summary totals are computed from the cached graph and carry explicit partial provenance when raw HPROF record facts are unavailable; they never impersonate a fresh record scan. The UI parses the complete hydrate before mutating state. A failed load, malformed response, cancelled operation, or old `{ workspaceId, revision, operationId }` response leaves the previous artifact, mode/capabilities, selection, remembered source, and persistence identity unchanged.
+
+On accepted success, the host swaps graph + dominator + heap identity inside one session mutation gate. The UI then installs the parsed facts, `deep` mode/capabilities, snapshot-key persistence identity, and only selection IDs compatible with those facts in one synchronous commit path. No intermediate “clear artifact A” step remains, so graph B cannot be paired with artifact A as the settled workspace.
+
+#### Task 4: Derive honest analysis facts from the cached graph
+
+**Files:**
+- Modify: `core/src/analysis/engine.rs`
+
+**Interfaces:**
+- Produces: `analyze_snapshot_from_graph_controlled(request, graph, dominator, observer) -> CoreResult<AnalyzeResponse>`.
+- Preserves: `analyze_heap_from_graph` and all parse-based analysis behavior.
+- Requires: a graph-derived `HeapSummary` with `header: None`, `total_records: 0`, empty `record_stats`, basename-only `heap_path`, and `ProvenanceKind::Partial`.
+
+- [ ] **Step 1: Write a failing source-independent snapshot analysis test**
+
+```rust
+#[tokio::test]
+async fn snapshot_analysis_survives_missing_source_heap() {
+    let (graph, dominator) = snapshot_graph_fixture();
+    let request = AnalyzeRequest {
+        heap_path: "fixture.hprof".into(),
+        enable_ai: false,
+        enable_classloaders: true,
+        enable_top_instances: true,
+        ..test_request("fixture.hprof")
+    };
+
+    let response = analyze_snapshot_from_graph_controlled(
+        request,
+        &graph,
+        &dominator,
+        &NoopOperationObserver,
+    )
+    .await
+    .expect("cached graph must hydrate without reopening the HPROF");
+
+    assert_eq!(response.mode, AnalysisMode::Deep);
+    assert_eq!(response.summary.total_objects, graph.object_count() as u64);
+    assert!(response.histogram.is_some());
+    assert!(response.provenance.iter().any(|marker| marker.kind == ProvenanceKind::Partial));
+}
+```
+
+- [ ] **Step 2: Run the focused core test and verify RED**
+
+Run: `cargo test -p mnemosyne-core snapshot_analysis_survives_missing_source_heap -- --nocapture`
+
+Expected: FAIL because `analyze_snapshot_from_graph_controlled` does not exist.
+
+- [ ] **Step 3: Implement graph-derived facts with cancellation checkpoints**
+
+```rust
+pub async fn analyze_snapshot_from_graph_controlled(
+    request: AnalyzeRequest,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    observer: &dyn OperationObserver,
+) -> CoreResult<AnalyzeResponse> {
+    let summary = derive_snapshot_summary(&request.heap_path, obj_graph);
+    ensure_not_cancelled(observer)?;
+    let assembled = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, observer)?;
+    // Build the normal deep response and append an explicit Partial marker
+    // explaining that raw record/header facts are unavailable from snapshots.
+}
+```
+
+The derived class totals use graph object shallow sizes, not raw HPROF record lengths. The provenance detail states that distinction. No absolute manifest path enters the response.
+
+- [ ] **Step 4: Run focused core tests and verify GREEN**
+
+Run: `cargo test -p mnemosyne-core snapshot_analysis_ -- --nocapture`
+
+Expected: all snapshot-analysis tests PASS, including cancellation before publication.
+
+- [ ] **Step 5: Commit source-independent snapshot facts**
+
+```bash
+git add core/src/analysis/engine.rs
+git commit -m "feat(core): derive snapshot workspace facts"
+```
+
+#### Task 5: Return and commit one host hydrate envelope
+
+**Files:**
+- Modify: `tauri/session-ops/src/lib.rs`
+- Modify: `tauri/src/commands.rs`
+
+**Interfaces:**
+- Reuses unchanged loader entry point: `open_snapshot_for_session(store, key)`.
+- Produces: serializable `SnapshotWorkspaceHydrate` with snapshot identity, `deep` mode, capabilities, and sanitized analysis facts.
+- Produces: `open_snapshot(...) -> Result<OperationEnvelope<SnapshotWorkspaceHydrate>, String>`.
+- Preserves: SHA-256 key validation and `SnapshotStore` lookup semantics.
+
+- [ ] **Step 1: Write failing hydrate-contract tests beside `open_snapshot_for_session`**
+
+```rust
+#[test]
+fn snapshot_hydrate_contains_identity_mode_capabilities_and_facts() {
+    let hydrate = build_snapshot_workspace_hydrate(
+        saved_manifest,
+        "source-opaque",
+        analysis_response,
+    )
+    .expect("hydrate must serialize");
+
+    assert_eq!(hydrate.snapshot.key, saved_key);
+    assert_eq!(hydrate.mode, AnalysisMode::Deep);
+    assert!(hydrate.capabilities.graph);
+    assert!(hydrate.capabilities.dominators);
+    assert_eq!(hydrate.analysis["summary"]["heap_path"], "fixture.hprof");
+}
+```
+
+- [ ] **Step 2: Run the focused session test and verify RED**
+
+Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures snapshot_hydrate_ -- --nocapture`
+
+Expected: FAIL because the hydrate contract/builder does not exist.
+
+- [ ] **Step 3: Build facts before the host commit gate**
+
+```rust
+let (manifest, graph, dominator) = open_snapshot_for_session(&store, &key)?;
+let response = analyze_snapshot_from_graph_controlled(
+    snapshot_analysis_request(&display_name, &config),
+    &graph,
+    &dominator,
+    observer,
+).await?;
+let hydrate = build_snapshot_workspace_hydrate(&manifest, source_id, response)?;
+```
+
+Use incident-safe defaults: classloaders and top instances enabled; field-heavy analyzers disabled. `fieldData` reports the cached manifest capability and does not trigger a second parse.
+
+- [ ] **Step 4: Atomically install the host session only after facts succeed**
+
+Acquire the session mutation guard and all required state locks before mutation. Run the graph/dominator/path/source replacement inside `OperationRegistration::commit_if_current`; if the gate rejects, return `operation_cancelled` without changing any slot. Do not clear the existing session on a failed load, analysis error, or rejected old operation.
+
+- [ ] **Step 5: Run focused host tests and verify GREEN**
+
+Run:
+
+```bash
+cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures \
+  open_snapshot_for_session -- --nocapture
+cargo check --manifest-path tauri/Cargo.toml
+```
+
+Expected: snapshot loader/hydrate tests PASS and the Tauri command compiles with the widened response.
+
+- [ ] **Step 6: Commit the host hydrate envelope**
+
+```bash
+git add tauri/session-ops/src/lib.rs tauri/src/commands.rs
+git commit -m "feat(desktop): hydrate snapshots transactionally"
+```
+
+#### Task 6: Parse and apply snapshot hydrate transactionally in the UI
+
+**Files:**
+- Modify: `ui/src/features/workflow-landing/workflow-bridge-client.ts`
+- Modify: `ui/src/features/workflow-landing/workflow-bridge-client.test.ts`
+- Modify: `ui/src/features/investigation/investigation-store.ts`
+- Modify: `ui/src/features/investigation/investigation-store.test.ts`
+- Modify: `ui/src/features/investigation/workspace-actions.ts`
+- Modify: `ui/src/features/investigation/workspace-actions.test.ts`
+
+**Interfaces:**
+- Changes: `runOpenSnapshot(key) -> WorkflowBridgeResult<SnapshotWorkspaceHydrate>`.
+- Produces: investigation fields `analysisMode` and `capabilities`.
+- Produces: `applyOpenedSnapshotHydrate(hydrate)`, replacing graph-only `applyOpenedSnapshotSession`.
+- Consumes: M26 `OperationEnvelope` validation in `invokeOperation`; no UI-side loader.
+
+- [ ] **Step 1: Write failing bridge parser tests for the complete hydrate**
+
+```ts
+it("parses one snapshot workspace hydrate", async () => {
+  window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+    openSnapshot: async () => rawSnapshotHydrate,
+  };
+
+  expect(await runOpenSnapshot(SNAPSHOT_KEY)).toEqual({
+    status: "ready",
+    data: expectedSnapshotHydrate,
+  });
+});
+
+it("rejects a hydrate missing facts before workspace mutation", async () => {
+  window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+    openSnapshot: async () => ({ ...rawSnapshotHydrate, analysis: undefined }),
+  };
+  expect((await runOpenSnapshot(SNAPSHOT_KEY)).status).toBe("error");
+});
+```
+
+- [ ] **Step 2: Run the bridge test and verify RED**
+
+Run: `cd ui && bun test src/features/workflow-landing/workflow-bridge-client.test.ts --max-concurrency=1`
+
+Expected: FAIL because `runOpenSnapshot` still accepts only the graph summary.
+
+- [ ] **Step 3: Parse identity, mode/capabilities, and facts as one value**
+
+```ts
+function parseSnapshotWorkspaceHydrate(value: unknown): SnapshotWorkspaceHydrate {
+  // Validate the complete envelope first, sanitize displayName, require the
+  // opaque snapshot key/sourceId, and parse analysis through parseAnalysisArtifact.
+}
+```
+
+Do not place raw graph payloads or paths in browser persistence.
+
+- [ ] **Step 4: Write failing atomic apply and compatibility tests**
+
+```ts
+it("commits snapshot facts, mode, capabilities, and compatible selection together", () => {
+  seedSnapshotMetadata(SNAPSHOT_KEY, {
+    objectId: "object-current",
+    leakId: "leak-stale",
+  });
+  applyOpenedSnapshotHydrate(snapshotHydrate);
+
+  expect(useArtifactStore.getState().artifact).toEqual(snapshotHydrate.analysis);
+  expect(useInvestigationStore.getState()).toMatchObject({
+    analysisMode: "deep",
+    capabilities: snapshotHydrate.capabilities,
+    persistenceIdentity: { kind: "snapshot", key: SNAPSHOT_KEY },
+    objectId: "object-current",
+    leakId: undefined,
+  });
+});
+```
+
+- [ ] **Step 5: Add the single snapshot commit action**
+
+The action bumps revision once, installs the parsed artifact, resets heap-bound adapter stores, restores metadata against compatibility sets from the new facts, remembers the opaque host source, and adds the recent entry. The old graph-only clear path is removed.
+
+- [ ] **Step 6: Add failure and old-revision race tests**
+
+Use deferred promises around the real bridge client, `beginOperation("snapshot")`, and the M26 envelope checks:
+
+```ts
+it("keeps the prior workspace when snapshot open fails", async () => {
+  seedPriorWorkspace();
+  rejectSnapshotOpen("snapshot_corrupt");
+  await attemptOpen();
+  expectWorkspaceToEqual(priorWorkspace);
+});
+
+it("keeps the prior workspace when an old revision returns late", async () => {
+  seedPriorWorkspace();
+  const pending = beginSnapshotOpen();
+  useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+  resolveWithOldOperationEnvelope(pending);
+  await expect(pending.result).rejects.toThrow(/no longer active|identity/i);
+  expectWorkspaceToEqual(workspaceAfterRevisionBump);
+});
+```
+
+- [ ] **Step 7: Run focused store/action/bridge tests and verify GREEN**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/workflow-landing/workflow-bridge-client.test.ts \
+  src/features/investigation/investigation-store.test.ts \
+  src/features/investigation/workspace-actions.test.ts \
+  --max-concurrency=1
+```
+
+Expected: all focused tests PASS without mounting a route.
+
+- [ ] **Step 8: Commit the UI hydrate transaction**
+
+```bash
+git add ui/src/features/workflow-landing/workflow-bridge-client.ts \
+  ui/src/features/workflow-landing/workflow-bridge-client.test.ts \
+  ui/src/features/investigation/investigation-store.ts \
+  ui/src/features/investigation/investigation-store.test.ts \
+  ui/src/features/investigation/workspace-actions.ts \
+  ui/src/features/investigation/workspace-actions.test.ts
+git commit -m "feat(ui): commit snapshot hydrate atomically"
+```
+
+#### Task 7: Route both snapshot entry points through the hydrate action
+
+**Files:**
+- Modify: `ui/src/features/snapshots/SnapshotManagerPage.tsx`
+- Modify: `ui/src/features/snapshots/SnapshotManagerPage.test.tsx`
+- Modify: `ui/src/features/workflow-landing/RecentHeapsList.tsx`
+- Modify: `ui/src/features/workflow-landing/RecentHeapsList.test.tsx`
+
+**Interfaces:**
+- Consumes: `runOpenSnapshot` and `applyOpenedSnapshotHydrate`.
+- Removes: graph-only success copy and `applyOpenedSnapshotSession`.
+- Preserves: browser/unavailable/list/remove/save behavior.
+
+- [ ] **Step 1: Update focused component tests to require hydrated facts**
+
+Each `openSnapshot` fixture returns the complete hydrate. Assertions require the new artifact and restored snapshot identity to be present after success. Add one rejected-open assertion proving the prior artifact remains unchanged.
+
+- [ ] **Step 2: Run component tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/snapshots/SnapshotManagerPage.test.tsx \
+  src/features/workflow-landing/RecentHeapsList.test.tsx \
+  --max-concurrency=1
+```
+
+Expected: FAIL while the components still call the graph-only action.
+
+- [ ] **Step 3: Apply the complete hydrate only on `ready`**
+
+```ts
+applyOpenedSnapshotHydrate(result.data);
+setActionStatus(
+  `Opened ${result.data.snapshot.displayName} ` +
+  `(${result.data.analysis.summary.totalObjects.toLocaleString()} objects).`,
+);
+```
+
+- [ ] **Step 4: Run the complete M27.B focused matrix**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/workflow-landing/workflow-bridge-client.test.ts \
+  src/features/investigation/investigation-store.test.ts \
+  src/features/investigation/workspace-actions.test.ts \
+  src/features/snapshots/SnapshotManagerPage.test.tsx \
+  src/features/workflow-landing/RecentHeapsList.test.tsx \
+  --max-concurrency=1
+bun run lint
+bun run build
+```
+
+Expected: focused tests PASS, lint is clean, and the TypeScript production build succeeds. No full production route is mounted.
+
+- [ ] **Step 5: Commit snapshot entry-point wiring**
+
+```bash
+git add ui/src/features/snapshots/SnapshotManagerPage.tsx \
+  ui/src/features/snapshots/SnapshotManagerPage.test.tsx \
+  ui/src/features/workflow-landing/RecentHeapsList.tsx \
+  ui/src/features/workflow-landing/RecentHeapsList.test.tsx
+git commit -m "feat(ui): reopen snapshots with full facts"
+```
+
+- [ ] **Step 6: Pre-push scope check**
+
+Run: `git diff --check && git status --short && git log --oneline -8`
+
+Expected: only M27.B plan/core/snapshot host/UI files are committed; M27.C comparison files and untracked `.claude/skills/gitnexus-*` remain untouched.
 
 ### M27.C — Integrated compare
 
