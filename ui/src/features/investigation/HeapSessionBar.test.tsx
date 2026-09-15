@@ -1,7 +1,7 @@
 import "../../test/setup";
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
@@ -26,6 +26,14 @@ function minimalArtifact(name: string): AnalysisArtifact {
     graph: { nodeCount: 1, edgeCount: 0, dominatorCount: 0, dominators: [] },
     provenance: [],
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -125,6 +133,138 @@ describe("HeapSessionBar", () => {
     expect(page.getByText(/800ms/)).toBeTruthy();
     expect(progress.getAttribute("aria-valuenow")).toBeNull();
     expect(progress.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("hides Cancel when the host does not support operation cancellation", () => {
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    useInvestigationStore.getState().beginOperation("analyze");
+    const router = createMemoryRouter(
+      [{ path: "/", element: <HeapSessionBar operationHost={undefined} /> }],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    expect(within(view.container).queryByRole("button", { name: /^cancel$/i })).toBeNull();
+  });
+
+  it("sends the active id and stays cancelling until the host terminal event", async () => {
+    const user = userEvent.setup();
+    const cancellation = createDeferred<{ operationId: string; accepted: boolean }>();
+    const cancelledIds: string[] = [];
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    const context = useInvestigationStore.getState().beginOperation("analyze");
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <HeapSessionBar
+              operationHost={{
+                cancelOperation: async (operationId) => {
+                  cancelledIds.push(operationId);
+                  return cancellation.promise;
+                },
+              }}
+            />
+          ),
+        },
+      ],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^cancel$/i }));
+
+    expect(cancelledIds).toEqual([context.operationId]);
+    expect(page.getByText(/Cancelling/)).toBeTruthy();
+    expect(page.getByRole("button", { name: /^cancel$/i }).hasAttribute("disabled")).toBe(true);
+
+    cancellation.resolve({ operationId: context.operationId, accepted: true });
+    await waitFor(() => expect(page.getByText(/Cancelling/)).toBeTruthy());
+
+    act(() => {
+      useInvestigationStore.getState().updateOperationProgress({
+        context,
+        kind: "analyze",
+        phase: "cancelled",
+        indeterminate: true,
+        elapsedMs: 1_200,
+      });
+    });
+    expect(page.getByText(/Cancelled/)).toBeTruthy();
+    expect(page.queryByRole("button", { name: /^cancel$/i })).toBeNull();
+  });
+
+  it("restores in-flight status with an explanation when cancellation is rejected", async () => {
+    const user = userEvent.setup();
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    const context = useInvestigationStore.getState().beginOperation("query");
+    useInvestigationStore.getState().updateOperationProgress({
+      context,
+      kind: "query",
+      phase: "analyzing",
+      indeterminate: true,
+      elapsedMs: 600,
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <HeapSessionBar
+              operationHost={{
+                cancelOperation: async (operationId) => ({
+                  operationId,
+                  accepted: false,
+                }),
+              }}
+            />
+          ),
+        },
+      ],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^cancel$/i }));
+
+    await waitFor(() => {
+      expect(page.getByText(/Analyzing/)).toBeTruthy();
+      expect(page.getByText(/host did not accept cancellation/i)).toBeTruthy();
+    });
+    expect(page.getByRole("button", { name: /^cancel$/i }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("treats a structured cancelled error as terminal acknowledgement", async () => {
+    const user = userEvent.setup();
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    useInvestigationStore.getState().beginOperation("gc-path");
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <HeapSessionBar
+              operationHost={{
+                cancelOperation: async () => {
+                  throw new Error("operation_cancelled: Operation cancelled");
+                },
+              }}
+            />
+          ),
+        },
+      ],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^cancel$/i }));
+
+    await waitFor(() => expect(page.getByText(/Cancelled/)).toBeTruthy());
+    expect(page.queryByRole("button", { name: /^cancel$/i })).toBeNull();
   });
 
   it("Close clears the artifact and returns home", async () => {

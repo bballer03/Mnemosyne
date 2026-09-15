@@ -9,7 +9,10 @@ import { formatHostError } from "./format-host-error";
 import type { PickHeapFileResult } from "../features/artifact-loader/desktop-heap-client";
 import { useInvestigationStore } from "../features/investigation/investigation-store";
 import {
+  isOperationCancelledError,
+  parseCancelOperationResult,
   parseOperationProgress,
+  type CancelOperationResult,
   type OperationContext,
   type OperationKind,
 } from "./operation-protocol";
@@ -22,6 +25,10 @@ export function isTauriRuntime(): boolean {
 }
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
+export type OperationCancellationHost = {
+  cancelOperation: (operationId: string) => Promise<CancelOperationResult>;
+};
 
 async function invokeOrThrow<T>(
   invoke: InvokeFn,
@@ -64,14 +71,46 @@ async function invokeOperation<T>(
 ): Promise<T> {
   const store = useInvestigationStore.getState();
   const context = store.beginOperation(kind);
+  let result: T;
   try {
-    const result = await invoke(context);
-    useInvestigationStore.getState().finishOperation(context, "complete");
-    return result;
+    result = await invoke(context);
   } catch (error) {
-    useInvestigationStore.getState().finishOperation(context, "failed");
+    useInvestigationStore
+      .getState()
+      .finishOperation(context, isOperationCancelledError(error) ? "cancelled" : "failed");
     throw error;
   }
+
+  const currentStore = useInvestigationStore.getState();
+  if (!currentStore.acceptOperationResult(context)) {
+    throw new Error("Operation result was ignored because the request is no longer active.");
+  }
+  currentStore.finishOperation(context, "complete");
+  return result;
+}
+
+async function cancelOperationWithInvoke(
+  invoke: InvokeFn,
+  operationId: string,
+): Promise<CancelOperationResult> {
+  const raw = await invokeOrThrow<unknown>(invoke, "cancel_operation", { operationId });
+  const result = parseCancelOperationResult(raw);
+  if (!result || result.operationId !== operationId) {
+    throw new Error("cancel_operation returned an unexpected result.");
+  }
+  return result;
+}
+
+export async function cancelOperation(operationId: string): Promise<CancelOperationResult> {
+  if (!isTauriRuntime()) {
+    throw new Error("Operation cancellation is unavailable in this environment.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return cancelOperationWithInvoke(invoke as InvokeFn, operationId);
+}
+
+export function getOperationCancellationHost(): OperationCancellationHost | undefined {
+  return isTauriRuntime() ? { cancelOperation } : undefined;
 }
 
 /** Accept camelCase (current) or snake_case (v0.4.1 regression) pick payloads. */

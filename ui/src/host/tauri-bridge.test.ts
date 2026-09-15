@@ -3,15 +3,29 @@ import "../test/setup";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
 import { useInvestigationStore } from "../features/investigation/investigation-store";
-import { injectHostBridges, isTauriRuntime, normalizePickHeapFileResult } from "./tauri-bridge";
+import {
+  cancelOperation,
+  injectHostBridges,
+  isTauriRuntime,
+  normalizePickHeapFileResult,
+} from "./tauri-bridge";
 
 const invokeCalls: Array<{ command: string; args?: Record<string, unknown> }> = [];
 let progressListenCalls = 0;
 let progressListener: ((event: { payload: unknown }) => void) | undefined;
+let invokeOverride:
+  | ((command: string, args?: Record<string, unknown>) => Promise<unknown>)
+  | undefined;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: async (command: string, args?: Record<string, unknown>) => {
     invokeCalls.push({ command, args });
+    if (invokeOverride) {
+      return invokeOverride(command, args);
+    }
+    if (command === "cancel_operation") {
+      return { operationId: args?.operationId, accepted: true };
+    }
     return { command, args };
   },
 }));
@@ -31,6 +45,7 @@ mock.module("@tauri-apps/api/event", () => ({
 describe("tauri-bridge", () => {
   beforeEach(() => {
     invokeCalls.length = 0;
+    invokeOverride = undefined;
     useInvestigationStore.setState({
       workspaceId: "workspace-1",
       revision: 4,
@@ -151,6 +166,43 @@ describe("tauri-bridge", () => {
         },
       },
     });
+  });
+
+  it("sends the active operation id to cancel_operation", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+
+    await expect(cancelOperation("operation-7")).resolves.toEqual({
+      operationId: "operation-7",
+      accepted: true,
+    });
+    expect(invokeCalls).toContainEqual({
+      command: "cancel_operation",
+      args: { operationId: "operation-7" },
+    });
+  });
+
+  it("does not return a late success after cancellation starts", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    let resolveQuery!: (value: unknown) => void;
+    const queryResult = new Promise<unknown>((resolve) => {
+      resolveQuery = resolve;
+    });
+    invokeOverride = async (command) =>
+      command === "query_heap" ? queryResult : { operationId: "unused", accepted: false };
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    const pending = window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?.queryHeap?.({
+      heapPath: "fixture.hprof",
+      query: "SELECT *",
+    });
+    const operation = useInvestigationStore.getState().activeOperation;
+    expect(operation).toBeDefined();
+    useInvestigationStore.getState().requestOperationCancellation(operation!);
+
+    resolveQuery({ rows: [{ objectId: "0x1" }] });
+
+    await expect(pending!).rejects.toThrow(/no longer active/i);
+    expect(useInvestigationStore.getState().activeOperation?.status).toBe("cancelling");
   });
 
   it("wires bounded class-instance arguments to the native command", async () => {

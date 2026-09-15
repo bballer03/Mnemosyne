@@ -10,6 +10,11 @@ import {
   type OpenHeapPhase,
 } from "./workspace-actions";
 import { useInvestigationStore, type ActiveOperation } from "./investigation-store";
+import {
+  getOperationCancellationHost,
+  type OperationCancellationHost,
+} from "../../host/tauri-bridge";
+import { isOperationCancelledError } from "../../host/operation-protocol";
 
 const phaseLabels: Record<ActiveOperation["status"], string> = {
   accepted: "Accepted",
@@ -43,6 +48,10 @@ function operationPercent(operation: ActiveOperation): number | undefined {
     return undefined;
   }
   return Math.round((operation.completed / operation.total) * 100);
+}
+
+function operationIsTerminal(operation: ActiveOperation): boolean {
+  return ["cancelled", "complete", "failed"].includes(operation.status);
 }
 
 function OperationStatus({ operation }: { operation: ActiveOperation }) {
@@ -104,14 +113,19 @@ function buttonStyle(primary?: boolean) {
  * Persistent investigation chrome: heap identity + Open another + Close.
  * Rendered from App whenever a heap/artifact is loaded (all routes).
  */
-export function HeapSessionBar() {
+export function HeapSessionBar({
+  operationHost = getOperationCancellationHost(),
+}: {
+  operationHost?: OperationCancellationHost;
+} = {}) {
   const artifactName = useArtifactStore((s) => s.artifactName);
   const artifact = useArtifactStore((s) => s.artifact);
   const activeOperation = useInvestigationStore((s) => s.activeOperation);
   const navigate = useNavigate();
   const [openPhase, setOpenPhase] = useState<OpenHeapPhase>("idle");
   const [message, setMessage] = useState<string | undefined>();
-  const busy = openPhase !== "idle" || activeOperation !== undefined;
+  const operationInFlight = activeOperation !== undefined && !operationIsTerminal(activeOperation);
+  const busy = openPhase !== "idle" || operationInFlight;
   const hasHeap = Boolean(artifactName && artifact);
 
   if (!hasHeap && !activeOperation) {
@@ -148,6 +162,41 @@ export function HeapSessionBar() {
     }
   }
 
+  async function handleCancel() {
+    const operation = useInvestigationStore.getState().activeOperation;
+    if (!operationHost || !operation || operationIsTerminal(operation)) {
+      return;
+    }
+
+    setMessage(undefined);
+    const context = {
+      workspaceId: operation.workspaceId,
+      revision: operation.revision,
+      operationId: operation.operationId,
+    };
+    if (!useInvestigationStore.getState().requestOperationCancellation(context)) {
+      return;
+    }
+
+    try {
+      const result = await operationHost.cancelOperation(operation.operationId);
+      if (result.operationId !== operation.operationId || !result.accepted) {
+        if (useInvestigationStore.getState().rejectOperationCancellation(context)) {
+          setMessage("The host did not accept cancellation; the operation is still running.");
+        }
+      }
+    } catch (error) {
+      if (isOperationCancelledError(error)) {
+        useInvestigationStore.getState().finishOperation(context, "cancelled");
+        return;
+      }
+      if (useInvestigationStore.getState().rejectOperationCancellation(context)) {
+        const detail = error instanceof Error ? error.message : "Host request failed.";
+        setMessage(`Cancellation failed: ${detail} The operation is still running.`);
+      }
+    }
+  }
+
   return (
     <div
       role="region"
@@ -179,12 +228,22 @@ export function HeapSessionBar() {
           >
             {label}
           </div>
-          {message ? (
-            <div style={{ color: "#fcd34d", fontSize: "0.75rem", marginTop: 2 }}>{message}</div>
-          ) : null}
         </div>
       ) : null}
       {activeOperation ? <OperationStatus operation={activeOperation} /> : null}
+      {message ? (
+        <div style={{ color: "#fcd34d", fontSize: "0.75rem", marginTop: 2 }}>{message}</div>
+      ) : null}
+      {activeOperation && operationHost && !operationIsTerminal(activeOperation) ? (
+        <button
+          type="button"
+          style={buttonStyle()}
+          disabled={activeOperation.status === "cancelling"}
+          onClick={() => void handleCancel()}
+        >
+          Cancel
+        </button>
+      ) : null}
       {hasHeap ? (
         <>
           <Link to="/" style={{ ...buttonStyle(), textDecoration: "none", display: "inline-block" }}>

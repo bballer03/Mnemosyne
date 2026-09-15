@@ -40,6 +40,7 @@ export type HistogramViewState = {
 export type ActiveOperation = OperationContext & {
   kind: OperationKind;
   status: OperationPhase;
+  cancellationRequestedFrom?: OperationPhase;
   completed?: number;
   total?: number;
   unit?: string;
@@ -55,6 +56,8 @@ type InvestigationState = InvestigationSelection & {
   acceptOperationResult: (context: OperationContext) => boolean;
   updateOperationProgress: (progress: OperationProgress) => boolean;
   applyOperationResult: (context: OperationContext, apply: () => void) => boolean;
+  requestOperationCancellation: (context: OperationContext) => boolean;
+  rejectOperationCancellation: (context: OperationContext) => boolean;
   finishOperation: (context: OperationContext, status: OperationPhase) => boolean;
   setHistogramView: (patch: Partial<HistogramViewState>) => void;
   setObjectId: (objectId: string | undefined, originPane: InvestigationOriginPane) => void;
@@ -96,6 +99,14 @@ function operationMatches(
   );
 }
 
+function operationAcceptsResult(state: InvestigationState, context: OperationContext): boolean {
+  return (
+    operationMatches(state, context) &&
+    state.activeOperation?.status !== "cancelling" &&
+    state.activeOperation?.status !== "cancelled"
+  );
+}
+
 export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   workspaceId: createWorkspaceId(),
   revision: 0,
@@ -120,7 +131,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     });
     return context;
   },
-  acceptOperationResult: (context) => operationMatches(get(), context),
+  acceptOperationResult: (context) => operationAcceptsResult(get(), context),
   updateOperationProgress: (progress) => {
     const state = get();
     if (
@@ -130,11 +141,19 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       return false;
     }
 
+    if (
+      state.activeOperation.status === "cancelled" ||
+      (state.activeOperation.status === "cancelling" && progress.phase !== "cancelled")
+    ) {
+      return false;
+    }
+
     set({
       activeOperation: {
         ...progress.context,
         kind: progress.kind,
         status: progress.phase,
+        cancellationRequestedFrom: undefined,
         completed: progress.completed,
         total: progress.total,
         unit: progress.unit,
@@ -145,17 +164,66 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     return true;
   },
   applyOperationResult: (context, apply) => {
-    if (!operationMatches(get(), context)) {
+    if (!operationAcceptsResult(get(), context)) {
       return false;
     }
     apply();
     return true;
   },
-  finishOperation: (context, status) => {
-    if (!terminalOperationPhases.has(status) || !operationMatches(get(), context)) {
+  requestOperationCancellation: (context) => {
+    const state = get();
+    const active = state.activeOperation;
+    if (
+      !operationMatches(state, context) ||
+      active === undefined ||
+      active.status === "cancelling" ||
+      terminalOperationPhases.has(active.status)
+    ) {
       return false;
     }
-    set({ activeOperation: undefined });
+    set({
+      activeOperation: {
+        ...active,
+        cancellationRequestedFrom: active.status,
+        status: "cancelling",
+      },
+    });
+    return true;
+  },
+  rejectOperationCancellation: (context) => {
+    const state = get();
+    const active = state.activeOperation;
+    if (!operationMatches(state, context) || active?.status !== "cancelling") {
+      return false;
+    }
+    set({
+      activeOperation: {
+        ...active,
+        status: active.cancellationRequestedFrom ?? "accepted",
+        cancellationRequestedFrom: undefined,
+      },
+    });
+    return true;
+  },
+  finishOperation: (context, status) => {
+    const state = get();
+    if (!terminalOperationPhases.has(status) || !operationMatches(state, context)) {
+      return false;
+    }
+    if (state.activeOperation?.status === "cancelling" && status === "complete") {
+      return false;
+    }
+    if (status === "cancelled" && state.activeOperation) {
+      set({
+        activeOperation: {
+          ...state.activeOperation,
+          status: "cancelled",
+          cancellationRequestedFrom: undefined,
+        },
+      });
+    } else {
+      set({ activeOperation: undefined });
+    }
     return true;
   },
   setHistogramView: (patch) =>

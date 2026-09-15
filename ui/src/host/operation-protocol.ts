@@ -50,6 +50,13 @@ export type OperationProgress = {
   elapsedMs: number;
 };
 
+export const OPERATION_CANCELLED_CODE = "operation_cancelled";
+
+export type CancelOperationResult = {
+  operationId: string;
+  accepted: boolean;
+};
+
 let fallbackIdSequence = 0;
 
 function createOpaqueId(prefix: "workspace" | "operation"): string {
@@ -92,6 +99,38 @@ export function isOperationContext(value: unknown): value is OperationContext {
 
 export function isOperationEnvelope<T = unknown>(value: unknown): value is OperationEnvelope<T> {
   return isOperationContext(value) && "data" in value;
+}
+
+export function parseCancelOperationResult(value: unknown): CancelOperationResult | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.operationId !== "string" ||
+    value.operationId.trim().length === 0 ||
+    typeof value.accepted !== "boolean"
+  ) {
+    return undefined;
+  }
+
+  return {
+    operationId: value.operationId,
+    accepted: value.accepted,
+  };
+}
+
+export function isOperationCancelledError(error: unknown): boolean {
+  const values: unknown[] = [error];
+  if (error instanceof Error) {
+    values.push(error.message);
+  } else if (isRecord(error)) {
+    values.push(error.code, error.message, error.error);
+  }
+
+  return values.some(
+    (value) =>
+      typeof value === "string" &&
+      (value === OPERATION_CANCELLED_CODE ||
+        value.startsWith(`${OPERATION_CANCELLED_CODE}:`)),
+  );
 }
 
 function readOptionalCount(value: unknown): number | undefined {

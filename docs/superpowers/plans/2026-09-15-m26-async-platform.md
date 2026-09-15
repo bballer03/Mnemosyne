@@ -311,25 +311,25 @@
 - Cancel remains visible while active and supported; first click transitions to `cancelling` and disables conflicting actions.
 - Late progress/success after host cancellation is ignored by the store even if emitted accidentally.
 
-- [ ] **Step 1: Write failing UI cancellation tests**
+- [x] **Step 1: Write failing UI cancellation tests**
 
   Assert the correct ID is sent, UI stays `cancelling` until acknowledgement/terminal event, rejected cancellation restores in-flight status with an explanation, and late success cannot apply.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/features/investigation/HeapSessionBar.test.tsx src/host/tauri-bridge.test.ts src/features/investigation/investigation-store.test.ts --max-concurrency=1`
 
   Expected: FAIL until bridge/control exist.
 
-- [ ] **Step 3: Implement Cancel and recovery states**
+- [x] **Step 3: Implement Cancel and recovery states**
 
   Browser/artifact adapters without cancellation support hide the button and retain honest indeterminate progress.
 
-- [ ] **Step 4: Re-run tests and type-check**
+- [x] **Step 4: Re-run tests and type-check**
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/host ui/src/features/investigation

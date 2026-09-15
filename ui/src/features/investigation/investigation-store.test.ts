@@ -92,6 +92,84 @@ describe("useInvestigationStore", () => {
     });
   });
 
+  it("rejects late progress and success after cancellation starts", () => {
+    const context = useInvestigationStore.getState().beginOperation("analyze");
+    useInvestigationStore.getState().updateOperationProgress({
+      context,
+      kind: "analyze",
+      phase: "parsing",
+      completed: 40,
+      total: 100,
+      unit: "records",
+      indeterminate: false,
+      elapsedMs: 500,
+    });
+
+    expect(useInvestigationStore.getState().requestOperationCancellation(context)).toBe(true);
+    expect(useInvestigationStore.getState().activeOperation?.status).toBe("cancelling");
+
+    let applied = false;
+    expect(
+      useInvestigationStore.getState().applyOperationResult(context, () => {
+        applied = true;
+      }),
+    ).toBe(false);
+    expect(applied).toBe(false);
+    expect(
+      useInvestigationStore.getState().updateOperationProgress({
+        context,
+        kind: "analyze",
+        phase: "complete",
+        completed: 100,
+        total: 100,
+        unit: "records",
+        indeterminate: false,
+        elapsedMs: 800,
+      }),
+    ).toBe(false);
+    expect(useInvestigationStore.getState().finishOperation(context, "complete")).toBe(false);
+    expect(useInvestigationStore.getState().activeOperation?.status).toBe("cancelling");
+  });
+
+  it("restores the in-flight phase when cancellation is rejected", () => {
+    const context = useInvestigationStore.getState().beginOperation("query");
+    useInvestigationStore.getState().updateOperationProgress({
+      context,
+      kind: "query",
+      phase: "analyzing",
+      indeterminate: true,
+      elapsedMs: 700,
+    });
+
+    expect(useInvestigationStore.getState().requestOperationCancellation(context)).toBe(true);
+    expect(useInvestigationStore.getState().rejectOperationCancellation(context)).toBe(true);
+    expect(useInvestigationStore.getState().activeOperation).toMatchObject({
+      ...context,
+      kind: "query",
+      status: "analyzing",
+      indeterminate: true,
+      elapsedMs: 700,
+    });
+  });
+
+  it("shows cancelled only after a correlated terminal acknowledgement", () => {
+    const context = useInvestigationStore.getState().beginOperation("gc-path");
+
+    useInvestigationStore.getState().requestOperationCancellation(context);
+    expect(useInvestigationStore.getState().activeOperation?.status).toBe("cancelling");
+
+    expect(
+      useInvestigationStore.getState().updateOperationProgress({
+        context,
+        kind: "gc-path",
+        phase: "cancelled",
+        indeterminate: true,
+        elapsedMs: 900,
+      }),
+    ).toBe(true);
+    expect(useInvestigationStore.getState().activeOperation?.status).toBe("cancelled");
+  });
+
   it("invalidates every outstanding operation when the revision changes", () => {
     const context = useInvestigationStore.getState().beginOperation("open");
 
