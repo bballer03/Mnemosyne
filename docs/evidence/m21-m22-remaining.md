@@ -1,8 +1,8 @@
 # M21 / M22 remaining work (honest)
 
-**Branch:** `sync/m15g-m16bcd`  
-**Date:** 2026-09-14  
-**Tip at write:** see `git log -1`
+**Branch:** `docs/older-partials-closeout-spec`  
+**Date:** 2026-09-15  
+**Tip at write:** see `git log -1` on this branch after M22.E evidence commit
 
 ## Shipped on this host (command-layer)
 
@@ -16,6 +16,7 @@
 | Fail-closed name/checksum/structure release gate | tip — still ≠ native launch; see `m21-portable-installability.md` |
 | M22.D Unique Classes CLI + hierarchy gate | `175a6ce`, Terra cycle fix `f004efd` |
 | OQL corpus honesty relabel | `f004efd` — handbook cases are `documentation-referenced` only |
+| M22.E corpus closeout evidence | 2026-09-15 — [m22-oql-compatibility.md](m22-oql-compatibility.md); **13 total, 12 shipped, 1 unsupported, 0 mat-referenced** |
 
 ## Blocked / needs native hosts (cannot close on WSL)
 
@@ -25,11 +26,12 @@
 | Clean Windows unzip → double-click | Needs clean Windows image; WebView2 prerequisite |
 | macOS Gatekeeper / Linux AppImage launch | Needs matching hosts |
 | Live AI provider round-trip | Optional secrets + network; not proven here |
-| Recorded MAT golden dump equivalency | Needs Eclipse MAT versioned results; corpus is docs-linked only |
-| Final Terra/Sol milestone closeouts | Human review gates |
+| Recorded MAT golden dump equivalency | **NOT PROVEN** — needs Eclipse MAT versioned results; corpus is docs-linked only |
+| Final Terra/Sol milestone closeouts for M20/M21/M23 | In progress under older-partials closeout program |
 
 ## Do not claim
 
 - Full MAT equivalency
 - Unsigned artifact = launch-proven
 - Green unit tests = packaged desktop smoke
+- M22 corpus green = MAT golden (0 `mat-referenced` cases)

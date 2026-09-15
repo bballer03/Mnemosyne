@@ -861,7 +861,7 @@ Matched: 1
 
 Mode behavior: the targeted M7-4 features depend on the deep graph-backed query path. The current `query` CLI already builds that deep path; when other callers reach the shared query engine without a deep graph, the runtime returns `FeatureUnavailableInOverviewMode` and the CLI reserves exit code `6` for that mismatch. Use overview-mode `parse` / `analyze` for large-dump triage, then come back to `query` when you need `@retainedSize`, `@toString`, `@gcRootPath`, `OBJECTS`, `IS NULL`, or `LIKE` / `CONTAINS` on retained instance fields. Exit codes `10`-`13` apply to explicit `--snapshot <key>` cache errors (see [`snapshot`](#snapshot)).
 
-Named deferrals (not silent gaps): `eval(...)` scriptlets, multi-class `FROM`, arbitrary-depth subquery nesting, and multi-hop `OBJECTS`. The M7-4 + M15 bounded list covers the highest-value MAT OQL workflows for heap triage; see the design docs linked above for the full explicit non-scope list.
+Shipped beyond M7-4 + M15 (M22.B–C): bounded multi-class `FROM` and 1–3 hop `OBJECTS` (4+ hops rejected). Named deferrals (not silent gaps): `eval(...)` scriptlets, arbitrary-depth subquery nesting, live JVM attach, and MAT `.index` interchange. Corpus honesty: handbook-linked cases are `documentation-referenced` only — see [docs/evidence/m22-oql-compatibility.md](evidence/m22-oql-compatibility.md). MAT golden / `mat-referenced` remain **NOT PROVEN** (0 cases). The M7-4 + M15 + M22 bounded list covers the highest-value MAT OQL workflows for heap triage without claiming golden MAT equivalency.
 
 ### Duplicate primitive-array detection
 

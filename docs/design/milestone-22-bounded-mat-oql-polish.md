@@ -1,8 +1,8 @@
 # Milestone 22 — Bounded MAT OQL and Operator Polish
 
-**Status:** in progress (22.A–22.D shipped; 22.E corpus closeout open)  
+**Status:** ✅ 22.A–22.E closed for bounded corpus evidence (2026-09-15) — see [docs/evidence/m22-oql-compatibility.md](../evidence/m22-oql-compatibility.md). MAT golden / `mat-referenced` cases remain **NOT PROVEN**.  
 **Plan:** [docs/superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md](../superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md) § M22  
-**Branch:** `sync/m15g-m16bcd`
+**Branch:** `docs/older-partials-closeout-spec`
 
 ## Honesty rule
 
@@ -18,7 +18,7 @@ Only **MAT-referenced** corpus cases may close a compatibility-matrix row or sup
 | `core/tests/oql_compatibility_corpus.rs` | Thin runner: parse + targeted execute checks |
 | `core/tests/query_parser.rs` / `query_executor.rs` | Behavioral depth; MAT refs in comments |
 
-**Case fields:** `id`, `status` (`shipped` \| `unsupported`), `equivalency` (`mat-referenced` \| `non-equivalency`), MAT handbook links/section names, query text, expected parse/execute/error outcome, result budget notes.
+**Case fields:** `id`, `status` (`shipped` \| `unsupported`), `equivalency` (`mat-referenced` \| `documentation-referenced` \| `non-equivalency`), MAT handbook links/section names, query text, expected parse/execute/error outcome, result budget notes.
 
 **Required coverage (first slice):** multi-class `FROM`, 1–3 hop `OBJECTS`, 4-hop rejection, duplicate targets, null/missing fields, cycles, budget exhaustion (`LIMIT` truncation).
 
