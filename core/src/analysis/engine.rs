@@ -14,8 +14,11 @@ use crate::{
         HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
     hprof::{
-        parse_heap, parse_hprof_file_with_options, ClassDelta, ClassStat, HeapDiff, HeapParseJob,
-        HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
+        parse_heap, parse_hprof_file_with_options_controlled, ClassDelta, ClassStat, HeapDiff,
+        HeapParseJob, HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
+    },
+    operation::{
+        NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
     },
     plugin::{AnalyzerResult, PluginRegistry},
 };
@@ -392,9 +395,11 @@ fn assemble_graph_backed_analysis(
 async fn analyze_heap_internal(
     request: AnalyzeRequest,
     registry: Option<&PluginRegistry>,
+    observer: &dyn OperationObserver,
 ) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
+    report_indeterminate_phase(observer, OperationPhase::Parsing, start);
 
     let parse_job = HeapParseJob {
         path: request.heap_path.clone(),
@@ -408,7 +413,9 @@ async fn analyze_heap_internal(
         || request.enable_duplicate_arrays;
 
     // Attempt graph-backed analysis
-    let dominator_result = try_build_dominator(&request.heap_path, retain_field_data);
+    let dominator_result =
+        try_build_dominator_controlled(&request.heap_path, retain_field_data, observer, start);
+    report_indeterminate_phase(observer, OperationPhase::Analyzing, start);
 
     let (
         graph,
@@ -511,7 +518,17 @@ async fn analyze_heap_internal(
 }
 
 pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request, None).await?.response)
+    analyze_heap_controlled(request, &NoopOperationObserver).await
+}
+
+/// Execute the analysis workflow with dependency-neutral progress observation.
+pub async fn analyze_heap_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<AnalyzeResponse> {
+    Ok(analyze_heap_internal(request, None, observer)
+        .await?
+        .response)
 }
 
 /// Like [`analyze_heap`], but runs every [`crate::plugin::AnalyzerPlugin`]
@@ -526,9 +543,11 @@ pub async fn analyze_heap_with_plugins(
     request: AnalyzeRequest,
     registry: &PluginRegistry,
 ) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request, Some(registry))
-        .await?
-        .response)
+    Ok(
+        analyze_heap_internal(request, Some(registry), &NoopOperationObserver)
+            .await?
+            .response,
+    )
 }
 
 /// Like [`analyze_heap`], but also returns the `(ObjectGraph,
@@ -543,22 +562,38 @@ pub async fn analyze_heap_with_plugins(
 pub async fn analyze_heap_capturing_graph(
     request: AnalyzeRequest,
 ) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
+    analyze_heap_capturing_graph_controlled(request, &NoopOperationObserver).await
+}
+
+/// Like [`analyze_heap_capturing_graph`], with progress observation.
+pub async fn analyze_heap_capturing_graph_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
     let AnalysisArtifacts {
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request, None).await?;
+    } = analyze_heap_internal(request, None, observer).await?;
     Ok((response, object_graph, dominator_tree))
 }
 
 pub async fn analyze_heap_with_graph(
     request: AnalyzeRequest,
 ) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
+    analyze_heap_with_graph_controlled(request, &NoopOperationObserver).await
+}
+
+/// Like [`analyze_heap_with_graph`], with progress observation.
+pub async fn analyze_heap_with_graph_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
     let AnalysisArtifacts {
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request, None).await?;
+    } = analyze_heap_internal(request, None, observer).await?;
 
     match (object_graph, dominator_tree) {
         (Some(graph), Some(dom)) => Ok((response, graph, dom)),
@@ -838,11 +873,31 @@ pub(crate) fn try_build_dominator(
     heap_path: &str,
     retain_field_data: bool,
 ) -> Option<(ObjectGraph, DominatorTree)> {
-    match parse_hprof_file_with_options(heap_path, ParseOptions { retain_field_data }) {
+    try_build_dominator_controlled(
+        heap_path,
+        retain_field_data,
+        &NoopOperationObserver,
+        Instant::now(),
+    )
+}
+
+fn try_build_dominator_controlled(
+    heap_path: &str,
+    retain_field_data: bool,
+    observer: &dyn OperationObserver,
+    started: Instant,
+) -> Option<(ObjectGraph, DominatorTree)> {
+    match parse_hprof_file_with_options_controlled(
+        heap_path,
+        ParseOptions { retain_field_data },
+        observer,
+    ) {
         Ok(graph) => {
             if graph.objects.is_empty() {
                 return None;
             }
+            report_indeterminate_phase(observer, OperationPhase::BuildingGraph, started);
+            report_indeterminate_phase(observer, OperationPhase::ComputingDominators, started);
             let dom = build_dominator_tree(&graph);
             if dom.node_count() == 0 {
                 return None;
@@ -854,6 +909,21 @@ pub(crate) fn try_build_dominator(
             None
         }
     }
+}
+
+fn report_indeterminate_phase(
+    observer: &dyn OperationObserver,
+    phase: OperationPhase,
+    started: Instant,
+) {
+    observer.progress(OperationProgressSnapshot {
+        phase,
+        completed: None,
+        total: None,
+        unit: None,
+        indeterminate: true,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    });
 }
 
 /// Produce leak insights from the dominator tree's top retained objects.
@@ -1419,7 +1489,29 @@ mod tests {
     use super::*;
     use crate::hprof::{ClassInfo, ClassStat, RecordStat};
     use std::io::Write;
+    use std::sync::Mutex;
     use std::time::{Duration, SystemTime};
+
+    #[derive(Default)]
+    struct RecordingOperationObserver {
+        events: Mutex<Vec<crate::OperationProgressSnapshot>>,
+    }
+
+    impl crate::OperationObserver for RecordingOperationObserver {
+        fn progress(&self, event: crate::OperationProgressSnapshot) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    impl RecordingOperationObserver {
+        fn events(&self) -> Vec<crate::OperationProgressSnapshot> {
+            self.events.lock().unwrap().clone()
+        }
+    }
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
         HeapSummary {
@@ -1532,6 +1624,57 @@ mod tests {
         assert!(!graph.objects.is_empty());
         assert!(dom.node_count() > 0);
         assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn operation_progress_orders_graph_dominator_and_analysis_phases() {
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let observer = RecordingOperationObserver::default();
+
+        let (controlled, graph, dominator) =
+            analyze_heap_capturing_graph_controlled(request.clone(), &observer)
+                .await
+                .unwrap();
+        let legacy = analyze_heap(request).await.unwrap();
+        let phases = observer
+            .events()
+            .into_iter()
+            .map(|event| {
+                if event.total.is_none() {
+                    assert!(
+                        event.indeterminate,
+                        "phases without totals must be explicitly indeterminate"
+                    );
+                }
+                event.phase
+            })
+            .collect::<Vec<_>>();
+
+        let phase_index = |phase| {
+            phases
+                .iter()
+                .position(|candidate| *candidate == phase)
+                .unwrap_or_else(|| panic!("missing operation phase {phase:?}: {phases:?}"))
+        };
+        assert!(
+            phase_index(crate::OperationPhase::Parsing)
+                < phase_index(crate::OperationPhase::BuildingGraph)
+        );
+        assert!(
+            phase_index(crate::OperationPhase::BuildingGraph)
+                < phase_index(crate::OperationPhase::ComputingDominators)
+        );
+        assert!(
+            phase_index(crate::OperationPhase::ComputingDominators)
+                < phase_index(crate::OperationPhase::Analyzing)
+        );
+        assert!(graph.is_some());
+        assert!(dominator.is_some());
+        assert_eq!(
+            normalized_analysis_bytes(&controlled),
+            normalized_analysis_bytes(&legacy)
+        );
     }
 
     #[tokio::test]

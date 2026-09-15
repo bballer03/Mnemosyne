@@ -9,12 +9,17 @@ use super::object_graph::{
 };
 use super::tags::*;
 use crate::errors::{CoreError, CoreResult};
+use crate::operation::{
+    NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
+};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read};
+use std::time::{Duration, Instant};
 
 const MAX_RETAINED_PRIMITIVE_ARRAY_BYTES: u64 = 1024 * 1024;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
@@ -23,25 +28,60 @@ pub struct ParseOptions {
 
 /// Parse an HPROF binary from a byte slice into an [`ObjectGraph`].
 pub fn parse_hprof(data: &[u8]) -> CoreResult<ObjectGraph> {
-    parse_hprof_with_options(data, ParseOptions::default())
+    parse_hprof_controlled(data, &NoopOperationObserver)
+}
+
+/// Parse an HPROF binary while reporting bounded byte progress.
+pub fn parse_hprof_controlled(
+    data: &[u8],
+    observer: &dyn OperationObserver,
+) -> CoreResult<ObjectGraph> {
+    parse_hprof_with_options_controlled(data, ParseOptions::default(), observer)
 }
 
 /// Parse an HPROF binary from a byte slice into an [`ObjectGraph`] with explicit options.
 pub fn parse_hprof_with_options(data: &[u8], options: ParseOptions) -> CoreResult<ObjectGraph> {
+    parse_hprof_with_options_controlled(data, options, &NoopOperationObserver)
+}
+
+/// Parse an HPROF binary with explicit options and bounded byte progress.
+pub fn parse_hprof_with_options_controlled(
+    data: &[u8],
+    options: ParseOptions,
+    observer: &dyn OperationObserver,
+) -> CoreResult<ObjectGraph> {
     let mut cursor = Cursor::new(data);
-    parse_hprof_reader(&mut cursor, options)
+    parse_hprof_reader(&mut cursor, options, observer, data.len() as u64)
 }
 
 /// Parse an HPROF file into an [`ObjectGraph`].
 pub fn parse_hprof_file(path: &str) -> CoreResult<ObjectGraph> {
-    parse_hprof_file_with_options(path, ParseOptions::default())
+    parse_hprof_file_controlled(path, &NoopOperationObserver)
+}
+
+/// Parse an HPROF file while reporting bounded byte progress.
+pub fn parse_hprof_file_controlled(
+    path: &str,
+    observer: &dyn OperationObserver,
+) -> CoreResult<ObjectGraph> {
+    parse_hprof_file_with_options_controlled(path, ParseOptions::default(), observer)
 }
 
 /// Parse an HPROF file into an [`ObjectGraph`] with explicit options.
 pub fn parse_hprof_file_with_options(path: &str, options: ParseOptions) -> CoreResult<ObjectGraph> {
+    parse_hprof_file_with_options_controlled(path, options, &NoopOperationObserver)
+}
+
+/// Parse an HPROF file with explicit options and bounded byte progress.
+pub fn parse_hprof_file_with_options_controlled(
+    path: &str,
+    options: ParseOptions,
+    observer: &dyn OperationObserver,
+) -> CoreResult<ObjectGraph> {
     let file = File::open(path)?;
+    let total_bytes = file.metadata()?.len();
     let mut reader = BufReader::new(file);
-    parse_hprof_reader(&mut reader, options)
+    parse_hprof_reader(&mut reader, options, observer, total_bytes)
 }
 
 // ── Internal parser state ──────────────────────────────────────────
@@ -66,7 +106,66 @@ struct ParserState {
     retain_field_data: bool,
 }
 
-fn parse_hprof_reader<R: Read>(reader: &mut R, options: ParseOptions) -> CoreResult<ObjectGraph> {
+struct ParserProgress<'a> {
+    observer: &'a dyn OperationObserver,
+    started: Instant,
+    total_bytes: u64,
+    last_completed: u64,
+    last_percent: u64,
+    last_emit: Instant,
+}
+
+impl<'a> ParserProgress<'a> {
+    fn new(observer: &'a dyn OperationObserver, total_bytes: u64) -> Self {
+        let now = Instant::now();
+        Self {
+            observer,
+            started: now,
+            total_bytes,
+            last_completed: 0,
+            last_percent: 0,
+            last_emit: now,
+        }
+    }
+
+    fn report(&mut self, completed: u64, force: bool) {
+        let completed = completed.min(self.total_bytes);
+        let percent = if self.total_bytes == 0 {
+            100
+        } else {
+            completed.saturating_mul(100) / self.total_bytes
+        };
+        let now = Instant::now();
+        let should_emit = force
+            || percent > self.last_percent
+            || now.duration_since(self.last_emit) >= PROGRESS_INTERVAL;
+        if !should_emit || completed < self.last_completed {
+            return;
+        }
+
+        self.observer.progress(OperationProgressSnapshot {
+            phase: OperationPhase::Parsing,
+            completed: Some(completed),
+            total: Some(self.total_bytes),
+            unit: Some("bytes".to_string()),
+            indeterminate: false,
+            elapsed_ms: self.started.elapsed().as_millis() as u64,
+        });
+        self.last_completed = completed;
+        self.last_percent = percent;
+        self.last_emit = now;
+    }
+}
+
+fn parse_hprof_reader<R: Read>(
+    reader: &mut R,
+    options: ParseOptions,
+    observer: &dyn OperationObserver,
+    total_bytes: u64,
+) -> CoreResult<ObjectGraph> {
+    let mut progress = ParserProgress::new(observer, total_bytes);
+    progress.report(0, true);
+
     // ── Header ─────────────────────────────────────────────────────
     // Read null-terminated format string.
     let mut header_bytes: Vec<u8> = Vec::new();
@@ -87,6 +186,7 @@ fn parse_hprof_reader<R: Read>(reader: &mut R, options: ParseOptions) -> CoreRes
 
     let id_size = reader.read_u32::<BigEndian>()? as u8;
     let _timestamp = reader.read_u64::<BigEndian>()?;
+    let mut completed_bytes = header_len as u64 + 1 + 4 + 8;
 
     if !matches!(id_size, 4 | 8) {
         return Err(CoreError::InvalidInput(format!(
@@ -121,10 +221,13 @@ fn parse_hprof_reader<R: Read>(reader: &mut R, options: ParseOptions) -> CoreRes
             }
             _ => skip_bytes(reader, length as u64)?,
         }
+        completed_bytes = completed_bytes.saturating_add(9 + u64::from(length));
+        progress.report(completed_bytes, false);
     }
 
     // ── Post-processing: resolve class names ───────────────────────
     resolve_class_names(&mut state);
+    progress.report(total_bytes, true);
 
     Ok(state.graph)
 }
@@ -756,6 +859,29 @@ mod tests {
     use crate::hprof::test_fixtures::{
         build_segment_fixture, build_simple_fixture, HeapDumpBuilder, HprofBuilder,
     };
+    use crate::{OperationObserver, OperationPhase, OperationProgressSnapshot};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Mutex<Vec<OperationProgressSnapshot>>,
+    }
+
+    impl OperationObserver for RecordingObserver {
+        fn progress(&self, event: OperationProgressSnapshot) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    impl RecordingObserver {
+        fn events(&self) -> Vec<OperationProgressSnapshot> {
+            self.events.lock().unwrap().clone()
+        }
+    }
 
     fn encode_node_instance(next_id: u64, value: i32) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -779,6 +905,43 @@ mod tests {
         let data = build_simple_fixture();
         let graph = parse_hprof(&data).expect("parse should succeed");
         assert_eq!(graph.identifier_size, 8);
+    }
+
+    #[test]
+    fn operation_progress_is_bounded_monotonic_and_preserves_graph() {
+        let data = build_simple_fixture();
+        let legacy = parse_hprof(&data).expect("legacy parse should succeed");
+        let observer = RecordingObserver::default();
+
+        let controlled =
+            parse_hprof_controlled(&data, &observer).expect("controlled parse should succeed");
+        let events = observer.events();
+        let parsing = events
+            .iter()
+            .filter(|event| event.phase == OperationPhase::Parsing)
+            .collect::<Vec<_>>();
+
+        assert!(!parsing.is_empty(), "parser must emit byte progress");
+        assert!(parsing.iter().all(|event| {
+            event.unit.as_deref() == Some("bytes")
+                && event.completed.is_some()
+                && event.total == Some(data.len() as u64)
+                && !event.indeterminate
+                && event.completed <= event.total
+        }));
+        assert!(parsing.windows(2).all(|pair| {
+            pair[0].completed.expect("bounded completion")
+                <= pair[1].completed.expect("bounded completion")
+        }));
+        assert_eq!(
+            parsing.last().and_then(|event| event.completed),
+            Some(data.len() as u64)
+        );
+        assert_eq!(
+            serde_json::to_value(controlled).unwrap(),
+            serde_json::to_value(legacy).unwrap(),
+            "controlled parsing must preserve the legacy graph"
+        );
     }
 
     #[test]

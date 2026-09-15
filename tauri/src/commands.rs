@@ -1,22 +1,23 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, sync::atomic::Ordering};
 
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest,
-        ObjectInspection,
+        analyze_heap, analyze_heap_capturing_graph_controlled, analyze_heap_with_graph_controlled,
+        validate_leak_id, AnalyzeRequest, ObjectInspection,
     },
     diff::ObjectDiffReport,
-    evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file,
-    parse_hprof_file_with_options, parse_hprof_overview_file, propose_fix_with_config,
+    evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file_controlled,
+    parse_hprof_file_with_options_controlled, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     AllPathsRequest, AnalysisMode, CancellationToken, FixRequest, FixResponse, FixStyle,
     GcPathRequest, GcPathResult, HistogramGroupBy, HistogramResult, LeakDetectionOptions,
-    MapToCodeRequest, OperationObserver, OperationProgressSnapshot, OverviewOptions, ParseOptions,
-    Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult,
+    MapToCodeRequest, NoopOperationObserver, OperationObserver, OperationPhase,
+    OperationProgressSnapshot, OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate,
+    ProvenanceMarker, Severity, SourceMapResult,
 };
 use mnemosyne_desktop_session::{
     ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
@@ -28,10 +29,9 @@ use mnemosyne_desktop_session::{
     list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
     remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
-    save_snapshot_for_session, start_workflow_for_session, CreateAiSessionInput,
-    DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationProgress,
-    OperationProgressCoalescer, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
-    DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+    start_workflow_for_session, CreateAiSessionInput, DiffObjectsSessionInput,
+    FieldDataCacheCapture, OperationContext, OperationProgress, OperationProgressCoalescer,
+    StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT, DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,6 +46,64 @@ const NO_HEAP_LOADED: &str = "No heap loaded";
 const LOCK_ERROR: &str = "Heap session lock poisoned";
 const UNKNOWN_SOURCE: &str = "Unknown heap source";
 const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin extension";
+
+type SharedOperationObserver = Option<Arc<TauriOperationObserver>>;
+
+fn operation_observer(
+    app: &AppHandle,
+    context: Option<OperationContext>,
+    kind: &str,
+) -> SharedOperationObserver {
+    context.map(|context| {
+        Arc::new(TauriOperationObserver::new(
+            app.clone(),
+            context,
+            kind,
+            CancellationToken::new(),
+        ))
+    })
+}
+
+fn core_observer(observer: &SharedOperationObserver) -> &dyn OperationObserver {
+    observer
+        .as_deref()
+        .map(|observer| observer as &dyn OperationObserver)
+        .unwrap_or(&NoopOperationObserver)
+}
+
+fn emit_indeterminate(
+    observer: &SharedOperationObserver,
+    phase: OperationPhase,
+    started: std::time::Instant,
+) {
+    if let Some(observer) = observer {
+        observer.progress(OperationProgressSnapshot {
+            phase,
+            completed: None,
+            total: None,
+            unit: None,
+            indeterminate: true,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+}
+
+fn emit_completed(
+    observer: &SharedOperationObserver,
+    phase: OperationPhase,
+    started: std::time::Instant,
+) {
+    if let Some(observer) = observer {
+        observer.progress(OperationProgressSnapshot {
+            phase,
+            completed: Some(1),
+            total: Some(1),
+            unit: Some("stage".to_string()),
+            indeterminate: false,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +170,8 @@ fn sanitize_analyze_response_value(mut value: Value, display_name: &str) -> Valu
 pub struct DesktopAnalysisInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
     enable_classloaders: Option<bool>,
@@ -136,8 +196,14 @@ pub struct DesktopAnalysisInput {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn run_desktop_analysis(
     input: DesktopAnalysisInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, input.context.clone(), "analyze");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
     let path = {
         let sources = state
             .selected_sources
@@ -220,7 +286,6 @@ pub async fn run_desktop_analysis(
     };
 
     let file_bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
-    let started = std::time::Instant::now();
     tracing::info!(
         %display_name,
         source_id = %input.source_id,
@@ -236,19 +301,21 @@ pub async fn run_desktop_analysis(
         "run_desktop_analysis: starting (lean Home defaults skip field-data reports unless explicitly enabled)"
     );
 
-    let (response, object_graph, dominator) = match analyze_heap_capturing_graph(request).await {
-        Ok(result) => result,
-        Err(error) => {
-            let mapped = map_native_error(error);
-            tracing::error!(
-                %display_name,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                error = %mapped,
-                "run_desktop_analysis: failed"
-            );
-            return Err(mapped);
-        }
-    };
+    let (response, object_graph, dominator) =
+        match analyze_heap_capturing_graph_controlled(request, core_observer(&observer)).await {
+            Ok(result) => result,
+            Err(error) => {
+                emit_indeterminate(&observer, OperationPhase::Failed, started);
+                let mapped = map_native_error(error);
+                tracing::error!(
+                    %display_name,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    error = %mapped,
+                    "run_desktop_analysis: failed"
+                );
+                return Err(mapped);
+            }
+        };
 
     let object_count = object_graph.as_ref().map(|graph| graph.object_count());
     tracing::info!(
@@ -259,6 +326,7 @@ pub async fn run_desktop_analysis(
         "run_desktop_analysis: completed"
     );
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
@@ -285,7 +353,9 @@ pub async fn run_desktop_analysis(
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
     let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
-    Ok(sanitize_analyze_response_value(raw, &display_name))
+    let result = sanitize_analyze_response_value(raw, &display_name);
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(result)
 }
 
 fn desktop_ci_check_exit_code(result: &mnemosyne_core::PolicyResult, fail_on: Severity) -> i32 {
@@ -488,6 +558,8 @@ pub async fn run_ci_check(
 pub struct DesktopFlamegraphInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     format: Option<String>,
@@ -496,8 +568,14 @@ pub struct DesktopFlamegraphInput {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn generate_desktop_flamegraph(
     input: DesktopFlamegraphInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, input.context.clone(), "flamegraph");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
     let path = {
         let sources = state
             .selected_sources
@@ -529,20 +607,23 @@ pub async fn generate_desktop_flamegraph(
         .clone();
 
     let (graph, dominator) = {
-        let (_, graph, dominator) =
-            mnemosyne_core::analysis::analyze_heap_with_graph(AnalyzeRequest {
+        let (_, graph, dominator) = analyze_heap_with_graph_controlled(
+            AnalyzeRequest {
                 heap_path: path.clone(),
                 config,
                 leak_options: LeakDetectionOptions::default(),
                 enable_ai: false,
                 histogram_group_by: HistogramGroupBy::Class,
                 ..AnalyzeRequest::default()
-            })
-            .await
-            .map_err(map_native_error)?;
+            },
+            core_observer(&observer),
+        )
+        .await
+        .map_err(map_native_error)?;
         (graph, dominator)
     };
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     {
         let _session = state
             .session_mutation
@@ -569,12 +650,13 @@ pub async fn generate_desktop_flamegraph(
             .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
     }
 
+    emit_indeterminate(&observer, OperationPhase::Rendering, started);
     let stacks = collapse(root, &graph, &dominator, &CollapseOptions::default());
     let mut buffer = Vec::new();
     render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
     let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
 
-    match format {
+    let result = match format {
         FlameFormat::Svg => Ok(serde_json::json!({
             "format": "svg",
             "content": rendered,
@@ -594,7 +676,13 @@ pub async fn generate_desktop_flamegraph(
                 "byteLength": rendered.len(),
             }))
         }
+    };
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
     }
+    result
 }
 
 #[derive(Debug, Deserialize)]
@@ -602,6 +690,8 @@ pub async fn generate_desktop_flamegraph(
 pub struct HeapQueryInput {
     heap_path: String,
     query: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
 }
 
 #[derive(Debug, Serialize)]
@@ -640,6 +730,8 @@ pub struct ObjectReferrersResult {
 pub struct DiffObjectsBridgeInput {
     before_key: String,
     after_key: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
     strategy: Option<String>,
     top_n: Option<usize>,
     cross_reference_leaks: Option<bool>,
@@ -718,6 +810,8 @@ pub fn get_desktop_log_path() -> String {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap_from_source(
     source_id: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     let path = {
@@ -731,30 +825,47 @@ pub async fn load_heap_from_source(
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
 
-    load_heap_internal(path, Some(source_id), &state).await
+    load_heap_internal(path, Some(source_id), context, &app, &state).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap(
     path: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     if !is_supported_heap_path(&path) {
         return Err(INVALID_HEAP_EXTENSION.to_string());
     }
-    load_heap_internal(path, None, &state).await
+    load_heap_internal(path, None, context, &app, &state).await
 }
 
 async fn load_heap_internal(
     path: String,
     source_id: Option<String>,
+    context: Option<OperationContext>,
+    app: &AppHandle,
     state: &State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(app, context, "open");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+    let background_observer = observer.clone();
     let (graph, dominator) = spawn_blocking({
         let path = path.clone();
         move || {
-            let graph = parse_hprof_file(&path).map_err(map_native_error)?;
+            let graph = parse_hprof_file_controlled(&path, core_observer(&background_observer))
+                .map_err(map_native_error)?;
+            emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
+            emit_indeterminate(
+                &background_observer,
+                OperationPhase::ComputingDominators,
+                started,
+            );
             let dominator = mnemosyne_core::build_dominator_tree(&graph);
+            emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
             Ok::<_, String>((graph, dominator))
         }
     })
@@ -769,6 +880,7 @@ async fn load_heap_internal(
         gc_root_count: graph.gc_roots.len(),
     };
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
@@ -793,6 +905,7 @@ async fn load_heap_internal(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
+    emit_completed(&observer, OperationPhase::Complete, started);
     Ok(summary)
 }
 
@@ -877,12 +990,17 @@ pub async fn get_referrers(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn query_heap(
     input: HeapQueryInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<HeapQueryResult, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, input.context.clone(), "query");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
     let (graph, dominator) = require_loaded_analysis(&state)?;
 
-    spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let query = parse_query(&input.query).map_err(|error| error.to_string())?;
         let result =
             execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
@@ -901,7 +1019,13 @@ pub async fn query_heap(
         })
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1052,8 +1176,13 @@ pub async fn explain_leak(
 pub async fn inspect_object(
     object_id: String,
     retain_field_data: Option<bool>,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<ObjectInspection, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, context, "inspect");
+    emit_completed(&observer, OperationPhase::Accepted, started);
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let retain_field_data = retain_field_data.unwrap_or(false);
@@ -1071,6 +1200,7 @@ pub async fn inspect_object(
         None
     };
 
+    let background_observer = observer.clone();
     let (inspection, refreshed_field_graph) = spawn_blocking(move || {
         let (inspect_graph, refreshed_field_graph) = if retain_field_data
             && !graph_has_field_data(&graph)
@@ -1078,11 +1208,12 @@ pub async fn inspect_object(
             if let Some(cached) = cached_field_graph.filter(|cached| graph_has_field_data(cached)) {
                 (cached, None)
             } else {
-                let reloaded = parse_hprof_file_with_options(
+                let reloaded = parse_hprof_file_with_options_controlled(
                     &heap_path,
                     ParseOptions {
                         retain_field_data: true,
                     },
+                    core_observer(&background_observer),
                 )
                 .map_err(|error| error.to_string())?;
                 (reloaded.clone(), Some(reloaded))
@@ -1091,6 +1222,7 @@ pub async fn inspect_object(
             (graph, None)
         };
 
+        emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
         inspect_object_for_session(&inspect_graph, &heap_path, &object_id, retain_field_data)
             .map(|inspection| (inspection, refreshed_field_graph))
     })
@@ -1098,6 +1230,7 @@ pub async fn inspect_object(
     .map_err(|error| error.to_string())??;
 
     if let Some(field_graph) = refreshed_field_graph {
+        emit_indeterminate(&observer, OperationPhase::Committing, started);
         let _session = state
             .session_mutation
             .lock()
@@ -1122,6 +1255,7 @@ pub async fn inspect_object(
         );
     }
 
+    emit_completed(&observer, OperationPhase::Complete, started);
     Ok(inspection)
 }
 
@@ -1129,27 +1263,47 @@ pub async fn inspect_object(
 pub async fn find_all_gc_paths(
     object_id: String,
     max_paths: Option<usize>,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<GcPathResult, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, context, "gc-path");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, None)?;
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let max_paths = max_paths.unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS);
 
-    spawn_blocking(move || find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths))
-        .await
-        .map_err(|error| error.to_string())?
+    let result = spawn_blocking(move || {
+        find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn find_gc_path(
     object_id: String,
     heap_path: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<mnemosyne_core::GcPathResult, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, context, "gc-path");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let active_heap_path = ensure_loaded_heap_matches(&state, Some(&heap_path))?;
 
-    spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         mnemosyne_core::find_gc_path(&GcPathRequest {
             heap_path: active_heap_path,
             object_id,
@@ -1158,7 +1312,13 @@ pub async fn find_gc_path(
         .map_err(|error| error.to_string())
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1185,14 +1345,21 @@ pub async fn map_to_code(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn diff_objects(input: DiffObjectsBridgeInput) -> Result<ObjectDiffReport, String> {
+pub async fn diff_objects(
+    input: DiffObjectsBridgeInput,
+    app: AppHandle,
+) -> Result<ObjectDiffReport, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, input.context.clone(), "diff");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let strategy = match input.strategy.as_deref() {
         None => None,
         Some(raw) => Some(parse_identity_strategy(raw)?),
     };
 
     let store = default_snapshot_store();
-    diff_objects_for_session(
+    let result = diff_objects_for_session(
         &store,
         DiffObjectsSessionInput {
             before_key: input.before_key,
@@ -1202,7 +1369,13 @@ pub async fn diff_objects(input: DiffObjectsBridgeInput) -> Result<ObjectDiffRep
             cross_reference_leaks: input.cross_reference_leaks,
         },
     )
-    .await
+    .await;
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1370,14 +1543,20 @@ pub async fn list_snapshots() -> Result<Vec<SnapshotManifest>, String> {
 pub struct SaveSnapshotInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     retain_field_data: Option<bool>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn save_snapshot(
     input: SaveSnapshotInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<SnapshotManifest, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, input.context.clone(), "snapshot");
+    emit_completed(&observer, OperationPhase::Accepted, started);
     let path = {
         let sources = state
             .selected_sources
@@ -1391,12 +1570,34 @@ pub async fn save_snapshot(
 
     let retain_field_data = input.retain_field_data.unwrap_or(false);
     let heap_path = path.clone();
-    spawn_blocking(move || {
-        save_snapshot_for_session(&default_snapshot_store(), &heap_path, retain_field_data)
+    let background_observer = observer.clone();
+    let result = spawn_blocking(move || {
+        let graph = parse_hprof_file_with_options_controlled(
+            &heap_path,
+            ParseOptions { retain_field_data },
+            core_observer(&background_observer),
+        )
+        .map_err(map_native_error)?;
+        emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
+        emit_indeterminate(
+            &background_observer,
+            OperationPhase::ComputingDominators,
+            started,
+        );
+        let dominator = mnemosyne_core::build_dominator_tree(&graph);
+        emit_indeterminate(&background_observer, OperationPhase::Committing, started);
+        default_snapshot_store()
+            .save(&heap_path, &graph, &dominator)
             .map_err(map_native_error)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_indeterminate(&observer, OperationPhase::Failed, started);
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1411,8 +1612,14 @@ pub async fn remove_snapshot(key: String) -> Result<Value, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn open_snapshot(
     key: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
+    let started = std::time::Instant::now();
+    let observer = operation_observer(&app, context, "snapshot");
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
     let (manifest, graph, dominator) = spawn_blocking(move || {
         open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
     })
@@ -1439,6 +1646,7 @@ pub async fn open_snapshot(
         gc_root_count: graph.gc_roots.len(),
     };
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
@@ -1463,6 +1671,7 @@ pub async fn open_snapshot(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
 
+    emit_completed(&observer, OperationPhase::Complete, started);
     Ok(summary)
 }
 

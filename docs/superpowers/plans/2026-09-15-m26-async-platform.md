@@ -139,15 +139,15 @@
 - Add controlled analysis variant used by Tauri; existing `analyze_heap*` signatures remain source-compatible.
 - Minimum phase sequence for deep open: accepted → opening → parsing → building-graph → computing-dominators → analyzing → committing → complete.
 
-- [ ] **Step 1: Write failing parser progress tests**
+- [x] **Step 1: Write failing parser progress tests**
 
   Parse a synthetic fixture through a recording observer. Assert at least one bounded record/byte update, monotonic completion, and the same final graph as the legacy entry point.
 
-- [ ] **Step 2: Write failing analysis phase tests**
+- [x] **Step 2: Write failing analysis phase tests**
 
   Assert graph/dominator/analyzer phases occur in order and indeterminate is explicit when a total is unavailable.
 
-- [ ] **Step 3: Run focused core tests**
+- [x] **Step 3: Run focused core tests**
 
   Run:
 
@@ -158,15 +158,15 @@
 
   Expected: FAIL until controlled variants exist.
 
-- [ ] **Step 4: Implement minimal checkpoints and Tauri emission**
+- [x] **Step 4: Implement minimal checkpoints and Tauri emission**
 
   Emit at record boundaries with throttling (for example, at most every 100 ms or 1% change), not for every object. Add phases to `run_desktop_analysis`, `load_heap_internal`, `query_heap`, `diff_objects`, `inspect_object` field reparse, `find_all_gc_paths`, snapshot, and flamegraph commands; use indeterminate events where core totals are not exposed yet.
 
-- [ ] **Step 5: Re-run focused core and headless Tauri tests**
+- [x] **Step 5: Re-run focused core and headless Tauri tests**
 
   Expected: PASS; legacy parser/analysis results remain equal.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add core/src/hprof/binary_parser.rs core/src/analysis/engine.rs tauri/src/commands.rs tauri/session-ops/src/lib.rs
