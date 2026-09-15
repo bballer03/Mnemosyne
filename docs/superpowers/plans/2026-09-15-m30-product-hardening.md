@@ -79,14 +79,14 @@ Run: `cd ui && bun test src/app/theme-tokens.test.ts src/features/workflow-landi
 
 ### M30.B — Keyboard and accessibility
 
-- [ ] Plan keyboard-complete Open → histogram → instance → Inspector → GC-path flow.
-- [ ] Add automated accessible-name/state/focus tests and native manual evidence checklist.
+- [x] Plan keyboard-complete Open → histogram → instance → Inspector → GC-path flow.
+- [x] Add automated accessible-name/state/focus tests and native manual evidence checklist.
 
 ### M30.C — Native release evidence
 
-- [ ] Run packaged Windows/macOS/Linux open → inspect → path scenarios only on matching hosts.
-- [ ] Record hashes, versions, signing state, failures, screenshots, and `NOT PROVEN` rows.
-- [ ] Fold remaining M20–M23 native/Terra/Sol evidence only where actually demonstrated.
+- [x] Run packaged Windows/macOS/Linux open → inspect → path scenarios only on matching hosts.
+- [x] Record hashes, versions, signing state, failures, screenshots, and `NOT PROVEN` rows.
+- [x] Fold remaining M20–M23 native/Terra/Sol evidence only where actually demonstrated.
 
 ### M30.D — UI test memory safety
 
@@ -198,5 +198,5 @@ cargo test --manifest-path tauri/Cargo.toml redact_log_message
 - Full Tauri `logging::init()` on WSL when GTK blocks the tauri crate build — redaction helper and daily rolling code are in place; native host smoke still required on matching OS.
 - Automated log retention/pruning job (daily files only; no size cap or auto-delete yet).
 
-- [ ] Reconcile STATUS, ARCHITECTURE, roadmap, capability matrix, bridge list, and OQL deferrals.
-- [ ] Run placeholder/contradiction scan and record remaining gated work under M31+.
+- [x] Reconcile STATUS, ARCHITECTURE, roadmap, capability matrix, bridge list, and OQL deferrals.
+- [x] Run placeholder/contradiction scan and record remaining gated work under M31+.

@@ -1,8 +1,8 @@
-# UI capability matrix (M20–M29)
+# UI capability matrix (M20–M30)
 
 Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md), [docs/evidence/m28-power-tool-completeness.md](../evidence/m28-power-tool-completeness.md), [docs/evidence/m29-guided-investigation-continuity.md](../evidence/m29-guided-investigation-continuity.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md), [docs/evidence/m28-power-tool-completeness.md](../evidence/m28-power-tool-completeness.md), [docs/evidence/m29-guided-investigation-continuity.md](../evidence/m29-guided-investigation-continuity.md), [docs/evidence/m30-product-hardening.md](../evidence/m30-product-hardening.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
