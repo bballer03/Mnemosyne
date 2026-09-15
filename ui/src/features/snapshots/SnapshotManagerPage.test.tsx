@@ -9,6 +9,7 @@ import {
   clearRememberedDesktopHeapSource,
   rememberDesktopHeapSource,
 } from "../artifact-loader/desktop-heap-session";
+import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { SnapshotManagerPage } from "./SnapshotManagerPage";
 
 const FULL_KEY = "abcdef0123456789deadbeefabcdef0123456789deadbeefabcdef0123456789";
@@ -19,6 +20,7 @@ describe("SnapshotManagerPage", () => {
     delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
     delete window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
     clearRememberedDesktopHeapSource();
+    useArtifactStore.getState().reset();
   });
 
   it("shows unavailable state when the desktop bridge is missing", async () => {
@@ -117,6 +119,24 @@ describe("SnapshotManagerPage", () => {
   });
 
   it("opens a snapshot into the desktop session and remembers the source", async () => {
+    useArtifactStore.getState().setArtifact("older.json", {
+      summary: {
+        heapPath: "older.hprof",
+        totalObjects: 1,
+        totalSizeBytes: 8,
+        totalRecords: 1,
+      },
+      leaks: [],
+      recommendations: [],
+      elapsedSeconds: 0,
+      graph: {
+        nodeCount: 1,
+        edgeCount: 0,
+        dominatorCount: 0,
+        dominators: [],
+      },
+      provenance: [],
+    });
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       listSnapshots: async () => [
         {
@@ -154,8 +174,11 @@ describe("SnapshotManagerPage", () => {
     fireEvent.click(view.getByRole("button", { name: /^open$/i }));
 
     await waitFor(() => {
-      expect(view.getByRole("status")).toHaveTextContent(/opened fixture\.hprof \(42 objects\)/i);
+      expect(view.getByRole("status")).toHaveTextContent(
+        /opened fixture\.hprof \(42 objects\).*artifact views were cleared/i,
+      );
     });
+    expect(useArtifactStore.getState().artifact).toBeUndefined();
     expect(getRememberedDesktopHeapSource()).toEqual({
       sourceId: "src-opened",
       displayName: "fixture.hprof",

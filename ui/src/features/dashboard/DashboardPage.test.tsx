@@ -316,7 +316,7 @@ describe("DashboardPage", () => {
       { initialEntries: ["/dashboard"] },
     );
 
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await user.click(view.getByRole("button", { name: /trace/i }));
 
@@ -369,7 +369,7 @@ describe("DashboardPage", () => {
     });
 
     const router = createMemoryRouter(dashboardRoutes(), { initialEntries: ["/dashboard"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await user.click(view.getByRole("link", { name: /artifact explorer/i }));
 
@@ -389,7 +389,7 @@ describe("DashboardPage", () => {
     });
 
     const router = createMemoryRouter(dashboardRoutes(), { initialEntries: ["/dashboard"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await user.click(view.getByRole("link", { name: /heap explorer/i }));
 

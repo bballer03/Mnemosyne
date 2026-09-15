@@ -1,11 +1,11 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-14 (**v0.4.1** desktop bridge hotfix; **v0.5.0 reserved** for M24 Continuous Heap Investigation / MAT-equivalent workbench — [design](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md))  
+> **Last updated:** 2026-09-15 (**v0.4.3** current; **v0.5.0** release prep = M24 Continuous Heap Investigation A–D; M24.E in-workbench compare gated post-0.5.0; full UI→MAT maturity catalog **M24–M31+** — [maturity roadmap](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md); M24 product thesis — [design](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md))
 > **Owner:** Tech PM Agent  
-> **Goal:** Reach Eclipse MAT-level analysis depth while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
+> **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
 >
-> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. **M24 = Continuous Heap Investigation** ships as product release **v0.5.0** (modern, token-consistent dark workbench theme). Prefer UI-first plan + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
+> **Numbering note:** The **UI-first product plan** ([2026-09-14-ui-first-mat-install-ai-plan.md](superpowers/plans/2026-09-14-ui-first-mat-install-ai-plan.md)) uses **M20 = workbench UI**, **M21 = portable install**, **M22 = bounded OQL**, **M23 = AI-first assistant**. **M24 = Continuous Heap Investigation** ships as product release **v0.5.0**. Post-M24 depth is catalogued in [2026-09-15-ui-mat-maturity-roadmap-design.md](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) (M25–M31+). Prefer that design + [STATUS.md](../STATUS.md) + [ui-capability-matrix.md](product/ui-capability-matrix.md) for current product status.
 
 Mnemosyne has closed M1 through M7 and shipped `v0.3.0` (2026-04-26) across GitHub Releases, GHCR, and Homebrew. The active roadmap is now a Tech PM **post-v0.3.0 refresh**: an honest MAT parity matrix, an explicit differentiator inventory, a backlog of candidate M8+ milestones, and a recommended next milestone for orchestration to schedule.
 
@@ -475,7 +475,9 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M15 MAT Backend Parity Completion** | [design/milestone-15-mat-backend-parity.md](design/milestone-15-mat-backend-parity.md) | ✅ Shipped (slices 15.A–15.F implementation, 15.G doc-sync) |
 | **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
 | **M23 AI-First Guided Investigation (UI-first plan)** | [design/milestone-23-ai-first-guided-investigation.md](design/milestone-23-ai-first-guided-investigation.md), [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md) | 🟡 Slices 23.A–C shipped; 23.D evidence recorded; Terra/Sol final verdict pending |
-| **M24 Continuous Heap Investigation** | [superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md) | 🧭 Design; product target **v0.5.0** (theme tokens + heap-first shell); v0.4.1 is bridge hotfix only |
+| **M24 Continuous Heap Investigation** | [superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md) | ✅ A–D ready for the **v0.5.0** cut after release prep lands: persistent Open / **Open another / Close**, transactional recent/snapshot open, shared selection, and findings advisory. **M24.E in-workbench compare is gated post-0.5.0**; the existing standalone `/compare` route remains available. |
+| **UI → MAT maturity program (M24–M32)** | [superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) | 🧭 Design proposed 2026-09-15; Approach C (M32 deps → M24 shell → depth); [dependency inventory](product/dependency-currency-inventory.md) |
+| **M32 Dependency & toolchain currency** | [product/dependency-currency-inventory.md](product/dependency-currency-inventory.md) | 🧭 First track; registry-verified latest; closes Dependabot #50–#52 |
 
 ---
 

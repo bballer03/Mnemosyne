@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { InvestigationBreadcrumbs } from "../../app/InvestigationBreadcrumbs";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 import { ModeRail } from "./components/ModeRail";
 import { ObjectInspectorPanel } from "./components/ObjectInspectorPanel";
@@ -30,24 +31,45 @@ export type HeapExplorerOutletContext = {
 
 export function HeapExplorerLayout() {
   const { artifact, artifactName } = useArtifactStore();
+  const selectionRevision = useInvestigationStore((state) => state.revision);
+  const selectedObjectId = useInvestigationStore((state) => state.objectId);
+  const setObjectId = useInvestigationStore((state) => state.setObjectId);
+  const bumpRevisionOnArtifactChange = useInvestigationStore(
+    (state) => state.bumpRevisionOnArtifactChange,
+  );
   const location = useLocation();
+  const previousArtifactRef = useRef(artifact);
+  const observedRevisionRef = useRef(selectionRevision);
   const [selectedRowIndex, setSelectedRowIndex] = useState<number | undefined>(artifact?.graph.dominators[0] ? 0 : undefined);
   const [seededSearch, setSeededSearch] = useState<string | undefined>();
-  const [hasUnmatchedSeededObject, setHasUnmatchedSeededObject] = useState(false);
   const [isCompactLayout, setIsCompactLayout] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 980 : false,
   );
 
   function handleSelectedRowIndexChange(rowIndex: number | undefined) {
-    setHasUnmatchedSeededObject(false);
     setSelectedRowIndex(rowIndex);
+    setObjectId(
+      rowIndex === undefined ? undefined : artifact?.graph.dominators[rowIndex]?.objectId || undefined,
+      "dominators",
+    );
   }
 
   useEffect(() => {
-    setSelectedRowIndex(artifact?.graph.dominators[0] ? 0 : undefined);
-    setSeededSearch(undefined);
-    setHasUnmatchedSeededObject(false);
-  }, [artifact]);
+    const artifactChanged = previousArtifactRef.current !== artifact;
+    const revisionAlreadyBumped = observedRevisionRef.current !== selectionRevision;
+    previousArtifactRef.current = artifact;
+    observedRevisionRef.current = selectionRevision;
+
+    if (artifactChanged && artifact && !revisionAlreadyBumped) {
+      bumpRevisionOnArtifactChange();
+    }
+    // Only reset local row selection when the artifact identity changes — not on every
+    // selection-revision bump (artifact-only rows keep index-based selection).
+    if (artifactChanged) {
+      setSelectedRowIndex(artifact?.graph.dominators[0] ? 0 : undefined);
+      setSeededSearch(undefined);
+    }
+  }, [artifact, bumpRevisionOnArtifactChange, selectionRevision]);
 
   useEffect(() => {
     if (!artifact) {
@@ -60,22 +82,36 @@ export function HeapExplorerLayout() {
 
     const objectId = new URLSearchParams(location.search).get("objectId");
     if (!objectId) {
-      setHasUnmatchedSeededObject(false);
       setSeededSearch(location.search);
       return;
     }
 
+    setObjectId(objectId, "inspector");
     const matchingRowIndex = artifact.graph.dominators.findIndex((row) => row.objectId === objectId);
     if (matchingRowIndex >= 0) {
       setSelectedRowIndex(matchingRowIndex);
-      setHasUnmatchedSeededObject(false);
     } else {
+      // Explicit URL seed that is not in the table: clear row so unmatched seed wins.
       setSelectedRowIndex(undefined);
-      setHasUnmatchedSeededObject(true);
     }
 
     setSeededSearch(location.search);
-  }, [artifact, location.search, seededSearch]);
+  }, [artifact, location.search, seededSearch, setObjectId]);
+
+  useEffect(() => {
+    if (!artifact || !selectedObjectId) {
+      return;
+    }
+
+    const matchingRowIndex = artifact.graph.dominators.findIndex(
+      (row) => row.objectId === selectedObjectId,
+    );
+    // Only sync row index when the shared objectId maps to a dominator row.
+    // Artifact-only rows (empty objectId) must keep index-based selection.
+    if (matchingRowIndex >= 0) {
+      setSelectedRowIndex(matchingRowIndex);
+    }
+  }, [artifact, selectedObjectId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -96,9 +132,26 @@ export function HeapExplorerLayout() {
     return <Navigate to="/" replace />;
   }
 
-  const selectedObject = hasUnmatchedSeededObject
-    ? undefined
-    : (selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined) ?? artifact.graph.dominators[0];
+  const storedSelectedObject = selectedObjectId
+    ? artifact.graph.dominators.find((row) => row.objectId === selectedObjectId)
+    : undefined;
+  const rowSelectedObject =
+    selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined;
+  // Prefer a concrete dominator row over an unmatched shared id so stale store
+  // objectIds (or cross-pane seeds) cannot steal leak/cross-nav identity.
+  const unmatchedSelectedObject =
+    selectedObjectId && !storedSelectedObject && !rowSelectedObject
+      ? {
+          objectId: selectedObjectId,
+          className: "Object not present in dominator artifact",
+          name: "Shared object selection",
+        }
+      : undefined;
+  const selectedObject =
+    storedSelectedObject ??
+    rowSelectedObject ??
+    unmatchedSelectedObject ??
+    artifact.graph.dominators[0];
   const resolvedLeakId = resolveObjectToLeak(selectedObject?.objectId, artifact);
   const showInspectorPane = location.pathname !== "/heap-explorer/object-inspector";
 

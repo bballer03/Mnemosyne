@@ -1,7 +1,9 @@
 import { useMemo } from "react";
-import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { createColumnHelper, flexRender, tableFeatures, useTable } from "@tanstack/react-table";
 
 import type { AnalysisArtifact, ReferrerEntry } from "../../../lib/analysis-types";
+
+const features = tableFeatures({});
 
 function formatBytes(bytes: number | undefined) {
   if (bytes === undefined) {
@@ -19,9 +21,9 @@ function formatBytes(bytes: number | undefined) {
   return `${bytes} B`;
 }
 
-const columnHelper = createColumnHelper<ReferrerEntry>();
+const columnHelper = createColumnHelper<typeof features, ReferrerEntry>();
 
-const columns = [
+const columns = columnHelper.columns([
   columnHelper.accessor("className", {
     header: "Class",
     cell: (info) => (
@@ -61,16 +63,16 @@ const columns = [
       );
     },
   }),
-];
+]);
 
 export function ReferrerPanel({ artifact }: { artifact: AnalysisArtifact }) {
   const report = artifact.referrerReport;
   const entries = useMemo(() => report?.entries ?? [], [report]);
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: entries,
     columns,
-    getCoreRowModel: getCoreRowModel(),
   });
 
   if (!report) {
@@ -116,7 +118,7 @@ export function ReferrerPanel({ artifact }: { artifact: AnalysisArtifact }) {
             <tbody>
               {table.getRowModel().rows.map((row) => (
                 <tr key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <td
                       key={cell.id}
                       style={{ padding: "0.7rem 0.6rem 0.7rem 0", borderTop: "1px solid #1e293b", verticalAlign: "top" }}

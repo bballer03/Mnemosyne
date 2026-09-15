@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { getRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 import {
   appendBoundedTurn,
   askWithProviderFallback,
@@ -74,8 +75,12 @@ export function InvestigationAssistantPage() {
   const remembered = getRememberedDesktopHeapSource();
   const leaks = artifact?.leaks ?? [];
   const defaultLeakId = pickDefaultLeakId(leaks);
+  const selectedLeakId = useInvestigationStore((state) => state.leakId);
+  const initialLeakId = leaks.some((leak) => leak.id === selectedLeakId)
+    ? selectedLeakId
+    : defaultLeakId;
 
-  const [focusLeakId, setFocusLeakId] = useState<string | undefined>(defaultLeakId);
+  const [focusLeakId, setFocusLeakId] = useState<string | undefined>(initialLeakId);
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<AssistantChatTurn[]>([]);
   const [providerNotice, setProviderNotice] = useState<string | undefined>();
@@ -240,7 +245,19 @@ export function InvestigationAssistantPage() {
         <select
           aria-label="Focus leak"
           value={focusLeakId ?? ""}
-          onChange={(event) => setFocusLeakId(event.target.value || undefined)}
+          onChange={(event) => {
+            const nextLeakId = event.target.value || undefined;
+            setFocusLeakId(nextLeakId);
+            if (nextLeakId) {
+              const nextLeak = leaks.find((leak) => leak.id === nextLeakId);
+              const investigation = useInvestigationStore.getState();
+              investigation.clearSelection();
+              investigation.setLeakId(nextLeakId, "leak");
+              if (nextLeak) {
+                investigation.setClassKey(nextLeak.className, "leak");
+              }
+            }
+          }}
           style={{
             background: "#020617",
             color: "#e2e8f0",

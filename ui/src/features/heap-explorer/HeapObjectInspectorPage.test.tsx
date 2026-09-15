@@ -6,6 +6,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 function createArtifactFixture() {
   return {
@@ -71,6 +72,13 @@ describe("HeapObjectInspectorPage", () => {
   beforeEach(() => {
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        revision: 0,
+        objectId: undefined,
+        classKey: undefined,
+        leakId: undefined,
+        originPane: undefined,
+      });
     });
   });
 
@@ -79,6 +87,7 @@ describe("HeapObjectInspectorPage", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
   });
 
@@ -92,7 +101,7 @@ describe("HeapObjectInspectorPage", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/object-inspector"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("heading", { name: /object inspector/i })).toBeInTheDocument();
     expect(view.getAllByText(/com\.example\.cache\.lrucache/i).length).toBeGreaterThan(0);
@@ -112,7 +121,7 @@ describe("HeapObjectInspectorPage", () => {
     const router = createMemoryRouter(heapExplorerRoutes(), {
       initialEntries: ["/heap-explorer/object-inspector?objectId=0xcafebabe"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getAllByText(/com\.example\.jobs\.WorkerQueue/i).length).toBeGreaterThan(0);
     expect(view.getAllByText(/0xcafebabe/i).length).toBeGreaterThan(0);
@@ -144,7 +153,7 @@ describe("HeapObjectInspectorPage", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/object-inspector"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("link", { name: /open object inspector/i })).toHaveAttribute(
       "href",
@@ -169,7 +178,7 @@ describe("HeapObjectInspectorPage", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/object-inspector"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByRole("link", { name: /open leak workspace/i })).toHaveAttribute(
       "href",

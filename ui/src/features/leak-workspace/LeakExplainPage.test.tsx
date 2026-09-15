@@ -100,7 +100,7 @@ describe("LeakExplainPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/explain", element: <LeakExplainPage /> }], {
       initialEntries: ["/leaks/leak-1/explain"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/loading explanation/i)).toBeInTheDocument();
     expect(await view.findByText(/explain unavailable: local explain bridge is unavailable\./i)).toBeInTheDocument();
@@ -123,7 +123,7 @@ describe("LeakExplainPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/explain", element: <LeakExplainPage /> }], {
       initialEntries: ["/leaks/leak-1/explain"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/loading explanation/i)).toBeInTheDocument();
     expect(await view.findByText(/bridge explanation\./i)).toBeInTheDocument();
@@ -155,7 +155,7 @@ describe("LeakExplainPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/explain", element: <LeakExplainPage /> }], {
       initialEntries: ["/leaks/leak-2/explain"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.queryByText(/stale explanation for leak one/i)).not.toBeInTheDocument();
     expect(view.getByText(/loading explanation/i)).toBeInTheDocument();
@@ -214,7 +214,7 @@ describe("LeakExplainPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/explain", element: <LeakExplainPage /> }], {
       initialEntries: ["/leaks/leak-2/explain"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await waitFor(() => {
       expect(view.getByText(/bridge explanation\./i)).toBeInTheDocument();

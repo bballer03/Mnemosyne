@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { useInvestigationStore } from "../investigation/investigation-store";
+
 import type {
   ExplainResult,
   FixResult,
@@ -85,7 +87,11 @@ function rememberObjectTarget(
 
 export const useLeakWorkspaceStore = create<LeakWorkspaceState>((set) => ({
   ...initialState,
-  setSelection: (selection) =>
+  setSelection: (selection) => {
+    if (hasOwnSelectionField(selection, "objectId")) {
+      useInvestigationStore.getState().setObjectId(selection.objectId, "leak");
+    }
+
     set((state) => {
       const hasLeakId = hasOwnSelectionField(selection, "leakId");
       const hasHeapPath = hasOwnSelectionField(selection, "heapPath");
@@ -130,7 +136,8 @@ export const useLeakWorkspaceStore = create<LeakWorkspaceState>((set) => ({
             ...buildIdleSubviewState(),
           }
         : state;
-    }),
+    });
+  },
   requestGcPathRefresh: () => set((state) => ({ gcPathRefreshNonce: state.gcPathRefreshNonce + 1 })),
   setSubviewState: (key, value) => set({ [key]: value } as Pick<SubviewStateByKey, typeof key>),
   reset: () => set({ ...initialState, ...buildIdleSubviewState() }),

@@ -57,6 +57,8 @@ const testBatches = [
     "src/features/assistant/assistant-bridge-client.test.ts",
     "src/features/workflow-landing/workflow-bridge-client.test.ts",
     "src/features/workflow-landing/natural-language-router.test.ts",
+    "src/features/investigation/investigation-store.test.ts",
+    "src/features/investigation/workspace-actions.test.ts",
   ],
   [
     // WorkflowCard alone: after TopNav/assistant-bridge in one process, CI

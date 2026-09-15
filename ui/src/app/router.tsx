@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Navigate,
+  Outlet,
   createBrowserRouter,
   RouterProvider,
   type RouteObject,
@@ -25,6 +26,25 @@ import { SnapshotManagerPage } from "../features/snapshots/SnapshotManagerPage";
 import { PolicyCheckPage } from "../features/policy/PolicyCheckPage";
 import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
+import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
+import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
+
+/**
+ * Persistent Open another / Close chrome for every route once a heap is loaded.
+ * Intentionally does NOT duplicate TopNav labels (Dashboard, …) to avoid
+ * test collisions — see M14 note below.
+ */
+function InvestigationChromeLayout() {
+  return (
+    <>
+      <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+        <HeapSessionBar />
+        <FindingsAdvisoryPane />
+      </div>
+      <Outlet />
+    </>
+  );
+}
 
 // M14 Slice 14.D note: the persistent top-nav (`TopNav`) is NOT wired in
 // here as a shared layout route wrapping every entry below. That was tried
@@ -39,7 +59,11 @@ import { InvestigationAssistantPage } from "../features/assistant/InvestigationA
 // landing page" specifically. `TopNav` is rendered directly inside
 // `ArtifactLoaderPage` (the `/` route) instead -- see that file's own doc
 // comment for the full placement rationale.
-export const routes: RouteObject[] = [
+//
+// M24: `InvestigationChromeLayout` wraps all routes with `HeapSessionBar`
+// only (Open another / Close / current heap). Those labels do not collide
+// with page-local nav names.
+const pageRoutes: RouteObject[] = [
   {
     path: "/",
     element: <ArtifactLoaderPage />,
@@ -130,9 +154,12 @@ export const routes: RouteObject[] = [
   },
 ];
 
-const future = {
-  v7_startTransition: true,
-};
+export const routes: RouteObject[] = [
+  {
+    element: <InvestigationChromeLayout />,
+    children: pageRoutes,
+  },
+];
 
 /**
  * Create the data router once per app mount — never at module scope.
@@ -148,5 +175,5 @@ const future = {
  */
 export function AppRouter() {
   const [router] = useState(() => createBrowserRouter(routes));
-  return <RouterProvider router={router} future={future} />;
+  return <RouterProvider router={router} />;
 }

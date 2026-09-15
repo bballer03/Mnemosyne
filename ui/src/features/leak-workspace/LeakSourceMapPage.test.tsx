@@ -100,7 +100,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-1/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/source map is unavailable until a project root is configured/i)).toBeInTheDocument();
   });
@@ -115,7 +115,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-1/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/source map unavailable: local source map bridge is unavailable\./i)).toBeInTheDocument();
   });
@@ -149,7 +149,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-1/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/d:\/repo\/src\/main\/java\/com\/example\/cache\.java/i)).toBeInTheDocument();
     expect(view.getByText(/git metadata: present/i)).toBeInTheDocument();
@@ -184,7 +184,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-1/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/mapping fell back to an unmapped placeholder/i)).toBeInTheDocument();
   });
@@ -233,7 +233,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-2/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.queryByText(/src\/old\/LeakOne\.java/i)).not.toBeInTheDocument();
     expect(view.getByText(/loading source map/i)).toBeInTheDocument();
@@ -298,7 +298,7 @@ describe("LeakSourceMapPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/source-map", element: <LeakSourceMapPage /> }], {
       initialEntries: ["/leaks/leak-2/source-map"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await waitFor(() => {
       expect(view.getByText(/mapping fell back to an unmapped placeholder/i)).toBeInTheDocument();

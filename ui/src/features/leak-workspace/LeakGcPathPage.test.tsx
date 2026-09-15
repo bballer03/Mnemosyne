@@ -98,7 +98,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(view.getByText(/gc path is unavailable for this leak until an object target is present/i)).toBeInTheDocument();
   });
@@ -113,7 +113,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/gc path unavailable: local gc path bridge is unavailable\./i)).toBeInTheDocument();
   });
@@ -153,7 +153,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/current object target: 0x1000/i)).toBeInTheDocument();
     expect(view.getByText(/root node/i)).toBeInTheDocument();
@@ -198,7 +198,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/gc path includes backend-reported fallback provenance\./i)).toBeInTheDocument();
     expect(view.getByText(/gc path was synthesized from summary-level heap information\./i)).toBeInTheDocument();
@@ -243,7 +243,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await view.findByText(/current object target: 0x1000/i);
     await user.click(view.getByRole("button", { name: /refresh gc path/i }));
@@ -293,7 +293,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/^old\.heap\.node$/i)).toBeInTheDocument();
 
@@ -347,7 +347,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await view.findByText(/current object target: 0x1000/i);
 
@@ -391,7 +391,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByLabelText(/path count/i)).toBeInTheDocument();
     expect(await view.findByText(/path 1 of 2/i)).toBeInTheDocument();
@@ -428,7 +428,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     await view.findByText(/path 1 of 1/i);
 
@@ -463,7 +463,7 @@ describe("LeakGcPathPage", () => {
     const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
       initialEntries: ["/leaks/leak-1/gc-path"],
     });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByText(/truncated/i)).toBeInTheDocument();
   });

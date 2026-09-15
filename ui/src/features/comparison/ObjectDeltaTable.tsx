@@ -1,7 +1,9 @@
 import { useMemo } from "react";
-import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { createColumnHelper, flexRender, tableFeatures, useTable } from "@tanstack/react-table";
 
 import type { ObjectDelta, ObjectDeltaKind } from "../../lib/diff-types";
+
+const features = tableFeatures({});
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -39,77 +41,79 @@ const kindEmptyCopy: Record<ObjectDeltaKind, string> = {
   RetainedChanged: "No object classes changed retained size beyond the configured threshold.",
 };
 
-const columnHelper = createColumnHelper<ObjectDelta>();
+const columnHelper = createColumnHelper<typeof features, ObjectDelta>();
 
 export function ObjectDeltaTable({ kind, deltas }: { kind: ObjectDeltaKind; deltas: ObjectDelta[] }) {
   const columns = useMemo(
-    () => [
-      columnHelper.accessor("className", {
-        header: "Class",
-        cell: (info) => (
-          <div>
-            <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{info.getValue()}</div>
-            <div style={{ color: "#64748b", fontSize: "0.82rem", marginTop: "0.2rem" }}>
-              example object id: {info.row.original.exampleObjectId}
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("className", {
+          header: "Class",
+          cell: (info) => (
+            <div>
+              <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{info.getValue()}</div>
+              <div style={{ color: "#64748b", fontSize: "0.82rem", marginTop: "0.2rem" }}>
+                example object id: {info.row.original.exampleObjectId}
+              </div>
             </div>
-          </div>
-        ),
-      }),
-      columnHelper.display({
-        id: "count",
-        header: "Count (before -> after)",
-        cell: (info) => `${info.row.original.beforeCount.toLocaleString()} -> ${info.row.original.afterCount.toLocaleString()}`,
-      }),
-      columnHelper.display({
-        id: "retained",
-        header: "Retained (before -> after)",
-        cell: (info) =>
-          `${formatBytes(info.row.original.beforeRetainedBytes)} -> ${formatBytes(info.row.original.afterRetainedBytes)}`,
-      }),
-      columnHelper.accessor("dominatorChain", {
-        header: "Dominator chain",
-        cell: (info) => {
-          const chain = info.getValue();
-          return chain.length > 0 ? chain.join(" -> ") : "-";
-        },
-      }),
-      columnHelper.accessor("leakSeverity", {
-        header: "Leak severity",
-        cell: (info) => {
-          const severity = info.getValue();
+          ),
+        }),
+        columnHelper.display({
+          id: "count",
+          header: "Count (before -> after)",
+          cell: (info) =>
+            `${info.row.original.beforeCount.toLocaleString()} -> ${info.row.original.afterCount.toLocaleString()}`,
+        }),
+        columnHelper.display({
+          id: "retained",
+          header: "Retained (before -> after)",
+          cell: (info) =>
+            `${formatBytes(info.row.original.beforeRetainedBytes)} -> ${formatBytes(info.row.original.afterRetainedBytes)}`,
+        }),
+        columnHelper.accessor("dominatorChain", {
+          header: "Dominator chain",
+          cell: (info) => {
+            const chain = info.getValue();
+            return chain.length > 0 ? chain.join(" -> ") : "-";
+          },
+        }),
+        columnHelper.accessor("leakSeverity", {
+          header: "Leak severity",
+          cell: (info) => {
+            const severity = info.getValue();
 
-          if (!severity) {
-            return <span style={{ color: "#64748b" }}>-</span>;
-          }
+            if (!severity) {
+              return <span style={{ color: "#64748b" }}>-</span>;
+            }
 
-          const tone = severityTone(severity);
+            const tone = severityTone(severity);
 
-          return (
-            <span
-              style={{
-                display: "inline-flex",
-                borderRadius: 999,
-                border: `1px solid ${tone.border}`,
-                color: tone.text,
-                background: tone.background,
-                padding: "0.2rem 0.5rem",
-                fontSize: "0.78rem",
-                letterSpacing: "0.06em",
-              }}
-            >
-              {severity}
-            </span>
-          );
-        },
-      }),
-    ],
+            return (
+              <span
+                style={{
+                  display: "inline-flex",
+                  borderRadius: 999,
+                  border: `1px solid ${tone.border}`,
+                  color: tone.text,
+                  background: tone.background,
+                  padding: "0.2rem 0.5rem",
+                  fontSize: "0.78rem",
+                  letterSpacing: "0.06em",
+                }}
+              >
+                {severity}
+              </span>
+            );
+          },
+        }),
+      ]),
     [],
   );
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: deltas,
     columns,
-    getCoreRowModel: getCoreRowModel(),
   });
 
   return (
@@ -148,7 +152,7 @@ export function ObjectDeltaTable({ kind, deltas }: { kind: ObjectDeltaKind; delt
             <tbody>
               {table.getRowModel().rows.map((row) => (
                 <tr key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getAllCells().map((cell) => (
                     <td
                       key={cell.id}
                       style={{ padding: "0.7rem 0.6rem 0.7rem 0", borderTop: "1px solid #1e293b", verticalAlign: "top" }}

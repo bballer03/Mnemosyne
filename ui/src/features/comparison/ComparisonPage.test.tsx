@@ -15,7 +15,7 @@ function renderComparisonPage() {
     { initialEntries: ["/compare"] },
   );
 
-  return render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+  return render(<RouterProvider router={router} />);
 }
 
 const knownFixturePair: ObjectDiffReport = {

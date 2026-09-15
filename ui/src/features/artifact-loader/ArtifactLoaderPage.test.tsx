@@ -98,7 +98,7 @@ describe("ArtifactLoaderPage", () => {
     await user.click(page.getByRole("button", { name: /open heap dump/i }));
 
     await waitFor(() => {
-      expect(page.getByText(/needs the desktop app/i)).toBeInTheDocument();
+      expect(page.getAllByText(/needs the desktop app/i).length).toBeGreaterThanOrEqual(1);
     });
     expect(page.queryByText(/\/tmp\//i)).not.toBeInTheDocument();
   });
@@ -168,6 +168,47 @@ describe("ArtifactLoaderPage", () => {
     });
     expect(page.queryByText(/\/home\//i)).not.toBeInTheDocument();
     expect(page.queryByText(/C:\\/i)).not.toBeInTheDocument();
+  });
+
+  it("reopens a desktop recent load by its opaque source id", async () => {
+    const user = userEvent.setup();
+    const analyzedSourceIds: string[] = [];
+
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      pickHeapFile: async () => ({
+        status: "selected",
+        sourceId: "src-recent",
+        displayName: "recent.hprof",
+      }),
+      runDesktopAnalysis: async (input) => {
+        analyzedSourceIds.push(input.sourceId);
+        return JSON.parse(createArtifactJson());
+      },
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+    await user.click(page.getByRole("button", { name: /^open heap dump$/i }));
+
+    const recentOpen = await page.findByRole("button", { name: /open recent\.hprof/i });
+    await user.click(recentOpen);
+
+    await waitFor(() => {
+      expect(analyzedSourceIds).toEqual(["src-recent", "src-recent"]);
+    });
+    expect(page.queryByText(/\/home\//i)).not.toBeInTheDocument();
+  });
+
+  it("disables reopening metadata-only artifact loads with an honest reason", async () => {
+    const user = userEvent.setup();
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+    const file = new File([createArtifactJson()], "fixture.json", { type: "application/json" });
+
+    await user.upload(page.getByLabelText(/analysis json artifact/i), file);
+
+    expect(await page.findByRole("button", { name: /open fixture\.json/i })).toBeDisabled();
+    expect(page.getByText(/import this artifact again to reopen it/i)).toBeInTheDocument();
   });
 
   it("shows Analyzing… while lean first-open analysis is in flight", async () => {

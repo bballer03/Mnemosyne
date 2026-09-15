@@ -761,8 +761,9 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    // Idempotent: Close from UI must succeed even if the graph was already cleared.
     if graph.is_none() {
-        return Err(NO_HEAP_LOADED.to_string());
+        return Ok(());
     }
 
     state.bump_session_epoch();

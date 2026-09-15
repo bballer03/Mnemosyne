@@ -7,6 +7,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 function createArtifactFixture() {
   return {
@@ -82,6 +83,13 @@ describe("HeapQueryConsolePage", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        revision: 0,
+        objectId: undefined,
+        classKey: undefined,
+        leakId: undefined,
+        originPane: undefined,
+      });
     });
   });
 
@@ -91,6 +99,7 @@ describe("HeapQueryConsolePage", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
   });
 
@@ -98,7 +107,7 @@ describe("HeapQueryConsolePage", () => {
     seedArtifactWithDominators();
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByText(/query execution is unavailable in this browser session/i)).toBeInTheDocument();
@@ -108,7 +117,7 @@ describe("HeapQueryConsolePage", () => {
     seedArtifactWithDominators();
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByRole("link", { name: /open object inspector/i })).toHaveAttribute(
@@ -131,7 +140,7 @@ describe("HeapQueryConsolePage", () => {
     });
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     expect(page.getByRole("link", { name: /open leak workspace/i })).toHaveAttribute(
@@ -151,7 +160,7 @@ describe("HeapQueryConsolePage", () => {
     };
 
     const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/query-console"] });
-    const view = render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
     await user.click(page.getByRole("button", { name: /run query/i }));

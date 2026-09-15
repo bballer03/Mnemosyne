@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-client";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
@@ -25,6 +26,8 @@ const panelStyle = {
 
 export function ArtifactExplorerPage() {
   const { artifact, artifactName } = useArtifactStore();
+  const selectedClassKey = useInvestigationStore((state) => state.classKey);
+  const setClassKey = useInvestigationStore((state) => state.setClassKey);
   const [selectedHistogramKey, setSelectedHistogramKey] = useState<string | undefined>(
     artifact?.histogram?.entries[0]?.key,
   );
@@ -36,6 +39,20 @@ export function ArtifactExplorerPage() {
     setLiveHistogram(undefined);
     setHistogramSource("artifact");
   }, [artifact]);
+
+  useEffect(() => {
+    if (selectedClassKey) {
+      setSelectedHistogramKey(selectedClassKey);
+    }
+  }, [selectedClassKey]);
+
+  const handleSelectHistogramKey = useCallback(
+    (key: string | undefined) => {
+      setSelectedHistogramKey(key);
+      setClassKey(key, "histogram");
+    },
+    [setClassKey],
+  );
 
   const explorerArtifact = useMemo(() => {
     if (!artifact) {
@@ -103,7 +120,7 @@ export function ArtifactExplorerPage() {
               setHistogramSource(source);
             }}
             selectedKey={selectedHistogramKey}
-            onSelectKey={setSelectedHistogramKey}
+            onSelectKey={handleSelectHistogramKey}
           />
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>

@@ -6,6 +6,7 @@ import {
   getRememberedDesktopHeapSource,
   rememberDesktopHeapSource,
 } from "../artifact-loader/desktop-heap-session";
+import { applyOpenedSnapshotSession } from "../investigation/workspace-actions";
 import {
   isListSnapshotsAvailable,
   isOpenSnapshotAvailable,
@@ -127,9 +128,14 @@ export function SnapshotManagerPage() {
         return;
       }
 
-      rememberDesktopHeapSource(result.data.sourceId, result.data.displayName);
+      applyOpenedSnapshotSession(
+        result.data.displayName,
+        result.data.sourceId,
+        result.data.objectCount,
+      );
       setActionStatus(
-        `Opened ${result.data.displayName} (${result.data.objectCount.toLocaleString()} objects).`,
+        `Opened ${result.data.displayName} (${result.data.objectCount.toLocaleString()} objects). ` +
+          "Snapshot graph is active; prior artifact views were cleared because this bridge does not return an analysis artifact.",
       );
     } finally {
       setBusy(false);

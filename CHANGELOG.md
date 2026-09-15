@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - Unreleased
+
+### Added
+- M24 continuous heap investigation shell: persistent heap identity with **Open / Open another / Close**, transactional replacement and recent/snapshot reopen, shared `objectId` / `classKey` / `leakId` selection across core panes, and a collapsible Rules-labelled findings advisory with deterministic deep-links.
+
+### Changed
+- M32 dependency/toolchain currency: React 19.3, React Router 7, Vite 8, Tailwind 4.3, TypeScript 7, Cargo dependencies, Rust Docker image, and GitHub Actions pins refreshed within the validated compatibility envelope.
+- Workspace, Tauri, and Homebrew formula versions bump to `0.5.0`. Homebrew SHA-256 values remain from the prior release until v0.5.0 archives publish.
+- M24.E in-workbench compare is gated to post-v0.5.0 / the next slice. The existing standalone `/compare` route remains the shipped comparison surface and does not block this cut.
+- **jsdom stays on 24.1.1**; jsdom 30 is explicitly deferred after Bun RSS/hang evidence, with no forced upgrade in this release.
+
 ## [0.4.3] - 2026-09-14
 
 ### Fixed

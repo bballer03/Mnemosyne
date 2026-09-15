@@ -8,6 +8,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { assistantRoutes } from "../../test/app-route-trees";
 import { rememberDesktopHeapSource, clearRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 import { DEFAULT_HISTORY_MAX_TURNS } from "./assistant-bridge-client";
 
 function seedArtifact() {
@@ -54,6 +55,13 @@ describe("InvestigationAssistantPage", () => {
   beforeEach(() => {
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        revision: 0,
+        objectId: undefined,
+        classKey: undefined,
+        leakId: undefined,
+        originPane: undefined,
+      });
     });
     clearRememberedDesktopHeapSource();
     delete window.__MNEMOSYNE_ASSISTANT_BRIDGE__;
@@ -64,6 +72,7 @@ describe("InvestigationAssistantPage", () => {
     cleanup();
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
     clearRememberedDesktopHeapSource();
     delete window.__MNEMOSYNE_ASSISTANT_BRIDGE__;
@@ -191,6 +200,7 @@ describe("InvestigationAssistantPage", () => {
   it("updates focus when the selected leak changes", async () => {
     const user = userEvent.setup();
     seedArtifact();
+    useInvestigationStore.getState().setObjectId("0xstale", "findings");
 
     const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
     const view = render(<RouterProvider router={router} />);
@@ -203,6 +213,23 @@ describe("InvestigationAssistantPage", () => {
 
     const facts = view.getByRole("region", { name: /measured heap facts/i });
     expect(within(facts).getByText(/leak-low/i)).toBeInTheDocument();
+    expect(within(facts).getByText(/low severity cache/i)).toBeInTheDocument();
+    expect(useInvestigationStore.getState()).toMatchObject({
+      leakId: "leak-low",
+      classKey: "com.example.Low",
+      objectId: undefined,
+    });
+  });
+
+  it("opens on the finding selected in the shared investigation store", () => {
+    seedArtifact();
+    useInvestigationStore.getState().setLeakId("leak-low", "findings");
+
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
+    const view = render(<RouterProvider router={router} />);
+
+    expect((view.getByLabelText(/focus leak/i) as HTMLSelectElement).value).toBe("leak-low");
+    const facts = view.getByRole("region", { name: /measured heap facts/i });
     expect(within(facts).getByText(/low severity cache/i)).toBeInTheDocument();
   });
 
