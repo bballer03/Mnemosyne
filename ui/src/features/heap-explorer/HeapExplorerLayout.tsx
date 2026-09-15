@@ -19,6 +19,7 @@ const panelStyle = {
 
 export type HeapExplorerOutletContext = {
   artifact: AnalysisArtifact;
+  objectId?: string;
   selectedObject?: {
     objectId: string;
     className: string;
@@ -38,9 +39,17 @@ export function HeapExplorerLayout() {
     (state) => state.bumpRevisionOnArtifactChange,
   );
   const location = useLocation();
+  const routeObjectId = new URLSearchParams(location.search).get("objectId") || undefined;
   const previousArtifactRef = useRef(artifact);
   const observedRevisionRef = useRef(selectionRevision);
-  const [selectedRowIndex, setSelectedRowIndex] = useState<number | undefined>(artifact?.graph.dominators[0] ? 0 : undefined);
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | undefined>(() => {
+    if (routeObjectId) {
+      const matchingRowIndex = artifact?.graph.dominators.findIndex((row) => row.objectId === routeObjectId) ?? -1;
+      return matchingRowIndex >= 0 ? matchingRowIndex : undefined;
+    }
+
+    return artifact?.graph.dominators[0] ? 0 : undefined;
+  });
   const [seededSearch, setSeededSearch] = useState<string | undefined>();
   const [isCompactLayout, setIsCompactLayout] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 980 : false,
@@ -132,17 +141,19 @@ export function HeapExplorerLayout() {
     return <Navigate to="/" replace />;
   }
 
-  const storedSelectedObject = selectedObjectId
-    ? artifact.graph.dominators.find((row) => row.objectId === selectedObjectId)
+  const effectiveSelectedObjectId =
+    seededSearch === location.search ? selectedObjectId : routeObjectId ?? selectedObjectId;
+  const storedSelectedObject = effectiveSelectedObjectId
+    ? artifact.graph.dominators.find((row) => row.objectId === effectiveSelectedObjectId)
     : undefined;
   const rowSelectedObject =
     selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined;
   // Prefer a concrete dominator row over an unmatched shared id so stale store
   // objectIds (or cross-pane seeds) cannot steal leak/cross-nav identity.
   const unmatchedSelectedObject =
-    selectedObjectId && !storedSelectedObject && !rowSelectedObject
+    effectiveSelectedObjectId && !storedSelectedObject && !rowSelectedObject
       ? {
-          objectId: selectedObjectId,
+          objectId: effectiveSelectedObjectId,
           className: "Object not present in dominator artifact",
           name: "Shared object selection",
         }
@@ -200,6 +211,7 @@ export function HeapExplorerLayout() {
           <Outlet
             context={{
               artifact,
+              objectId: selectedObject?.objectId || undefined,
               selectedObject,
               resolvedLeakId,
               selectedRowIndex,
@@ -209,7 +221,11 @@ export function HeapExplorerLayout() {
         </section>
         {showInspectorPane ? (
           <aside aria-label="Object inspector panel" style={panelStyle}>
-            <ObjectInspectorPanel artifact={artifact} selectedRowIndex={selectedRowIndex} />
+            <ObjectInspectorPanel
+              artifact={artifact}
+              objectId={selectedObject?.objectId || undefined}
+              selectedRowIndex={selectedRowIndex}
+            />
           </aside>
         ) : null}
       </section>

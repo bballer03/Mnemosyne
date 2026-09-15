@@ -324,25 +324,25 @@
 - Explicit CTA calls `inspectObject(objectId, true)` after disclosing: “May reparse the heap and retain field bytes; memory use can increase.”
 - `fields === undefined` after an opt-in response means field bytes were unavailable; `fields.length === 0` means no decoded fields.
 
-- [ ] **Step 1: Write failing inspector tests**
+- [x] **Step 1: Write failing inspector tests**
 
   Assert unmatched URL/shared IDs still inspect, no field-data request runs automatically, the disclosure appears before opt-in, clicking the CTA sends `true`, and primitive/object-reference fields render with type/name/value.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx src/features/heap-explorer/HeapObjectInspectorPage.test.tsx src/features/heap-explorer/HeapExplorerLayout.test.tsx --max-concurrency=1`
 
   Expected: FAIL because the panel derives identity only from a dominator row and never renders `fields`.
 
-- [ ] **Step 3: Implement stable-ID inspection and field states**
+- [x] **Step 3: Implement stable-ID inspection and field states**
 
   Keep field values out of logs and error strings. Render long values with wrapping; if UI display is capped, add a per-value `truncated` label and show the exact cap rather than silently slicing.
 
-- [ ] **Step 4: Re-run tests**
+- [x] **Step 4: Re-run tests**
 
   Expected: PASS; field data stays opt-in and an object absent from the artifact shortlist is inspectable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/features/heap-explorer

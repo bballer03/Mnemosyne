@@ -1,6 +1,6 @@
 import "../../test/setup";
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
@@ -70,6 +70,7 @@ function createMatchingLeak() {
 
 describe("HeapObjectInspectorPage", () => {
   beforeEach(() => {
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
     act(() => {
       useArtifactStore.getState().reset();
       useInvestigationStore.setState({
@@ -84,6 +85,7 @@ describe("HeapObjectInspectorPage", () => {
 
   afterEach(() => {
     cleanup();
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -129,6 +131,42 @@ describe("HeapObjectInspectorPage", () => {
       "href",
       "/heap-explorer/query-console?objectId=0xcafebabe",
     );
+  });
+
+  it("inspects an unmatched objectId search param through the live bridge", async () => {
+    const inspectionCalls: Array<[string, boolean | undefined]> = [];
+    globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      inspectObject: async (objectId, retainFieldData) => {
+        inspectionCalls.push([objectId, retainFieldData]);
+        return {
+          object_id: objectId,
+          class_name: "com.example.DetachedObject",
+          shallow_size: 24,
+          retained_size: 96,
+          references_out: [],
+          referrers_in: [],
+          dominator_parent: null,
+          dominator_children: [],
+        };
+      },
+    };
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: createArtifactFixture(),
+      });
+    });
+
+    const router = createMemoryRouter(heapExplorerRoutes(), {
+      initialEntries: ["/heap-explorer/object-inspector?objectId=0xfeedface"],
+    });
+    const view = render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(inspectionCalls).toEqual([["0xfeedface", false]]);
+    });
+    expect(view.getByText("com.example.DetachedObject")).toBeInTheDocument();
   });
 
   it("renders cross-navigation links for the selected object", () => {

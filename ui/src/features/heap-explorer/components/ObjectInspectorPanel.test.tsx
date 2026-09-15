@@ -1,5 +1,6 @@
 import "../../../test/setup";
 
+import userEvent from "@testing-library/user-event";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
@@ -71,10 +72,10 @@ function setHeapExplorerBridge(bridge: NonNullable<Window["__MNEMOSYNE_HEAP_EXPL
   globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = bridge;
 }
 
-function renderPanel(selectedRowIndex?: number) {
+function renderPanel(selectedRowIndex?: number, objectId?: string) {
   return render(
     <MemoryRouter initialEntries={["/heap-explorer/object-inspector"]}>
-      <ObjectInspectorPanel artifact={artifact} selectedRowIndex={selectedRowIndex} />
+      <ObjectInspectorPanel artifact={artifact} selectedRowIndex={selectedRowIndex} objectId={objectId} />
     </MemoryRouter>,
   );
 }
@@ -274,6 +275,115 @@ describe("ObjectInspectorPanel", () => {
 
     expect(await view.findByText(/no dominator parent/i)).toBeInTheDocument();
     expect(view.getByText(/no dominator children/i)).toBeInTheDocument();
+  });
+
+  it("inspects an object id absent from the artifact without requesting field data automatically", async () => {
+    const inspectionCalls: Array<[string, boolean | undefined]> = [];
+    setHeapExplorerBridge({
+      inspectObject: async (objectId, retainFieldData) => {
+        inspectionCalls.push([objectId, retainFieldData]);
+        return {
+          object_id: objectId,
+          class_name: "com.example.DetachedObject",
+          shallow_size: 24,
+          retained_size: 96,
+          references_out: [],
+          referrers_in: [],
+          dominator_parent: null,
+          dominator_children: [],
+        };
+      },
+    });
+
+    const view = renderPanel(undefined, "0xfeedface");
+
+    await waitFor(() => {
+      expect(inspectionCalls).toEqual([["0xfeedface", false]]);
+    });
+    expect(view.getByText("com.example.DetachedObject")).toBeInTheDocument();
+    expect(view.getByText("0xfeedface")).toBeInTheDocument();
+    expect(
+      view.getByText(/may reparse the heap and retain field bytes; memory use can increase\./i),
+    ).toBeInTheDocument();
+    expect(view.getByRole("button", { name: /request field data/i })).toBeInTheDocument();
+  });
+
+  it("requests fields only after the disclosed opt-in and renders primitive and object-reference values", async () => {
+    const user = userEvent.setup();
+    const inspectionCalls: Array<[string, boolean | undefined]> = [];
+    setHeapExplorerBridge({
+      inspectObject: async (objectId, retainFieldData) => {
+        inspectionCalls.push([objectId, retainFieldData]);
+        return {
+          object_id: objectId,
+          class_name: "com.example.jobs.WorkerQueue",
+          shallow_size: 48,
+          retained_size: 768,
+          fields: retainFieldData
+            ? [
+                { name: "size", type_name: "int", value: "42" },
+                { name: "owner", type_name: "object reference", value: "0xdeadbeef" },
+              ]
+            : undefined,
+          references_out: [],
+          referrers_in: [],
+          dominator_parent: null,
+          dominator_children: [],
+        };
+      },
+    });
+
+    const view = renderPanel(1, "0xcafebabe");
+
+    await waitFor(() => {
+      expect(inspectionCalls).toEqual([["0xcafebabe", false]]);
+    });
+    expect(
+      view.getByText(/may reparse the heap and retain field bytes; memory use can increase\./i),
+    ).toBeInTheDocument();
+
+    await user.click(view.getByRole("button", { name: /request field data/i }));
+
+    await waitFor(() => {
+      expect(inspectionCalls).toEqual([
+        ["0xcafebabe", false],
+        ["0xcafebabe", true],
+      ]);
+    });
+    expect(view.getByText("size")).toBeInTheDocument();
+    expect(view.getByText("int")).toBeInTheDocument();
+    expect(view.getByText("42")).toBeInTheDocument();
+    expect(view.getByText("owner")).toBeInTheDocument();
+    expect(view.getByText("object reference")).toBeInTheDocument();
+    expect(view.getByText("0xdeadbeef")).toBeInTheDocument();
+  });
+
+  it("distinguishes unavailable field bytes from an object with no decoded fields", async () => {
+    const user = userEvent.setup();
+    let fieldResponse: undefined | [] = undefined;
+    setHeapExplorerBridge({
+      inspectObject: async (objectId, retainFieldData) => ({
+        object_id: objectId,
+        class_name: "com.example.jobs.WorkerQueue",
+        shallow_size: 48,
+        retained_size: 768,
+        fields: retainFieldData ? fieldResponse : undefined,
+        references_out: [],
+        referrers_in: [],
+        dominator_parent: null,
+        dominator_children: [],
+      }),
+    });
+
+    const unavailableView = renderPanel(1, "0xcafebabe");
+    await user.click(await unavailableView.findByRole("button", { name: /request field data/i }));
+    expect(await unavailableView.findByText(/field bytes were unavailable/i)).toBeInTheDocument();
+
+    cleanup();
+    fieldResponse = [];
+    const emptyView = renderPanel(1, "0xcafebabe");
+    await user.click(await emptyView.findByRole("button", { name: /request field data/i }));
+    expect(await emptyView.findByText(/no decoded fields/i)).toBeInTheDocument();
   });
 
   it("shows an error message when the bridge rejects the inspectObject lookup", async () => {

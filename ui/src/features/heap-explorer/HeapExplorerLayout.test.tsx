@@ -1,7 +1,7 @@
 import "../../test/setup";
 
 import userEvent from "@testing-library/user-event";
-import { act, cleanup, render, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
@@ -58,6 +58,7 @@ describe("HeapExplorerLayout", () => {
   const originalInnerWidth = window.innerWidth;
 
   beforeEach(() => {
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
     act(() => {
       useArtifactStore.getState().reset();
       useInvestigationStore.setState({
@@ -72,6 +73,7 @@ describe("HeapExplorerLayout", () => {
 
   afterEach(() => {
     cleanup();
+    delete globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -160,6 +162,42 @@ describe("HeapExplorerLayout", () => {
       "href",
       "/heap-explorer/query-console?objectId=0xdoesnotexist",
     );
+  });
+
+  it("passes an unmatched shared object id to the inspector side panel", async () => {
+    const inspectionCalls: Array<[string, boolean | undefined]> = [];
+    globalThis.window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      inspectObject: async (objectId, retainFieldData) => {
+        inspectionCalls.push([objectId, retainFieldData]);
+        return {
+          object_id: objectId,
+          class_name: "com.example.DetachedObject",
+          shallow_size: 24,
+          retained_size: 96,
+          references_out: [],
+          referrers_in: [],
+          dominator_parent: null,
+          dominator_children: [],
+        };
+      },
+    };
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: createArtifactFixture(),
+      });
+    });
+
+    const router = createMemoryRouter(heapExplorerRoutes(), {
+      initialEntries: ["/heap-explorer/dominators?objectId=0xfeedface"],
+    });
+    const view = render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(inspectionCalls).toEqual([["0xfeedface", false]]);
+    });
+    expect(within(view.getByLabelText(/object inspector panel/i)).getByText("com.example.DetachedObject")).toBeInTheDocument();
   });
 
   it("recovers normal shared selection after a manual row click from an unmatched objectId entry", async () => {
