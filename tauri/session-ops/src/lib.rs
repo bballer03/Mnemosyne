@@ -34,7 +34,11 @@ use mnemosyne_core::{
 use serde_json::{json, Value};
 
 mod operation;
-pub use operation::{OperationContext, OperationProgress, OperationProgressCoalescer};
+pub use operation::{
+    structured_operation_cancelled_error, CancelOperationResult, OperationContext,
+    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
+    OperationRegistryError, OPERATION_CANCELLED_CODE,
+};
 
 pub const DEFAULT_CLASS_INSTANCES_LIMIT: usize = 100;
 pub const MAX_CLASS_INSTANCES_LIMIT: usize = 200;

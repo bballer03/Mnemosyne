@@ -52,6 +52,7 @@ fn main() {
             commands::remove_snapshot,
             commands::open_snapshot,
             commands::get_desktop_log_path,
+            commands::cancel_operation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

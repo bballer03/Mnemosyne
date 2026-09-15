@@ -227,25 +227,25 @@
 - `cancel_operation(operation_id)` sets the token and returns `{ operation_id, accepted: bool }`; unknown/already-finished IDs return `accepted: false`.
 - Structured terminal code: `operation_cancelled`.
 
-- [ ] **Step 1: Write failing registry tests**
+- [x] **Step 1: Write failing registry tests**
 
   Cover register, duplicate ID rejection, cancellation, unknown ID, cleanup after success/error/cancel, and isolation between two operation IDs.
 
-- [ ] **Step 2: Run focused Rust tests**
+- [x] **Step 2: Run focused Rust tests**
 
   Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml operation_registry`
 
   Expected: FAIL until registry helpers exist.
 
-- [ ] **Step 3: Implement registry and command**
+- [x] **Step 3: Implement registry and command**
 
   Use atomics only for the token; protect registry membership with the existing session synchronization discipline. Never expose heap paths in registry diagnostics.
 
-- [ ] **Step 4: Register `cancel_operation` and re-run tests**
+- [x] **Step 4: Register `cancel_operation` and re-run tests**
 
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add tauri/src/state.rs tauri/src/commands.rs tauri/src/main.rs tauri/session-ops/src/lib.rs

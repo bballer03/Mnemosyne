@@ -8,6 +8,7 @@ use std::{
 
 use mnemosyne_core::config::AppConfig;
 use mnemosyne_core::{hprof::ObjectGraph, DominatorTree};
+use mnemosyne_desktop_session::OperationRegistry;
 
 /// Shared heap session state managed by Tauri.
 ///
@@ -30,6 +31,7 @@ pub struct HeapSession {
     pub heap_path: RwLock<Option<String>>,
     /// Opaque source IDs → absolute paths retained only on the native side.
     pub selected_sources: Mutex<HashMap<String, String>>,
+    pub operations: OperationRegistry,
 }
 
 impl HeapSession {
@@ -43,6 +45,7 @@ impl HeapSession {
             config: RwLock::new(AppConfig::default()),
             heap_path: RwLock::new(None),
             selected_sources: Mutex::new(HashMap::new()),
+            operations: OperationRegistry::default(),
         }
     }
 

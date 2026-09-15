@@ -1,5 +1,8 @@
-use std::sync::{Arc, Mutex};
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
@@ -13,11 +16,11 @@ use mnemosyne_core::{
     parse_hprof_file_with_options_controlled, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
-    AllPathsRequest, AnalysisMode, CancellationToken, FixRequest, FixResponse, FixStyle,
-    GcPathRequest, GcPathResult, HistogramGroupBy, HistogramResult, LeakDetectionOptions,
-    MapToCodeRequest, NoopOperationObserver, OperationObserver, OperationPhase,
-    OperationProgressSnapshot, OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate,
-    ProvenanceMarker, Severity, SourceMapResult,
+    AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
+    HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest,
+    NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
+    OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker, Severity,
+    SourceMapResult,
 };
 use mnemosyne_desktop_session::{
     ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
@@ -29,8 +32,9 @@ use mnemosyne_desktop_session::{
     list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
     remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
-    start_workflow_for_session, CreateAiSessionInput, DiffObjectsSessionInput,
-    FieldDataCacheCapture, OperationContext, OperationProgress, OperationProgressCoalescer,
+    start_workflow_for_session, structured_operation_cancelled_error, CancelOperationResult,
+    CreateAiSessionInput, DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext,
+    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
     StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT, DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
@@ -49,19 +53,25 @@ const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin ex
 
 type SharedOperationObserver = Option<Arc<TauriOperationObserver>>;
 
-fn operation_observer(
+fn registered_operation_observer<'a>(
     app: &AppHandle,
     context: Option<OperationContext>,
     kind: &str,
-) -> SharedOperationObserver {
-    context.map(|context| {
-        Arc::new(TauriOperationObserver::new(
-            app.clone(),
-            context,
-            kind,
-            CancellationToken::new(),
-        ))
-    })
+    registry: &'a OperationRegistry,
+) -> Result<(SharedOperationObserver, Option<OperationRegistration<'a>>), String> {
+    let Some(context) = context else {
+        return Ok((None, None));
+    };
+    let registration = registry
+        .register(context.clone())
+        .map_err(|error| error.to_string())?;
+    let observer = Arc::new(TauriOperationObserver::new(
+        app.clone(),
+        context,
+        kind,
+        registration.cancellation_token(),
+    ));
+    Ok((Some(observer), Some(registration)))
 }
 
 fn core_observer(observer: &SharedOperationObserver) -> &dyn OperationObserver {
@@ -145,6 +155,9 @@ fn is_supported_heap_path(path: &str) -> bool {
 
 fn map_native_error(error: impl ToString) -> String {
     let raw = error.to_string();
+    if raw == "Operation cancelled" {
+        return structured_operation_cancelled_error();
+    }
     if raw.contains('/') || raw.contains('\\') {
         return "Heap open or analysis failed. Check that the file is a valid .hprof/.bin dump."
             .to_string();
@@ -200,7 +213,8 @@ pub async fn run_desktop_analysis(
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, input.context.clone(), "analyze");
+    let (observer, _registration) =
+        registered_operation_observer(&app, input.context.clone(), "analyze", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
 
@@ -572,7 +586,12 @@ pub async fn generate_desktop_flamegraph(
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, input.context.clone(), "flamegraph");
+    let (observer, _registration) = registered_operation_observer(
+        &app,
+        input.context.clone(),
+        "flamegraph",
+        &state.operations,
+    )?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
 
@@ -808,6 +827,14 @@ pub fn get_desktop_log_path() -> String {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn cancel_operation(
+    operation_id: String,
+    state: State<'_, HeapSession>,
+) -> CancelOperationResult {
+    state.operations.cancel(&operation_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap_from_source(
     source_id: String,
     context: Option<OperationContext>,
@@ -849,7 +876,8 @@ async fn load_heap_internal(
     state: &State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(app, context, "open");
+    let (observer, _registration) =
+        registered_operation_observer(app, context, "open", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
     let background_observer = observer.clone();
@@ -994,7 +1022,8 @@ pub async fn query_heap(
     state: State<'_, HeapSession>,
 ) -> Result<HeapQueryResult, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, input.context.clone(), "query");
+    let (observer, _registration) =
+        registered_operation_observer(&app, input.context.clone(), "query", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
@@ -1181,7 +1210,8 @@ pub async fn inspect_object(
     state: State<'_, HeapSession>,
 ) -> Result<ObjectInspection, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, context, "inspect");
+    let (observer, _registration) =
+        registered_operation_observer(&app, context, "inspect", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
@@ -1268,7 +1298,8 @@ pub async fn find_all_gc_paths(
     state: State<'_, HeapSession>,
 ) -> Result<GcPathResult, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, context, "gc-path");
+    let (observer, _registration) =
+        registered_operation_observer(&app, context, "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, None)?;
@@ -1298,7 +1329,8 @@ pub async fn find_gc_path(
     state: State<'_, HeapSession>,
 ) -> Result<mnemosyne_core::GcPathResult, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, context, "gc-path");
+    let (observer, _registration) =
+        registered_operation_observer(&app, context, "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let active_heap_path = ensure_loaded_heap_matches(&state, Some(&heap_path))?;
@@ -1348,9 +1380,11 @@ pub async fn map_to_code(
 pub async fn diff_objects(
     input: DiffObjectsBridgeInput,
     app: AppHandle,
+    state: State<'_, HeapSession>,
 ) -> Result<ObjectDiffReport, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, input.context.clone(), "diff");
+    let (observer, _registration) =
+        registered_operation_observer(&app, input.context.clone(), "diff", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let strategy = match input.strategy.as_deref() {
@@ -1555,7 +1589,8 @@ pub async fn save_snapshot(
     state: State<'_, HeapSession>,
 ) -> Result<SnapshotManifest, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, input.context.clone(), "snapshot");
+    let (observer, _registration) =
+        registered_operation_observer(&app, input.context.clone(), "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let path = {
         let sources = state
@@ -1617,7 +1652,8 @@ pub async fn open_snapshot(
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     let started = std::time::Instant::now();
-    let observer = operation_observer(&app, context, "snapshot");
+    let (observer, _registration) =
+        registered_operation_observer(&app, context, "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
     let (manifest, graph, dominator) = spawn_blocking(move || {
@@ -1827,7 +1863,7 @@ pub struct TauriOperationObserver {
     app: AppHandle,
     context: OperationContext,
     kind: String,
-    cancellation: CancellationToken,
+    cancellation: Arc<AtomicBool>,
     coalescer: Mutex<OperationProgressCoalescer>,
 }
 
@@ -1836,7 +1872,7 @@ impl TauriOperationObserver {
         app: AppHandle,
         context: OperationContext,
         kind: impl Into<String>,
-        cancellation: CancellationToken,
+        cancellation: Arc<AtomicBool>,
     ) -> Self {
         Self {
             app,
@@ -1882,6 +1918,6 @@ impl OperationObserver for TauriOperationObserver {
     }
 
     fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
+        self.cancellation.load(Ordering::Acquire)
     }
 }
