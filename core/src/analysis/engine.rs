@@ -708,6 +708,135 @@ pub async fn analyze_heap_from_graph(
     })
 }
 
+fn derive_snapshot_summary(heap_path: &str, graph: &ObjectGraph) -> HeapSummary {
+    let mut classes_by_name: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut total_size_bytes = 0_u64;
+
+    for object in graph.objects.values() {
+        let shallow_size = u64::from(object.shallow_size);
+        total_size_bytes = total_size_bytes.saturating_add(shallow_size);
+        let class_name = graph
+            .class_name(object.class_id)
+            .unwrap_or("<unknown>")
+            .to_string();
+        let entry = classes_by_name.entry(class_name).or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = entry.1.saturating_add(shallow_size);
+    }
+
+    let mut classes = classes_by_name
+        .into_iter()
+        .map(|(name, (instances, class_bytes))| ClassStat {
+            name,
+            instances,
+            total_size_bytes: class_bytes,
+            percentage: if total_size_bytes == 0 {
+                0.0
+            } else {
+                ((class_bytes as f64 / total_size_bytes as f64) * 100.0) as f32
+            },
+        })
+        .collect::<Vec<_>>();
+    classes.sort_by(|left, right| {
+        right
+            .total_size_bytes
+            .cmp(&left.total_size_bytes)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let display_name = std::path::Path::new(heap_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("snapshot.hprof")
+        .to_string();
+
+    HeapSummary {
+        heap_path: display_name,
+        total_objects: graph.object_count() as u64,
+        total_size_bytes,
+        classes,
+        generated_at: std::time::SystemTime::now(),
+        header: None,
+        total_records: 0,
+        record_stats: Vec::new(),
+    }
+}
+
+/// Build display-safe analysis facts entirely from a cached snapshot graph.
+///
+/// Unlike [`analyze_heap_from_graph`], this entry point never reopens the
+/// original HPROF. Raw record/header facts are therefore unavailable and the
+/// response carries explicit partial provenance.
+pub async fn analyze_snapshot_from_graph_controlled(
+    request: AnalyzeRequest,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    observer: &dyn OperationObserver,
+) -> CoreResult<AnalyzeResponse> {
+    info!(
+        heap = %request.heap_path,
+        "starting source-independent analysis from cached snapshot graph"
+    );
+    let start = Instant::now();
+    ensure_not_cancelled(observer)?;
+    report_indeterminate_phase(observer, OperationPhase::Analyzing, start);
+    let summary = derive_snapshot_summary(&request.heap_path, obj_graph);
+
+    let (
+        graph,
+        leaks,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
+        mut provenance,
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, observer)?;
+
+    ensure_not_cancelled(observer)?;
+    let ai = if request.enable_ai || request.config.ai.enabled {
+        Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
+    } else {
+        None
+    };
+    ensure_not_cancelled(observer)?;
+    provenance.push(ProvenanceMarker::new(
+        ProvenanceKind::Partial,
+        "snapshot-backed summary totals use cached object shallow sizes; raw HPROF header, \
+         record counts, and record statistics are unavailable without re-reading the source",
+    ));
+
+    Ok(AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
+        summary,
+        leaks,
+        recommendations: vec![
+            "Snapshot-backed graph analysis complete. Retained sizes are computed from the cached dominator tree."
+                .into(),
+        ],
+        elapsed: start.elapsed(),
+        graph,
+        ai,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
+        plugin_results: Vec::new(),
+        provenance,
+    })
+}
+
 /// Compare two heap snapshots and produce a structured diff of their dominant classes.
 pub async fn diff_heaps(before_path: &str, after_path: &str) -> CoreResult<HeapDiff> {
     match crate::diff::run_diff(crate::diff::DiffRequest::class(before_path, after_path)).await? {
@@ -1681,6 +1810,40 @@ mod tests {
         assert!(!graph.objects.is_empty());
         assert!(dom.node_count() > 0);
         assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn snapshot_analysis_survives_missing_source_heap() {
+        let bytes = crate::test_fixtures::build_graph_fixture();
+        let graph =
+            crate::hprof::parse_hprof_with_options(&bytes, ParseOptions::default()).unwrap();
+        let dominator = crate::build_dominator_tree(&graph);
+        let request = AnalyzeRequest {
+            heap_path: "/missing/private/fixture.hprof".into(),
+            enable_classloaders: true,
+            enable_top_instances: true,
+            ..AnalyzeRequest::default()
+        };
+
+        let response = analyze_snapshot_from_graph_controlled(
+            request,
+            &graph,
+            &dominator,
+            &NoopOperationObserver,
+        )
+        .await
+        .expect("cached graph must hydrate without reopening the HPROF");
+
+        assert_eq!(response.mode, AnalysisMode::Deep);
+        assert_eq!(response.summary.heap_path, "fixture.hprof");
+        assert_eq!(response.summary.total_objects, graph.object_count() as u64);
+        assert!(response.histogram.is_some());
+        assert!(response.classloader_report.is_some());
+        assert!(response.top_instances.is_some());
+        assert!(response
+            .provenance
+            .iter()
+            .any(|marker| marker.kind == ProvenanceKind::Partial));
     }
 
     #[tokio::test]
