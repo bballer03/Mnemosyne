@@ -364,29 +364,29 @@
 - Bound each rendered relation section to 100 rows and disclose `Showing first N of M returned`; do not imply backend completeness when the response was truncated or fallback.
 - Preserve `GcPathResult.truncated` and provenance exactly.
 
-- [ ] **Step 1: Write failing cross-navigation tests**
+- [x] **Step 1: Write failing cross-navigation tests**
 
   Cover outgoing reference, incoming referrer, dominator parent, dominator child, shortest-path node, and all-path node. Assert each updates the shared store and produces an encoded Inspector URL.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx src/features/leak-workspace/LeakGcPathPage.test.tsx src/features/leak-workspace/live-detail-client.test.ts --max-concurrency=1`
 
   Expected: FAIL because current links update only the URL and GC-path nodes are non-interactive articles.
 
-- [ ] **Step 3: Implement synchronized navigation**
+- [x] **Step 3: Implement synchronized navigation**
 
   Root/synthetic nodes without a real object ID remain non-clickable and labelled. Real nodes use `originPane: "gc-path"`; refs/referrers/dominator chips use `"inspector"`.
 
-- [ ] **Step 4: Add honest truncation regressions**
+- [x] **Step 4: Add honest truncation regressions**
 
   Assert backend `truncated: true` remains visible, bounded relation rendering states the cap, and fallback provenance never uses a green/complete label.
 
-- [ ] **Step 5: Re-run focused tests and type-check**
+- [x] **Step 5: Re-run focused tests and type-check**
 
   Expected: PASS and `bun run lint` exits 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add ui/src/features/heap-explorer/components/ObjectInspectorPanel.tsx ui/src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx ui/src/features/leak-workspace

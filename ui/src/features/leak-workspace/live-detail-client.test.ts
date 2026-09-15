@@ -373,6 +373,7 @@ describe("live detail client", () => {
             is_root: false,
           },
         ],
+        truncated: true,
         provenance: [
           { kind: "SYNTHETIC", detail: "GC path was synthesized from summary-level heap information." },
           { kind: "FALLBACK", detail: "No real GC root chain could be resolved; best-effort fallback path returned." },
@@ -387,7 +388,11 @@ describe("live detail client", () => {
     });
 
     expect(gcPath.status).toBe("fallback");
-    expect(gcPath.data?.provenance?.map((marker) => marker.kind)).toEqual(["SYNTHETIC", "FALLBACK"]);
+    expect(gcPath.data?.truncated).toBeTrue();
+    expect(gcPath.data?.provenance).toEqual([
+      { kind: "SYNTHETIC", detail: "GC path was synthesized from summary-level heap information." },
+      { kind: "FALLBACK", detail: "No real GC root chain could be resolved; best-effort fallback path returned." },
+    ]);
   });
 
   it("marks gc path as error when the bridge throws", async () => {

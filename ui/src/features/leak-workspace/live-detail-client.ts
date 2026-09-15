@@ -28,6 +28,7 @@ export type GcPathResult = {
   object_id: string;
   path: GcPathNode[];
   path_length: number;
+  truncated: boolean;
   provenance?: ArtifactProvenanceMarker[];
 };
 
@@ -239,6 +240,7 @@ function parseGcPathResult(value: unknown, leakId: string): GcPathResult {
       } satisfies GcPathNode;
     }),
     path_length: readNumber(value.path_length, "gcPath.path_length"),
+    truncated: readOptionalBoolean(value.truncated, "gcPath.truncated") ?? false,
     provenance: readProvenance(value.provenance, "gcPath.provenance"),
   };
 }
@@ -452,6 +454,7 @@ export async function findLeakGcPath(
         object_id: "",
         path: [],
         path_length: 0,
+        truncated: false,
       },
     };
   }

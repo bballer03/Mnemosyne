@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { AnalysisArtifact } from "../../../lib/analysis-types";
+import { useInvestigationStore } from "../../investigation/investigation-store";
 import {
   getObjectReferences,
   getObjectReferrers,
@@ -15,6 +16,8 @@ import {
   type ObjectReferencesResult,
   type ObjectReferrersResult,
 } from "../heap-explorer-query-client";
+
+const MAX_RELATION_ROWS = 100;
 
 type ObjectInspectorPanelProps = Readonly<{
   artifact: AnalysisArtifact;
@@ -77,9 +80,13 @@ function formatBytes(bytes: number) {
 function renderReferenceList(entries: ObjectReferenceEntry[]) {
   return (
     <ul style={liveReferenceListStyle}>
-      {entries.map((entry) => (
+      {entries.slice(0, MAX_RELATION_ROWS).map((entry) => (
         <li key={`${entry.objectId}:${entry.className}`}>
-          <Link to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`} style={liveReferenceLinkStyle}>
+          <Link
+            to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`}
+            onClick={() => useInvestigationStore.getState().setObjectId(entry.objectId, "inspector")}
+            style={liveReferenceLinkStyle}
+          >
             <strong style={{ overflowWrap: "anywhere" }}>{entry.className}</strong>
             {entry.displayName ? <p style={liveReferenceMetaStyle}>{entry.displayName}</p> : null}
             <p style={liveReferenceMetaStyle}>{entry.objectId}</p>
@@ -102,6 +109,7 @@ function renderInspectionRefChip(entry: ObjectInspectionRef) {
     <Link
       key={`${entry.objectId}:${entry.className}`}
       to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`}
+      onClick={() => useInvestigationStore.getState().setObjectId(entry.objectId, "inspector")}
       style={liveReferenceLinkStyle}
     >
       <strong style={{ overflowWrap: "anywhere" }}>{entry.className}</strong>
@@ -113,7 +121,7 @@ function renderInspectionRefChip(entry: ObjectInspectionRef) {
 function renderDominatorChildrenList(entries: ObjectInspectionRef[]) {
   return (
     <ul style={liveReferenceListStyle}>
-      {entries.map((entry) => (
+      {entries.slice(0, MAX_RELATION_ROWS).map((entry) => (
         <li key={`${entry.objectId}:${entry.className}`}>{renderInspectionRefChip(entry)}</li>
       ))}
     </ul>
@@ -260,7 +268,14 @@ export function ObjectInspectorPanel({ artifact, objectId, selectedRowIndex }: O
     } else if (entries.length === 0) {
       content = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>{emptyMessage}</p>;
     } else {
-      content = renderReferenceList(entries);
+      content = (
+        <>
+          <p style={liveReferenceMetaStyle}>
+            Showing first {Math.min(entries.length, MAX_RELATION_ROWS)} of {entries.length} returned
+          </p>
+          {renderReferenceList(entries)}
+        </>
+      );
     }
 
     return (
@@ -311,7 +326,12 @@ export function ObjectInspectorPanel({ artifact, objectId, selectedRowIndex }: O
             {dominatorChildren.length === 0 ? (
               <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>No dominator children.</p>
             ) : (
-              renderDominatorChildrenList(dominatorChildren)
+              <>
+                <p style={liveReferenceMetaStyle}>
+                  Showing first {Math.min(dominatorChildren.length, MAX_RELATION_ROWS)} of {dominatorChildren.length} returned
+                </p>
+                {renderDominatorChildrenList(dominatorChildren)}
+              </>
             )}
           </div>
         </div>
