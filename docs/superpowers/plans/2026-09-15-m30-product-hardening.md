@@ -176,6 +176,27 @@ bun test src/test/reset-test-state.test.ts --max-concurrency=1
 
 ### M30.E — Documentation and logging closeout
 
-- [ ] Add size/daily rotation for `desktop.log` with redaction tests.
+#### M30.E.1 — Desktop log rotation and redaction
+
+**Files:**
+- Create: `tauri/src/log_redact.rs` — pure `redact_log_message` helper + `#[cfg(test)]` unit tests
+- Modify: `tauri/src/logging.rs` — daily rolling (`tracing_appender::rolling::daily`, prefix `desktop`), path-free init line, retention intent docs
+
+- [x] **Step 1: Add `redact_log_message`** — redact Unix/Windows absolute paths, `sk-` API-key-like tokens, and sensitive `key=value` field dumps.
+- [x] **Step 2: Unit-test redaction** in `log_redact.rs` (no Tauri/GTK required for helper tests when `cargo test` compiles).
+- [x] **Step 3: Switch file appender** from `rolling::never("desktop.log")` to `rolling::daily(..., "desktop")`; document ~14-day retention intent (manual prune until automated job).
+- [x] **Step 4: Remove path from init log** — emit `"Mnemosyne desktop logging initialized"` without filesystem paths; keep `log_file_path()` for `get_desktop_log_path` command API.
+- [x] **Step 5: Run focused Rust tests**
+
+```bash
+cargo test --manifest-path tauri/Cargo.toml redact_log_message
+```
+
+- [x] **Step 6: Commit** `fix(desktop): rotate and redact desktop logs`
+
+**NOT PROVEN (explicit):**
+- Full Tauri `logging::init()` on WSL when GTK blocks the tauri crate build — redaction helper and daily rolling code are in place; native host smoke still required on matching OS.
+- Automated log retention/pruning job (daily files only; no size cap or auto-delete yet).
+
 - [ ] Reconcile STATUS, ARCHITECTURE, roadmap, capability matrix, bridge list, and OQL deferrals.
 - [ ] Run placeholder/contradiction scan and record remaining gated work under M31+.
