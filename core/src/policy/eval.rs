@@ -973,6 +973,7 @@ mod tests {
     ) -> HistogramEntry {
         HistogramEntry {
             key: key.to_string(),
+            parent_key: None,
             instance_count,
             shallow_size,
             retained_size,

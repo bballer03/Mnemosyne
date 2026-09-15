@@ -3,8 +3,8 @@
  *
  * Expand/collapse is allowed only when returned entries carry an explicit
  * `parentKey` that resolves to another entry key. Flat superclass regroup keys
- * alone never invent ancestry (MAT-like tree remains open until a parent
- * relation is present in the payload).
+ * alone never invent ancestry; graph-backed regroup can now provide the
+ * explicit relation.
  */
 
 export type HierarchyHistogramEntry = {

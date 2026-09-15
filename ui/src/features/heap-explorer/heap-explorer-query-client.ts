@@ -102,7 +102,7 @@ export type HeapExplorerHostBridge = {
   getReferences?: (objectId: string) => Promise<unknown>;
   getReferrers?: (objectId: string) => Promise<unknown>;
   inspectObject?: (objectId: string, retainFieldData?: boolean) => Promise<unknown>;
-  /** M19.B — live flat regroup via session graph / MCP analyze_heap.histogram_group_by. */
+  /** Live regroup via session graph / MCP analyze_heap.histogram_group_by. */
   regroupHistogram?: (groupBy: string) => Promise<unknown>;
   listClassInstances?: (classKey: string, offset?: number, limit?: number) => Promise<unknown>;
   getDominatorChildren?: (

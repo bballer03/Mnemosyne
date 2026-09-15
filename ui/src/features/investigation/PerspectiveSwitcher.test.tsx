@@ -28,6 +28,7 @@ describe("PerspectiveSwitcher", () => {
       </MemoryRouter>,
     );
 
+    expect(view.getByRole("heading", { name: "Workbench perspective" })).toBeInTheDocument();
     expect(view.getByRole("button", { name: /Leak Hunt/ })).toHaveAttribute(
       "aria-pressed",
       "true",

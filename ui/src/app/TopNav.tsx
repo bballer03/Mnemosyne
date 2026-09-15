@@ -37,7 +37,7 @@ export const POWER_ROUTES: NavItem[] = [
   { to: "/", label: "Home" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/artifacts/explorer", label: "Artifact Explorer" },
-  { to: "/heap-explorer/dominators", label: "Dominators" },
+  { to: "/heap-explorer/dominators", label: "Dominator Tree" },
   { to: "/heap-explorer/object-inspector", label: "Object Inspector" },
   { to: "/heap-explorer/query-console", label: "Query Console" },
   { to: "/heap-explorer/threads", label: "Threads" },

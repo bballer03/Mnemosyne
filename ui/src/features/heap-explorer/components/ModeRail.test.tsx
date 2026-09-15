@@ -21,7 +21,7 @@ describe("ModeRail", () => {
     );
     const rail = within(view.container);
 
-    expect(rail.getByRole("link", { name: /dominators/i })).toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Dominator Tree" })).toHaveAttribute(
       "href",
       "/heap-explorer/dominators",
     );
