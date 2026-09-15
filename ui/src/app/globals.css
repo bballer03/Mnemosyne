@@ -5,6 +5,16 @@
   font-family: Inter, system-ui, sans-serif;
   background: #0a0c10;
   color: #e2e2e8;
+  --mn-surface-raised: rgba(15, 23, 42, 0.88);
+  --mn-border: #334155;
+  --mn-text-primary: #e2e8f0;
+  --mn-text-muted: #94a3b8;
+  --mn-warning-text: #facc15;
+  --mn-advisory-surface: rgba(46, 16, 101, 0.2);
+  --mn-advisory-border: #6d28d9;
+  --mn-advisory-link: #c4b5fd;
+  --mn-provenance-rules-border: #0e7490;
+  --mn-provenance-rules-text: #67e8f9;
 }
 
 body {

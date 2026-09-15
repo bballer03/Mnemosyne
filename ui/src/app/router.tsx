@@ -26,6 +26,7 @@ import { SnapshotManagerPage } from "../features/snapshots/SnapshotManagerPage";
 import { PolicyCheckPage } from "../features/policy/PolicyCheckPage";
 import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
+import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
 import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
 
 /**
@@ -36,8 +37,9 @@ import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
 function InvestigationChromeLayout() {
   return (
     <>
-      <div style={{ marginBottom: "1rem" }}>
+      <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
         <HeapSessionBar />
+        <FindingsAdvisoryPane />
       </div>
       <Outlet />
     </>

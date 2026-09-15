@@ -5,7 +5,8 @@ export type InvestigationOriginPane =
   | "dominators"
   | "inspector"
   | "gc-path"
-  | "leak";
+  | "leak"
+  | "findings";
 
 export type InvestigationSelection = {
   revision: number;

@@ -66,7 +66,7 @@
 
 ### Task 24.D / 24.E
 
-- [ ] Findings + Assistant as pane (can follow 24.C)
+- [x] Findings + Assistant as collapsible, provenance-labelled advisory pane with deterministic deep-links
 - [ ] Gate compare if needed; cut v0.5.0 when 24.A–C (+ D if ready) meet success criteria
 
 ---

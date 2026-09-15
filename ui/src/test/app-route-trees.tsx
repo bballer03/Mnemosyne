@@ -15,6 +15,7 @@ import { LeakSourceMapPage } from "../features/leak-workspace/LeakSourceMapPage"
 import { LeakWorkspaceLayout } from "../features/leak-workspace/LeakWorkspaceLayout";
 import { LeakWorkspaceOverview } from "../features/leak-workspace/LeakWorkspaceOverview";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
+import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
 
 /**
  * Minimal route trees for unit tests.
@@ -76,7 +77,15 @@ export function artifactExplorerRoutes(): RouteObject[] {
 export function dashboardRoutes(): RouteObject[] {
   return [
     homeRoute,
-    { path: "/dashboard", element: <DashboardPage /> },
+    {
+      path: "/dashboard",
+      element: (
+        <>
+          <FindingsAdvisoryPane />
+          <DashboardPage />
+        </>
+      ),
+    },
     { path: "/artifacts/explorer", element: <ArtifactExplorerPage /> },
     heapExplorerBranch,
   ];
