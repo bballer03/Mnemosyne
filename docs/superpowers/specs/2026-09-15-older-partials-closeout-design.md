@@ -1,10 +1,18 @@
 # Older partials closeout (M20 / M21 / M22.E / M23 / jsdom trial)
 
 **Date:** 2026-09-15  
-**Status:** Approved (conversation); pending written-spec review  
+**Status:** **Sol APPROVED** (2026-09-15) — proceed to implementation plan + execution  
 **Owner:** Sol (agent authorized to record Sol verdicts when evidence is met)  
 **Terra stand-in:** Code-review / Bugbot-style subagent  
 **Related:** [STATUS.md](../../../STATUS.md), [m21-m22-remaining.md](../../evidence/m21-m22-remaining.md), [ui-first plan](../plans/2026-09-14-ui-first-mat-install-ai-plan.md), [dependency inventory](../../product/dependency-currency-inventory.md)
+
+### Sol review notes (2026-09-15)
+
+- Decisions 1–6 are unambiguous and match host reality (WSL + Windows under dual-boot).
+- Evidence standard correctly forbids browser→packaged and unit→launch inference.
+- M21 Windows-only partial closeout is acceptable; macOS/Linux remain open rows.
+- jsdom 30 correctly gated on RSS; failure must not block other tracks.
+- **Verdict: APPROVED.** Implementation may proceed in the documented sequence.
 
 ## 1. Purpose
 
