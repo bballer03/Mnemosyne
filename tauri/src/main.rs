@@ -28,6 +28,7 @@ fn main() {
             commands::get_referrers,
             commands::query_heap,
             commands::regroup_histogram,
+            commands::list_class_instances,
             commands::explain_leak,
             commands::inspect_object,
             commands::find_all_gc_paths,

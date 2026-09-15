@@ -27,9 +27,32 @@ use mnemosyne_core::{
     },
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
+    resolve_live_instances_by_class, AllPathsRequest, AppConfig, DominatorTree, GcPathResult,
+    HistogramGroupBy, HistogramResult,
 };
 use serde_json::{json, Value};
+
+pub const DEFAULT_CLASS_INSTANCES_LIMIT: usize = 100;
+pub const MAX_CLASS_INSTANCES_LIMIT: usize = 200;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassInstanceEntry {
+    pub object_id: String,
+    pub class_name: String,
+    pub shallow_size: u32,
+    pub retained_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassInstancesPage {
+    pub class_key: String,
+    pub total: usize,
+    pub returned: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub truncated: bool,
+    pub instances: Vec<ClassInstanceEntry>,
+}
 
 /// Input for the M17 comparison bridge's `diffObjects` host method.
 #[derive(Debug, Clone)]
@@ -41,6 +64,65 @@ pub struct DiffObjectsSessionInput {
     /// Leak-progression cross-reference (M10-B): default `false` unless the
     /// UI explicitly opts in.
     pub cross_reference_leaks: Option<bool>,
+}
+
+pub fn list_class_instances_for_session(
+    graph: &ObjectGraph,
+    dominator: &DominatorTree,
+    class_key: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<ClassInstancesPage, String> {
+    let limit = limit.min(MAX_CLASS_INSTANCES_LIMIT);
+    let mut matching_ids = resolve_live_instances_by_class(graph, class_key);
+    matching_ids.sort_unstable_by(|left_id, right_id| {
+        let left_shallow = graph
+            .get_object(*left_id)
+            .map(|object| object.shallow_size)
+            .unwrap_or(0);
+        let right_shallow = graph
+            .get_object(*right_id)
+            .map(|object| object.shallow_size)
+            .unwrap_or(0);
+
+        dominator
+            .retained_size(*right_id)
+            .cmp(&dominator.retained_size(*left_id))
+            .then_with(|| right_shallow.cmp(&left_shallow))
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    let total = matching_ids.len();
+    let instances = matching_ids
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .filter_map(|object_id| {
+            graph.get_object(object_id).map(|object| ClassInstanceEntry {
+                object_id: format!(
+                    "0x{object_id:0width$X}",
+                    width = usize::from(graph.identifier_size) * 2
+                ),
+                class_name: graph
+                    .class_name(object.class_id)
+                    .map(|name| name.replace('/', "."))
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                shallow_size: object.shallow_size,
+                retained_size: dominator.retained_size(object_id),
+            })
+        })
+        .collect::<Vec<_>>();
+    let returned = instances.len();
+
+    Ok(ClassInstancesPage {
+        class_key: class_key.to_string(),
+        total,
+        returned,
+        offset,
+        limit,
+        truncated: offset.saturating_add(returned) < total,
+        instances,
+    })
 }
 
 pub fn graph_has_field_data(graph: &mnemosyne_core::hprof::ObjectGraph) -> bool {
@@ -797,6 +879,106 @@ mod tests {
     fn graph_fixture() -> mnemosyne_core::hprof::ObjectGraph {
         let bytes = build_graph_fixture();
         parse_hprof_file_with_options_from_bytes(&bytes, false).expect("fixture must parse")
+    }
+
+    fn add_rooted_big_cache(
+        graph: &mut mnemosyne_core::hprof::ObjectGraph,
+        object_id: u64,
+        shallow_size: u32,
+        child: Option<(u64, u32)>,
+    ) {
+        let mut object = graph
+            .get_object(0x1000)
+            .expect("fixture BigCache object")
+            .clone();
+        object.id = object_id;
+        object.shallow_size = shallow_size;
+        object.references = child.iter().map(|(id, _)| *id).collect();
+        graph.objects.insert(object_id, object);
+
+        if let Some((child_id, child_size)) = child {
+            let mut child_object = graph
+                .get_object(0x2000)
+                .expect("fixture Object child")
+                .clone();
+            child_object.id = child_id;
+            child_object.shallow_size = child_size;
+            child_object.references.clear();
+            graph.objects.insert(child_id, child_object);
+        }
+
+        let mut root = graph.gc_roots[0].clone();
+        root.object_id = object_id;
+        graph.gc_roots.push(root);
+    }
+
+    #[test]
+    fn list_class_instances_matches_dotted_names_and_orders_deterministically() {
+        let mut graph = graph_fixture();
+        add_rooted_big_cache(&mut graph, 0x3000, 16, None);
+        add_rooted_big_cache(&mut graph, 0x4000, 8, Some((0x4100, 16)));
+        add_rooted_big_cache(&mut graph, 0x5000, 8, Some((0x5100, 16)));
+        add_rooted_big_cache(&mut graph, 0x6000, 12, Some((0x6100, 12)));
+        let dominator = build_dominator_tree(&graph);
+
+        let page = list_class_instances_for_session(
+            &graph,
+            &dominator,
+            "com.example.BigCache",
+            0,
+            100,
+        )
+        .expect("dotted class name must resolve");
+
+        assert_eq!(page.class_key, "com.example.BigCache");
+        assert_eq!(page.total, 5);
+        assert_eq!(page.returned, 5);
+        assert_eq!(page.offset, 0);
+        assert_eq!(page.limit, 100);
+        assert!(!page.truncated);
+        assert_eq!(
+            page.instances
+                .iter()
+                .map(|instance| instance.object_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0x00006000",
+                "0x00004000",
+                "0x00005000",
+                "0x00003000",
+                "0x00001000",
+            ]
+        );
+        assert!(page
+            .instances
+            .iter()
+            .all(|instance| instance.class_name == "com.example.BigCache"));
+    }
+
+    #[test]
+    fn list_class_instances_caps_limit_and_reports_truncation_after_offset() {
+        let mut graph = graph_fixture();
+        for index in 0..205 {
+            add_rooted_big_cache(&mut graph, 0x10000 + index, 1, None);
+        }
+        let dominator = build_dominator_tree(&graph);
+
+        let page = list_class_instances_for_session(
+            &graph,
+            &dominator,
+            "com.example.BigCache",
+            3,
+            usize::MAX,
+        )
+        .expect("bounded page must resolve");
+
+        assert_eq!(page.total, 206);
+        assert_eq!(page.offset, 3);
+        assert_eq!(page.limit, 200);
+        assert_eq!(page.returned, 200);
+        assert_eq!(page.instances.len(), 200);
+        assert!(page.truncated);
+        assert!(page.offset + page.returned < page.total);
     }
 
     fn parse_hprof_file_with_options_from_bytes(

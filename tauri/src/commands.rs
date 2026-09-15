@@ -22,11 +22,12 @@ use mnemosyne_desktop_session::{
     default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
     find_all_gc_paths_for_session, get_ai_session_for_session, get_workflow_for_session,
     graph_has_field_data, inspect_object_for_session, install_field_data_cache_if_still_current,
-    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
-    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
-    remove_snapshot_for_session, resume_ai_session_for_session, save_snapshot_for_session,
-    start_workflow_for_session, CreateAiSessionInput, DiffObjectsSessionInput,
-    FieldDataCacheCapture, StartWorkflowSessionInput,
+    list_class_instances_for_session, list_snapshots_for_session, next_step_for_session,
+    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
+    regroup_histogram_for_session, remove_snapshot_for_session, resume_ai_session_for_session,
+    save_snapshot_for_session, start_workflow_for_session, CreateAiSessionInput,
+    DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
+    DEFAULT_CLASS_INSTANCES_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -868,6 +869,47 @@ pub async fn regroup_histogram(
     spawn_blocking(move || regroup_histogram_for_session(&graph, &group_by))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_class_instances(
+    class_key: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let graph = require_loaded_graph(&state)?;
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(DEFAULT_CLASS_INSTANCES_LIMIT);
+
+    spawn_blocking(move || {
+        let dominator = mnemosyne_core::build_dominator_tree(&graph);
+        let page = list_class_instances_for_session(&graph, &dominator, &class_key, offset, limit)?;
+        let instances = page
+            .instances
+            .into_iter()
+            .map(|instance| {
+                serde_json::json!({
+                    "object_id": instance.object_id,
+                    "class_name": instance.class_name,
+                    "shallow_size": instance.shallow_size,
+                    "retained_size": instance.retained_size,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(serde_json::json!({
+            "class_key": page.class_key,
+            "total": page.total,
+            "returned": page.returned,
+            "offset": page.offset,
+            "limit": page.limit,
+            "truncated": page.truncated,
+            "instances": instances,
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]

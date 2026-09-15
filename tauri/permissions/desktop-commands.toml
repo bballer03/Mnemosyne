@@ -13,6 +13,7 @@ commands.allow = [
   "get_referrers",
   "query_heap",
   "regroup_histogram",
+  "list_class_instances",
   "explain_leak",
   "inspect_object",
   "find_all_gc_paths",

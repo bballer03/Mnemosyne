@@ -100,25 +100,25 @@
 - Response: `{ class_key, total, returned, offset, limit, truncated, instances: [{ object_id, class_name, shallow_size, retained_size }] }`
 - Limits: default `100`, hard maximum `200`; sort by retained size descending, shallow size descending, then object ID.
 
-- [ ] **Step 1: Write failing `session-ops` fixture tests**
+- [x] **Step 1: Write failing `session-ops` fixture tests**
 
   Use `build_graph_fixture()` and assert class matching delegates to the existing dotted-name semantics of `resolve_live_instances_by_class`, output ordering is deterministic, `limit` is capped at 200, and `truncated` is true when `offset + returned < total`.
 
-- [ ] **Step 2: Run the focused Rust test**
+- [x] **Step 2: Run the focused Rust test**
 
   Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures list_class_instances`
 
   Expected: FAIL because the helper and response structs do not exist.
 
-- [ ] **Step 3: Implement the projection without new graph analysis**
+- [x] **Step 3: Implement the projection without new graph analysis**
 
   Call `resolve_live_instances_by_class(graph, class_key)`, look up shallow size from `graph.get_object(id)`, and retained size from the already-built `DominatorTree`. Never serialize the full matching ID vector.
 
-- [ ] **Step 4: Add the command and bridge/client contract**
+- [x] **Step 4: Add the command and bridge/client contract**
 
   Register `commands::list_class_instances` in `tauri/src/main.rs`. Validate snake_case Rust payloads in `heap-explorer-query-client.ts`; malformed totals, IDs, or rows fail with the existing `Invalid heap explorer bridge payload` prefix.
 
-- [ ] **Step 5: Run focused native and client tests**
+- [x] **Step 5: Run focused native and client tests**
 
   Run:
 
@@ -129,7 +129,7 @@
 
   Expected: PASS; unavailable bridge returns `{ status: "unavailable" }`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add tauri/session-ops/src/lib.rs tauri/src/commands.rs tauri/src/main.rs ui/src/host/tauri-bridge.ts ui/src/host/tauri-bridge.test.ts ui/src/features/heap-explorer/heap-explorer-query-client.ts ui/src/features/heap-explorer/heap-explorer-query-client.test.ts

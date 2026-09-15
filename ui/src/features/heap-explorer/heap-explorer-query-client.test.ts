@@ -7,9 +7,11 @@ import {
   getObjectReferences,
   inspectObject,
   isInspectObjectAvailable,
+  isListClassInstancesAvailable,
   isReferencesAvailable,
   isReferrersAvailable,
   isRegroupHistogramAvailable,
+  listClassInstances,
   normalizeHistogramGroupBy,
   regroupHistogram,
   runHeapQuery,
@@ -47,6 +49,134 @@ describe("heap explorer query client", () => {
   it("returns unavailable when no heap explorer query bridge exists", async () => {
     expect(await runHeapQuery({ heapPath: "heap.hprof", query: "SELECT object_id" })).toEqual({
       status: "unavailable",
+    });
+  });
+
+  it("listClassInstances returns unavailable when no bridge exists", async () => {
+    expect(isListClassInstancesAvailable()).toBeFalse();
+    expect(await listClassInstances("com.example.BigCache")).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("listClassInstances parses a bounded snake_case page", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 3,
+        returned: 2,
+        offset: 1,
+        limit: 2,
+        truncated: false,
+        instances: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+          },
+          {
+            object_id: "0x00002000",
+            class_name: "com.example.BigCache",
+            shallow_size: 16,
+            retained_size: 128,
+          },
+        ],
+      }),
+    });
+
+    expect(isListClassInstancesAvailable()).toBeTrue();
+    expect(await listClassInstances("com.example.BigCache", 1, 2)).toEqual({
+      status: "ready",
+      data: {
+        classKey: "com.example.BigCache",
+        total: 3,
+        returned: 2,
+        offset: 1,
+        limit: 2,
+        truncated: false,
+        instances: [
+          {
+            objectId: "0x00001000",
+            className: "com.example.BigCache",
+            shallowSize: 32,
+            retainedSize: 256,
+          },
+          {
+            objectId: "0x00002000",
+            className: "com.example.BigCache",
+            shallowSize: 16,
+            retainedSize: 128,
+          },
+        ],
+      },
+    });
+  });
+
+  it("listClassInstances rejects malformed totals with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: "3",
+        returned: 0,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: [],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("listClassInstances rejects malformed object IDs with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: [
+          {
+            object_id: 4096,
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+          },
+        ],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("listClassInstances rejects malformed rows with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: ["not-an-instance"],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
     });
   });
 

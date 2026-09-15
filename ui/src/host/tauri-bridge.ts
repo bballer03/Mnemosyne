@@ -86,6 +86,8 @@ export async function injectHostBridges(): Promise<boolean> {
     inspectObject: (objectId, retainFieldData) =>
       call("inspect_object", { objectId, retainFieldData }),
     regroupHistogram: (groupBy) => call("regroup_histogram", { groupBy }),
+    listClassInstances: (classKey, offset, limit) =>
+      call("list_class_instances", { classKey, offset, limit }),
   };
 
   hostWindow.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {

@@ -27,6 +27,23 @@ export type ObjectReferrersResult = {
   referrers: ObjectReferenceEntry[];
 };
 
+export type ClassInstanceEntry = {
+  objectId: string;
+  className: string;
+  shallowSize: number;
+  retainedSize: number;
+};
+
+export type ClassInstancesPage = {
+  classKey: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  instances: ClassInstanceEntry[];
+};
+
 /// A class-name-resolved object reference, mirroring core's structured
 /// `analysis::inspector::ObjectRef` (`{ object_id, class_name }`) -- kept
 /// separate from `ObjectReferenceEntry` above (which carries `shallowSize`/
@@ -63,6 +80,7 @@ export type HeapExplorerHostBridge = {
   inspectObject?: (objectId: string, retainFieldData?: boolean) => Promise<unknown>;
   /** M19.B — live flat regroup via session graph / MCP analyze_heap.histogram_group_by. */
   regroupHistogram?: (groupBy: string) => Promise<unknown>;
+  listClassInstances?: (classKey: string, offset?: number, limit?: number) => Promise<unknown>;
 };
 
 export type HistogramGroupByMode = "class" | "package" | "class_loader" | "superclass";
@@ -137,6 +155,34 @@ function readNumber(value: unknown, field: string): number {
   }
 
   return value;
+}
+
+function readCount(value: unknown, field: string): number {
+  const count = readNumber(value, field);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new TypeError(
+      `Invalid heap explorer bridge payload: expected ${field} to be a non-negative safe integer.`,
+    );
+  }
+
+  return count;
+}
+
+function readBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${field} to be a boolean.`);
+  }
+
+  return value;
+}
+
+function readObjectId(value: unknown, field: string): string {
+  const objectId = readString(value, field);
+  if (!/^(?:0x)?[0-9a-f]+$/i.test(objectId)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${field} to be an object id.`);
+  }
+
+  return objectId;
 }
 
 function readOptionalString(value: unknown, field: string): string | undefined {
@@ -249,6 +295,50 @@ function parseObjectReferrersResult(value: unknown): ObjectReferrersResult {
   };
 }
 
+function parseClassInstanceEntry(value: unknown, path: string): ClassInstanceEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    objectId: readObjectId(value.object_id, `${path}.object_id`),
+    className: readString(value.class_name, `${path}.class_name`),
+    shallowSize: readCount(value.shallow_size, `${path}.shallow_size`),
+    retainedSize: readCount(value.retained_size, `${path}.retained_size`),
+  };
+}
+
+function parseClassInstancesPage(value: unknown): ClassInstancesPage {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid heap explorer bridge payload: class instances result must be an object.");
+  }
+  if (!Array.isArray(value.instances)) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: expected class_instances.instances to be an array.",
+    );
+  }
+
+  const instances = value.instances.map((entry, index) =>
+    parseClassInstanceEntry(entry, `class_instances.instances[${index}]`),
+  );
+  const returned = readCount(value.returned, "class_instances.returned");
+  if (returned !== instances.length) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: class_instances.returned must match instances.length.",
+    );
+  }
+
+  return {
+    classKey: readString(value.class_key, "class_instances.class_key"),
+    total: readCount(value.total, "class_instances.total"),
+    returned,
+    offset: readCount(value.offset, "class_instances.offset"),
+    limit: readCount(value.limit, "class_instances.limit"),
+    truncated: readBoolean(value.truncated, "class_instances.truncated"),
+    instances,
+  };
+}
+
 function parseObjectInspectionRef(value: unknown, path: string): ObjectInspectionRef {
   if (!isRecord(value)) {
     throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
@@ -349,6 +439,10 @@ export function isRegroupHistogramAvailable(): boolean {
   return Boolean(getHeapExplorerBridge()?.regroupHistogram);
 }
 
+export function isListClassInstancesAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.listClassInstances);
+}
+
 export function parseHistogramResult(raw: unknown): HistogramResultView {
   if (!isRecord(raw)) {
     throw new TypeError("Invalid histogram regroup payload: expected an object.");
@@ -403,6 +497,28 @@ export async function regroupHistogram(groupBy: string) {
     return {
       status: "error" as const,
       error: error instanceof Error ? error.message : "Unknown histogram regroup failure.",
+    };
+  }
+}
+
+export async function listClassInstances(classKey: string, offset?: number, limit?: number) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.listClassInstances) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.listClassInstances(classKey, offset, limit);
+
+    return {
+      status: "ready" as const,
+      data: parseClassInstancesPage(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown class instances lookup failure.",
     };
   }
 }
