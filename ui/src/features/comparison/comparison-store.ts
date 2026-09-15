@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ObjectDiffReport } from "../../lib/diff-types";
+import type { IdentityStrategy, ObjectDiffReport } from "../../lib/diff-types";
 
 export type ComparisonSourceKind = "file" | "live";
 
@@ -14,10 +14,16 @@ type ComparisonState = {
   loadError?: string;
   liveBeforeKey: string;
   liveAfterKey: string;
+  identityStrategy: IdentityStrategy;
+  topN: number;
+  crossReferenceLeaks: boolean;
   setDiffReport: (report: ObjectDiffReport, sourceLabel: string, sourceKind: ComparisonSourceKind) => void;
   setLoadStatus: (status: ComparisonLoadStatus, error?: string) => void;
   setLiveBeforeKey: (value: string) => void;
   setLiveAfterKey: (value: string) => void;
+  setIdentityStrategy: (value: IdentityStrategy) => void;
+  setTopN: (value: number) => void;
+  setCrossReferenceLeaks: (value: boolean) => void;
   reset: () => void;
 };
 
@@ -29,6 +35,9 @@ const initialState = {
   loadError: undefined,
   liveBeforeKey: "",
   liveAfterKey: "",
+  identityStrategy: "ClassDominator" as IdentityStrategy,
+  topN: 50,
+  crossReferenceLeaks: false,
 };
 
 export const useComparisonStore = create<ComparisonState>((set) => ({
@@ -48,5 +57,8 @@ export const useComparisonStore = create<ComparisonState>((set) => ({
     }),
   setLiveBeforeKey: (value) => set({ liveBeforeKey: value }),
   setLiveAfterKey: (value) => set({ liveAfterKey: value }),
+  setIdentityStrategy: (value) => set({ identityStrategy: value }),
+  setTopN: (value) => set({ topN: Math.min(500, Math.max(1, Math.trunc(value) || 1)) }),
+  setCrossReferenceLeaks: (value) => set({ crossReferenceLeaks: value }),
   reset: () => set(initialState),
 }));

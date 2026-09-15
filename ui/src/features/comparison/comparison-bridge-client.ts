@@ -34,8 +34,9 @@ import { parseObjectDiffReport, type IdentityStrategy, type ObjectDiffReport } f
 export type DiffObjectsInput = {
   beforeKey: string;
   afterKey: string;
-  strategy?: IdentityStrategy;
-  topN?: number;
+  strategy: IdentityStrategy;
+  topN: number;
+  crossReferenceLeaks: boolean;
 };
 
 export type ComparisonHostBridge = {
