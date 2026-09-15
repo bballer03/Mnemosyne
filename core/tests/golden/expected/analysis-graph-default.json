@@ -1,0 +1,99 @@
+{
+  "case_id": "analysis-graph-default",
+  "command": "analyze --mode deep --format json",
+  "eclipse_mat_reference": null,
+  "equivalence": "mnemosyne-golden",
+  "fixture": "build_graph_fixture",
+  "output": {
+    "ai": null,
+    "graph": {
+      "dominators": [
+        {
+          "class_name": "com/example/BigCache",
+          "dominates": 1,
+          "immediate_dominator": null,
+          "name": "com/example/BigCache",
+          "object_id": "0x00001000",
+          "retained_size": 4,
+          "shallow_size": 4
+        },
+        {
+          "class_name": "java/lang/Object",
+          "dominates": 0,
+          "immediate_dominator": "com/example/BigCache",
+          "name": "java/lang/Object",
+          "object_id": "0x00002000"
+        }
+      ],
+      "edge_count": 1,
+      "node_count": 2
+    },
+    "histogram": {
+      "entries": [
+        {
+          "instance_count": 1,
+          "key": "com/example/BigCache",
+          "retained_size": 4,
+          "shallow_size": 4
+        },
+        {
+          "instance_count": 1,
+          "key": "java/lang/Object",
+          "retained_size": 0,
+          "shallow_size": 0
+        }
+      ],
+      "group_by": "class",
+      "total_instances": 2,
+      "total_shallow_size": 4
+    },
+    "leaks": [],
+    "provenance": [
+      {
+        "detail": "Graph-backed dominator analysis was available but leak filters produced no results; heuristic fallback was used for leak detection.",
+        "kind": "FALLBACK"
+      }
+    ],
+    "recommendations": [
+      "Graph-backed analysis complete. Retained sizes are computed from dominator tree."
+    ],
+    "summary": {
+      "classes": [],
+      "header": {
+        "format": "JAVA PROFILE 1.0.2",
+        "identifier_size": 4,
+        "timestamp_millis": 0
+      },
+      "heap_path": "<synthetic-fixture>",
+      "record_stats": [
+        {
+          "bytes": 142,
+          "count": 1,
+          "name": "HEAP_DUMP",
+          "tag": 12
+        },
+        {
+          "bytes": 55,
+          "count": 3,
+          "name": "STRING_IN_UTF8",
+          "tag": 1
+        },
+        {
+          "bytes": 32,
+          "count": 2,
+          "name": "LOAD_CLASS",
+          "tag": 2
+        }
+      ],
+      "total_objects": 6,
+      "total_records": 6,
+      "total_size_bytes": 314
+    },
+    "unreachable": {
+      "by_class": [],
+      "total_count": 0,
+      "total_shallow_size": 0
+    }
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,52 @@
+{
+  "case_id": "oql-node-instances",
+  "command": "query SELECT @objectId, @className, @shallowSize FROM \"com.example.Node\"",
+  "eclipse_mat_reference": null,
+  "equivalence": "mnemosyne-golden",
+  "fixture": "build_simple_fixture",
+  "output": {
+    "columns": [
+      "@objectId",
+      "@className",
+      "@shallowSize"
+    ],
+    "rows": [
+      [
+        {
+          "Id": 8193
+        },
+        {
+          "Str": "com.example.Node"
+        },
+        {
+          "Int": 16
+        }
+      ],
+      [
+        {
+          "Id": 8194
+        },
+        {
+          "Str": "com.example.Node"
+        },
+        {
+          "Int": 16
+        }
+      ],
+      [
+        {
+          "Id": 8195
+        },
+        {
+          "Str": "com.example.Node"
+        },
+        {
+          "Int": 16
+        }
+      ]
+    ],
+    "total_matched": 3,
+    "truncated": false
+  },
+  "schema_version": 1
+}
