@@ -22,6 +22,7 @@ fn main() {
             commands::run_desktop_analysis,
             commands::run_ci_check,
             commands::generate_desktop_flamegraph,
+            commands::export_desktop_report,
             commands::load_heap,
             commands::unload_heap,
             commands::get_references,

@@ -181,6 +181,31 @@ describe("tauri-bridge", () => {
     });
   });
 
+  it("exports reports through the correlated native operation envelope", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    await window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__?.exportReport?.({
+      sourceId: "src-opaque",
+      format: "html",
+    });
+
+    expect(invokeCalls).toContainEqual({
+      command: "export_desktop_report",
+      args: {
+        input: {
+          sourceId: "src-opaque",
+          format: "html",
+          context: {
+            workspaceId: "workspace-1",
+            revision: 4,
+            operationId: expect.any(String),
+          },
+        },
+      },
+    });
+  });
+
   it("never logs query text or stores it in operation progress state", async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const query = "SELECT PRIVATE_QUERY_SENTINEL";

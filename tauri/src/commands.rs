@@ -10,31 +10,33 @@ use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
     analysis::{
         analyze_heap, analyze_heap_capturing_graph_controlled, analyze_heap_with_graph_controlled,
-        analyze_snapshot_from_graph_controlled, validate_leak_id, AnalyzeRequest, ObjectInspection,
+        analyze_snapshot_from_graph_controlled, validate_leak_id, AnalyzeRequest, AnalyzeResponse,
+        ObjectInspection,
     },
     diff::ObjectDiffReport,
     evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file_controlled,
     parse_hprof_file_with_options_controlled, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
+    render_report,
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
     HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest,
     NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
-    OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker, Severity,
-    SourceMapResult,
+    OutputFormat, OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker,
+    ReportRequest, Severity, SourceMapResult,
 };
 use mnemosyne_desktop_session::{
-    ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
-    close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
-    default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
-    dominator_children_for_session, find_all_gc_paths_for_session, get_ai_session_for_session,
-    get_workflow_for_session, graph_has_field_data, inspect_object_for_session_controlled,
-    install_field_data_cache_if_still_current, list_class_instances_for_session,
-    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
-    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
-    remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
-    start_workflow_for_session, structured_operation_cancelled_error,
-    build_snapshot_workspace_hydrate, CancelOperationResult, CreateAiSessionInput,
+    ai_session_store_for_config, build_snapshot_workspace_hydrate, chat_session_for_session,
+    close_ai_session_for_session, close_workflow_for_session, create_ai_session_for_session,
+    default_snapshot_store, default_workflow_store, describe_workflow_for_session,
+    diff_objects_for_session, dominator_children_for_session, find_all_gc_paths_for_session,
+    get_ai_session_for_session, get_workflow_for_session, graph_has_field_data,
+    inspect_object_for_session_controlled, install_field_data_cache_if_still_current,
+    list_class_instances_for_session, list_snapshots_for_session, next_step_for_session,
+    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
+    regroup_histogram_for_session, remove_snapshot_for_session, replace_session_analysis,
+    resume_ai_session_for_session, start_workflow_for_session,
+    structured_operation_cancelled_error, CancelOperationResult, CreateAiSessionInput,
     DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationEnvelope,
     OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
     SnapshotWorkspaceHydrate, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
@@ -272,7 +274,6 @@ pub async fn run_desktop_analysis(
             .cloned()
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
-
     let display_name = display_name_for_path(&path);
     let mode = input.mode.as_deref().unwrap_or("incident");
     if mode.eq_ignore_ascii_case("overview") {
@@ -315,6 +316,7 @@ pub async fn run_desktop_analysis(
             .write()
             .map_err(|_| LOCK_ERROR.to_string())?;
         replace_session_analysis(&mut graph, &mut dominator, None);
+        *state.analysis.write().map_err(|_| LOCK_ERROR.to_string())? = None;
         *state
             .field_data_graph
             .write()
@@ -417,7 +419,9 @@ pub async fn run_desktop_analysis(
         .dominator
         .write()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
     replace_session_analysis(&mut graph, &mut dominator, replacement);
+    *analysis_slot = Some(response.clone());
     *state
         .field_data_graph
         .write()
@@ -429,6 +433,7 @@ pub async fn run_desktop_analysis(
 
     if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
         replace_session_analysis(&mut graph, &mut dominator, None);
+        *analysis_slot = None;
         *state
             .field_data_graph
             .write()
@@ -440,10 +445,11 @@ pub async fn run_desktop_analysis(
         emit_indeterminate(&observer, OperationPhase::Cancelled, started);
         return Err(error);
     }
-    let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
+    let raw = serde_json::to_value(&response).map_err(|error| error.to_string())?;
     let result = sanitize_analyze_response_value(raw, &display_name);
     if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
         replace_session_analysis(&mut graph, &mut dominator, None);
+        *analysis_slot = None;
         *state
             .field_data_graph
             .write()
@@ -693,6 +699,7 @@ pub async fn generate_desktop_flamegraph(
             .cloned()
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
+    let display_name = display_name_for_path(&path);
 
     let root = match input.root.as_deref().unwrap_or("dominator") {
         "dominator" => FlameRoot::Dominator,
@@ -713,8 +720,8 @@ pub async fn generate_desktop_flamegraph(
         .map_err(|_| LOCK_ERROR.to_string())?
         .clone();
 
-    let (graph, dominator) = {
-        let (_, graph, dominator) = analyze_heap_with_graph_controlled(
+    let (mut analysis, graph, dominator) = {
+        analyze_heap_with_graph_controlled(
             AnalyzeRequest {
                 heap_path: path.clone(),
                 config,
@@ -726,9 +733,9 @@ pub async fn generate_desktop_flamegraph(
             core_observer(&observer),
         )
         .await
-        .map_err(map_native_error)?;
-        (graph, dominator)
+        .map_err(map_native_error)?
     };
+    analysis.summary.heap_path = display_name;
     if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
         emit_indeterminate(&observer, OperationPhase::Cancelled, started);
         return Err(error);
@@ -739,17 +746,24 @@ pub async fn generate_desktop_flamegraph(
     let mut buffer = Vec::new();
     render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
     let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
+    let mode = serde_json::to_value(analysis.mode).map_err(|error| error.to_string())?;
+    let provenance =
+        serde_json::to_value(&analysis.provenance).map_err(|error| error.to_string())?;
 
     let result: Result<Value, String> = match format {
         FlameFormat::Svg => Ok(serde_json::json!({
             "format": "svg",
             "content": rendered,
             "byteLength": rendered.len(),
+            "mode": mode,
+            "provenance": provenance,
         })),
         FlameFormat::FoldedStack => Ok(serde_json::json!({
-            "format": "folded",
+            "format": "folded-stack",
             "content": rendered,
             "byteLength": rendered.len(),
+            "mode": mode,
+            "provenance": provenance,
         })),
         FlameFormat::Json => {
             let value: Value =
@@ -758,6 +772,8 @@ pub async fn generate_desktop_flamegraph(
                 "format": "json",
                 "content": value,
                 "byteLength": rendered.len(),
+                "mode": mode,
+                "provenance": provenance,
             }))
         }
     };
@@ -781,11 +797,13 @@ pub async fn generate_desktop_flamegraph(
             .dominator
             .write()
             .map_err(|_| LOCK_ERROR.to_string())?;
+        let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
         replace_session_analysis(
             &mut graph_slot,
             &mut dominator_slot,
             Some((graph, dominator)),
         );
+        *analysis_slot = Some(analysis);
         *state
             .field_data_graph
             .write()
@@ -796,6 +814,7 @@ pub async fn generate_desktop_flamegraph(
             .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
         if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
             replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+            *analysis_slot = None;
             *state
                 .field_data_graph
                 .write()
@@ -816,6 +835,98 @@ pub async fn generate_desktop_flamegraph(
         );
     }
     result.map(|data| OperationEnvelope::new(context, data))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopReportExportInput {
+    source_id: String,
+    format: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
+}
+
+fn parse_report_export_format(value: &str) -> Result<(OutputFormat, &'static str), String> {
+    match value.to_ascii_lowercase().as_str() {
+        "text" => Ok((OutputFormat::Text, "text")),
+        "markdown" => Ok((OutputFormat::Markdown, "markdown")),
+        "html" => Ok((OutputFormat::Html, "html")),
+        "toon" => Ok((OutputFormat::Toon, "toon")),
+        "json" => Ok((OutputFormat::Json, "json")),
+        other => Err(format!("unsupported report export format: {other}")),
+    }
+}
+
+fn render_desktop_report_export(
+    mut analysis: AnalyzeResponse,
+    display_name: &str,
+    requested_format: &str,
+) -> Result<Value, String> {
+    let (format, format_name) = parse_report_export_format(requested_format)?;
+    analysis.summary.heap_path = display_name.to_string();
+    let mode = serde_json::to_value(analysis.mode).map_err(|error| error.to_string())?;
+    let provenance =
+        serde_json::to_value(&analysis.provenance).map_err(|error| error.to_string())?;
+    let report = render_report(&ReportRequest { analysis, format }).map_err(map_native_error)?;
+    let byte_length = report.contents.as_bytes().len();
+
+    Ok(serde_json::json!({
+        "format": format_name,
+        "content": report.contents,
+        "mimeType": report.mime_type,
+        "byteLength": byte_length,
+        "mode": mode,
+        "provenance": provenance,
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn export_desktop_report(
+    input: DesktopReportExportInput,
+    app: AppHandle,
+    state: State<'_, HeapSession>,
+) -> Result<OperationEnvelope<Value>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "analyze", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+    ensure_loaded_heap_matches(&state, Some(&path))?;
+    let analysis = state
+        .analysis
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| {
+            "No committed analysis is available for the active workspace; run analysis first."
+                .to_string()
+        })?;
+
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_indeterminate(&observer, OperationPhase::Rendering, started);
+    let result =
+        render_desktop_report_export(analysis, &display_name_for_path(&path), &input.format)?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, result))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1048,11 +1159,13 @@ async fn load_heap_internal(
         .dominator
         .write()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
     replace_session_analysis(
         &mut graph_slot,
         &mut dominator_slot,
         Some((graph, dominator)),
     );
+    *analysis_slot = None;
     *state
         .field_data_graph
         .write()
@@ -1064,6 +1177,7 @@ async fn load_heap_internal(
 
     if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
         replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+        *analysis_slot = None;
         *state
             .field_data_graph
             .write()
@@ -1090,13 +1204,15 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
         .dominator
         .write()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
     // Idempotent: Close from UI must succeed even if the graph was already cleared.
-    if graph.is_none() && dominator.is_none() {
+    if graph.is_none() && dominator.is_none() && analysis.is_none() {
         return Ok(());
     }
 
     state.bump_session_epoch();
     replace_session_analysis(&mut graph, &mut dominator, None);
+    *analysis = None;
     *state
         .field_data_graph
         .write()
@@ -1947,7 +2063,7 @@ pub async fn open_snapshot(
     )
     .await
     .map_err(map_native_error)?;
-    let hydrate = build_snapshot_workspace_hydrate(&manifest, &source_id, analysis);
+    let hydrate = build_snapshot_workspace_hydrate(&manifest, &source_id, analysis.clone());
 
     emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
@@ -1959,6 +2075,7 @@ pub async fn open_snapshot(
         .dominator
         .write()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
     let mut field_data_slot = state
         .field_data_graph
         .write()
@@ -1981,6 +2098,7 @@ pub async fn open_snapshot(
             &mut dominator_slot,
             Some((graph, dominator)),
         );
+        *analysis_slot = Some(analysis);
         *field_data_slot = None;
         *heap_path_slot = Some(heap_path.clone());
         sources.insert(source_id, heap_path);
@@ -2116,6 +2234,71 @@ fn format_object_id(object_id: u64, id_size: usize) -> String {
 
 fn prettify_class_name(raw: &str) -> String {
     raw.replace('/', ".")
+}
+
+#[cfg(test)]
+mod report_export_tests {
+    use super::render_desktop_report_export;
+    use mnemosyne_core::{graph::GraphMetrics, hprof::HeapSummary};
+    use mnemosyne_core::{AnalysisMode, AnalyzeResponse, ProvenanceKind, ProvenanceMarker};
+    use std::time::{Duration, SystemTime};
+
+    fn sample_response() -> AnalyzeResponse {
+        AnalyzeResponse {
+            mode: AnalysisMode::Deep,
+            overview: None,
+            summary: HeapSummary {
+                heap_path: "private/source/path.hprof".into(),
+                total_objects: 1,
+                total_size_bytes: 16,
+                classes: Vec::new(),
+                generated_at: SystemTime::UNIX_EPOCH,
+                header: None,
+                total_records: 1,
+                record_stats: Vec::new(),
+            },
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(1),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: None,
+            collection_report: None,
+            string_report: None,
+            array_report: None,
+            top_instances: None,
+            referrer_report: None,
+            plugin_results: Vec::new(),
+            provenance: vec![ProvenanceMarker::new(
+                ProvenanceKind::Partial,
+                "bounded analyzer output",
+            )],
+        }
+    }
+
+    #[test]
+    fn report_export_uses_existing_html_escaping_and_preserves_labels() {
+        let export =
+            render_desktop_report_export(sample_response(), "evil<script>.hprof", "html").unwrap();
+        let content = export["content"].as_str().unwrap();
+
+        assert!(content.contains("evil&lt;script&gt;.hprof"));
+        assert!(!content.contains("evil<script>.hprof"));
+        assert_eq!(export["mode"], "deep");
+        assert_eq!(export["provenance"][0]["kind"], "Partial");
+        assert_eq!(export["provenance"][0]["detail"], "bounded analyzer output");
+    }
+
+    #[test]
+    fn report_export_rejects_unknown_formats() {
+        let error =
+            render_desktop_report_export(sample_response(), "fixture.hprof", "custom:unsafe")
+                .unwrap_err();
+        assert!(error.contains("unsupported report export format"));
+    }
 }
 
 #[cfg(test)]

@@ -190,6 +190,10 @@ export async function injectHostBridges(): Promise<boolean> {
       invokeOperation("flamegraph", (context) =>
         call("generate_desktop_flamegraph", { input: { ...input, context } }),
       ),
+    exportReport: (input) =>
+      invokeOperation("analyze", (context) =>
+        call("export_desktop_report", { input: { ...input, context } }),
+      ),
   };
 
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {

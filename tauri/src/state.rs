@@ -7,7 +7,7 @@ use std::{
 };
 
 use mnemosyne_core::config::AppConfig;
-use mnemosyne_core::{hprof::ObjectGraph, DominatorTree};
+use mnemosyne_core::{hprof::ObjectGraph, AnalyzeResponse, DominatorTree};
 use mnemosyne_desktop_session::OperationRegistry;
 
 /// Shared heap session state managed by Tauri.
@@ -21,6 +21,9 @@ pub struct HeapSession {
     pub session_mutation: Mutex<()>,
     pub graph: RwLock<Option<ObjectGraph>>,
     pub dominator: RwLock<Option<DominatorTree>>,
+    /// Last analysis response committed with the active heap. Report exports
+    /// render this value so they preserve workspace analyzer/provenance facts.
+    pub analysis: RwLock<Option<AnalyzeResponse>>,
     /// Lazily populated when `inspect_object` is called with
     /// `retain_field_data: true` against a lean session graph.
     pub field_data_graph: RwLock<Option<ObjectGraph>>,
@@ -40,6 +43,7 @@ impl HeapSession {
             session_mutation: Mutex::new(()),
             graph: RwLock::new(None),
             dominator: RwLock::new(None),
+            analysis: RwLock::new(None),
             field_data_graph: RwLock::new(None),
             session_epoch: AtomicU64::new(0),
             config: RwLock::new(AppConfig::default()),
