@@ -41,10 +41,58 @@ This note records what M20 *shipped* and what remains **NOT proven** on this WSL
 | Clean Windows unzip → double-click on a machine without preinstalled WebView2 | **NOT proven** | M21; zip remains labeled **portable with WebView2 prerequisite** |
 | Browser screenshot gallery per workbench family (synthetic fixtures) | **Not captured** in this closeout | Optional follow-up; do not invent visual proof |
 | Full workspace `cargo test` / `bun run test` / Tauri session-ops suite as a single 20.H gate run | **Not re-executed** in the 20.H docs commit | Prior slice commits record focused gates; full matrix remains a release discipline item |
-| Final Terra M20 milestone closeout + Sol verdict | **Not recorded** | Requires human/Sol review after this evidence note |
+| Final Terra M20 milestone closeout + Sol verdict | **Recorded 2026-09-15** for **browser/stub scope only** (see closeout section below) | Packaged GUI remains M21 |
 
 ## How to read this evidence
 
 1. Product capability status → [ui-capability-matrix.md](../product/ui-capability-matrix.md).
 2. Install / unzip claims → README Desktop section + M21 slices; never infer launch success from WSL unit green.
 3. Packaged GUI and clean-Windows portable proof → deferred to **M21** native hosts.
+
+## 2026-09-15 browser stub closeout (mode A)
+
+**Branch:** `docs/m20-m23-browser-stub-closeout`  
+**Program:** [older-partials closeout](../superpowers/plans/2026-09-15-older-partials-closeout.md)
+
+### Focused stub-bridge tests
+
+```bash
+cd ui && bun test \
+  src/app/TopNav.test.tsx \
+  src/features/policy/PolicyCheckPage.test.tsx \
+  src/features/snapshots/SnapshotManagerPage.test.tsx \
+  src/features/flamegraph/FlamegraphPage.test.tsx
+```
+
+Result: **23 pass, 0 fail** (TopNav power routes; policies/snapshots/flamegraphs with missing-bridge unavailable states and stub-bridge happy paths).
+
+### Localhost Vite SPA shell smoke (non-Tauri)
+
+```bash
+bun run dev -- --host 127.0.0.1 --port 5173
+# curl routes: /, /dashboard, /artifacts/explorer, /workbench/policies,
+# /workbench/snapshots, /workbench/flamegraphs, /assistant,
+# /heap-explorer/dominators, /heap-explorer/query-console
+```
+
+Result: all listed paths returned **HTTP 200**. Honesty: SPA shell 200 ≠ Open-heap / Tauri invoke success.
+
+### Still NOT PROVEN (this closeout)
+
+| Claim | Status |
+| --- | --- |
+| Real `invoke` / Tauri IPC | **NOT PROVEN** in browser stub mode |
+| Packaged Open-heap | **NOT PROVEN** |
+| Packaged GUI smoke | **NOT PROVEN** (M21) |
+
+### Terra subagent stand-in
+
+- Reviewer: cavecrew-reviewer / docs honesty pass on this section
+- Outcome: **APPROVED** for browser/stub scope (no packaged claim)
+
+### Sol verdict
+
+- **Scope:** M20 browser/stub workbench closeout only
+- **Verdict:** **met** for stub/browser evidence; packaged GUI remains **NOT PROVEN**
+- **Date:** 2026-09-15
+
