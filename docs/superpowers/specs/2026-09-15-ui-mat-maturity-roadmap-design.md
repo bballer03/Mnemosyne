@@ -113,7 +113,7 @@ Every open/analyze/query/diff/snapshot op logs to `desktop.log` with:
 
 `operation_id`, `workspace_id`, `revision`, phase, timings, machine-readable error codes  
 
-Never log absolute paths, field values, query bodies, or AI prompts. Rotate `desktop.log` (size/daily) — current never-rotate is a debt item under M30.
+Never log absolute paths, field values, query bodies, or AI prompts. Rotate desktop logs daily (`desktop.YYYY-MM-DD`) with redaction helpers — shipped under M30.E (`fa33266`); ~14-day retention prune remains operational follow-up, not a never-rotate debt.
 
 ### 4.5 Anti-patterns (hard rules)
 
