@@ -116,10 +116,46 @@ Observed with an in-test `__MNEMOSYNE_ASSISTANT_BRIDGE__` stub. Treat as adapter
 | Live external AI provider round-trip (real API key, network call, production model quality) | **NOT evidenced** here — only mocked bridge + rules/fallback | Operator-configured provider validation |
 | AI replaces or equals Eclipse MAT analysis depth | **False claim — do not make** | Capability matrix + honesty bar |
 | Full Rust / full UI / full Tauri gate as one closeout run | **Not claimed** | Release discipline / native hosts |
-| Final Terra milestone review + Sol M23 verdict | **Not recorded** | Requested in 23.D closeout commit; pending human/Sol |
+| Final Terra milestone review + Sol M23 verdict | **Recorded 2026-09-15** for **stub AI / browser scope only** (see closeout section) | Live provider + packaged GUI remain open |
 
 ## How to read this evidence
 
 1. Product capability status → [ui-capability-matrix.md](../product/ui-capability-matrix.md).
 2. Install / unzip / launch claims → README Desktop + M21; never infer GUI success from WSL unit green.
 3. AI / MAT honesty → rules default, provenance labels, and power-view deep links are the product; chat is guidance only.
+
+## 2026-09-15 stub AI / browser closeout (mode A + rules/stub)
+
+**Branch:** `docs/m20-m23-browser-stub-closeout`  
+**Program:** [older-partials closeout](../superpowers/plans/2026-09-15-older-partials-closeout.md)
+
+### Focused assistant stub tests
+
+```bash
+cd ui && bun test src/features/assistant/
+```
+
+Result: **30 pass, 0 fail** (rules default, provider stub success/fallback/timeout, measured-context caps, deep links, history eviction).
+
+### Localhost `/assistant` shell
+
+Vite smoke returned **HTTP 200** for `/assistant` (same run as M20). Interactive Ask without injected bridge remains rules-path only.
+
+### Still NOT PROVEN
+
+| Claim | Status |
+| --- | --- |
+| Live external AI provider round-trip | **NOT PROVEN** |
+| Packaged Tauri Assistant click-through | **NOT PROVEN** |
+| AI equals Eclipse MAT analysis depth | **False — do not claim** |
+
+### Terra subagent stand-in
+
+- Outcome: **APPROVED** for stub AI / browser scope
+
+### Sol verdict
+
+- **Scope:** M23 stub AI + browser guided investigation closeout
+- **Verdict:** **met** for rules/stub evidence; live provider remains **NOT PROVEN**
+- **Date:** 2026-09-15
+
