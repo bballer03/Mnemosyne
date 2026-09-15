@@ -211,8 +211,8 @@ When a release lists multiple formats for one platform, prefer the portable zip 
 
 **Install steps**
 
-- **Windows (portable zip):** Unzip `Mnemosyne-<version>-windows-x64-portable.zip` → double-click `Mnemosyne.exe` (WebView2 prerequisite above). Until a given release attaches that zip, use the MSI/setup assets.
-- **Windows (installer):** Run the `.msi` or `-setup.exe`. If SmartScreen warns on first launch, follow [SECURITY.md](SECURITY.md#desktop-app-distribution-m16).
+- **Windows (portable zip):** Unzip `Mnemosyne-<version>-windows-x64-portable.zip` → double-click `Mnemosyne.exe` (WebView2 prerequisite above). To add Mnemosyne to **Open with** for `.hprof` and `.bin`, verify the archive checksum, open PowerShell in the extracted directory, and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\register-file-associations.ps1 -ExecutablePath .\Mnemosyne.exe`. This unsigned helper writes only per-user `OpenWithProgids`; it does not override Windows `UserChoice`. Remove those entries with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\register-file-associations.ps1 -Unregister`.
+- **Windows (installer):** Run the `.msi` or `-setup.exe`. M31.A configures `.hprof` / `.bin` file associations for new installers, so Windows can pass the selected path to the existing `--open` startup flow. If SmartScreen warns on first launch, follow [SECURITY.md](SECURITY.md#desktop-app-distribution-m16). Installer generation is proven; install/double-click behavior remains release-host evidence, not inferred from the build.
 - **macOS (app zip):** Unzip `Mnemosyne-<version>-macos-{aarch64,x64}-app.zip` → launch **Mnemosyne.app**. On first open, use **Right-click → Open** if Gatekeeper blocks an unsigned build — details in [SECURITY.md](SECURITY.md#desktop-app-distribution-m16). Not launch-tested from WSL.
 - **macOS (DMG fallback):** Open the `.dmg`, drag **Mnemosyne.app** to Applications if desired, then launch.
 - **Linux (.AppImage):** `chmod +x Mnemosyne-<version>-linux-x86_64.AppImage && ./Mnemosyne-<version>-linux-x86_64.AppImage` (or the `linux-aarch64` name; WebKitGTK caveat above). Not launch-tested from WSL.

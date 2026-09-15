@@ -29,6 +29,12 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 Copy-Item -Path $exe.FullName -Destination (Join-Path $stage "Mnemosyne.exe")
+$associationScript = Join-Path (Split-Path -Parent $PSScriptRoot) "windows\register-file-associations.ps1"
+if (-not (Test-Path -LiteralPath $associationScript -PathType Leaf)) {
+  Write-Error "Portable Open With registration script not found"
+  exit 1
+}
+Copy-Item -LiteralPath $associationScript -Destination $stage
 $readme = @"
 Mnemosyne portable (Windows x64)
 Version: $Version
@@ -43,6 +49,18 @@ If the app fails to start with a WebView/runtime error, install WebView2 from Mi
 
 This package is labeled: portable with WebView2 prerequisite.
 It is not a silent offline single-file drop-in and is not launch-proven from WSL.
+
+Optional Open With registration (current Windows user; no administrator required):
+1. Verify this archive against the release SHA256SUMS file.
+2. Open PowerShell in this extracted directory.
+3. Run:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\register-file-associations.ps1 -ExecutablePath .\Mnemosyne.exe
+4. Right-click a .hprof or .bin file, choose Open with -> Choose another app,
+   then select Mnemosyne. Windows can remember that choice for future double-clicks.
+
+The script adds only per-user OpenWithProgids entries. It does not override the
+Windows UserChoice default. Remove the entries with:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\register-file-associations.ps1 -Unregister
 "@
 Set-Content -Path (Join-Path $stage "README-PORTABLE.txt") -Value $readme -Encoding UTF8
 

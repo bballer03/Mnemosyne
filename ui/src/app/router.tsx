@@ -27,6 +27,7 @@ import { SnapshotManagerPage } from "../features/snapshots/SnapshotManagerPage";
 import { PolicyCheckPage } from "../features/policy/PolicyCheckPage";
 import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
+import { DesktopOpenHeapMenuHandler } from "../features/investigation/DesktopOpenHeapMenuHandler";
 import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
 import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
 import { PerspectiveSwitcher } from "../features/investigation/PerspectiveSwitcher";
@@ -43,6 +44,7 @@ function InvestigationChromeLayout() {
   return (
     <>
       <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+        <DesktopOpenHeapMenuHandler />
         <HeapSessionBar />
         <PerspectiveSwitcher />
         <FindingsAdvisoryPane />
