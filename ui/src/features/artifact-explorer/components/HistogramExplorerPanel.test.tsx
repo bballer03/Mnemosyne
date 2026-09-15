@@ -259,7 +259,7 @@ describe("HistogramExplorerPanel", () => {
     for (const [sortKey, sortDirection, expected] of expectedOrders) {
       fireEvent.change(sortBy, { target: { value: sortKey } });
       fireEvent.change(direction, { target: { value: sortDirection } });
-      expect(selectedRowKeys(view)).toEqual(expected);
+      expect(selectedRowKeys(view)).toEqual([...expected]);
     }
   });
 
