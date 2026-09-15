@@ -43,6 +43,9 @@ describe("TriageSummaryCard", () => {
     await waitFor(() => {
       expect(page.getByText(/current step: investigate_suspect/i)).toBeInTheDocument();
     });
-    expect(page.getByText(/com\.example\.cache/i)).toBeInTheDocument();
+    // M29.B: workflow cards show step identity + Continue / deep-links, not raw
+    // step_result payloads (which may include absolute paths or field values).
+    expect(page.getByRole("button", { name: /^continue$/i })).toBeInTheDocument();
+    expect(page.queryByText(/com\.example\.cache/i)).toBeNull();
   });
 });
