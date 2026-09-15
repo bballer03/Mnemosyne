@@ -63,8 +63,12 @@ export function HeapExplorerLayout() {
     if (artifactChanged && artifact && !revisionAlreadyBumped) {
       bumpRevisionOnArtifactChange();
     }
-    setSelectedRowIndex(artifact?.graph.dominators[0] ? 0 : undefined);
-    setSeededSearch(undefined);
+    // Only reset local row selection when the artifact identity changes — not on every
+    // selection-revision bump (artifact-only rows keep index-based selection).
+    if (artifactChanged) {
+      setSelectedRowIndex(artifact?.graph.dominators[0] ? 0 : undefined);
+      setSeededSearch(undefined);
+    }
   }, [artifact, bumpRevisionOnArtifactChange, selectionRevision]);
 
   useEffect(() => {
@@ -87,6 +91,7 @@ export function HeapExplorerLayout() {
     if (matchingRowIndex >= 0) {
       setSelectedRowIndex(matchingRowIndex);
     } else {
+      // Explicit URL seed that is not in the table: clear row so unmatched seed wins.
       setSelectedRowIndex(undefined);
     }
 
@@ -101,7 +106,11 @@ export function HeapExplorerLayout() {
     const matchingRowIndex = artifact.graph.dominators.findIndex(
       (row) => row.objectId === selectedObjectId,
     );
-    setSelectedRowIndex(matchingRowIndex >= 0 ? matchingRowIndex : undefined);
+    // Only sync row index when the shared objectId maps to a dominator row.
+    // Artifact-only rows (empty objectId) must keep index-based selection.
+    if (matchingRowIndex >= 0) {
+      setSelectedRowIndex(matchingRowIndex);
+    }
   }, [artifact, selectedObjectId]);
 
   useEffect(() => {
@@ -126,17 +135,22 @@ export function HeapExplorerLayout() {
   const storedSelectedObject = selectedObjectId
     ? artifact.graph.dominators.find((row) => row.objectId === selectedObjectId)
     : undefined;
-  const unmatchedSelectedObject = selectedObjectId && !storedSelectedObject
-    ? {
-        objectId: selectedObjectId,
-        className: "Object not present in dominator artifact",
-        name: "Shared object selection",
-      }
-    : undefined;
+  const rowSelectedObject =
+    selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined;
+  // Prefer a concrete dominator row over an unmatched shared id so stale store
+  // objectIds (or cross-pane seeds) cannot steal leak/cross-nav identity.
+  const unmatchedSelectedObject =
+    selectedObjectId && !storedSelectedObject && !rowSelectedObject
+      ? {
+          objectId: selectedObjectId,
+          className: "Object not present in dominator artifact",
+          name: "Shared object selection",
+        }
+      : undefined;
   const selectedObject =
     storedSelectedObject ??
+    rowSelectedObject ??
     unmatchedSelectedObject ??
-    (selectedRowIndex !== undefined ? artifact.graph.dominators[selectedRowIndex] : undefined) ??
     artifact.graph.dominators[0];
   const resolvedLeakId = resolveObjectToLeak(selectedObject?.objectId, artifact);
   const showInspectorPane = location.pathname !== "/heap-explorer/object-inspector";

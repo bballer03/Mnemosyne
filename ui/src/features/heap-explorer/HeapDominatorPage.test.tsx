@@ -7,6 +7,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 function createArtifactFixture() {
   return {
@@ -70,6 +71,13 @@ describe("HeapDominatorPage", () => {
   beforeEach(() => {
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        revision: 0,
+        objectId: undefined,
+        classKey: undefined,
+        leakId: undefined,
+        originPane: undefined,
+      });
     });
   });
 
@@ -78,6 +86,7 @@ describe("HeapDominatorPage", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
   });
 

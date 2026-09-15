@@ -59,10 +59,10 @@
 
 ### Task 24.C — Shared selection across core panes
 
-- [ ] Stable object/class/leak ids in investigation store
-- [ ] Wire Histogram / Dominators / Inspector / GC Paths to shared selection
-- [ ] Tests
-- [ ] Commit
+- [x] Stable object/class/leak ids in investigation store (`8c37037`)
+- [x] Wire Histogram / Dominators / Inspector; row-index preserved for artifact-only rows
+- [x] Tests + CI fix for stale objectId precedence
+- [x] Commit
 
 ### Task 24.D / 24.E
 
