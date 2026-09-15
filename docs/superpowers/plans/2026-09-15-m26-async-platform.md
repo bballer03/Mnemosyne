@@ -187,25 +187,25 @@
 - Ignore events failing `acceptOperationResult(context)`.
 - Render phase label, short operation ID, elapsed time, and either percent/unit progress or an indeterminate progressbar with `aria-busy`.
 
-- [ ] **Step 1: Write failing bridge/status tests**
+- [x] **Step 1: Write failing bridge/status tests**
 
   Inject progress events directly; assert matching updates render, stale events do not, known progress exposes `aria-valuenow`, and indeterminate progress omits it.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/host/tauri-bridge.test.ts src/features/investigation/HeapSessionBar.test.tsx src/host/operation-protocol.test.ts --max-concurrency=1`
 
   Expected: FAIL until subscription/status support exists.
 
-- [ ] **Step 3: Implement subscription and status projection**
+- [x] **Step 3: Implement subscription and status projection**
 
   Do not keep feature-local “Loading…” as a second source of truth; adapt it to the operation store or remove it after equivalent states are covered.
 
-- [ ] **Step 4: Re-run tests and type-check**
+- [x] **Step 4: Re-run tests and type-check**
 
   Expected: PASS and `bun run lint` exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/host ui/src/features/investigation ui/src/features/artifact-loader ui/src/features/heap-explorer ui/src/features/comparison ui/src/features/snapshots ui/src/features/flamegraph ui/src/features/leak-workspace

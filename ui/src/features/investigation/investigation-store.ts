@@ -6,6 +6,7 @@ import {
   type OperationContext,
   type OperationKind,
   type OperationPhase,
+  type OperationProgress,
 } from "../../host/operation-protocol";
 import type { HistogramGroupByMode } from "../heap-explorer/heap-explorer-query-client";
 
@@ -39,6 +40,11 @@ export type HistogramViewState = {
 export type ActiveOperation = OperationContext & {
   kind: OperationKind;
   status: OperationPhase;
+  completed?: number;
+  total?: number;
+  unit?: string;
+  indeterminate: boolean;
+  elapsedMs: number;
 };
 
 type InvestigationState = InvestigationSelection & {
@@ -47,6 +53,7 @@ type InvestigationState = InvestigationSelection & {
   histogramView: HistogramViewState;
   beginOperation: (kind: OperationKind) => OperationContext;
   acceptOperationResult: (context: OperationContext) => boolean;
+  updateOperationProgress: (progress: OperationProgress) => boolean;
   applyOperationResult: (context: OperationContext, apply: () => void) => boolean;
   finishOperation: (context: OperationContext, status: OperationPhase) => boolean;
   setHistogramView: (patch: Partial<HistogramViewState>) => void;
@@ -107,11 +114,36 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
         ...context,
         kind,
         status: "accepted",
+        indeterminate: true,
+        elapsedMs: 0,
       },
     });
     return context;
   },
   acceptOperationResult: (context) => operationMatches(get(), context),
+  updateOperationProgress: (progress) => {
+    const state = get();
+    if (
+      !operationMatches(state, progress.context) ||
+      state.activeOperation?.kind !== progress.kind
+    ) {
+      return false;
+    }
+
+    set({
+      activeOperation: {
+        ...progress.context,
+        kind: progress.kind,
+        status: progress.phase,
+        completed: progress.completed,
+        total: progress.total,
+        unit: progress.unit,
+        indeterminate: progress.indeterminate,
+        elapsedMs: progress.elapsedMs,
+      },
+    });
+    return true;
+  },
   applyOperationResult: (context, apply) => {
     if (!operationMatches(get(), context)) {
       return false;

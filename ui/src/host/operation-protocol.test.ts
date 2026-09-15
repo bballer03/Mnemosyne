@@ -5,6 +5,7 @@ import {
   OPERATION_PHASES,
   isOperationContext,
   isOperationEnvelope,
+  parseOperationProgress,
 } from "./operation-protocol";
 
 describe("operation protocol", () => {
@@ -76,5 +77,56 @@ describe("operation protocol", () => {
         operationId: "operation-1",
       }),
     ).toBe(false);
+  });
+
+  it("validates and normalizes a desktop progress payload", () => {
+    expect(
+      parseOperationProgress({
+        context: {
+          workspaceId: "workspace-1",
+          revision: 3,
+          operationId: "operation-7",
+        },
+        kind: "analyze",
+        phase: "parsing",
+        completed: 25,
+        total: 100,
+        unit: " records ",
+        indeterminate: false,
+        elapsedMs: 1_250,
+      }),
+    ).toEqual({
+      context: {
+        workspaceId: "workspace-1",
+        revision: 3,
+        operationId: "operation-7",
+      },
+      kind: "analyze",
+      phase: "parsing",
+      completed: 25,
+      total: 100,
+      unit: "records",
+      indeterminate: false,
+      elapsedMs: 1_250,
+    });
+  });
+
+  it("rejects progress that claims determinate status without a valid bound", () => {
+    expect(
+      parseOperationProgress({
+        context: {
+          workspaceId: "workspace-1",
+          revision: 3,
+          operationId: "operation-7",
+        },
+        kind: "analyze",
+        phase: "parsing",
+        completed: 25,
+        total: null,
+        unit: "records",
+        indeterminate: false,
+        elapsedMs: 1_250,
+      }),
+    ).toBeUndefined();
   });
 });

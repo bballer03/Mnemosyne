@@ -2,9 +2,12 @@ import "../test/setup";
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
+import { useInvestigationStore } from "../features/investigation/investigation-store";
 import { injectHostBridges, isTauriRuntime, normalizePickHeapFileResult } from "./tauri-bridge";
 
 const invokeCalls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+let progressListenCalls = 0;
+let progressListener: ((event: { payload: unknown }) => void) | undefined;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: async (command: string, args?: Record<string, unknown>) => {
@@ -13,9 +16,26 @@ mock.module("@tauri-apps/api/core", () => ({
   },
 }));
 
+mock.module("@tauri-apps/api/event", () => ({
+  listen: async (
+    eventName: string,
+    listener: (event: { payload: unknown }) => void,
+  ) => {
+    expect(eventName).toBe("mnemosyne://operation-progress");
+    progressListenCalls += 1;
+    progressListener = listener;
+    return () => {};
+  },
+}));
+
 describe("tauri-bridge", () => {
   beforeEach(() => {
     invokeCalls.length = 0;
+    useInvestigationStore.setState({
+      workspaceId: "workspace-1",
+      revision: 4,
+      activeOperation: undefined,
+    });
   });
 
   afterEach(() => {
@@ -55,6 +75,82 @@ describe("tauri-bridge", () => {
     expect(() =>
       normalizePickHeapFileResult({ status: "selected", source_id: "src-only" }),
     ).toThrow(/incomplete selection/i);
+  });
+
+  it("subscribes once and accepts only correlated operation progress", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    await expect(injectHostBridges()).resolves.toBe(true);
+    await expect(injectHostBridges()).resolves.toBe(true);
+    expect(progressListenCalls).toBe(1);
+
+    const stale = useInvestigationStore.getState().beginOperation("analyze");
+    const current = useInvestigationStore.getState().beginOperation("query");
+
+    progressListener?.({
+      payload: {
+        context: stale,
+        kind: "analyze",
+        phase: "parsing",
+        completed: 20,
+        total: 100,
+        unit: "records",
+        indeterminate: false,
+        elapsedMs: 700,
+      },
+    });
+    expect(useInvestigationStore.getState().activeOperation).toMatchObject({
+      ...current,
+      kind: "query",
+      status: "accepted",
+    });
+
+    progressListener?.({
+      payload: {
+        context: current,
+        kind: "query",
+        phase: "analyzing",
+        completed: null,
+        total: null,
+        unit: null,
+        indeterminate: true,
+        elapsedMs: 900,
+      },
+    });
+    expect(useInvestigationStore.getState().activeOperation).toMatchObject({
+      ...current,
+      kind: "query",
+      status: "analyzing",
+      completed: undefined,
+      total: undefined,
+      unit: undefined,
+      indeterminate: true,
+      elapsedMs: 900,
+    });
+  });
+
+  it("adds operation context to long native calls", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    await window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?.queryHeap?.({
+      heapPath: "fixture.hprof",
+      query: "SELECT *",
+    });
+
+    expect(invokeCalls).toContainEqual({
+      command: "query_heap",
+      args: {
+        input: {
+          heapPath: "fixture.hprof",
+          query: "SELECT *",
+          context: {
+            workspaceId: "workspace-1",
+            revision: 4,
+            operationId: expect.any(String),
+          },
+        },
+      },
+    });
   });
 
   it("wires bounded class-instance arguments to the native command", async () => {

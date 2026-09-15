@@ -9,6 +9,7 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { clearRememberedDesktopHeapSource } from "../artifact-loader/desktop-heap-session";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { HeapSessionBar } from "./HeapSessionBar";
+import { useInvestigationStore } from "./investigation-store";
 
 function minimalArtifact(name: string): AnalysisArtifact {
   return {
@@ -30,6 +31,11 @@ function minimalArtifact(name: string): AnalysisArtifact {
 afterEach(() => {
   cleanup();
   useArtifactStore.getState().reset();
+  useInvestigationStore.setState({
+    workspaceId: "workspace-1",
+    revision: 0,
+    activeOperation: undefined,
+  });
   clearRememberedDesktopHeapSource();
   delete window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
 });
@@ -60,6 +66,65 @@ describe("HeapSessionBar", () => {
     expect(page.getByRole("button", { name: /open another/i })).toBeTruthy();
     expect(page.getByRole("button", { name: /close/i })).toBeTruthy();
     expect(page.getByText("demo.hprof")).toBeTruthy();
+  });
+
+  it("renders named determinate progress with percent, unit, operation id, and elapsed time", () => {
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    const context = useInvestigationStore.getState().beginOperation("analyze");
+    useInvestigationStore.getState().updateOperationProgress({
+      context,
+      kind: "analyze",
+      phase: "parsing",
+      completed: 25,
+      total: 100,
+      unit: "records",
+      indeterminate: false,
+      elapsedMs: 1_500,
+    });
+    const router = createMemoryRouter(
+      [{ path: "/", element: <HeapSessionBar /> }],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+    const progress = page.getByRole("progressbar", { name: /analyze operation progress/i });
+
+    expect(page.getByText(/Parsing/)).toBeTruthy();
+    expect(page.getByText(new RegExp(context.operationId.slice(0, 8)))).toBeTruthy();
+    expect(page.getByText(/1\.5s/)).toBeTruthy();
+    expect(page.getByText(/25%.*25.*100 records/)).toBeTruthy();
+    expect(progress.getAttribute("aria-valuenow")).toBe("25");
+    expect(progress.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("renders indeterminate progress without claiming a percentage", () => {
+    useArtifactStore.getState().setArtifact("demo.hprof", minimalArtifact("demo.hprof"));
+    const context = useInvestigationStore.getState().beginOperation("gc-path");
+    useInvestigationStore.getState().updateOperationProgress({
+      context,
+      kind: "gc-path",
+      phase: "analyzing",
+      completed: undefined,
+      total: undefined,
+      unit: undefined,
+      indeterminate: true,
+      elapsedMs: 800,
+    });
+    const router = createMemoryRouter(
+      [{ path: "/", element: <HeapSessionBar /> }],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+    const progress = page.getByRole("progressbar", { name: /gc-path operation progress/i });
+
+    expect(page.getByText(/Analyzing/)).toBeTruthy();
+    expect(page.getByText(/Indeterminate/)).toBeTruthy();
+    expect(page.getByText(/800ms/)).toBeTruthy();
+    expect(progress.getAttribute("aria-valuenow")).toBeNull();
+    expect(progress.getAttribute("aria-busy")).toBe("true");
   });
 
   it("Close clears the artifact and returns home", async () => {

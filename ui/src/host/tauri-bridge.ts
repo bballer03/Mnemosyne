@@ -7,6 +7,15 @@
  */
 import { formatHostError } from "./format-host-error";
 import type { PickHeapFileResult } from "../features/artifact-loader/desktop-heap-client";
+import { useInvestigationStore } from "../features/investigation/investigation-store";
+import {
+  parseOperationProgress,
+  type OperationContext,
+  type OperationKind,
+} from "./operation-protocol";
+
+const OPERATION_PROGRESS_EVENT = "mnemosyne://operation-progress";
+let operationProgressSubscription: Promise<unknown> | undefined;
 
 export function isTauriRuntime(): boolean {
   return typeof globalThis !== "undefined" && "__TAURI_INTERNALS__" in globalThis;
@@ -25,6 +34,43 @@ async function invokeOrThrow<T>(
     const message = formatHostError(error, `${cmd} failed`);
     console.error(`[mnemosyne] ${cmd} failed`, error);
     throw new Error(message);
+  }
+}
+
+async function subscribeToOperationProgress(): Promise<void> {
+  if (!operationProgressSubscription) {
+    operationProgressSubscription = import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<unknown>(OPERATION_PROGRESS_EVENT, ({ payload }) => {
+          const progress = parseOperationProgress(payload);
+          if (!progress) {
+            return;
+          }
+          useInvestigationStore.getState().updateOperationProgress(progress);
+        }),
+      )
+      .catch((error) => {
+        operationProgressSubscription = undefined;
+        throw error;
+      });
+  }
+
+  await operationProgressSubscription;
+}
+
+async function invokeOperation<T>(
+  kind: OperationKind,
+  invoke: (context: OperationContext) => Promise<T>,
+): Promise<T> {
+  const store = useInvestigationStore.getState();
+  const context = store.beginOperation(kind);
+  try {
+    const result = await invoke(context);
+    useInvestigationStore.getState().finishOperation(context, "complete");
+    return result;
+  } catch (error) {
+    useInvestigationStore.getState().finishOperation(context, "failed");
+    throw error;
   }
 }
 
@@ -68,23 +114,34 @@ export async function injectHostBridges(): Promise<boolean> {
   const { invoke } = await import("@tauri-apps/api/core");
   const call = <T>(cmd: string, args?: Record<string, unknown>) =>
     invokeOrThrow<T>(invoke as InvokeFn, cmd, args);
+  await subscribeToOperationProgress();
 
   hostWindow.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
     pickHeapFile: async () => normalizePickHeapFileResult(await call("pick_heap_file")),
-    loadHeapFromSource: (sourceId) => call("load_heap_from_source", { sourceId }),
-    runDesktopAnalysis: (input) => call("run_desktop_analysis", { input }),
+    loadHeapFromSource: (sourceId) =>
+      invokeOperation("open", (context) => call("load_heap_from_source", { sourceId, context })),
+    runDesktopAnalysis: (input) =>
+      invokeOperation("analyze", (context) =>
+        call("run_desktop_analysis", { input: { ...input, context } }),
+      ),
     unloadHeap: () => call("unload_heap"),
     getDesktopLogPath: () => call("get_desktop_log_path"),
     runCiCheck: (input) => call("run_ci_check", { input }),
-    generateFlamegraph: (input) => call("generate_desktop_flamegraph", { input }),
+    generateFlamegraph: (input) =>
+      invokeOperation("flamegraph", (context) =>
+        call("generate_desktop_flamegraph", { input: { ...input, context } }),
+      ),
   };
 
   hostWindow.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
-    queryHeap: (input) => call("query_heap", { input }),
+    queryHeap: (input) =>
+      invokeOperation("query", (context) => call("query_heap", { input: { ...input, context } })),
     getReferences: (objectId) => call("get_references", { objectId }),
     getReferrers: (objectId) => call("get_referrers", { objectId }),
     inspectObject: (objectId, retainFieldData) =>
-      call("inspect_object", { objectId, retainFieldData }),
+      invokeOperation("inspect", (context) =>
+        call("inspect_object", { objectId, retainFieldData, context }),
+      ),
     regroupHistogram: (groupBy) => call("regroup_histogram", { groupBy }),
     listClassInstances: (classKey, offset, limit) =>
       call("list_class_instances", { classKey, offset, limit }),
@@ -102,14 +159,23 @@ export async function injectHostBridges(): Promise<boolean> {
       provider: "ready" as const,
     },
     explainLeak: (input) => call("explain_leak", input as Record<string, unknown>),
-    findGcPath: (input) => call("find_gc_path", input as Record<string, unknown>),
-    findAllGcPaths: (objectId, maxPaths) => call("find_all_gc_paths", { objectId, maxPaths }),
+    findGcPath: (input) =>
+      invokeOperation("gc-path", (context) =>
+        call("find_gc_path", { ...(input as Record<string, unknown>), context }),
+      ),
+    findAllGcPaths: (objectId, maxPaths) =>
+      invokeOperation("gc-path", (context) =>
+        call("find_all_gc_paths", { objectId, maxPaths, context }),
+      ),
     mapToCode: (input) => call("map_to_code", input as Record<string, unknown>),
     proposeFix: (input) => call("propose_fix", input as Record<string, unknown>),
   };
 
   hostWindow.__MNEMOSYNE_COMPARISON_BRIDGE__ = {
-    diffObjects: (input) => call("diff_objects", { input }),
+    diffObjects: (input) =>
+      invokeOperation("diff", (context) =>
+        call("diff_objects", { input: { ...input, context } }),
+      ),
   };
 
   hostWindow.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
@@ -129,11 +195,14 @@ export async function injectHostBridges(): Promise<boolean> {
     closeWorkflow: (workflowId) => call("close_workflow", { workflowId }),
     listSnapshots: () => call("list_snapshots"),
     saveSnapshot: (sourceId, retainFieldData) =>
-      call("save_snapshot", {
-        input: { sourceId, retainFieldData },
-      }),
+      invokeOperation("snapshot", (context) =>
+        call("save_snapshot", {
+          input: { sourceId, retainFieldData, context },
+        }),
+      ),
     removeSnapshot: (key) => call("remove_snapshot", { key }),
-    openSnapshot: (key) => call("open_snapshot", { key }),
+    openSnapshot: (key) =>
+      invokeOperation("snapshot", (context) => call("open_snapshot", { key, context })),
   };
 
   hostWindow.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {

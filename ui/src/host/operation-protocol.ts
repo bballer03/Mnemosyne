@@ -39,6 +39,17 @@ export type OperationEnvelope<T> = OperationContext & {
   data: T;
 };
 
+export type OperationProgress = {
+  context: OperationContext;
+  kind: OperationKind;
+  phase: OperationPhase;
+  completed?: number;
+  total?: number;
+  unit?: string;
+  indeterminate: boolean;
+  elapsedMs: number;
+};
+
 let fallbackIdSequence = 0;
 
 function createOpaqueId(prefix: "workspace" | "operation"): string {
@@ -81,4 +92,67 @@ export function isOperationContext(value: unknown): value is OperationContext {
 
 export function isOperationEnvelope<T = unknown>(value: unknown): value is OperationEnvelope<T> {
   return isOperationContext(value) && "data" in value;
+}
+
+function readOptionalCount(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : Number.NaN;
+}
+
+/** Validate and normalize an untrusted desktop operation-progress event. */
+export function parseOperationProgress(value: unknown): OperationProgress | undefined {
+  if (!isRecord(value) || !isOperationContext(value.context)) {
+    return undefined;
+  }
+
+  if (
+    typeof value.kind !== "string" ||
+    !OPERATION_KINDS.includes(value.kind as OperationKind) ||
+    typeof value.phase !== "string" ||
+    !OPERATION_PHASES.includes(value.phase as OperationPhase) ||
+    typeof value.indeterminate !== "boolean" ||
+    typeof value.elapsedMs !== "number" ||
+    !Number.isSafeInteger(value.elapsedMs) ||
+    value.elapsedMs < 0
+  ) {
+    return undefined;
+  }
+
+  const completed = readOptionalCount(value.completed);
+  const total = readOptionalCount(value.total);
+  if (Number.isNaN(completed) || Number.isNaN(total)) {
+    return undefined;
+  }
+
+  const unit =
+    value.unit === undefined || value.unit === null
+      ? undefined
+      : typeof value.unit === "string" && value.unit.trim().length > 0
+        ? value.unit.trim()
+        : null;
+  if (unit === null) {
+    return undefined;
+  }
+
+  if (
+    !value.indeterminate &&
+    (completed === undefined || total === undefined || total <= 0 || completed > total)
+  ) {
+    return undefined;
+  }
+
+  return {
+    context: value.context,
+    kind: value.kind as OperationKind,
+    phase: value.phase as OperationPhase,
+    completed,
+    total,
+    unit,
+    indeterminate: value.indeterminate,
+    elapsedMs: value.elapsedMs,
+  };
 }
