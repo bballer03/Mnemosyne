@@ -22,8 +22,8 @@
 
 | Item | Why |
 | --- | --- |
-| Packaged GUI smoke | WebKitGTK/GTK absent on this WSL environment |
-| Clean Windows unzip → double-click | Needs clean Windows image; WebView2 prerequisite |
+| Packaged GUI smoke | **PARTIAL** — Windows portable launch-tested 2026-09-15; Open-heap UI click NOT PROVEN; macOS/Linux still blocked |
+| Clean Windows unzip → double-click | **PARTIAL** — portable extract + `Start-Process Mnemosyne.exe` proven; SmartScreen/double-click UX not separately recorded |
 | macOS Gatekeeper / Linux AppImage launch | Needs matching hosts |
 | Live AI provider round-trip | Optional secrets + network; not proven here |
 | Recorded MAT golden dump equivalency | **NOT PROVEN** — needs Eclipse MAT versioned results; corpus is docs-linked only |
