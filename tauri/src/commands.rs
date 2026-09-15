@@ -10,7 +10,7 @@ use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
     analysis::{
         analyze_heap, analyze_heap_capturing_graph_controlled, analyze_heap_with_graph_controlled,
-        validate_leak_id, AnalyzeRequest, ObjectInspection,
+        analyze_snapshot_from_graph_controlled, validate_leak_id, AnalyzeRequest, ObjectInspection,
     },
     diff::ObjectDiffReport,
     evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file_controlled,
@@ -33,10 +33,11 @@ use mnemosyne_desktop_session::{
     list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
     remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
-    start_workflow_for_session, structured_operation_cancelled_error, CancelOperationResult,
-    CreateAiSessionInput, DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext,
-    OperationEnvelope, OperationProgress, OperationProgressCoalescer, OperationRegistration,
-    OperationRegistry, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
+    start_workflow_for_session, structured_operation_cancelled_error,
+    build_snapshot_workspace_hydrate, CancelOperationResult, CreateAiSessionInput,
+    DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationEnvelope,
+    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
+    SnapshotWorkspaceHydrate, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
     DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
@@ -1885,14 +1886,14 @@ pub async fn remove_snapshot(key: String) -> Result<Value, String> {
 /// Load a cached snapshot by SHA-256 store key into the live desktop session.
 ///
 /// Registers an opaque `sourceId` → `manifest.heap_path` for later save/ci_check
-/// and returns a display-safe summary (basename + counts only — no absolute paths).
+/// and returns one display-safe graph/facts/mode/capability hydrate.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn open_snapshot(
     key: String,
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+) -> Result<OperationEnvelope<SnapshotWorkspaceHydrate>, String> {
     let started = std::time::Instant::now();
     let context = require_operation_context(context)?;
     let (observer, registration) =
@@ -1914,84 +1915,82 @@ pub async fn open_snapshot(
         return Err(error);
     }
 
-    let heap_path = manifest.heap_path;
+    let heap_path = manifest.heap_path.clone();
     let display_name = display_name_for_path(&heap_path);
     let source_id = Uuid::new_v4().to_string();
-
-    {
-        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
-            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
-            return Err(error);
-        }
-        let mut sources = state
-            .selected_sources
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
-        sources.insert(source_id.clone(), heap_path.clone());
-    }
-
-    let summary = HeapLoadSummary {
-        display_name,
-        source_id: Some(source_id.clone()),
-        object_count: graph.object_count(),
-        class_count: graph.classes.len(),
-        gc_root_count: graph.gc_roots.len(),
-    };
+    let config = state
+        .config
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone();
+    let analysis = analyze_snapshot_from_graph_controlled(
+        AnalyzeRequest {
+            heap_path: display_name,
+            config,
+            leak_options: LeakDetectionOptions::default(),
+            enable_ai: false,
+            histogram_group_by: HistogramGroupBy::Class,
+            enable_classloaders: true,
+            enable_threads: false,
+            enable_strings: false,
+            enable_collections: false,
+            enable_top_instances: true,
+            enable_by_referrer: false,
+            enable_duplicate_arrays: false,
+            top_n: 25,
+            min_collection_capacity: 16,
+            min_duplicate_count: 2,
+        },
+        &graph,
+        &dominator,
+        core_observer(&observer),
+    )
+    .await
+    .map_err(map_native_error)?;
+    let hydrate = build_snapshot_workspace_hydrate(&manifest, &source_id, analysis);
 
     emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
-    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
-        state
-            .selected_sources
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?
-            .remove(&source_id);
-        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
-        return Err(error);
-    }
-    state.bump_session_epoch();
     let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
     let mut dominator_slot = state
         .dominator
         .write()
         .map_err(|_| LOCK_ERROR.to_string())?;
-    replace_session_analysis(
-        &mut graph_slot,
-        &mut dominator_slot,
-        Some((graph, dominator)),
-    );
-    *state
+    let mut field_data_slot = state
         .field_data_graph
         .write()
-        .map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut heap_path_slot = state
         .heap_path
         .write()
-        .map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
-
-    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
-        replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
-        *state
-            .field_data_graph
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state
-            .heap_path
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = None;
-        state
-            .selected_sources
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?
-            .remove(&source_id);
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut sources = state
+        .selected_sources
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let registration = registration
+        .as_ref()
+        .ok_or_else(|| "Missing operation registration".to_string())?;
+    let committed = registration.commit_if_current(|| {
+        state.bump_session_epoch();
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((graph, dominator)),
+        );
+        *field_data_slot = None;
+        *heap_path_slot = Some(heap_path.clone());
+        sources.insert(source_id, heap_path);
+    });
+    if committed.is_none() {
         emit_indeterminate(&observer, OperationPhase::Cancelled, started);
-        return Err(error);
+        return Err(structured_operation_cancelled_error());
     }
     emit_completed(&observer, OperationPhase::Complete, started);
-    Ok(OperationEnvelope::new(context, summary))
+    Ok(OperationEnvelope::new(context, hydrate))
 }
 
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use mnemosyne_core::{
     analysis::{
         analyze_heap, focus_leaks, generate_ai_chat_turn_async, inspect_object, validate_leak_id,
-        AiChatTurn, AnalyzeRequest, LeakDetectionOptions, ObjectInspection,
+        AiChatTurn, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, ObjectInspection,
     },
     build_dominator_tree, build_histogram,
     diff::{
@@ -28,9 +28,10 @@ use mnemosyne_core::{
     resolve_live_instances_by_class,
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
-    NoopOperationObserver, OperationObserver, VIRTUAL_ROOT_ID,
+    AllPathsRequest, AnalysisMode, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy,
+    HistogramResult, NoopOperationObserver, OperationObserver, VIRTUAL_ROOT_ID,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 
 mod operation;
@@ -1003,6 +1004,58 @@ pub fn remove_snapshot_for_session(store: &SnapshotStore, key: &str) -> Result<V
     Ok(json!({ "removed": true, "key": store_key }))
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceIdentity {
+    pub key: String,
+    pub display_name: String,
+    pub source_id: String,
+    pub schema_version: u32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceCapabilities {
+    pub graph: bool,
+    pub dominators: bool,
+    pub field_data: bool,
+    pub snapshot_backed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceHydrate {
+    pub snapshot: SnapshotWorkspaceIdentity,
+    pub mode: AnalysisMode,
+    pub capabilities: SnapshotWorkspaceCapabilities,
+    pub analysis: AnalyzeResponse,
+}
+
+pub fn build_snapshot_workspace_hydrate(
+    manifest: &SnapshotManifest,
+    source_id: &str,
+    analysis: AnalyzeResponse,
+) -> SnapshotWorkspaceHydrate {
+    SnapshotWorkspaceHydrate {
+        snapshot: SnapshotWorkspaceIdentity {
+            key: manifest.heap_sha256.clone(),
+            display_name: display_name_for_path(&manifest.heap_path),
+            source_id: source_id.to_string(),
+            schema_version: manifest.schema_version,
+            created_at: manifest.created_at.clone(),
+        },
+        mode: AnalysisMode::Deep,
+        capabilities: SnapshotWorkspaceCapabilities {
+            graph: true,
+            dominators: true,
+            field_data: manifest.has_field_data,
+            snapshot_backed: true,
+        },
+        analysis,
+    }
+}
+
 /// Load a cached snapshot by validated SHA-256 store key for desktop session install.
 ///
 /// Returns the manifest plus the deserialized graph/dominator pair. Callers that
@@ -1778,6 +1831,51 @@ mod tests {
             assert_eq!(loaded_graph.object_count(), graph.object_count());
             assert_eq!(loaded_graph.classes.len(), graph.classes.len());
             assert_eq!(manifest.object_count, graph.object_count());
+        }
+
+        #[tokio::test]
+        async fn snapshot_hydrate_contains_identity_mode_capabilities_and_facts() {
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
+                .expect("fixture must parse");
+            let dominator = build_dominator_tree(&graph);
+            let saved = store
+                .save(&heap_path, &graph, &dominator)
+                .expect("snapshot must save");
+            let (manifest, loaded_graph, loaded_dominator) =
+                open_snapshot_for_session(&store, &saved.heap_sha256).expect("open must succeed");
+            let analysis = mnemosyne_core::analysis::analyze_snapshot_from_graph_controlled(
+                AnalyzeRequest {
+                    heap_path: manifest.heap_path.clone(),
+                    enable_classloaders: true,
+                    enable_top_instances: true,
+                    ..AnalyzeRequest::default()
+                },
+                &loaded_graph,
+                &loaded_dominator,
+                &NoopOperationObserver,
+            )
+            .await
+            .expect("snapshot analysis must succeed");
+
+            let hydrate =
+                build_snapshot_workspace_hydrate(&manifest, "source-opaque", analysis);
+            let expected_display_name = display_name_for_path(&heap_path);
+
+            assert_eq!(hydrate.snapshot.key, saved.heap_sha256);
+            assert_eq!(hydrate.snapshot.display_name, expected_display_name);
+            assert_eq!(hydrate.snapshot.source_id, "source-opaque");
+            assert_eq!(hydrate.mode, AnalysisMode::Deep);
+            assert!(hydrate.capabilities.graph);
+            assert!(hydrate.capabilities.dominators);
+            assert!(!hydrate.capabilities.field_data);
+            assert!(hydrate.capabilities.snapshot_backed);
+            assert_eq!(
+                hydrate.analysis.summary.heap_path,
+                hydrate.snapshot.display_name
+            );
         }
 
         #[test]
