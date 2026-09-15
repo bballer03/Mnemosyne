@@ -1,6 +1,6 @@
 # M29 Guided Investigation Continuity Stub Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:writing-plans to expand the selected slice, then superpowers:subagent-driven-development or superpowers:executing-plans to implement it. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:writing-plans to expand the selected slice, then superpowers:subagent-driven-development or superpowers:executing-plans to implement it. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Bind findings, workflows, and advisory Assistant turns to the active deterministic investigation without rewriting measured facts.
 
@@ -89,7 +89,7 @@ Every adapter must produce a deterministic fact ID and one of the three stable t
 - `setFindingStatus(findingId, status): boolean` updates only known facts.
 - `clearFindings()` clears facts and status on artifact replacement/close.
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
 Add focused tests that:
 
@@ -107,7 +107,7 @@ expect(store.findingStatuses[fact.id]).toBe("resolved");
 
 Also assert that a prior workspace ID and prior revision both return `false` without changing facts/statuses, policy replacement preserves artifact facts, unchanged IDs preserve status, removed IDs drop status, unknown IDs reject status changes, and `bumpRevisionOnArtifactChange()` clears the queue.
 
-- [ ] **Step 2: Run the focused store tests and verify RED**
+- [x] **Step 2: Run the focused store tests and verify RED**
 
 Run:
 
@@ -118,11 +118,11 @@ bun test src/features/investigation/investigation-store.test.ts --max-concurrenc
 
 Expected: FAIL because the finding contract and actions do not exist.
 
-- [ ] **Step 3: Implement the minimal store contract**
+- [x] **Step 3: Implement the minimal store contract**
 
 Add the readonly types above, recursively freeze each accepted fact’s owned fields, merge source slices in deterministic artifact-then-policy order, and keep status in a separate map. Do not persist fact payloads or statuses in `workspace-persistence`; M29.A is active-workspace state only.
 
-- [ ] **Step 4: Re-run the focused store tests and verify GREEN**
+- [x] **Step 4: Re-run the focused store tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -133,7 +133,7 @@ Run the Step 2 command. Expected: PASS.
 - `buildPolicyFindingFacts(violations, measuredFacts): readonly FindingFact[]`
 - `findingHref(target: FindingTarget): string`
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 Build one artifact fixture containing:
 
@@ -147,7 +147,7 @@ Assert each adapter output keeps the exact source description/metrics, has a det
 
 For policy, provide violations for leak/classloader/object-growth predicates plus the measured facts. Assert each policy finding chooses a relevant stable measured target, preserves rule ID/predicate/message/severity as immutable facts, and skips an unresolvable generic violation instead of fabricating a target.
 
-- [ ] **Step 2: Run adapter tests and verify RED**
+- [x] **Step 2: Run adapter tests and verify RED**
 
 Run:
 
@@ -158,7 +158,7 @@ bun test src/features/investigation/finding-adapters.test.ts --max-concurrency=1
 
 Expected: FAIL because `finding-adapters.ts` does not exist.
 
-- [ ] **Step 3: Implement minimal pure adapters**
+- [x] **Step 3: Implement minimal pure adapters**
 
 Use source-owned identifiers (`leak.id`, object IDs, class names, array content hashes) and encoded query/path parameters. Sort by severity rank, then measured waste/retained value, then fact ID. Cap only at presentation time so the store retains the full bounded artifact result.
 
@@ -169,7 +169,7 @@ Policy target resolution order is predicate-aware:
 3. `object_growth_threshold` → first measured object target, then class target;
 4. other predicates → no queue entry unless a stable measured target is available from an explicit adapter argument.
 
-- [ ] **Step 4: Re-run adapter tests and verify GREEN**
+- [x] **Step 4: Re-run adapter tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -180,7 +180,7 @@ Run the Step 2 command. Expected: PASS.
 - Status controls call `setFindingStatus` and never mutate a `FindingFact`.
 - Primary links come only from `findingHref(fact.target)`.
 
-- [ ] **Step 1: Replace the production-route tests with focused failing tests**
+- [x] **Step 1: Replace the production-route tests with focused failing tests**
 
 Render only:
 
@@ -192,7 +192,7 @@ Render only:
 
 Assert all six finding kinds render, the queue uses stable encoded links, `open` is the default status, status changes survive a same-ID artifact refresh, and resolved/deferred controls do not change rendered measured descriptions or metrics. Retain the collapse, Rules/offline label, provenance, and no-heap-path assertions.
 
-- [ ] **Step 2: Run pane tests and verify RED**
+- [x] **Step 2: Run pane tests and verify RED**
 
 Run:
 
@@ -203,11 +203,11 @@ bun test src/features/investigation/FindingsAdvisoryPane.test.tsx --max-concurre
 
 Expected: FAIL because the pane still builds a leak-only local queue.
 
-- [ ] **Step 3: Implement the unified pane**
+- [x] **Step 3: Implement the unified pane**
 
 Publish artifact facts in an effect with the captured current `{ workspaceId, revision }`, select the merged store queue, show at most `MAX_VISIBLE_FINDINGS`, and render the target-specific stable link. Keep facts visually authoritative and advisory guidance/provenance visually separate. Use a labelled status `<select>` per finding with `open`, `resolved`, and `deferred`.
 
-- [ ] **Step 4: Re-run pane tests and verify GREEN**
+- [x] **Step 4: Re-run pane tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -218,7 +218,7 @@ Run the Step 2 command. Expected: PASS.
 - A ready response adapts violations against the current measured facts and calls `replaceFindings(capturedContext, "policy", facts)`.
 - Stale replacement returns `false`; the page does not overwrite the newer workspace queue.
 
-- [ ] **Step 1: Write focused failing policy-page tests**
+- [x] **Step 1: Write focused failing policy-page tests**
 
 With only `MemoryRouter`, a remembered opaque source, and a fake bridge:
 
@@ -226,7 +226,7 @@ With only `MemoryRouter`, a remembered opaque source, and a fake bridge:
 2. start a deferred bridge response, bump the investigation revision, resolve the old response, and assert no old policy fact enters the queue;
 3. assert the bridge input and rendered queue contain no heap path.
 
-- [ ] **Step 2: Run policy tests and verify RED**
+- [x] **Step 2: Run policy tests and verify RED**
 
 Run:
 
@@ -237,11 +237,11 @@ bun test src/features/policy/PolicyCheckPage.test.tsx --max-concurrency=1
 
 Expected: FAIL because policy results are not published to the investigation store.
 
-- [ ] **Step 3: Implement policy publication**
+- [x] **Step 3: Implement policy publication**
 
 Capture the workspace context synchronously at run start. After a ready response, derive policy facts from the current measured artifact finding slice and submit them through `replaceFindings`; rely on the store’s workspace/revision gate for late results. Preserve the page’s existing incomplete/skipped semantics.
 
-- [ ] **Step 4: Run the complete focused M29.A suite**
+- [x] **Step 4: Run the complete focused M29.A suite**
 
 Run:
 
@@ -258,7 +258,7 @@ bun run build
 
 Expected: all focused tests PASS and the TypeScript/Vite production build exits 0. Existing Vite advisory/chunk-size warnings are not packaged-GUI evidence.
 
-- [ ] **Step 5: Commit M29.A implementation**
+- [x] **Step 5: Commit M29.A implementation**
 
 ```bash
 git add \
@@ -323,7 +323,7 @@ Persistence stores only `{ workflowId, kind, currentStep, revision }` under the 
 - `detachWorkflow(expectedWorkflowId?): WorkspaceWorkflowBinding | undefined`
 - `PersistedWorkspaceV1.workflow?: PersistedWorkflowBinding`
 
-- [ ] **Step 1: Write failing store and persistence tests**
+- [x] **Step 1: Write failing store and persistence tests**
 
 Add focused tests proving:
 
@@ -344,7 +344,7 @@ expect(useInvestigationStore.getState().activeWorkflow).toMatchObject({
 
 Also assert that another workspace, old revision, and superseded request ID return `false`; only one binding exists; `bumpRevisionOnArtifactChange()` clears both request slots and the binding; persisted JSON contains kind/step/ID but no step result, history, or heap path; invalid kinds/path-like IDs are rejected; and restore drops a workflow whose workflow revision differs from the persisted workspace revision.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -358,11 +358,11 @@ bun test \
 
 Expected: FAIL because request slots, active workflow state, and persisted workflow validation do not exist.
 
-- [ ] **Step 3: Implement the minimal state and schema**
+- [x] **Step 3: Implement the minimal state and schema**
 
 Add the shared workflow types, one active binding, independent workflow/Assistant request slots, strict request acceptance, and an optional workflow persistence field. Rebind a structurally compatible persisted candidate to the newly opened revision, but mark it for host confirmation before a workflow card may advance it. Keep operation payloads, results, histories, absolute paths, and raw field values out of persistence.
 
-- [ ] **Step 4: Re-run focused tests and verify GREEN**
+- [x] **Step 4: Re-run focused tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -375,7 +375,7 @@ Run the Step 2 command. Expected: PASS.
 - `closeWorkspaceWorkflow(): Promise<WorkspaceWorkflowResult>`
 - `closeOrDetachWorkspaceWorkflow(): Promise<void>`
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 Using only the Zustand store plus a fake `__MNEMOSYNE_WORKFLOW_BRIDGE__`, assert:
 
@@ -387,7 +387,7 @@ Using only the Zustand store plus a fake `__MNEMOSYNE_WORKFLOW_BRIDGE__`, assert
 6. close sends the internal ID and detaches only the matching binding;
 7. serialized/display-facing results contain no heap path.
 
-- [ ] **Step 2: Run adapter tests and verify RED**
+- [x] **Step 2: Run adapter tests and verify RED**
 
 Run:
 
@@ -398,11 +398,11 @@ bun test src/features/workflow-landing/workflow-binding.test.ts --max-concurrenc
 
 Expected: FAIL because `workflow-binding.ts` does not exist.
 
-- [ ] **Step 3: Implement the minimal lifecycle adapter**
+- [x] **Step 3: Implement the minimal lifecycle adapter**
 
 Wrap the existing bridge client. Begin a workflow request before each host call, commit only through the matching request context, and return a distinct `stale` result when the workspace/revision/request no longer matches. Starting a new kind first best-effort closes the prior binding; host absence or close failure detaches locally. Recovery validates host ID and kind before clearing the persisted-candidate marker. Do not add native commands or widen core workflow payloads.
 
-- [ ] **Step 4: Re-run adapter tests and verify GREEN**
+- [x] **Step 4: Re-run adapter tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -414,13 +414,13 @@ Run the Step 2 command. Expected: PASS.
 - Continue/close call the binding adapter without an ID argument.
 - `NaturalLanguageInputBar` uses `startWorkspaceWorkflow`.
 
-- [ ] **Step 1: Replace pasted-ID tests with focused failing binding tests**
+- [x] **Step 1: Replace pasted-ID tests with focused failing binding tests**
 
 Render one `WorkflowCard` inside `MemoryRouter`; never mount `App` or production routes. Assert there is no “Resume workflow id” textbox and no rendered workflow ID. Seed a compatible persisted binding, render its matching card, and assert `getWorkflow("wf-internal")` runs automatically and the current step appears. Assert another kind does not recover or advance that binding. Start/continue/close through the card and verify store step updates.
 
 For `NaturalLanguageInputBar`, assert a free-text start populates `activeWorkflow`; resolve an older deferred start after a newer start and assert the older result is not rendered or stored.
 
-- [ ] **Step 2: Run component tests and verify RED**
+- [x] **Step 2: Run component tests and verify RED**
 
 Run:
 
@@ -434,11 +434,11 @@ bun test \
 
 Expected: FAIL because both components still call raw bridge methods and the card exposes pasted-ID resume.
 
-- [ ] **Step 3: Implement bound workflow controls**
+- [x] **Step 3: Implement bound workflow controls**
 
 Remove `resumeId`, the ID textbox, and every rendered workflow ID. Select the matching active binding, automatically confirm compatible persisted state, and route start/continue/close through the lifecycle adapter. Render only display-safe kind labels, current step, deterministic deep links, and bounded status/error copy; do not render raw host workflow state or heap paths.
 
-- [ ] **Step 4: Re-run component tests and verify GREEN**
+- [x] **Step 4: Re-run component tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -449,7 +449,7 @@ Run the Step 2 command. Expected: PASS.
 - `HeapSessionBar` renders `Workflow: <kind label> · current step: <step>`.
 - `InvestigationAssistantPage` reads the same binding and captures an Assistant request context before awaiting provider/rules execution.
 
-- [ ] **Step 1: Write focused failing lifecycle and UI tests**
+- [x] **Step 1: Write focused failing lifecycle and UI tests**
 
 Add tests that:
 
@@ -462,7 +462,7 @@ Add tests that:
 
 Render `HeapSessionBar` with a small `MemoryRouter` and render `InvestigationAssistantPage` with `MemoryRouter`; do not use `App`, `router.tsx`, or a production route tree.
 
-- [ ] **Step 2: Run lifecycle and UI tests and verify RED**
+- [x] **Step 2: Run lifecycle and UI tests and verify RED**
 
 Run:
 
@@ -478,11 +478,11 @@ bun test \
 
 Expected: FAIL because workspace actions do not close workflows, chrome/Assistant do not select the binding, and Assistant responses are not revision-correlated.
 
-- [ ] **Step 3: Implement lifecycle cleanup and display-safe step surfaces**
+- [x] **Step 3: Implement lifecycle cleanup and display-safe step surfaces**
 
 Capture and detach the old binding before revision replacement; invoke host close best-effort so failure cannot block Open/Close. In chrome and Assistant, map kind to a human label and render only current step. Replace Assistant’s local workflow placeholders with the active binding, omit workflow ID from local rules/provider context, and append a turn/session only when the captured Assistant request remains current.
 
-- [ ] **Step 4: Run the complete focused M29.B suite**
+- [x] **Step 4: Run the complete focused M29.B suite**
 
 Run:
 
@@ -505,7 +505,7 @@ bun run build
 
 Expected: all focused tests PASS and the TypeScript/Vite production build exits 0.
 
-- [ ] **Step 5: Commit M29.B implementation**
+- [x] **Step 5: Commit M29.B implementation**
 
 ```bash
 git add \
@@ -587,7 +587,7 @@ The measured-facts region renders the current selection and matched facts. The c
 - Input uses only `InvestigationSelection` and immutable `FindingFact` values from the active store revision.
 - Output is frozen, deterministically ordered, and capped by `MAX_ASSISTANT_CONTEXT_FINDINGS`.
 
-- [ ] **Step 1: Write failing pure context tests**
+- [x] **Step 1: Write failing pure context tests**
 
 Create `assistant-context.test.ts` with leak, object, and class findings. Assert:
 
@@ -604,7 +604,7 @@ expect(Object.isFrozen(projected[0]?.target)).toBe(true);
 
 Also assert leak matching by `leakId`, empty output with no selected IDs, store order retained when more than one identifier matches, truncation after five facts, no finding status/user note/Assistant turn included, no input object mutated, and no absolute heap path appears in serialized output.
 
-- [ ] **Step 2: Run context tests and verify RED**
+- [x] **Step 2: Run context tests and verify RED**
 
 Run:
 
@@ -615,11 +615,11 @@ bun test src/features/assistant/assistant-context.test.ts --max-concurrency=1
 
 Expected: FAIL because `assistant-context.ts` does not exist.
 
-- [ ] **Step 3: Implement the minimal pure projector**
+- [x] **Step 3: Implement the minimal pure projector**
 
 Copy only the contract fields from matching `FindingFact` values. Match a fact when at least one defined selected stable identifier equals the corresponding target identifier. Freeze copied target, provenance entries/list, metrics, each projected fact, and the capped result list. Do not sort, infer a leak from severity, or consult mutable finding status.
 
-- [ ] **Step 4: Re-run context tests and verify GREEN**
+- [x] **Step 4: Re-run context tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -630,7 +630,7 @@ Run the Step 2 command. Expected: PASS.
 - `buildRulesModeAnswer(question, context)` cites selected stable identifiers and matched measured finding titles/descriptions/metrics.
 - `AssistantChatTurn.provenance` remains required for rules, provider, and fallback turns.
 
-- [ ] **Step 1: Write failing bridge-client tests**
+- [x] **Step 1: Write failing bridge-client tests**
 
 Add a context containing selected `objectId`/`classKey` and one projected collection finding. Assert the rules answer names the selected identifiers and measured finding without containing a heap path, raw field value, workflow ID, or prior advisory text. Keep explicit tests that provider success yields `provider`, provider error yields `fallback`, and offline execution yields `rules`.
 
@@ -641,7 +641,7 @@ expect(appendBoundedTurn(history, nextTurn)).toHaveLength(12);
 expect(appendBoundedTurn(history, nextTurn, 100)).toHaveLength(32);
 ```
 
-- [ ] **Step 2: Run bridge-client tests and verify RED**
+- [x] **Step 2: Run bridge-client tests and verify RED**
 
 Run:
 
@@ -652,11 +652,11 @@ bun test src/features/assistant/assistant-bridge-client.test.ts --max-concurrenc
 
 Expected: FAIL because rules guidance still consumes the old leak-specific context instead of the stable selection/finding projection.
 
-- [ ] **Step 3: Implement minimal contextual rules composition**
+- [x] **Step 3: Implement minimal contextual rules composition**
 
 Render selected leak/object/class identifiers and at most five already-projected measured findings into local rules guidance. Keep the provider bridge’s existing heap-bound session plus optional stable leak ID contract; do not serialize finding payloads into the provider question and do not add native commands. Preserve `DEFAULT_HISTORY_MAX_TURNS = 12`, `HARD_MAX_HISTORY_TURNS = 32`, the required provenance union, provider error sanitization, and deterministic rules fallback.
 
-- [ ] **Step 4: Re-run bridge-client tests and verify GREEN**
+- [x] **Step 4: Re-run bridge-client tests and verify GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
@@ -667,7 +667,7 @@ Run the Step 2 command. Expected: PASS.
 - The page calls `buildAssistantMeasuredContext` and seeds each ask from that current projection.
 - `<details open>` contains only AI guidance; measured facts and deterministic workbench links remain outside it.
 
-- [ ] **Step 1: Replace route-tree coverage with focused failing page tests**
+- [x] **Step 1: Replace route-tree coverage with focused failing page tests**
 
 Render only:
 
@@ -681,7 +681,7 @@ Seed an immutable finding and matching shared selection. Assert the measured reg
 
 Collapse the `AI guidance` disclosure and assert measured facts plus Dashboard, Object Inspector, Dominators, and Query Console links remain visible and usable. With both Assistant and workflow bridges absent, submit another turn and assert rules guidance still appends. Keep focused provider/fallback provenance, stale-revision rejection, no-path, and 12-turn eviction coverage.
 
-- [ ] **Step 2: Run page tests and verify RED**
+- [x] **Step 2: Run page tests and verify RED**
 
 Run:
 
@@ -692,11 +692,11 @@ bun test src/features/assistant/InvestigationAssistantPage.test.tsx --max-concur
 
 Expected: FAIL because the page invents a highest-score leak focus, reads artifact leak details directly, mounts through a route helper in tests, and the advisory is not collapsible.
 
-- [ ] **Step 3: Implement the contextual Assistant pane**
+- [x] **Step 3: Implement the contextual Assistant pane**
 
 Remove score-based default focus. Seed the local selector from the current stable `leakId` only; changing it continues to update shared stable selection. Project matched store findings with the pure helper for both measured rendering and rules context. Show selection identifiers and matched measured facts without editing their payloads. Wrap the existing form/history in an open disclosure labelled `AI guidance`; keep measured facts, provider availability, outbound notice, and deterministic navigation outside the disclosure.
 
-- [ ] **Step 4: Run the complete focused M29.C suite**
+- [x] **Step 4: Run the complete focused M29.C suite**
 
 Run:
 
@@ -712,7 +712,7 @@ bun run build
 
 Expected: all focused tests PASS and the TypeScript/Vite production build exits 0.
 
-- [ ] **Step 5: Commit M29.C implementation**
+- [x] **Step 5: Commit M29.C implementation**
 
 ```bash
 git add \
@@ -727,19 +727,19 @@ git commit -m "feat(ui): contextualize investigation assistant"
 
 #### Task M29.C.4: M29 evidence and closeout
 
-- [ ] **Step 1: Run the focused M29 regression suite**
+- [x] **Step 1: Run the focused M29 regression suite**
 
 Run all focused M29.A–C tests named in Tasks M29.A.4, M29.B.4, and M29.C.3 in one Bun invocation with `--max-concurrency=1`, followed by `bun run build`. Record exact commands and counts in the evidence file.
 
-- [ ] **Step 2: Write evidence with explicit proof boundaries**
+- [x] **Step 2: Write evidence with explicit proof boundaries**
 
 Create `docs/evidence/m29-guided-investigation-continuity.md` covering the unified findings queue, workspace workflow binding, contextual Assistant projection, 12/32 history bounds, provenance, unavailable-bridge behavior, stale response rejection, and immutable measured facts. Mark live-provider behavior, packaged GUI interaction, and native/Tauri behavior `NOT PROVEN` unless each was actually run in this closeout.
 
-- [ ] **Step 3: Synchronize status, capability matrix, roadmap, and checkboxes**
+- [x] **Step 3: Synchronize status, capability matrix, roadmap, and checkboxes**
 
 Mark M29 complete in `STATUS.md`, `docs/product/ui-capability-matrix.md`, and `docs/roadmap.md`; link the evidence file; set M30 as next without starting it. Check completed M29.A, M29.B, and M29.C plan steps based on committed work and recorded commands. Do not alter M30 implementation state.
 
-- [ ] **Step 4: Validate and commit closeout**
+- [x] **Step 4: Validate and commit closeout**
 
 Run:
 
