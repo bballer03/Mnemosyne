@@ -139,11 +139,10 @@ impl<'a> ParserProgress<'a> {
 
     fn report(&mut self, completed: u64, force: bool) {
         let completed = completed.min(self.total_bytes);
-        let percent = if self.total_bytes == 0 {
-            100
-        } else {
-            completed.saturating_mul(100) / self.total_bytes
-        };
+        let percent = completed
+            .saturating_mul(100)
+            .checked_div(self.total_bytes)
+            .unwrap_or(100);
         let now = Instant::now();
         let should_emit = force
             || percent > self.last_percent
