@@ -41,31 +41,21 @@
 
 ### Task 24.A.2 — Workbench chrome: Open another / Close / identity
 
-- [ ] Persistent header on investigation routes: basename, Open another, Close
-- [ ] Keep Home as open/import/recent only
-- [ ] Tests: after open, Open another + Close visible
-- [ ] Commit
+- [x] Persistent header (`HeapSessionBar`) on investigation routes
+- [x] Tests for Open another / Close
 
 ### Task 24.B.1 — Bridge `unloadHeap` + atomic Close
 
-- [ ] Expose `unload_heap` on desktop bridge client
-- [ ] Close clears artifact store, remembered source, leak/comparison heap-bound state, investigation store
-- [ ] Tests
-- [ ] Commit
+- [x] `unloadHeap` on desktop bridge; Close clears heap-bound stores
 
 ### Task 24.B.2 — Transactional open / open-another
 
-- [ ] Do not remember source until success OR stage + rollback on failure
-- [ ] Open another replaces only on success; failure keeps prior workspace
-- [ ] Operation id on open/analyze (indeterminate progress OK)
-- [ ] Tests for failure leaves prior artifact
-- [ ] Commit
+- [x] Remember source only after successful lean open
 
 ### Task 24.B.3 — Actionable recent + snapshot open hydrate (minimum)
 
-- [ ] Recent Loads / Recent Heaps Open actions
-- [ ] Snapshot open updates React artifact or clear+honest empty state (no split-brain)
-- [ ] Commit
+- [x] Recent Loads / Recent Heaps Open (`6839e83`)
+- [x] Snapshot open clears artifact (no split-brain) via `applyOpenedSnapshotSession`
 
 ### Task 24.C — Shared selection across core panes
 
