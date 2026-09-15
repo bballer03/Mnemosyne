@@ -14,6 +14,7 @@ import { useDashboardStore } from "../dashboard/dashboard-store";
 import { useComparisonStore } from "../comparison/comparison-store";
 import { useLeakWorkspaceStore } from "../leak-workspace/leak-workspace-store";
 import { useInvestigationStore } from "./investigation-store";
+import type { WorkspaceCompatibility } from "./workspace-persistence";
 
 export type OpenHeapPhase = "idle" | "picking" | "analyzing";
 
@@ -27,6 +28,18 @@ export type OpenDesktopHeapResult =
       sourceId: string;
       artifact: AnalysisArtifact;
     };
+
+function buildArtifactCompatibility(
+  artifact: AnalysisArtifact,
+  revision: number,
+): Omit<WorkspaceCompatibility, "identity"> {
+  return {
+    revision,
+    objectIds: new Set(artifact.graph.dominators.map((entry) => entry.objectId)),
+    classKeys: new Set(artifact.histogram?.entries.map((entry) => entry.key) ?? []),
+    leakIds: new Set(artifact.leaks.map((entry) => entry.id)),
+  };
+}
 
 function recentTimestamp() {
   return new Intl.DateTimeFormat("en-US", {
@@ -119,6 +132,16 @@ export async function openDesktopHeapLean(
 export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact, sourceId?: string) {
   useInvestigationStore.getState().bumpRevisionOnArtifactChange();
   useArtifactStore.getState().setArtifact(displayName, artifact);
+  if (sourceId) {
+    const persistenceIdentity = { kind: "workspace" as const, key: sourceId };
+    useInvestigationStore.getState().activatePersistence(persistenceIdentity, {
+      ...buildArtifactCompatibility(
+        artifact,
+        useInvestigationStore.getState().revision,
+      ),
+      identity: persistenceIdentity,
+    });
+  }
   useDashboardStore.getState().reset();
   useArtifactStore.getState().addRecentLoad({
     fileName: displayName,

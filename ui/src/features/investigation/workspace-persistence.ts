@@ -413,6 +413,26 @@ function identitiesMatch(
   return left.kind === right.kind && left.key === right.key;
 }
 
+function isActivePaneCompatible(
+  activePane: InvestigationOriginPane | undefined,
+  selection: PersistedWorkspaceV1["selection"],
+): boolean {
+  switch (activePane) {
+    case "histogram":
+      return selection.classKey !== undefined;
+    case "dominators":
+    case "inspector":
+    case "gc-path":
+      return selection.objectId !== undefined;
+    case "leak":
+      return selection.leakId !== undefined;
+    case "findings":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function restoreCompatibleWorkspace(
   record: PersistedWorkspaceV1,
   compatibility: WorkspaceCompatibility,
@@ -464,12 +484,11 @@ export function restoreCompatibleWorkspace(
     }
   }
 
-  const hasCompatibleSelection = Boolean(
-    selection.objectId || selection.classKey || selection.leakId,
-  );
   return {
     revision: compatibility.revision,
-    layout: hasCompatibleSelection ? record.layout : {},
+    layout: isActivePaneCompatible(record.layout.activePane, selection)
+      ? record.layout
+      : {},
     filters: record.filters,
     selection,
     notes: record.notes,

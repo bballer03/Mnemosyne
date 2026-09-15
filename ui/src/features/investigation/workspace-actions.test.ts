@@ -1,14 +1,94 @@
 import "../../test/setup";
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
+import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import {
   clearRememberedDesktopHeapSource,
   getRememberedDesktopHeapSource,
   rememberDesktopHeapSource,
 } from "../artifact-loader/desktop-heap-session";
-import { closeInvestigationWorkspace, openDesktopHeapLean } from "./workspace-actions";
+import { useInvestigationStore } from "./investigation-store";
+import {
+  applyOpenedHeap,
+  closeInvestigationWorkspace,
+  openDesktopHeapLean,
+} from "./workspace-actions";
+
+function buildArtifact(options: {
+  objectIds?: string[];
+  classKeys?: string[];
+  leakIds?: string[];
+}): AnalysisArtifact {
+  return {
+    summary: {
+      heapPath: "fixture.hprof",
+      totalObjects: options.objectIds?.length ?? 0,
+      totalSizeBytes: 0,
+      totalRecords: 0,
+    },
+    leaks: (options.leakIds ?? []).map((id) => ({
+      id,
+      className: "com.example.Cache",
+      leakKind: "cache",
+      severity: "high",
+      retainedSizeBytes: 100,
+      instances: 1,
+      description: "fixture",
+      provenance: [],
+    })),
+    recommendations: [],
+    elapsedSeconds: 0,
+    graph: {
+      nodeCount: options.objectIds?.length ?? 0,
+      edgeCount: 0,
+      dominatorCount: options.objectIds?.length ?? 0,
+      dominators: (options.objectIds ?? []).map((objectId) => ({
+        name: objectId,
+        className: "com.example.Cache",
+        objectId,
+        dominates: 0,
+        retainedSize: 100,
+        shallowSize: 10,
+      })),
+    },
+    histogram: {
+      groupBy: "class",
+      entries: (options.classKeys ?? []).map((key) => ({
+        key,
+        instanceCount: 1,
+        shallowSize: 10,
+        retainedSize: 100,
+      })),
+      totalInstances: options.classKeys?.length ?? 0,
+      totalShallowSize: (options.classKeys?.length ?? 0) * 10,
+    },
+  };
+}
+
+beforeEach(() => {
+  window.sessionStorage.clear();
+  useInvestigationStore.setState({
+    revision: 0,
+    activeOperation: undefined,
+    objectId: undefined,
+    classKey: undefined,
+    leakId: undefined,
+    originPane: undefined,
+    persistenceIdentity: undefined,
+    notes: [],
+    bookmarks: [],
+    lastPersistenceNotice: undefined,
+    histogramView: {
+      searchText: "",
+      groupBy: "class",
+      sortKey: "retained",
+      sortDirection: "desc",
+      pageOffset: 0,
+    },
+  });
+});
 
 afterEach(() => {
   useArtifactStore.getState().reset();
@@ -86,5 +166,59 @@ describe("closeInvestigationWorkspace", () => {
     expect(unloaded).toBe(true);
     expect(useArtifactStore.getState().artifact).toBeUndefined();
     expect(getRememberedDesktopHeapSource()).toBeUndefined();
+  });
+});
+
+describe("workspace persistence lifecycle", () => {
+  it("restores only selections present in the reopened artifact revision", () => {
+    const artifactA = buildArtifact({
+      objectIds: ["object-a"],
+      classKeys: ["class-a"],
+      leakIds: ["leak-removed"],
+    });
+    const artifactB = buildArtifact({
+      objectIds: ["object-b"],
+      classKeys: ["class-b"],
+      leakIds: [],
+    });
+    const reopenedArtifactA = buildArtifact({
+      objectIds: ["object-a"],
+      classKeys: ["class-a"],
+      leakIds: [],
+    });
+
+    applyOpenedHeap("a.hprof", artifactA, "source-a");
+    useInvestigationStore.getState().setObjectId("object-a", "inspector");
+    useInvestigationStore.getState().setClassKey("class-a", "histogram");
+    useInvestigationStore.getState().setLeakId("leak-removed", "leak");
+    useInvestigationStore.getState().setHistogramView({ searchText: "cache" });
+    useInvestigationStore.getState().setHistogramView({ pageOffset: 100 });
+
+    applyOpenedHeap("b.hprof", artifactB, "source-b");
+    applyOpenedHeap("a.hprof", reopenedArtifactA, "source-a");
+
+    expect(useInvestigationStore.getState()).toMatchObject({
+      revision: 3,
+      persistenceIdentity: { kind: "workspace", key: "source-a" },
+      objectId: "object-a",
+      classKey: "class-a",
+      leakId: undefined,
+      originPane: undefined,
+      histogramView: {
+        searchText: "cache",
+        pageOffset: 100,
+      },
+    });
+    expect(useInvestigationStore.getState().lastPersistenceNotice).toContain(
+      "leak-removed",
+    );
+  });
+
+  it("keeps browser-only artifact imports out of persistence", () => {
+    applyOpenedHeap("browser.json", buildArtifact({ objectIds: ["object-a"] }));
+    useInvestigationStore.getState().setObjectId("object-a", "inspector");
+
+    expect(useInvestigationStore.getState().persistenceIdentity).toBeUndefined();
+    expect(window.sessionStorage.length).toBe(0);
   });
 });
