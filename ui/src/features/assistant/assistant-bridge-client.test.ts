@@ -31,21 +31,42 @@ describe("assistant-bridge-client path opacity", () => {
 });
 
 describe("assistant-bridge-client rules mode", () => {
-  it("builds a rules-mode answer from measured focus context without a host bridge", () => {
+  it("builds a rules-mode answer from stable selection and measured findings", () => {
     const context: AssistantSessionContext = {
       heapDisplayName: "fixture.hprof",
-      focusLeakId: "leak-cache-1",
-      focusLeakClassName: "com.example.Cache",
-      focusLeakSeverity: "HIGH",
-      focusLeakDescription: "Cache retaining 12 MB",
+      selection: {
+        objectId: "0x10",
+        classKey: "com.example.Cache",
+        originPane: "inspector",
+      },
+      measuredFindings: [
+        {
+          id: "collection:0x10",
+          kind: "collection-waste",
+          severity: "WARNING",
+          title: "Collection waste: java.util.HashMap",
+          description: "HashMap uses 1024 slots for 3 entries.",
+          target: {
+            kind: "object",
+            objectId: "0x10",
+            classKey: "java.util.HashMap",
+          },
+          provenance: [{ kind: "Measured" }],
+          metrics: { wasteBytes: 4084 },
+        },
+      ],
       totalObjects: 100,
     };
 
     const answer = buildRulesModeAnswer("What should I investigate first?", context);
     expect(answer.provenance).toBe("rules");
     expect(answer.model).toBe("rules");
-    expect(answer.answerSummary).toMatch(/leak-cache-1|com\.example\.Cache|Cache retaining/i);
+    expect(answer.answerSummary).toMatch(/0x10/);
+    expect(answer.answerSummary).toMatch(/com\.example\.Cache/);
+    expect(answer.answerSummary).toMatch(/Collection waste: java\.util\.HashMap/);
+    expect(answer.answerSummary).toMatch(/HashMap uses 1024 slots for 3 entries/);
     expect(answer.answerSummary).not.toMatch(/\/var\/heaps/);
+    expect(answer.answerSummary).not.toMatch(/prior advisory text/i);
   });
 
   it("describes workflow kind and step without an internal id", () => {
@@ -53,6 +74,8 @@ describe("assistant-bridge-client rules mode", () => {
       heapDisplayName: "fixture.hprof",
       workflowKind: "Tune GC",
       workflowStep: "thread_local_review",
+      selection: {},
+      measuredFindings: [],
     });
 
     expect(answer.answerSummary).toContain("Tune GC");
@@ -172,7 +195,8 @@ describe("assistant-bridge-client provider availability", () => {
 describe("assistant-bridge-client create + ask fallback", () => {
   const context: AssistantSessionContext = {
     heapDisplayName: "fixture.hprof",
-    focusLeakId: "leak-1",
+    selection: { leakId: "leak-1" },
+    measuredFindings: [],
     totalObjects: 10,
   };
 
