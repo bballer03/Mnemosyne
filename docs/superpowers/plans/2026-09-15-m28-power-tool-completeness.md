@@ -406,6 +406,200 @@
 
 ### M28.C — Visualization and export
 
-- [ ] Expose existing flamegraph formats and report exports from the workspace.
-- [ ] Sanitize filenames/content, preserve provenance/mode labels, and never inject untrusted HTML.
-- [ ] Add focused export contract tests and honest native/download evidence.
+**Owned files:**
+- Create: `ui/src/features/flamegraph/export-download.ts`
+- Create: `ui/src/features/flamegraph/export-download.test.ts`
+- Modify: `ui/src/features/flamegraph/FlamegraphPage.tsx`
+- Modify: `ui/src/features/flamegraph/FlamegraphPage.test.tsx`
+- Modify: `ui/src/features/artifact-loader/desktop-heap-client.ts`
+- Modify: `ui/src/host/tauri-bridge.ts`
+- Modify: `ui/src/host/tauri-bridge.test.ts`
+- Modify: `tauri/src/state.rs`
+- Modify: `tauri/src/commands.rs`
+- Modify: `tauri/src/main.rs`
+
+**Interfaces:**
+- `DesktopHeapBridge.exportReport(input)` requests one of the existing core report formats (`text`, `markdown`, `html`, `toon`, `json`) for the active opaque heap source. The native host renders the most recently committed `AnalyzeResponse`; it does not accept a heap path or untrusted pre-rendered HTML from React.
+- `generateFlamegraph(input)` keeps the existing command and result shape while the page exposes all shipped formats: `svg`, `folded-stack`, and `json`.
+- Native export results use `{ format, content, mimeType, byteLength, mode, provenance }`. `content` is always a string at the React boundary, including JSON flamegraph output.
+- `prepareExportDownload(...)` validates the allowlisted format, normalizes control characters, derives a basename-only filename, and returns a Blob download descriptor. HTML/SVG content is downloadable only; SVG preview remains an `<img src="blob:…">`, never `innerHTML`/`dangerouslySetInnerHTML`.
+- Export labels show the active mode and every response-level provenance marker. Filenames contain only a sanitized heap basename, export kind, mode, and allowlisted extension.
+
+#### Task 1: Safe filename/content and download contract
+
+- [ ] **Step 1: Add failing filename and content tests**
+
+  In `export-download.test.ts`, assert that a display name such as `../../<img src=x onerror=alert(1)>.hprof` produces a basename-only, extension-allowlisted filename with no `/`, `\`, `<`, `>`, quotes, or event-handler text. Cover empty/all-invalid names and a name longer than the exported filename limit.
+
+  Assert that text control characters are removed except `\n`, `\r`, and `\t`; JSON object content is serialized to a string; and an unknown format is rejected rather than converted to a generic text file.
+
+- [ ] **Step 2: Run the utility test and verify RED**
+
+  Run: `cd ui && bun test src/features/flamegraph/export-download.test.ts --max-concurrency=1`
+
+  Expected: FAIL because the export-download contract does not exist.
+
+- [ ] **Step 3: Implement the minimal download contract**
+
+  Add:
+
+  ```ts
+  export type ExportKind = "flamegraph" | "report";
+  export type FlamegraphExportFormat = "svg" | "folded-stack" | "json";
+  export type ReportExportFormat = "text" | "markdown" | "html" | "toon" | "json";
+
+  export type ExportDownload = {
+    filename: string;
+    mimeType: string;
+    content: string;
+    blob: Blob;
+  };
+  ```
+
+  Use an explicit kind/format → extension/MIME allowlist. Strip path components, remove a terminal `.hprof`/`.bin`/`.json`, normalize unsafe filename runs to `-`, trim leading/trailing dots/dashes, cap the basename, and fall back to `mnemosyne-heap`. Normalize content to a string and remove unsafe C0 controls without interpreting markup.
+
+- [ ] **Step 4: Add and test the click-download helper**
+
+  Add a helper that creates an object URL, assigns it to a temporary anchor with the sanitized `download` value, clicks it, removes it, and revokes the URL. Test those observable calls with DOM spies; do not use `innerHTML` or `dangerouslySetInnerHTML`.
+
+- [ ] **Step 5: Run the utility test and verify GREEN**
+
+  Run: `cd ui && bun test src/features/flamegraph/export-download.test.ts --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 2: Native report-renderer export bridge
+
+- [ ] **Step 1: Add failing bridge contract tests**
+
+  In `tauri-bridge.test.ts`, inject a native invoke spy, call `exportReport({ sourceId, format })`, and assert one `export_desktop_report` invocation with the active M26 operation context. Assert the response is accepted only through the existing workspace/revision/operation-ID envelope.
+
+- [ ] **Step 2: Run the bridge test and verify RED**
+
+  Run: `cd ui && bun test src/host/tauri-bridge.test.ts --max-concurrency=1`
+
+  Expected: FAIL because `DesktopHeapBridge` and the injected host bridge do not expose `exportReport`.
+
+- [ ] **Step 3: Add the native response cache and export command**
+
+  Add `analysis: RwLock<Option<AnalyzeResponse>>` to `HeapSession`. Install the response only at the same guarded commit point that installs the current graph/dominator pair; clear it whenever the heap session is unloaded or replaced without an analysis response.
+
+  Add `export_desktop_report` to `commands.rs` and register it in `main.rs`. Resolve the opaque source ID on the native side, verify it still matches the loaded heap, clone the last committed response, replace `summary.heap_path` with `display_name_for_path(...)`, and dispatch through existing `render_report(ReportRequest { analysis, format })`. Accept only the five built-in formats; reject custom/unknown values.
+
+- [ ] **Step 4: Preserve mode/provenance and HTML escaping**
+
+  Return the rendered content plus `mimeType`, `byteLength`, the response mode, and response-level provenance markers. Do not post-process HTML in React. Add focused Rust helper assertions in `commands.rs` proving an untrusted display name is escaped by the existing HTML renderer and the response metadata retains `mode` and provenance.
+
+- [ ] **Step 5: Wire the typed desktop bridge**
+
+  Extend `DesktopHeapBridge` in `desktop-heap-client.ts` and the Tauri injector in `tauri-bridge.ts`. Route export through `invokeOperation("analyze", ...)` so M26 workspace/revision/operation-ID rejection remains the acceptance boundary.
+
+- [ ] **Step 6: Run focused bridge tests**
+
+  Run: `cd ui && bun test src/host/tauri-bridge.test.ts --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 3: Workspace flamegraph formats and safe report downloads
+
+- [ ] **Step 1: Add failing flamegraph format tests**
+
+  Extend `FlamegraphPage.test.tsx` to select each shipped format and assert the bridge receives exactly `svg`, `folded-stack`, or `json`. Assert SVG alone creates an `<img>` blob preview; folded-stack/JSON render metadata and a download action without mounting returned content.
+
+- [ ] **Step 2: Add failing report export tests**
+
+  Seed a remembered source and artifact, request HTML and JSON report exports, and assert `exportReport` receives only the opaque source ID and allowlisted format. Render a host result containing an HTML/script sentinel and assert it is absent from `container.innerHTML`, no script/event-handler node exists, and download uses the sanitized filename.
+
+  Assert mode and each `Partial`/`Fallback` provenance detail are visible as text labels. Add missing-bridge and missing-current-analysis cases that stay explicitly unavailable.
+
+- [ ] **Step 3: Run the focused page test and verify RED**
+
+  Run: `cd ui && bun test src/features/flamegraph/FlamegraphPage.test.tsx --max-concurrency=1`
+
+  Expected: FAIL because the page is SVG-only and has no report export controls.
+
+- [ ] **Step 4: Implement flamegraph format selection**
+
+  Add an allowlisted format selector beside the existing root selector. Normalize the host's JSON object payload into a downloadable string, preserve root/format/source metadata, preview SVG only through an object URL image, and revoke every replaced/unmounted URL.
+
+- [ ] **Step 5: Implement report export controls**
+
+  Add a separate report-format selector and generate/download flow backed by `exportReport`. Keep HTML and all other report bodies out of the DOM. Render mode and provenance metadata as React text nodes only.
+
+- [ ] **Step 6: Run focused export tests and verify GREEN**
+
+  Run:
+
+  ```bash
+  cd ui && bun test \
+    src/features/flamegraph/export-download.test.ts \
+    src/features/flamegraph/FlamegraphPage.test.tsx \
+    src/host/tauri-bridge.test.ts \
+    --max-concurrency=1
+  ```
+
+  Expected: PASS without mounting the production route tree.
+
+#### Task 4: M28.C verification and implementation commit
+
+- [ ] **Step 1: Run TypeScript lint and production build**
+
+  Run: `cd ui && bun run lint && bun run build`
+
+  Expected: both commands exit 0.
+
+- [ ] **Step 2: Run focused native checks where this host permits**
+
+  Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml`
+
+  Attempt: `cargo check --manifest-path tauri/Cargo.toml`
+
+  Expected: session-operation tests pass. Record the desktop check as command-layer evidence only; if WSL lacks WebKitGTK/GTK system libraries, record that exact environment block and do not call the packaged GUI proven.
+
+- [ ] **Step 3: Review scope**
+
+  Run: `git diff --check && git status --short`
+
+  Expected: only M28.C-owned source/tests plus this plan are changed; untracked `.claude/skills/gitnexus-*` remain untouched. GitNexus is non-blocking and omitted when unavailable.
+
+- [ ] **Step 4: Commit implementation**
+
+  ```bash
+  git add tauri/src/state.rs tauri/src/commands.rs tauri/src/main.rs \
+    ui/src/features/artifact-loader/desktop-heap-client.ts \
+    ui/src/features/flamegraph/FlamegraphPage.tsx \
+    ui/src/features/flamegraph/FlamegraphPage.test.tsx \
+    ui/src/features/flamegraph/export-download.ts \
+    ui/src/features/flamegraph/export-download.test.ts \
+    ui/src/host/tauri-bridge.ts ui/src/host/tauri-bridge.test.ts
+  git commit -m "feat(ui): add safe workspace exports"
+  ```
+
+#### Task 5: M28 closeout
+
+- [ ] **Step 1: Create the evidence record**
+
+  Create `docs/evidence/m28-power-tool-completeness.md` with exact M28.A (`856b89c`, `15f6a98`), M28.B (`2d1b4cc`, `7ca3e29`), and M28.C commit hashes; focused commands and results; export format/provenance/XSS assertions; and an explicit **NOT-PROVEN** row for packaged Windows/macOS/Linux GUI behavior.
+
+- [ ] **Step 2: Synchronize status, matrix, and roadmap**
+
+  Update `STATUS.md`, `docs/product/ui-capability-matrix.md`, and `docs/roadmap.md` to mark M28 closed with focused command/UI/native-contract evidence. Keep packaged GUI and native launch claims **NOT PROVEN** on WSL. Set the next roadmap milestone to M29 without starting or expanding M29 work.
+
+- [ ] **Step 3: Check all M28 plan boxes**
+
+  Mark M28.A, M28.B, and M28.C steps complete only where the referenced commits/evidence prove them. Leave any host-blocked launch proof described as a caveat rather than an unchecked hidden requirement.
+
+- [ ] **Step 4: Verify documentation and scope**
+
+  Run: `git diff --check && git status --short`
+
+  Expected: closeout docs plus the plan are modified; untracked `.claude/skills/gitnexus-*` remain untouched.
+
+- [ ] **Step 5: Commit closeout**
+
+  ```bash
+  git add docs/evidence/m28-power-tool-completeness.md \
+    docs/superpowers/plans/2026-09-15-m28-power-tool-completeness.md \
+    docs/product/ui-capability-matrix.md docs/roadmap.md STATUS.md
+  git commit -m "docs: close M28 power-tool completeness"
+  ```
