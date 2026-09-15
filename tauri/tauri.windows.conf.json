@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "bundle": {
+    "fileAssociations": [
+      {
+        "ext": ["hprof", "bin"],
+        "name": "Mnemosyne.HeapDump",
+        "description": "JVM heap dump"
+      }
+    ]
+  }
+}
