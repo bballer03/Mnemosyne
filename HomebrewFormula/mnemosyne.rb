@@ -1,7 +1,7 @@
 class Mnemosyne < Formula
   desc "AI-powered JVM heap analysis tool — parse HPROF dumps, detect memory leaks, trace GC paths"
   homepage "https://github.com/bballer03/mnemosyne"
-  version "0.5.0"
+  version "0.6.0"
   license "Apache-2.0"
 
   if Hardware::CPU.arm?

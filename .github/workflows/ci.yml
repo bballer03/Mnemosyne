@@ -25,7 +25,8 @@ jobs:
         with:
           # Pin: CI Bun 1.4.x hung mid-batch on NaturalLanguageInputBar after
           # heavy WorkflowCard/TopNav suites (job SIGTERM ~90s). Pin keeps the
-          # UI gate aligned with the verified local runner.
+          # UI gate aligned with the verified local runner. ui/run-tests.ts
+          # enforces per-batch RSS ceilings and names the batch on timeout/SIGTERM.
           bun-version: "1.2.5"
 
       - name: Install UI dependencies

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { AnalysisArtifact } from "../../../lib/analysis-types";
+import { useInvestigationStore } from "../../investigation/investigation-store";
 import {
   getObjectReferences,
   getObjectReferrers,
@@ -16,8 +17,11 @@ import {
   type ObjectReferrersResult,
 } from "../heap-explorer-query-client";
 
+const MAX_RELATION_ROWS = 100;
+
 type ObjectInspectorPanelProps = Readonly<{
   artifact: AnalysisArtifact;
+  objectId?: string;
   selectedRowIndex?: number;
 }>;
 
@@ -76,9 +80,13 @@ function formatBytes(bytes: number) {
 function renderReferenceList(entries: ObjectReferenceEntry[]) {
   return (
     <ul style={liveReferenceListStyle}>
-      {entries.map((entry) => (
+      {entries.slice(0, MAX_RELATION_ROWS).map((entry) => (
         <li key={`${entry.objectId}:${entry.className}`}>
-          <Link to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`} style={liveReferenceLinkStyle}>
+          <Link
+            to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`}
+            onClick={() => useInvestigationStore.getState().setObjectId(entry.objectId, "inspector")}
+            style={liveReferenceLinkStyle}
+          >
             <strong style={{ overflowWrap: "anywhere" }}>{entry.className}</strong>
             {entry.displayName ? <p style={liveReferenceMetaStyle}>{entry.displayName}</p> : null}
             <p style={liveReferenceMetaStyle}>{entry.objectId}</p>
@@ -101,6 +109,7 @@ function renderInspectionRefChip(entry: ObjectInspectionRef) {
     <Link
       key={`${entry.objectId}:${entry.className}`}
       to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(entry.objectId)}`}
+      onClick={() => useInvestigationStore.getState().setObjectId(entry.objectId, "inspector")}
       style={liveReferenceLinkStyle}
     >
       <strong style={{ overflowWrap: "anywhere" }}>{entry.className}</strong>
@@ -112,22 +121,28 @@ function renderInspectionRefChip(entry: ObjectInspectionRef) {
 function renderDominatorChildrenList(entries: ObjectInspectionRef[]) {
   return (
     <ul style={liveReferenceListStyle}>
-      {entries.map((entry) => (
+      {entries.slice(0, MAX_RELATION_ROWS).map((entry) => (
         <li key={`${entry.objectId}:${entry.className}`}>{renderInspectionRefChip(entry)}</li>
       ))}
     </ul>
   );
 }
 
-export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspectorPanelProps) {
-  const selectedRow = selectedRowIndex === undefined ? undefined : artifact.graph.dominators[selectedRowIndex];
-  const selectedObjectId = selectedRow?.objectId ? selectedRow.objectId : undefined;
+export function ObjectInspectorPanel({ artifact, objectId, selectedRowIndex }: ObjectInspectorPanelProps) {
+  const indexedRow = selectedRowIndex === undefined ? undefined : artifact.graph.dominators[selectedRowIndex];
+  const selectedRow = objectId
+    ? artifact.graph.dominators.find((row) => row.objectId === objectId)
+    : indexedRow;
+  const selectedObjectId = objectId ?? (selectedRow?.objectId || undefined);
   const referencesAvailable = isReferencesAvailable();
   const referrersAvailable = isReferrersAvailable();
   const inspectObjectAvailable = isInspectObjectAvailable();
   const [referencesState, setReferencesState] = useState<LiveLookupState<ObjectReferencesResult>>({ status: "idle" });
   const [referrersState, setReferrersState] = useState<LiveLookupState<ObjectReferrersResult>>({ status: "idle" });
   const [inspectionState, setInspectionState] = useState<LiveLookupState<ObjectInspection>>({ status: "idle" });
+  const [fieldInspectionState, setFieldInspectionState] = useState<LiveLookupState<ObjectInspection>>({
+    status: "idle",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +198,7 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
 
     if (!selectedObjectId) {
       setInspectionState({ status: "idle" });
+      setFieldInspectionState({ status: "idle" });
       return () => {
         cancelled = true;
       };
@@ -190,6 +206,7 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
 
     const objectId: string = selectedObjectId;
 
+    setFieldInspectionState({ status: "idle" });
     setInspectionState(inspectObjectAvailable ? { status: "loading" } : { status: "unavailable" });
 
     if (!inspectObjectAvailable) {
@@ -199,7 +216,7 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
     }
 
     async function loadInspection() {
-      const result = await inspectObject(objectId);
+      const result = await inspectObject(objectId, false);
 
       if (cancelled) {
         return;
@@ -216,6 +233,18 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
   }, [inspectObjectAvailable, selectedObjectId]);
 
   const liveBridgeUnavailable = !referencesAvailable && !referrersAvailable;
+  const liveInspection = inspectionState.status === "ready" ? inspectionState.data : undefined;
+
+  async function requestFieldData() {
+    if (!selectedObjectId || !inspectObjectAvailable) {
+      return;
+    }
+
+    const requestedObjectId = selectedObjectId;
+    setFieldInspectionState({ status: "loading" });
+    const result = await inspectObject(requestedObjectId, true);
+    setFieldInspectionState(result);
+  }
 
   function renderReferenceSection(
     title: string,
@@ -239,7 +268,14 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
     } else if (entries.length === 0) {
       content = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>{emptyMessage}</p>;
     } else {
-      content = renderReferenceList(entries);
+      content = (
+        <>
+          <p style={liveReferenceMetaStyle}>
+            Showing first {Math.min(entries.length, MAX_RELATION_ROWS)} of {entries.length} returned
+          </p>
+          {renderReferenceList(entries)}
+        </>
+      );
     }
 
     return (
@@ -290,7 +326,12 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
             {dominatorChildren.length === 0 ? (
               <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>No dominator children.</p>
             ) : (
-              renderDominatorChildrenList(dominatorChildren)
+              <>
+                <p style={liveReferenceMetaStyle}>
+                  Showing first {Math.min(dominatorChildren.length, MAX_RELATION_ROWS)} of {dominatorChildren.length} returned
+                </p>
+                {renderDominatorChildrenList(dominatorChildren)}
+              </>
             )}
           </div>
         </div>
@@ -305,6 +346,103 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
     );
   }
 
+  function renderFieldDataSection() {
+    if (!selectedObjectId) {
+      return null;
+    }
+
+    let resultContent;
+    if (!inspectObjectAvailable || fieldInspectionState.status === "unavailable") {
+      resultContent = (
+        <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>
+          Field data is unavailable — the object inspection host bridge is not connected.
+        </p>
+      );
+    } else if (fieldInspectionState.status === "loading") {
+      resultContent = (
+        <button type="button" disabled>
+          Requesting field data...
+        </button>
+      );
+    } else if (fieldInspectionState.status === "error") {
+      resultContent = (
+        <div style={{ display: "grid", gap: "0.6rem" }}>
+          <p style={{ margin: 0, color: "#fda4af", lineHeight: 1.7 }}>{fieldInspectionState.error}</p>
+          <button type="button" onClick={() => void requestFieldData()}>
+            Retry field data request
+          </button>
+        </div>
+      );
+    } else if (fieldInspectionState.status === "ready") {
+      const { fields } = fieldInspectionState.data;
+      if (fields === undefined) {
+        resultContent = (
+          <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>
+            Field bytes were unavailable after the opt-in request.
+          </p>
+        );
+      } else if (fields.length === 0) {
+        resultContent = <p style={{ margin: 0, color: "#cbd5e1", lineHeight: 1.7 }}>No decoded fields.</p>;
+      } else {
+        resultContent = (
+          <dl style={{ display: "grid", gap: "0.75rem", margin: 0 }}>
+            {fields.map((field, index) => (
+              <div
+                key={`${field.name}:${field.typeName}:${index}`}
+                style={{
+                  display: "grid",
+                  gap: "0.25rem",
+                  padding: "0.75rem",
+                  borderRadius: 12,
+                  border: "1px solid rgba(148, 163, 184, 0.22)",
+                }}
+              >
+                <dt style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", color: "#e2e8f0" }}>
+                  <strong>{field.name}</strong>
+                  <span style={{ color: "#94a3b8" }}>{field.typeName}</span>
+                </dt>
+                <dd
+                  style={{
+                    margin: 0,
+                    color: "#cbd5e1",
+                    overflowWrap: "anywhere",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {field.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        );
+      }
+    } else {
+      resultContent = (
+        <button type="button" onClick={() => void requestFieldData()}>
+          Request field data
+        </button>
+      );
+    }
+
+    return (
+      <section style={{ display: "grid", gap: "0.6rem" }}>
+        <h2 style={{ margin: 0, fontSize: "1rem", color: "#e2e8f0" }}>Fields</h2>
+        {inspectObjectAvailable ? (
+          <p style={{ margin: 0, color: "#fbbf24", lineHeight: 1.7 }}>
+            May reparse the heap and retain field bytes; memory use can increase.
+          </p>
+        ) : null}
+        {resultContent}
+      </section>
+    );
+  }
+
+  const displayClassName =
+    selectedRow?.className ?? liveInspection?.className ?? "Loading live object details...";
+  const displayObjectId = selectedObjectId ?? selectedRow?.objectId;
+  const displayShallowSize = selectedRow?.shallowSize ?? liveInspection?.shallowSize;
+  const displayRetainedSize = selectedRow?.retainedSize ?? liveInspection?.retainedSize;
+
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -316,36 +454,46 @@ export function ObjectInspectorPanel({ artifact, selectedRowIndex }: ObjectInspe
         ) : null}
       </div>
 
-      {selectedRow ? (
+      {selectedRow || selectedObjectId ? (
         <div style={{ display: "grid", gap: "1.25rem" }}>
           <dl style={{ display: "grid", gap: "0.9rem", margin: 0 }}>
             <div style={{ display: "grid", gap: "0.2rem" }}>
               <dt style={fieldLabelStyle}>Class name</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>{selectedRow.className}</dd>
+              <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>{displayClassName}</dd>
             </div>
             <div style={{ display: "grid", gap: "0.2rem" }}>
               <dt style={fieldLabelStyle}>Object id</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>{selectedRow.objectId || "Artifact-only row"}</dd>
+              <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>{displayObjectId || "Artifact-only row"}</dd>
             </div>
             <div style={{ display: "grid", gap: "0.2rem" }}>
               <dt style={fieldLabelStyle}>Shallow size</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0" }}>{formatBytes(selectedRow.shallowSize)}</dd>
+              <dd style={{ margin: 0, color: "#e2e8f0" }}>
+                {displayShallowSize === undefined ? "Loading live object details..." : formatBytes(displayShallowSize)}
+              </dd>
             </div>
             <div style={{ display: "grid", gap: "0.2rem" }}>
               <dt style={fieldLabelStyle}>Retained size</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0" }}>{formatBytes(selectedRow.retainedSize)}</dd>
-            </div>
-            <div style={{ display: "grid", gap: "0.2rem" }}>
-              <dt style={fieldLabelStyle}>Dominates count</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0" }}>{selectedRow.dominates.toLocaleString()} objects</dd>
-            </div>
-            <div style={{ display: "grid", gap: "0.2rem" }}>
-              <dt style={fieldLabelStyle}>Immediate dominator</dt>
-              <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>
-                {selectedRow.immediateDominator ?? "Not present in the artifact"}
+              <dd style={{ margin: 0, color: "#e2e8f0" }}>
+                {displayRetainedSize === undefined ? "Unavailable" : formatBytes(displayRetainedSize)}
               </dd>
             </div>
+            {selectedRow ? (
+              <>
+                <div style={{ display: "grid", gap: "0.2rem" }}>
+                  <dt style={fieldLabelStyle}>Dominates count</dt>
+                  <dd style={{ margin: 0, color: "#e2e8f0" }}>{selectedRow.dominates.toLocaleString()} objects</dd>
+                </div>
+                <div style={{ display: "grid", gap: "0.2rem" }}>
+                  <dt style={fieldLabelStyle}>Immediate dominator</dt>
+                  <dd style={{ margin: 0, color: "#e2e8f0", overflowWrap: "anywhere" }}>
+                    {selectedRow.immediateDominator ?? "Not present in the artifact"}
+                  </dd>
+                </div>
+              </>
+            ) : null}
           </dl>
+
+          {renderFieldDataSection()}
 
           {renderReferenceSection(
             "References (outgoing)",

@@ -23,6 +23,50 @@ afterEach(() => {
   delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
 });
 
+const SNAPSHOT_KEY = "a".repeat(64);
+
+function rawSnapshotHydrate(displayName = "fixture.hprof") {
+  return {
+    snapshot: {
+      key: SNAPSHOT_KEY,
+      displayName,
+      sourceId: "src-1",
+      schemaVersion: 1,
+      createdAt: "1700000000",
+    },
+    mode: "deep",
+    capabilities: {
+      graph: true,
+      dominators: true,
+      fieldData: false,
+      snapshotBacked: true,
+    },
+    analysis: {
+      summary: {
+        heap_path: displayName,
+        total_objects: 1,
+        total_size_bytes: 8,
+        classes: [],
+        generated_at: "2026-09-15T00:00:00Z",
+        header: null,
+        total_records: 0,
+        record_stats: [],
+      },
+      leaks: [],
+      recommendations: [],
+      elapsed: { secs: 0, nanos: 0 },
+      graph: { node_count: 1, edge_count: 0, dominators: [] },
+      histogram: {
+        group_by: "class",
+        entries: [],
+        total_instances: 1,
+        total_shallow_size: 8,
+      },
+      provenance: [{ kind: "Partial", detail: "snapshot-backed facts" }],
+    },
+  };
+}
+
 describe("workflow-bridge-client availability probes", () => {
   it("report false for every method when no bridge is installed", () => {
     expect(isDescribeWorkflowAvailable()).toBe(false);
@@ -245,51 +289,59 @@ describe("runOpenSnapshot", () => {
     expect(await runOpenSnapshot("abc")).toEqual({ status: "unavailable" });
   });
 
-  it("parses the display-safe HeapLoadSummary camelCase payload", async () => {
+  it("parses one snapshot workspace hydrate", async () => {
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       openSnapshot: async (key) => {
-        expect(key).toBe("deadbeef");
-        return {
-          displayName: "fixture.hprof",
-          sourceId: "src-1",
-          objectCount: 42,
-          classCount: 3,
-          gcRootCount: 1,
-        };
+        expect(key).toBe(SNAPSHOT_KEY);
+        return rawSnapshotHydrate();
       },
     };
 
-    const result = await runOpenSnapshot("deadbeef");
+    const result = await runOpenSnapshot(SNAPSHOT_KEY);
     expect(result.status).toBe("ready");
     if (result.status !== "ready") {
       throw new Error("expected ready status");
     }
-    expect(result.data).toEqual({
-      displayName: "fixture.hprof",
-      sourceId: "src-1",
-      objectCount: 42,
-      classCount: 3,
-      gcRootCount: 1,
+    expect(result.data).toMatchObject({
+      snapshot: {
+        key: SNAPSHOT_KEY,
+        displayName: "fixture.hprof",
+        sourceId: "src-1",
+      },
+      mode: "deep",
+      capabilities: {
+        graph: true,
+        dominators: true,
+        fieldData: false,
+        snapshotBacked: true,
+      },
+      analysis: {
+        summary: { heapPath: "fixture.hprof", totalObjects: 1 },
+        graph: { nodeCount: 1 },
+      },
     });
   });
 
   it("strips accidental absolute displayName down to basename", async () => {
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
-      openSnapshot: async () => ({
-        displayName: "/var/tmp/heaps/fixture.hprof",
-        sourceId: "src-1",
-        objectCount: 10,
-        classCount: 2,
-        gcRootCount: 1,
-      }),
+      openSnapshot: async () => rawSnapshotHydrate("/var/tmp/heaps/fixture.hprof"),
     };
 
-    const result = await runOpenSnapshot("deadbeef");
+    const result = await runOpenSnapshot(SNAPSHOT_KEY);
     expect(result.status).toBe("ready");
     if (result.status !== "ready") {
       throw new Error("expected ready status");
     }
-    expect(result.data.displayName).toBe("fixture.hprof");
+    expect(result.data.snapshot.displayName).toBe("fixture.hprof");
+    expect(result.data.analysis.summary.heapPath).toBe("fixture.hprof");
+  });
+
+  it("rejects a hydrate missing analysis facts", async () => {
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      openSnapshot: async () => ({ ...rawSnapshotHydrate(), analysis: undefined }),
+    };
+
+    expect((await runOpenSnapshot(SNAPSHOT_KEY)).status).toBe("error");
   });
 
   it("surfaces bridge rejections as an error status", async () => {

@@ -8,7 +8,7 @@ type AnalyzerRailProps = {
 
 type AnalyzerCardProps = {
   title: string;
-  state: "present" | "empty" | "absent";
+  state: "present" | "empty" | "unavailable";
   href?: string;
   children: ReactNode;
 };
@@ -41,7 +41,7 @@ function AnalyzerCard({ title, state, href, children }: AnalyzerCardProps) {
             textTransform: "uppercase",
           }}
         >
-          {state === "absent" ? "SECTION_ABSENT" : state.toUpperCase()}
+          {state.toUpperCase()}
         </span>
       </div>
       <div style={{ color: "#cbd5e1", fontSize: "0.92rem", lineHeight: 1.5 }}>{children}</div>
@@ -51,41 +51,46 @@ function AnalyzerCard({ title, state, href, children }: AnalyzerCardProps) {
 
 export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
   const recommendationState = artifact.recommendations.length > 0 ? "present" : "empty";
+  const boundedRecommendations = artifact.recommendations.slice(0, 3);
+  const responseProvenance = artifact.provenance.filter((marker) => {
+    const kind = marker.kind.toLowerCase();
+    return kind === "partial" || kind === "fallback";
+  });
   const stringState = artifact.stringReport
     ? artifact.stringReport.duplicateGroups.length > 0 || artifact.stringReport.topStringsBySize.length > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const arrayState = artifact.arrayReport
     ? artifact.arrayReport.duplicateGroups.length > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const collectionState = artifact.collectionReport
     ? artifact.collectionReport.oversizedCollections.length > 0 || Object.keys(artifact.collectionReport.summaryByType).length > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const topInstancesState = artifact.topInstances
     ? artifact.topInstances.instances.length > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const classloaderState = artifact.classloaderReport
     ? artifact.classloaderReport.loaders.length > 0 || artifact.classloaderReport.potentialLeaks.length > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const unreachableState = artifact.unreachable
     ? artifact.unreachable.totalCount > 0
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
   const pluginState = artifact.pluginResults
     ? artifact.pluginResults.some((plugin) => plugin.findings.length > 0)
       ? "present"
       : "empty"
-    : "absent";
+    : "unavailable";
 
   return (
     <div style={{ display: "grid", gap: "0.85rem" }}>
@@ -96,10 +101,47 @@ export function AnalyzerRail({ artifact }: AnalyzerRailProps) {
         </p>
       </div>
 
+      {responseProvenance.length > 0 ? (
+        <section
+          aria-label="Analyzer provenance"
+          style={{
+            display: "grid",
+            gap: "0.4rem",
+            borderRadius: 16,
+            border: "1px solid #854d0e",
+            background: "rgba(113, 63, 18, 0.16)",
+            padding: "0.85rem 0.9rem",
+          }}
+        >
+          <strong>Result provenance</strong>
+          <ul style={{ margin: 0, paddingLeft: "1.2rem", color: "#facc15" }}>
+            {responseProvenance.map((marker, index) => (
+              <li key={`${marker.kind}-${index}`}>
+                {marker.kind}: {marker.detail ?? "No additional detail supplied."}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <AnalyzerCard title="Artifact Recommendations" state={recommendationState}>
-        {recommendationState === "present"
-          ? `${artifact.recommendations.length} recommendation${artifact.recommendations.length === 1 ? "" : "s"} available.`
-          : "No artifact recommendations were included in this snapshot."}
+        {recommendationState === "present" ? (
+          <>
+            <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+              {boundedRecommendations.map((recommendation, index) => (
+                <li key={`${index}-${recommendation.slice(0, 24)}`}>{recommendation}</li>
+              ))}
+            </ul>
+            {artifact.recommendations.length > boundedRecommendations.length ? (
+              <div style={{ marginTop: "0.35rem", color: "#94a3b8" }}>
+                {artifact.recommendations.length - boundedRecommendations.length} more recommendation
+                {artifact.recommendations.length - boundedRecommendations.length === 1 ? "" : "s"} in this artifact.
+              </div>
+            ) : null}
+          </>
+        ) : (
+          "No artifact recommendations were included in this snapshot."
+        )}
       </AnalyzerCard>
 
       <AnalyzerCard title="String Deduplication" state={stringState} href="#string-analysis">

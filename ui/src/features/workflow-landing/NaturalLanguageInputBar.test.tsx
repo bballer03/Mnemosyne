@@ -4,10 +4,18 @@ import { cleanup, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "bun:test";
 
+import { useInvestigationStore } from "../investigation/investigation-store";
 import { NaturalLanguageInputBar } from "./NaturalLanguageInputBar";
 
 afterEach(() => {
   cleanup();
+  useInvestigationStore.setState({
+    workspaceId: "workspace-1",
+    revision: 0,
+    activeWorkflow: undefined,
+    workflowNeedsRecovery: false,
+    workspaceRequests: {},
+  });
   delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
   delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
 });
@@ -57,7 +65,11 @@ describe("NaturalLanguageInputBar", () => {
     await waitFor(() => {
       expect(page.getByText(/started tune gc/i)).toBeInTheDocument();
     });
-    expect(page.getByText(/g1/i)).toBeInTheDocument();
+    expect(useInvestigationStore.getState().activeWorkflow).toMatchObject({
+      workflowId: "wf-5",
+      kind: "tune_gc",
+      currentStep: "thread_local_review",
+    });
   });
 
   it("points comparison-shaped free text at the /compare card instead of starting a workflow", async () => {

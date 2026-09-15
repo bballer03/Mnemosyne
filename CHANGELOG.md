@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0] - Unreleased
+## [0.6.0] - 2026-09-15
+
+### Added
+- M25–M30 MAT maturity loop: histogram/instances/inspector depth, async progress/cancel platform, durable workspace + in-workbench compare, OQL/analyzer/export power tools, findings queue + workflow binding + contextual Assistant, theme tokens, UI RSS ceilings, and daily desktop log rotation with redaction.
+
+### Changed
+- Workspace, Tauri, session-ops, and Homebrew formula versions bump to `0.6.0`. Homebrew SHA-256 values remain from the prior release until v0.6.0 archives publish.
+- M31+ ecosystem items stay gated (OS integration, MAT golden, perspectives, live JVM, signing) with an explicit unmet-gate assessment.
+
+## [0.5.0] - 2026-09-15
 
 ### Added
 - M24 continuous heap investigation shell: persistent heap identity with **Open / Open another / Close**, transactional replacement and recent/snapshot reopen, shared `objectId` / `classKey` / `leakId` selection across core panes, and a collapsible Rules-labelled findings advisory with deterministic deep-links.

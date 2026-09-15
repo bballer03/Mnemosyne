@@ -5,24 +5,64 @@
   font-family: Inter, system-ui, sans-serif;
   background: #0a0c10;
   color: #e2e2e8;
+
+  /* Surfaces */
+  --mn-surface-page: #0a0c10;
   --mn-surface-raised: rgba(15, 23, 42, 0.88);
+  --mn-surface-panel: rgba(2, 6, 23, 0.75);
+
+  /* Borders */
   --mn-border: #334155;
+  --mn-border-subtle: #1e293b;
+  --mn-border-accent: #38bdf8;
+
+  /* Text */
   --mn-text-primary: #e2e8f0;
   --mn-text-muted: #94a3b8;
+  --mn-text-accent: #38bdf8;
+  --mn-text-page: #e2e2e8;
+
+  /* Feedback */
   --mn-warning-text: #facc15;
+  --mn-danger-text: #fca5a5;
+  --mn-success-text: #86efac;
+
+  /* Advisory / AI */
   --mn-advisory-surface: rgba(46, 16, 101, 0.2);
   --mn-advisory-border: #6d28d9;
   --mn-advisory-link: #c4b5fd;
+
+  /* Measured / provenance */
   --mn-provenance-rules-border: #0e7490;
   --mn-provenance-rules-text: #67e8f9;
+
+  /* Spacing / radius */
+  --mn-radius-panel: 16px;
+  --mn-radius-control: 10px;
+  --mn-space-panel: 1rem;
+  --mn-space-page: 1.5rem;
+
+  /* Compact workbench breakpoint (documented for M30.A) */
+  --mn-compact-max-width: 980px;
 }
 
 body {
   margin: 0;
-  background: #0a0c10;
-  color: #e2e2e8;
+  background: var(--mn-surface-page);
+  color: var(--mn-text-page);
 }
 
 * {
   box-sizing: border-box;
+}
+
+/**
+ * Narrow workbench: stack multi-column shells to a single column so primary
+ * actions (Open heap, Continue, Ask, nav links) stay visible without overflow
+ * hiding. Paired with `useCompactLayout` / `compactGridColumns` in TS.
+ */
+@media (max-width: 980px) {
+  .mn-workbench-grid {
+    grid-template-columns: 1fr !important;
+  }
 }

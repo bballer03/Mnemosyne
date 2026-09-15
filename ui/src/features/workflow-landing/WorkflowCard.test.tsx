@@ -2,10 +2,21 @@ import "../../test/setup";
 
 import { render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
 
+import { useInvestigationStore } from "../investigation/investigation-store";
 import { WorkflowCard } from "./WorkflowCard";
+
+beforeEach(() => {
+  useInvestigationStore.setState({
+    workspaceId: "workspace-1",
+    revision: 0,
+    activeWorkflow: undefined,
+    workflowNeedsRecovery: false,
+    workspaceRequests: {},
+  });
+});
 
 afterEach(() => {
   delete window.__MNEMOSYNE_WORKFLOW_BRIDGE__;
@@ -72,14 +83,19 @@ describe("WorkflowCard", () => {
     await waitFor(() => {
       expect(page.getByText(/current step: thread_local_review/i)).toBeInTheDocument();
     });
-    expect(page.getByText(/g1/i)).toBeInTheDocument();
+    expect(page.queryByText(/wf-42/i)).not.toBeInTheDocument();
+    expect(page.queryByLabelText(/resume workflow id/i)).not.toBeInTheDocument();
+    expect(useInvestigationStore.getState().activeWorkflow).toMatchObject({
+      workflowId: "wf-42",
+      kind: "tune_gc",
+      currentStep: "thread_local_review",
+    });
 
     await user.click(page.getByRole("button", { name: /continue/i }));
 
     await waitFor(() => {
       expect(page.getByText(/current step: complete/i)).toBeInTheDocument();
     });
-    expect(page.getByText(/increase heap/i)).toBeInTheDocument();
     expect(page.getByText(/workflow complete/i)).toBeInTheDocument();
     expect(page.queryByRole("button", { name: /continue/i })).not.toBeInTheDocument();
     expect(calls).toBe(2);
@@ -137,8 +153,18 @@ describe("WorkflowCard", () => {
     });
   });
 
-  it("resumes an in-progress workflow by id and links classloader steps", async () => {
+  it("recovers the bound workflow without pasted ids and links classloader steps", async () => {
     const user = userEvent.setup();
+    useInvestigationStore.setState({
+      activeWorkflow: {
+        workspaceId: "workspace-1",
+        revision: 0,
+        workflowId: "wf-resume",
+        kind: "classloader_leak",
+        currentStep: "select",
+      },
+      workflowNeedsRecovery: true,
+    });
 
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       startWorkflow: async () => ({
@@ -193,13 +219,11 @@ describe("WorkflowCard", () => {
     );
     const page = within(view.container);
 
-    await user.type(page.getByLabelText(/resume workflow id/i), "wf-resume");
-    await user.click(page.getByRole("button", { name: /resume/i }));
-
     await waitFor(() => {
       expect(page.getByText(/current step: select/i)).toBeInTheDocument();
     });
-    expect(page.getByText(/wf-resume/i)).toBeInTheDocument();
+    expect(page.queryByLabelText(/resume workflow id/i)).not.toBeInTheDocument();
+    expect(page.queryByText(/wf-resume/i)).not.toBeInTheDocument();
     expect(page.getByRole("link", { name: /open classloader explorer/i })).toHaveAttribute(
       "href",
       "/artifacts/explorer",
@@ -214,9 +238,19 @@ describe("WorkflowCard", () => {
     expect(page.getByRole("link", { name: /open gc paths/i })).toBeInTheDocument();
   });
 
-  it("closes a resumed workflow and returns to idle", async () => {
+  it("closes the bound workflow and returns to idle", async () => {
     const user = userEvent.setup();
     let closed = false;
+    useInvestigationStore.setState({
+      activeWorkflow: {
+        workspaceId: "workspace-1",
+        revision: 0,
+        workflowId: "wf-to-close",
+        kind: "tune_gc",
+        currentStep: "thread_local_review",
+      },
+      workflowNeedsRecovery: true,
+    });
 
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       getWorkflow: async () => ({
@@ -249,9 +283,6 @@ describe("WorkflowCard", () => {
     );
     const page = within(view.container);
 
-    await user.type(page.getByLabelText(/resume workflow id/i), "wf-to-close");
-    await user.click(page.getByRole("button", { name: /resume/i }));
-
     await waitFor(() => {
       expect(page.getByText(/current step: thread_local_review/i)).toBeInTheDocument();
     });
@@ -259,15 +290,24 @@ describe("WorkflowCard", () => {
     await user.click(page.getByRole("button", { name: /close workflow/i }));
 
     await waitFor(() => {
-      expect(page.getByRole("button", { name: /^resume$/i })).toBeInTheDocument();
+      expect(page.queryByText(/current step:/i)).not.toBeInTheDocument();
     });
     expect(closed).toBe(true);
-    expect(page.queryByText(/current step:/i)).not.toBeInTheDocument();
+    expect(useInvestigationStore.getState().activeWorkflow).toBeUndefined();
     expect(page.queryByRole("button", { name: /close workflow/i })).not.toBeInTheDocument();
   });
 
-  it("shows complete state when resuming an already-complete workflow", async () => {
-    const user = userEvent.setup();
+  it("shows complete state when recovering an already-complete workflow", async () => {
+    useInvestigationStore.setState({
+      activeWorkflow: {
+        workspaceId: "workspace-1",
+        revision: 0,
+        workflowId: "wf-done",
+        kind: "tune_gc",
+        currentStep: "complete",
+      },
+      workflowNeedsRecovery: true,
+    });
 
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       getWorkflow: async () => ({
@@ -296,9 +336,6 @@ describe("WorkflowCard", () => {
     );
     const page = within(view.container);
 
-    await user.type(page.getByLabelText(/resume workflow id/i), "wf-done");
-    await user.click(page.getByRole("button", { name: /resume/i }));
-
     await waitFor(() => {
       expect(page.getByText(/workflow complete/i)).toBeInTheDocument();
     });
@@ -306,8 +343,17 @@ describe("WorkflowCard", () => {
     expect(page.getByRole("button", { name: /close workflow/i })).toBeInTheDocument();
   });
 
-  it("surfaces corrupt resume errors without crashing", async () => {
-    const user = userEvent.setup();
+  it("surfaces corrupt automatic recovery errors without crashing", async () => {
+    useInvestigationStore.setState({
+      activeWorkflow: {
+        workspaceId: "workspace-1",
+        revision: 0,
+        workflowId: "wf-bad",
+        kind: "tune_gc",
+        currentStep: "thread_local_review",
+      },
+      workflowNeedsRecovery: true,
+    });
 
     window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
       getWorkflow: async () => {
@@ -319,9 +365,6 @@ describe("WorkflowCard", () => {
       <WorkflowCard kind="tune_gc" title="Tune GC" description="Review GC settings." heapPath="fixture.hprof" />,
     );
     const page = within(view.container);
-
-    await user.type(page.getByLabelText(/resume workflow id/i), "wf-bad");
-    await user.click(page.getByRole("button", { name: /resume/i }));
 
     await waitFor(() => {
       expect(page.getByRole("alert")).toHaveTextContent(/workflow_corrupt/i);

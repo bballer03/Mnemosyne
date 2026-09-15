@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { createColumnHelper, flexRender, tableFeatures, useTable } from "@tanstack/react-table";
+import { Link } from "react-router-dom";
 
 import type { ObjectDelta, ObjectDeltaKind } from "../../lib/diff-types";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 const features = tableFeatures({});
 
@@ -49,14 +51,29 @@ export function ObjectDeltaTable({ kind, deltas }: { kind: ObjectDeltaKind; delt
       columnHelper.columns([
         columnHelper.accessor("className", {
           header: "Class",
-          cell: (info) => (
-            <div>
-              <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{info.getValue()}</div>
-              <div style={{ color: "#64748b", fontSize: "0.82rem", marginTop: "0.2rem" }}>
-                example object id: {info.row.original.exampleObjectId}
+          cell: (info) => {
+            const delta = info.row.original;
+            const objectId = String(delta.exampleObjectId);
+
+            return (
+              <div>
+                <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{info.getValue()}</div>
+                {delta.kind === "Removed" ? (
+                  <div style={{ color: "#64748b", fontSize: "0.82rem", marginTop: "0.2rem" }}>
+                    example object id: {objectId}
+                  </div>
+                ) : (
+                  <Link
+                    to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(objectId)}`}
+                    onClick={() => useInvestigationStore.getState().setObjectId(objectId, "inspector")}
+                    style={{ color: "#7dd3fc", fontSize: "0.82rem", display: "inline-block", marginTop: "0.2rem" }}
+                  >
+                    Inspect after object {objectId}
+                  </Link>
+                )}
               </div>
-            </div>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "count",

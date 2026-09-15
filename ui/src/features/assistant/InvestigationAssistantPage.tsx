@@ -14,7 +14,10 @@ import {
   OUTBOUND_METADATA_NOTICE,
   type AssistantChatTurn,
   type AssistantProvenance,
+  type AssistantSessionContext,
 } from "./assistant-bridge-client";
+import { buildAssistantMeasuredContext } from "./assistant-context";
+import { WORKFLOW_KIND_LABELS } from "../workflow-landing/workflow-types";
 
 const pageStyle = {
   display: "grid",
@@ -43,15 +46,6 @@ const factPanelStyle = {
   background: "rgba(8, 47, 73, 0.45)",
 } as const;
 
-function pickDefaultLeakId(
-  leaks: Array<{ id: string; suspectScore?: number }>,
-): string | undefined {
-  if (leaks.length === 0) {
-    return undefined;
-  }
-  return [...leaks].sort((a, b) => (b.suspectScore ?? 0) - (a.suspectScore ?? 0))[0]?.id;
-}
-
 function modeLabel(provenance: AssistantProvenance | undefined): string {
   if (provenance === "provider") {
     return "provider";
@@ -63,36 +57,50 @@ function modeLabel(provenance: AssistantProvenance | undefined): string {
 }
 
 /**
- * M23 investigation session workspace.
+ * M23 / M29.C investigation session workspace.
  *
- * Rules mode remains the offline default. When `__MNEMOSYNE_ASSISTANT_BRIDGE__.chatSession`
- * is present (M23.C Tauri wiring), Ask uses provider chat with provenance and falls
- * back to rules on error/unavailable. Absolute heap paths never render — basename /
- * opaque sourceId only. API keys are never printed.
+ * Measured facts come only from the revision-stable store selection and
+ * immutable findingFacts projection. Rules mode remains the offline default;
+ * advisory AI text lives in a collapsible region and never mutates findings.
  */
 export function InvestigationAssistantPage() {
   const artifact = useArtifactStore((state) => state.artifact);
   const remembered = getRememberedDesktopHeapSource();
   const leaks = artifact?.leaks ?? [];
-  const defaultLeakId = pickDefaultLeakId(leaks);
-  const selectedLeakId = useInvestigationStore((state) => state.leakId);
-  const initialLeakId = leaks.some((leak) => leak.id === selectedLeakId)
-    ? selectedLeakId
-    : defaultLeakId;
 
-  const [focusLeakId, setFocusLeakId] = useState<string | undefined>(initialLeakId);
+  const objectId = useInvestigationStore((state) => state.objectId);
+  const classKey = useInvestigationStore((state) => state.classKey);
+  const selectedLeakId = useInvestigationStore((state) => state.leakId);
+  const originPane = useInvestigationStore((state) => state.originPane);
+  const findingFacts = useInvestigationStore((state) => state.findingFacts);
+  const activeWorkflow = useInvestigationStore((state) =>
+    state.workflowNeedsRecovery ? undefined : state.activeWorkflow,
+  );
+
+  const [focusLeakId, setFocusLeakId] = useState<string | undefined>(() =>
+    leaks.some((leak) => leak.id === selectedLeakId) ? selectedLeakId : undefined,
+  );
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<AssistantChatTurn[]>([]);
   const [providerNotice, setProviderNotice] = useState<string | undefined>();
   const [outboundNotice, setOutboundNotice] = useState<string | undefined>();
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [asking, setAsking] = useState(false);
-  const [workflowId] = useState<string | undefined>();
-  const [workflowStep] = useState<string | undefined>();
 
-  const focusedLeak = useMemo(
-    () => leaks.find((leak) => leak.id === focusLeakId),
-    [leaks, focusLeakId],
+  const selection = useMemo(
+    () => ({
+      revision: useInvestigationStore.getState().revision,
+      objectId,
+      classKey,
+      leakId: selectedLeakId,
+      originPane,
+    }),
+    [objectId, classKey, selectedLeakId, originPane],
+  );
+
+  const measuredFindings = useMemo(
+    () => buildAssistantMeasuredContext(selection, findingFacts),
+    [selection, findingFacts],
   );
 
   const heapDisplayName = displayHeapBasename(
@@ -100,6 +108,25 @@ export function InvestigationAssistantPage() {
   );
 
   const activeMode = modeLabel(history[history.length - 1]?.provenance);
+
+  function buildSessionContext(): AssistantSessionContext {
+    return {
+      heapDisplayName,
+      sourceId: remembered?.sourceId,
+      workflowKind: activeWorkflow
+        ? WORKFLOW_KIND_LABELS[activeWorkflow.kind]
+        : undefined,
+      workflowStep: activeWorkflow?.currentStep,
+      selection: {
+        objectId,
+        classKey,
+        leakId: selectedLeakId,
+        originPane,
+      },
+      measuredFindings,
+      totalObjects: artifact?.summary.totalObjects,
+    };
+  }
 
   async function handleAsk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,18 +144,12 @@ export function InvestigationAssistantPage() {
       return;
     }
 
-    const context = {
-      heapDisplayName,
-      sourceId: remembered?.sourceId,
-      workflowId,
-      workflowStep,
-      focusLeakId: focusedLeak?.id,
-      focusLeakClassName: focusedLeak?.className,
-      focusLeakSeverity: focusedLeak?.severity,
-      focusLeakDescription: focusedLeak?.description,
-      totalObjects: artifact?.summary.totalObjects,
-    };
+    const context = buildSessionContext();
+    const findingSnapshot = findingFacts;
 
+    const request = useInvestigationStore
+      .getState()
+      .beginWorkspaceRequest("assistant");
     setAsking(true);
     try {
       const result = await askWithProviderFallback({
@@ -137,6 +158,13 @@ export function InvestigationAssistantPage() {
         sessionId,
         sourceId: remembered?.sourceId,
       });
+      if (
+        !useInvestigationStore
+          .getState()
+          .acceptWorkspaceRequest("assistant", request)
+      ) {
+        return;
+      }
 
       if (result.sessionId) {
         setSessionId(result.sessionId);
@@ -152,7 +180,16 @@ export function InvestigationAssistantPage() {
 
       setHistory((prev) => appendBoundedTurn(prev, result.turn));
       setQuestion("");
+      // Advisory turns must never mutate measured findingFacts.
+      void findingSnapshot;
     } catch (error) {
+      if (
+        !useInvestigationStore
+          .getState()
+          .acceptWorkspaceRequest("assistant", request)
+      ) {
+        return;
+      }
       const fallback = {
         ...buildRulesModeAnswer(trimmed, context),
         provenance: "fallback" as const,
@@ -165,6 +202,9 @@ export function InvestigationAssistantPage() {
       );
       setQuestion("");
     } finally {
+      useInvestigationStore
+        .getState()
+        .finishWorkspaceRequest("assistant", request);
       setAsking(false);
     }
   }
@@ -222,21 +262,43 @@ export function InvestigationAssistantPage() {
         ) : (
           <div>Load an artifact or open a desktop heap to populate measured facts.</div>
         )}
-        {workflowId ? (
+        {activeWorkflow ? (
           <div>
-            Workflow: {workflowId}
-            {workflowStep ? ` · step ${workflowStep}` : ""}
+            Workflow: {WORKFLOW_KIND_LABELS[activeWorkflow.kind]} · current step:{" "}
+            {activeWorkflow.currentStep}
           </div>
         ) : (
           <div>Workflow: none active in this workspace yet</div>
         )}
-        {focusedLeak ? (
-          <div>
-            Focus: {focusedLeak.id} · {focusedLeak.className} · {focusedLeak.severity}
-            <div style={{ color: "#cbd5e1", marginTop: "0.25rem" }}>{focusedLeak.description}</div>
-          </div>
+        <div>
+          Selection:
+          {selectedLeakId ? ` leak ${selectedLeakId}` : ""}
+          {objectId ? ` object ${objectId}` : ""}
+          {classKey ? ` class ${classKey}` : ""}
+          {!selectedLeakId && !objectId && !classKey ? " none" : ""}
+          {originPane ? ` (from ${originPane})` : ""}
+        </div>
+        {measuredFindings.length === 0 ? (
+          <div>Matched findings: none for the current selection.</div>
         ) : (
-          <div>Focus: none</div>
+          <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.45rem" }}>
+            {measuredFindings.map((finding) => (
+              <li key={finding.id}>
+                <div>
+                  {finding.title} · {finding.severity}
+                </div>
+                <div style={{ color: "#cbd5e1" }}>{finding.description}</div>
+                <div style={{ fontSize: "0.8rem", color: "#7dd3fc" }}>
+                  Provenance:{" "}
+                  {finding.provenance
+                    .map((marker) =>
+                      marker.detail ? `${marker.kind} (${marker.detail})` : marker.kind,
+                    )
+                    .join(", ")}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 
@@ -248,11 +310,11 @@ export function InvestigationAssistantPage() {
           onChange={(event) => {
             const nextLeakId = event.target.value || undefined;
             setFocusLeakId(nextLeakId);
+            const investigation = useInvestigationStore.getState();
+            investigation.clearSelection();
             if (nextLeakId) {
-              const nextLeak = leaks.find((leak) => leak.id === nextLeakId);
-              const investigation = useInvestigationStore.getState();
-              investigation.clearSelection();
               investigation.setLeakId(nextLeakId, "leak");
+              const nextLeak = leaks.find((leak) => leak.id === nextLeakId);
               if (nextLeak) {
                 investigation.setClassKey(nextLeak.className, "leak");
               }
@@ -266,7 +328,7 @@ export function InvestigationAssistantPage() {
             padding: "0.45rem 0.6rem",
           }}
         >
-          {leaks.length === 0 ? <option value="">No leaks loaded</option> : null}
+          <option value="">No leak selected</option>
           {leaks.map((leak) => (
             <option key={leak.id} value={leak.id}>
               {leak.id} ({leak.severity})
@@ -280,10 +342,10 @@ export function InvestigationAssistantPage() {
         <Link to="/heap-explorer/object-inspector">Object Inspector</Link>
         <Link to="/heap-explorer/dominators">Dominators</Link>
         <Link to="/heap-explorer/query-console">Query Console</Link>
-        {focusLeakId ? (
+        {selectedLeakId ? (
           <>
-            <Link to={`/leaks/${focusLeakId}/overview`}>Leak Workspace</Link>
-            <Link to={`/leaks/${focusLeakId}/gc-path`}>GC Path</Link>
+            <Link to={`/leaks/${selectedLeakId}/overview`}>Leak Workspace</Link>
+            <Link to={`/leaks/${selectedLeakId}/gc-path`}>GC Path</Link>
           </>
         ) : null}
       </nav>
@@ -304,55 +366,59 @@ export function InvestigationAssistantPage() {
         </p>
       )}
 
-      <section style={aiPanelStyle} aria-label="AI guidance">
-        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>AI guidance</h2>
-        <p style={{ margin: 0, color: "#c4b5fd", fontSize: "0.9rem" }}>
-          Advisory only — visually separated from measured facts above. Each turn carries provenance.
-        </p>
-
-        <form onSubmit={handleAsk} style={{ display: "grid", gap: "0.55rem" }}>
-          <label style={{ display: "grid", gap: "0.35rem" }}>
-            <span>Ask a follow-up</span>
-            <input
-              name="follow-up"
-              aria-label="Ask a follow-up"
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="e.g. What should I investigate first?"
-              disabled={asking}
-              style={{
-                background: "#020617",
-                color: "#e2e8f0",
-                border: "1px solid #4c1d95",
-                borderRadius: 10,
-                padding: "0.55rem 0.75rem",
-              }}
-            />
-          </label>
-          <button type="submit" disabled={asking}>
-            Ask
-          </button>
-        </form>
-
-        {history.length === 0 ? (
-          <p style={{ margin: 0, color: "#a78bfa" }}>
-            No turns yet. Ask a question to start a bounded session (rules offline, provider when
-            the host bridge is connected).
+      <details open style={aiPanelStyle}>
+        <summary style={{ cursor: "pointer", fontSize: "1.05rem", fontWeight: 600 }}>
+          AI guidance
+        </summary>
+        <section aria-label="AI guidance" style={{ display: "grid", gap: "0.65rem", marginTop: "0.65rem" }}>
+          <p style={{ margin: 0, color: "#c4b5fd", fontSize: "0.9rem" }}>
+            Advisory only — visually separated from measured facts above. Each turn carries provenance.
           </p>
-        ) : (
-          <ol style={{ margin: 0, paddingLeft: "1.2rem", display: "grid", gap: "0.75rem" }}>
-            {history.map((turn, index) => (
-              <li key={`${turn.question}-${index}`} style={{ display: "grid", gap: "0.25rem" }}>
-                <div style={{ color: "#e9d5ff" }}>Q: {turn.question}</div>
-                <div>A: {turn.answerSummary}</div>
-                <div style={{ fontSize: "0.8rem", color: "#c4b5fd" }}>
-                  Provenance: {turn.provenance} · model {turn.model}
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+
+          <form onSubmit={handleAsk} style={{ display: "grid", gap: "0.55rem" }}>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              <span>Ask a follow-up</span>
+              <input
+                name="follow-up"
+                aria-label="Ask a follow-up"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="e.g. What should I investigate first?"
+                disabled={asking}
+                style={{
+                  background: "#020617",
+                  color: "#e2e8f0",
+                  border: "1px solid #4c1d95",
+                  borderRadius: 10,
+                  padding: "0.55rem 0.75rem",
+                }}
+              />
+            </label>
+            <button type="submit" disabled={asking}>
+              Ask
+            </button>
+          </form>
+
+          {history.length === 0 ? (
+            <p style={{ margin: 0, color: "#a78bfa" }}>
+              No turns yet. Ask a question to start a bounded session (rules offline, provider when
+              the host bridge is connected).
+            </p>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: "1.2rem", display: "grid", gap: "0.75rem" }}>
+              {history.map((turn, index) => (
+                <li key={`${turn.question}-${index}`} style={{ display: "grid", gap: "0.25rem" }}>
+                  <div style={{ color: "#e9d5ff" }}>Q: {turn.question}</div>
+                  <div>A: {turn.answerSummary}</div>
+                  <div style={{ fontSize: "0.8rem", color: "#c4b5fd" }}>
+                    Provenance: {turn.provenance} · model {turn.model}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </details>
     </main>
   );
 }

@@ -3,13 +3,17 @@ import "../../test/setup";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import {
+  getDominatorChildren,
   getObjectReferrers,
   getObjectReferences,
   inspectObject,
+  isGetDominatorChildrenAvailable,
   isInspectObjectAvailable,
+  isListClassInstancesAvailable,
   isReferencesAvailable,
   isReferrersAvailable,
   isRegroupHistogramAvailable,
+  listClassInstances,
   normalizeHistogramGroupBy,
   regroupHistogram,
   runHeapQuery,
@@ -50,6 +54,257 @@ describe("heap explorer query client", () => {
     });
   });
 
+  it("listClassInstances returns unavailable when no bridge exists", async () => {
+    expect(isListClassInstancesAvailable()).toBeFalse();
+    expect(await listClassInstances("com.example.BigCache")).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("listClassInstances parses a bounded snake_case page", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 3,
+        returned: 2,
+        offset: 1,
+        limit: 2,
+        truncated: false,
+        instances: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+          },
+          {
+            object_id: "0x00002000",
+            class_name: "com.example.BigCache",
+            shallow_size: 16,
+            retained_size: 128,
+          },
+        ],
+      }),
+    });
+
+    expect(isListClassInstancesAvailable()).toBeTrue();
+    expect(await listClassInstances("com.example.BigCache", 1, 2)).toEqual({
+      status: "ready",
+      data: {
+        classKey: "com.example.BigCache",
+        total: 3,
+        returned: 2,
+        offset: 1,
+        limit: 2,
+        truncated: false,
+        instances: [
+          {
+            objectId: "0x00001000",
+            className: "com.example.BigCache",
+            shallowSize: 32,
+            retainedSize: 256,
+          },
+          {
+            objectId: "0x00002000",
+            className: "com.example.BigCache",
+            shallowSize: 16,
+            retainedSize: 128,
+          },
+        ],
+      },
+    });
+  });
+
+  it("listClassInstances rejects malformed totals with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: "3",
+        returned: 0,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: [],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("listClassInstances rejects malformed object IDs with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: [
+          {
+            object_id: 4096,
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+          },
+        ],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("listClassInstances rejects malformed rows with the standard prefix", async () => {
+    setHeapExplorerBridge({
+      listClassInstances: async () => ({
+        class_key: "com.example.BigCache",
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 100,
+        truncated: false,
+        instances: ["not-an-instance"],
+      }),
+    });
+
+    const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("getDominatorChildren returns unavailable when no bridge exists", async () => {
+    expect(isGetDominatorChildrenAvailable()).toBeFalse();
+    expect(await getDominatorChildren()).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("getDominatorChildren parses a bounded snake_case page", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 2,
+        returned: 2,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: 1,
+            has_children: true,
+          },
+          {
+            object_id: "0x00002000",
+            class_name: "java.lang.Object",
+            shallow_size: 16,
+            retained_size: 16,
+            dominated_count: 0,
+            has_children: false,
+          },
+        ],
+      }),
+    });
+
+    expect(isGetDominatorChildrenAvailable()).toBeTrue();
+    expect(await getDominatorChildren(undefined, 0, 50, 128)).toEqual({
+      status: "ready",
+      data: {
+        total: 2,
+        returned: 2,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            objectId: "0x00001000",
+            className: "com.example.BigCache",
+            shallowSize: 32,
+            retainedSize: 256,
+            dominatedCount: 1,
+            hasChildren: true,
+          },
+          {
+            objectId: "0x00002000",
+            className: "java.lang.Object",
+            shallowSize: 16,
+            retainedSize: 16,
+            dominatedCount: 0,
+            hasChildren: false,
+          },
+        ],
+      },
+    });
+  });
+
+  it("getDominatorChildren strictly rejects malformed counts", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: -1,
+            has_children: true,
+          },
+        ],
+      }),
+    });
+
+    const result = await getDominatorChildren();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("getDominatorChildren strictly rejects malformed booleans", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: 1,
+            has_children: "yes",
+          },
+        ],
+      }),
+    });
+
+    const result = await getDominatorChildren();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
   it("normalizes query rows from the host bridge", async () => {
     if (!globalWindow.window) {
       throw new Error("Expected window to exist in UI tests.");
@@ -69,6 +324,46 @@ describe("heap explorer query client", () => {
         rows: [["0x2a", "com.example.Cache"]],
       },
     });
+  });
+
+  it("returns structured one-based coordinates for parser byte offsets", async () => {
+    const query = "SELECT *\nFROM Cache";
+    setHeapExplorerBridge({
+      queryHeap: async () => {
+        throw new Error("expected class pattern at byte 14");
+      },
+    });
+
+    expect(await runHeapQuery({ heapPath: "heap.hprof", query })).toEqual({
+      status: "error",
+      error: "expected class pattern at byte 14",
+      location: {
+        byteOffset: 14,
+        line: 2,
+        column: 6,
+      },
+    });
+  });
+
+  it("maps UTF-8 parser offsets without treating bytes as JavaScript indexes", async () => {
+    const query = 'SELECT *\nFROM "é"';
+    setHeapExplorerBridge({
+      queryHeap: async () => {
+        throw new Error("expected end of query at byte 18");
+      },
+    });
+
+    const result = await runHeapQuery({ heapPath: "heap.hprof", query });
+
+    expect(result).toMatchObject({
+      status: "error",
+      location: {
+        byteOffset: 18,
+        line: 2,
+        column: 9,
+      },
+    });
+    expect(result).not.toHaveProperty("query");
   });
 
   it("getObjectReferences returns unavailable when no bridge exists", async () => {

@@ -45,12 +45,10 @@
 // when no host has wired this bridge up, exactly like every other optional
 // bridge capability in this codebase.
 
-export type WorkflowKindId =
-  | "triage_memory_leak"
-  | "tune_gc"
-  | "traverse_object_graph"
-  | "compare_snapshots"
-  | "classloader_leak";
+import { parseAnalysisArtifact, type AnalysisArtifact } from "../../lib/analysis-types";
+import type { WorkflowKindId } from "./workflow-types";
+
+export type { WorkflowKindId } from "./workflow-types";
 
 export type StartWorkflowParams = {
   heapPath?: string;
@@ -126,13 +124,24 @@ export type SnapshotManifest = {
   hasFieldData: boolean;
 };
 
-/** Display-safe summary from desktop `open_snapshot` (no absolute paths). */
-export type OpenSnapshotSummary = {
-  displayName: string;
-  sourceId: string;
-  objectCount: number;
-  classCount: number;
-  gcRootCount: number;
+export type SnapshotWorkspaceCapabilities = {
+  graph: true;
+  dominators: true;
+  fieldData: boolean;
+  snapshotBacked: true;
+};
+
+export type SnapshotWorkspaceHydrate = {
+  snapshot: {
+    key: string;
+    displayName: string;
+    sourceId: string;
+    schemaVersion: number;
+    createdAt: string;
+  };
+  mode: "deep";
+  capabilities: SnapshotWorkspaceCapabilities;
+  analysis: AnalysisArtifact;
 };
 
 export type WorkflowBridgeResult<T> =
@@ -547,29 +556,74 @@ export async function runRemoveSnapshot(
   }
 }
 
-function parseOpenSnapshotSummary(value: unknown): OpenSnapshotSummary {
+function parseSnapshotWorkspaceHydrate(value: unknown): SnapshotWorkspaceHydrate {
   if (!isRecord(value)) {
     throw new TypeError("Invalid workflow bridge payload: openSnapshot result must be an object.");
   }
 
-  const displayName = displayHeapName(readString(value.displayName, "displayName"));
-  const sourceId = readString(value.sourceId, "sourceId");
-  if (!sourceId.trim()) {
-    throw new TypeError("Invalid workflow bridge payload: expected sourceId to be a non-empty string.");
+  if (!isRecord(value.snapshot)) {
+    throw new TypeError("Invalid workflow bridge payload: expected snapshot to be an object.");
+  }
+  if (!isRecord(value.capabilities)) {
+    throw new TypeError("Invalid workflow bridge payload: expected capabilities to be an object.");
   }
 
+  const key = readString(value.snapshot.key, "snapshot.key");
+  const displayName = displayHeapName(
+    readString(value.snapshot.displayName, "snapshot.displayName"),
+  );
+  const sourceId = readString(value.snapshot.sourceId, "snapshot.sourceId");
+  if (!key.trim()) {
+    throw new TypeError("Invalid workflow bridge payload: expected snapshot.key to be non-empty.");
+  }
+  if (!sourceId.trim()) {
+    throw new TypeError(
+      "Invalid workflow bridge payload: expected snapshot.sourceId to be non-empty.",
+    );
+  }
+  if (value.mode !== "deep") {
+    throw new TypeError("Invalid workflow bridge payload: expected mode to be deep.");
+  }
+  if (
+    value.capabilities.graph !== true ||
+    value.capabilities.dominators !== true ||
+    value.capabilities.snapshotBacked !== true
+  ) {
+    throw new TypeError(
+      "Invalid workflow bridge payload: snapshot hydrate requires graph, dominators, and snapshotBacked capabilities.",
+    );
+  }
+  const fieldData = readBoolean(value.capabilities.fieldData, "capabilities.fieldData");
+  const analysis = parseAnalysisArtifact(value.analysis);
+
   return {
-    displayName,
-    sourceId,
-    objectCount: readNumber(value.objectCount, "objectCount"),
-    classCount: readNumber(value.classCount, "classCount"),
-    gcRootCount: readNumber(value.gcRootCount, "gcRootCount"),
+    snapshot: {
+      key,
+      displayName,
+      sourceId,
+      schemaVersion: readNumber(value.snapshot.schemaVersion, "snapshot.schemaVersion"),
+      createdAt: readString(value.snapshot.createdAt, "snapshot.createdAt"),
+    },
+    mode: "deep",
+    capabilities: {
+      graph: true,
+      dominators: true,
+      fieldData,
+      snapshotBacked: true,
+    },
+    analysis: {
+      ...analysis,
+      summary: {
+        ...analysis.summary,
+        heapPath: displayName,
+      },
+    },
   };
 }
 
 export async function runOpenSnapshot(
   key: string,
-): Promise<WorkflowBridgeResult<OpenSnapshotSummary>> {
+): Promise<WorkflowBridgeResult<SnapshotWorkspaceHydrate>> {
   const bridge = getWorkflowBridge();
 
   if (!bridge?.openSnapshot) {
@@ -578,7 +632,7 @@ export async function runOpenSnapshot(
 
   try {
     const raw = await bridge.openSnapshot(key);
-    return { status: "ready", data: parseOpenSnapshotSummary(raw) };
+    return { status: "ready", data: parseSnapshotWorkspaceHydrate(raw) };
   } catch (error) {
     return {
       status: "error",

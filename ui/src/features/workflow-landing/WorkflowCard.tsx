@@ -1,18 +1,21 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useInRouterContext } from "react-router-dom";
 
 import {
   isCloseWorkflowAvailable,
   isGetWorkflowAvailable,
   isStartWorkflowAvailable,
-  runCloseWorkflow,
-  runGetWorkflow,
-  runNextStep,
-  runStartWorkflow,
   WORKFLOW_COMPLETE_STEP,
   type WorkflowKindId,
   type WorkflowStepResult,
 } from "./workflow-bridge-client";
+import { useInvestigationStore } from "../investigation/investigation-store";
+import {
+  advanceWorkspaceWorkflow,
+  closeWorkspaceWorkflow,
+  recoverWorkspaceWorkflow,
+  startWorkspaceWorkflow,
+} from "./workflow-binding";
 
 export type WorkflowCardProps = {
   kind: WorkflowKindId;
@@ -124,75 +127,72 @@ export function workflowStepLinks(kind: WorkflowKindId, currentStep: string): St
 
 export function WorkflowCard({ kind, title, description, heapPath, showObjectIdInput = false }: WorkflowCardProps) {
   const [objectId, setObjectId] = useState("");
-  const [resumeId, setResumeId] = useState("");
   const [state, setState] = useState<CardState>({ phase: "idle" });
+  const activeWorkflow = useInvestigationStore((store) =>
+    store.activeWorkflow?.kind === kind ? store.activeWorkflow : undefined,
+  );
+  const workflowNeedsRecovery = useInvestigationStore((store) => store.workflowNeedsRecovery);
+  const recoveryAttempted = useRef<string | undefined>(undefined);
   const canStart = isStartWorkflowAvailable();
   const canResume = isGetWorkflowAvailable();
   const canClose = isCloseWorkflowAvailable();
   const bridgeAvailable = canStart || canResume;
   const isInRouterContext = useInRouterContext();
 
+  useEffect(() => {
+    if (
+      !activeWorkflow ||
+      !workflowNeedsRecovery ||
+      !canResume ||
+      recoveryAttempted.current === activeWorkflow.workflowId
+    ) {
+      return;
+    }
+    recoveryAttempted.current = activeWorkflow.workflowId;
+    setState({ phase: "resuming" });
+    void recoverWorkspaceWorkflow().then((result) => {
+      if (result.status === "ready") {
+        setState({
+          phase: result.data.currentStep === WORKFLOW_COMPLETE_STEP ? "complete" : "in-progress",
+          result: result.data,
+        });
+      } else if (result.status === "error") {
+        setState({ phase: "error", message: result.error });
+      } else if (result.status === "incompatible") {
+        setState({ phase: "error", message: "Saved workflow is not compatible with this workspace." });
+      } else {
+        setState({ phase: "idle" });
+      }
+    });
+  }, [activeWorkflow, canResume, workflowNeedsRecovery]);
+
   async function handleStart() {
     setState({ phase: "starting" });
 
-    const result = await runStartWorkflow(kind, {
+    const result = await startWorkspaceWorkflow(kind, {
       heapPath,
       objectId: showObjectIdInput && objectId.trim().length > 0 ? objectId.trim() : undefined,
     });
 
-    if (result.status === "unavailable") {
+    if (result.status === "unavailable" || result.status === "stale" || result.status === "idle") {
       setState({ phase: "idle" });
       return;
     }
 
-    if (result.status === "error") {
-      setState({ phase: "error", message: result.error });
-      return;
-    }
-
-    setResumeId(result.data.workflowId);
-    setState({
-      phase: result.data.currentStep === WORKFLOW_COMPLETE_STEP ? "complete" : "in-progress",
-      result: result.data,
-    });
-  }
-
-  async function handleResume() {
-    const workflowId = resumeId.trim();
-    if (!workflowId) {
-      setState({ phase: "error", message: "Enter a workflow id to resume." });
-      return;
-    }
-
-    setState({ phase: "resuming" });
-    const result = await runGetWorkflow(workflowId);
-
-    if (result.status === "unavailable") {
-      setState({ phase: "idle" });
-      return;
-    }
-
-    if (result.status === "error") {
-      setState({ phase: "error", message: result.error });
-      return;
-    }
-
-    if (result.data.kind !== kind) {
+    if (result.status === "error" || result.status === "incompatible") {
       setState({
         phase: "error",
-        message: `Workflow ${workflowId} is kind '${result.data.kind}', not '${kind}'.`,
+        message:
+          result.status === "error"
+            ? result.error
+            : "Saved workflow is not compatible with this workspace.",
       });
       return;
     }
 
     setState({
       phase: result.data.currentStep === WORKFLOW_COMPLETE_STEP ? "complete" : "in-progress",
-      result: {
-        workflowId: result.data.workflowId,
-        currentStep: result.data.currentStep,
-        stepResult: result.data.stepResult,
-        nextExpectedInput: result.data.nextExpectedInput,
-      },
+      result: result.data,
     });
   }
 
@@ -213,7 +213,33 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
       input = { class_name: className };
     }
 
-    const result = await runNextStep(current.workflowId, input);
+    const result = await advanceWorkspaceWorkflow(input);
+
+    if (result.status === "unavailable" || result.status === "stale" || result.status === "idle") {
+      setState({ phase: "idle" });
+      return;
+    }
+
+    if (result.status === "error" || result.status === "incompatible") {
+      setState({
+        phase: "error",
+        message:
+          result.status === "error"
+            ? result.error
+            : "Saved workflow is not compatible with this workspace.",
+      });
+      return;
+    }
+
+    setState({
+      phase: result.data.currentStep === WORKFLOW_COMPLETE_STEP ? "complete" : "in-progress",
+      result: result.data,
+    });
+  }
+
+  async function handleClose() {
+    setState({ phase: "closing" });
+    const result = await closeWorkspaceWorkflow();
 
     if (result.status === "unavailable") {
       setState({ phase: "idle" });
@@ -225,32 +251,20 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
       return;
     }
 
-    setState({
-      phase: result.data.currentStep === WORKFLOW_COMPLETE_STEP ? "complete" : "in-progress",
-      result: result.data,
-    });
-  }
-
-  async function handleClose(current: WorkflowStepResult) {
-    setState({ phase: "closing" });
-    const result = await runCloseWorkflow(current.workflowId);
-
-    if (result.status === "unavailable") {
-      setState({ phase: "in-progress", result: current });
-      return;
-    }
-
-    if (result.status === "error") {
-      setState({ phase: "error", message: result.error });
-      return;
-    }
-
-    setResumeId("");
     setState({ phase: "idle" });
   }
 
   const activeResult =
-    state.phase === "in-progress" || state.phase === "complete" ? state.result : undefined;
+    state.phase === "in-progress" || state.phase === "complete"
+      ? state.result
+      : activeWorkflow && !workflowNeedsRecovery && state.phase !== "closing"
+        ? {
+            workflowId: activeWorkflow.workflowId,
+            currentStep: activeWorkflow.currentStep,
+            stepResult: null,
+            nextExpectedInput: [],
+          }
+        : undefined;
   const stepLinks =
     activeResult && isInRouterContext
       ? workflowStepLinks(kind, activeResult.currentStep)
@@ -285,39 +299,11 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
             </label>
           ) : null}
 
-          {canResume && (state.phase === "idle" || state.phase === "error") ? (
-            <label style={{ display: "grid", gap: "0.3rem", fontSize: "0.85rem", color: "#cbd5e1" }}>
-              Resume workflow id
-              <input
-                aria-label="Resume workflow id"
-                value={resumeId}
-                onChange={(event) => setResumeId(event.target.value)}
-                style={{
-                  borderRadius: 8,
-                  border: "1px solid #334155",
-                  background: "#020617",
-                  color: "#e2e8f0",
-                  padding: "0.4rem 0.6rem",
-                }}
-              />
-            </label>
-          ) : null}
-
-          {state.phase === "idle" || state.phase === "error" ? (
+          {(state.phase === "idle" || state.phase === "error") && !activeResult ? (
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               {canStart ? (
                 <button type="button" style={buttonStyle} onClick={() => void handleStart()} disabled={!heapPath}>
                   Start {title}
-                </button>
-              ) : null}
-              {canResume ? (
-                <button
-                  type="button"
-                  style={buttonStyle}
-                  onClick={() => void handleResume()}
-                  disabled={!resumeId.trim()}
-                >
-                  Resume
                 </button>
               ) : null}
             </div>
@@ -340,30 +326,16 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
             </p>
           ) : null}
 
-          {state.phase === "in-progress" || state.phase === "complete" ? (
+          {activeResult ? (
             <div style={{ display: "grid", gap: "0.4rem" }}>
               <div style={{ color: "#67e8f9", fontSize: "0.85rem" }}>
-                Workflow {state.result.workflowId} · current step: {state.result.currentStep}
+                Current step: {activeResult.currentStep}
               </div>
-              <pre
-                style={{
-                  margin: 0,
-                  background: "#020617",
-                  border: "1px solid #0f172a",
-                  borderRadius: 10,
-                  padding: "0.6rem",
-                  fontSize: "0.78rem",
-                  overflowX: "auto",
-                  color: "#cbd5e1",
-                }}
-              >
-                {JSON.stringify(state.result.stepResult, null, 2)}
-              </pre>
-              {state.phase === "in-progress" ? (
+              {activeResult.currentStep !== WORKFLOW_COMPLETE_STEP ? (
                 <button
                   type="button"
                   style={buttonStyle}
-                  onClick={() => void handleContinue(state.result)}
+                  onClick={() => void handleContinue(activeResult)}
                 >
                   Continue
                 </button>
@@ -371,7 +343,7 @@ export function WorkflowCard({ kind, title, description, heapPath, showObjectIdI
                 <div style={{ color: "#86efac", fontSize: "0.85rem" }}>Workflow complete.</div>
               )}
               {canClose ? (
-                <button type="button" style={buttonStyle} onClick={() => void handleClose(state.result)}>
+                <button type="button" style={buttonStyle} onClick={() => void handleClose()}>
                   Close workflow
                 </button>
               ) : null}

@@ -25,6 +25,15 @@ export type DesktopAnalysisInput = {
   minCollectionCapacity?: number;
 };
 
+export type DesktopExportResult = {
+  format: string;
+  content: unknown;
+  mimeType: string;
+  byteLength: number;
+  mode: string;
+  provenance: Array<{ kind: string; detail?: string }>;
+};
+
 export type DesktopHeapBridge = {
   pickHeapFile?: () => Promise<PickHeapFileResult>;
   loadHeapFromSource?: (sourceId: string) => Promise<HeapLoadSummary>;
@@ -42,7 +51,17 @@ export type DesktopHeapBridge = {
     sourceId: string;
     root?: string;
     format?: string;
-  }) => Promise<{ format: string; content: string; byteLength: number }>;
+  }) => Promise<{
+    format: string;
+    content: unknown;
+    byteLength: number;
+    mode?: string;
+    provenance?: Array<{ kind: string; detail?: string }>;
+  }>;
+  exportReport?: (input: {
+    sourceId: string;
+    format: "text" | "markdown" | "html" | "toon" | "json";
+  }) => Promise<DesktopExportResult>;
 };
 
 declare global {

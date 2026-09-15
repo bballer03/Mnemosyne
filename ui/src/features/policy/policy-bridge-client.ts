@@ -37,6 +37,12 @@ export type CiCheckResponse = {
   evaluation_complete: boolean;
 };
 
+export type BaselineSourceResult =
+  | { status: "selected"; sourceId: string; displayName: string }
+  | { status: "cancelled" }
+  | { status: "unavailable" }
+  | { status: "error"; error: string };
+
 function getBridge() {
   return getDesktopHeapBridge();
 }
@@ -92,6 +98,17 @@ export async function ensureDesktopHeapSource(): Promise<
     return {
       status: "error",
       error: error instanceof Error ? error.message : "Failed to pick heap dump.",
+    };
+  }
+}
+
+export async function pickDesktopBaselineSource(): Promise<BaselineSourceResult> {
+  try {
+    return await pickHeapFile();
+  } catch (error) {
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Failed to pick baseline heap dump.",
     };
   }
 }

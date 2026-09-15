@@ -1,8 +1,8 @@
 import "../../../test/setup";
 
 import userEvent from "@testing-library/user-event";
-import { render, within } from "@testing-library/react";
-import { describe, expect, it } from "bun:test";
+import { render, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import { DominatorExplorerPanel } from "./DominatorExplorerPanel";
 
@@ -26,6 +26,14 @@ const rows = [
 ];
 
 describe("DominatorExplorerPanel", () => {
+  beforeEach(() => {
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+  });
+
+  afterEach(() => {
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
+  });
+
   it("renders the dominator heading, comparison label, and row content", () => {
     const view = render(
       <DominatorExplorerPanel rows={rows} selectedRowIndex={0} onSelectRowIndex={() => {}} />,
@@ -280,5 +288,255 @@ describe("DominatorExplorerPanel", () => {
 
     expect(panel.getByText(/no dominator rows are available in this artifact\./i)).toBeInTheDocument();
     expect(panel.queryByText(/no dominator rows match the current search\./i)).toBeNull();
+  });
+
+  it("requests roots once and children only when expanded, then removes descendants on collapse", async () => {
+    const user = userEvent.setup();
+    const requests: Array<[string | undefined, number | undefined, number | undefined, number | undefined]> = [];
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      getDominatorChildren: async (parentObjectId, offset, limit, minRetainedBytes) => {
+        requests.push([parentObjectId, offset, limit, minRetainedBytes]);
+        const children =
+          parentObjectId === undefined
+            ? [
+                {
+                  object_id: "0x1",
+                  class_name: "com.example.Root",
+                  shallow_size: 64,
+                  retained_size: 4096,
+                  dominated_count: 2,
+                  has_children: true,
+                },
+              ]
+            : [
+                {
+                  object_id: "0x2",
+                  class_name: "com.example.Child",
+                  shallow_size: 32,
+                  retained_size: 2048,
+                  dominated_count: 0,
+                  has_children: false,
+                },
+              ];
+        return { total: children.length, returned: children.length, offset: 0, limit: 50, truncated: false, children };
+      },
+    };
+
+    const view = render(
+      <DominatorExplorerPanel
+        rows={rows}
+        totalSizeBytes={10_000}
+        selectedObjectId={undefined}
+        onSelectObjectId={() => {}}
+        selectedRowIndex={0}
+        onSelectRowIndex={() => {}}
+      />,
+    );
+    const panel = within(view.container);
+
+    await waitFor(() => expect(panel.getByRole("button", { name: /select com\.example\.root 0x1/i })).toBeInTheDocument());
+    expect(requests).toEqual([[undefined, 0, 50, 0]]);
+    expect(panel.queryByRole("button", { name: /select com\.example\.child 0x2/i })).toBeNull();
+
+    await user.click(panel.getByRole("button", { name: /expand com\.example\.root 0x1/i }));
+
+    await waitFor(() => expect(panel.getByRole("button", { name: /select com\.example\.child 0x2/i })).toBeInTheDocument());
+    expect(requests).toEqual([
+      [undefined, 0, 50, 0],
+      ["0x1", 0, 50, 0],
+    ]);
+
+    await user.click(panel.getByRole("button", { name: /collapse com\.example\.root 0x1/i }));
+
+    expect(panel.queryByRole("button", { name: /select com\.example\.child 0x2/i })).toBeNull();
+  });
+
+  it("converts retained percent to bytes when refreshing roots", async () => {
+    const user = userEvent.setup();
+    const requests: Array<[string | undefined, number | undefined, number | undefined, number | undefined]> = [];
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      getDominatorChildren: async (parentObjectId, offset, limit, minRetainedBytes) => {
+        requests.push([parentObjectId, offset, limit, minRetainedBytes]);
+        return { total: 0, returned: 0, offset: 0, limit: 50, truncated: false, children: [] };
+      },
+    };
+
+    const view = render(
+      <DominatorExplorerPanel
+        rows={rows}
+        totalSizeBytes={10_000}
+        selectedObjectId={undefined}
+        onSelectObjectId={() => {}}
+        selectedRowIndex={0}
+        onSelectRowIndex={() => {}}
+      />,
+    );
+    const panel = within(view.container);
+
+    await waitFor(() => expect(requests).toEqual([[undefined, 0, 50, 0]]));
+    const retainedInput = panel.getByRole("spinbutton", { name: /minimum retained percent/i });
+    await user.clear(retainedInput);
+    await user.type(retainedInput, "1");
+
+    await waitFor(() => expect(requests[requests.length - 1]).toEqual([undefined, 0, 50, 100]));
+  });
+
+  it("loads the next bounded child page and selects a live child by object id", async () => {
+    const user = userEvent.setup();
+    const requests: Array<[string | undefined, number | undefined]> = [];
+    let selectedObjectId: string | undefined;
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      getDominatorChildren: async (parentObjectId, offset) => {
+        requests.push([parentObjectId, offset]);
+        if (parentObjectId === undefined) {
+          return {
+            total: 1,
+            returned: 1,
+            offset: 0,
+            limit: 50,
+            truncated: false,
+            children: [
+              {
+                object_id: "0x1",
+                class_name: "com.example.Root",
+                shallow_size: 64,
+                retained_size: 4096,
+                dominated_count: 2,
+                has_children: true,
+              },
+            ],
+          };
+        }
+
+        const child =
+          offset === 0
+            ? { object_id: "0x2", class_name: "com.example.First", retained_size: 2048 }
+            : { object_id: "0x3", class_name: "com.example.Second", retained_size: 1024 };
+        return {
+          total: 2,
+          returned: 1,
+          offset: offset ?? 0,
+          limit: 50,
+          truncated: offset === 0,
+          children: [{ ...child, shallow_size: 32, dominated_count: 0, has_children: false }],
+        };
+      },
+    };
+
+    const view = render(
+      <DominatorExplorerPanel
+        rows={rows}
+        totalSizeBytes={10_000}
+        selectedObjectId={selectedObjectId}
+        onSelectObjectId={(objectId) => {
+          selectedObjectId = objectId;
+        }}
+        selectedRowIndex={0}
+        onSelectRowIndex={() => {}}
+      />,
+    );
+    const panel = within(view.container);
+
+    await user.click(await panel.findByRole("button", { name: /expand com\.example\.root 0x1/i }));
+    const firstChild = await panel.findByRole("button", { name: /select com\.example\.first 0x2/i });
+    expect(panel.queryByRole("button", { name: /select com\.example\.second 0x3/i })).toBeNull();
+
+    await user.click(firstChild);
+    expect(selectedObjectId).toBe("0x2");
+
+    await user.click(panel.getByRole("button", { name: /load next children for com\.example\.root 0x1/i }));
+
+    await waitFor(() => expect(panel.getByRole("button", { name: /select com\.example\.second 0x3/i })).toBeInTheDocument());
+    expect(requests).toContainEqual(["0x1", 1]);
+  });
+
+  it("keeps a parent visible and offers retry after a child request fails", async () => {
+    const user = userEvent.setup();
+    let childAttempts = 0;
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      getDominatorChildren: async (parentObjectId) => {
+        if (parentObjectId === undefined) {
+          return {
+            total: 1,
+            returned: 1,
+            offset: 0,
+            limit: 50,
+            truncated: false,
+            children: [
+              {
+                object_id: "0x1",
+                class_name: "com.example.Root",
+                shallow_size: 64,
+                retained_size: 4096,
+                dominated_count: 1,
+                has_children: true,
+              },
+            ],
+          };
+        }
+        childAttempts += 1;
+        if (childAttempts === 1) {
+          throw new Error("child lookup failed");
+        }
+        return {
+          total: 1,
+          returned: 1,
+          offset: 0,
+          limit: 50,
+          truncated: false,
+          children: [
+            {
+              object_id: "0x2",
+              class_name: "com.example.Recovered",
+              shallow_size: 32,
+              retained_size: 1024,
+              dominated_count: 0,
+              has_children: false,
+            },
+          ],
+        };
+      },
+    };
+
+    const view = render(
+      <DominatorExplorerPanel
+        rows={rows}
+        totalSizeBytes={10_000}
+        selectedObjectId={undefined}
+        onSelectObjectId={() => {}}
+        selectedRowIndex={0}
+        onSelectRowIndex={() => {}}
+      />,
+    );
+    const panel = within(view.container);
+
+    await user.click(await panel.findByRole("button", { name: /expand com\.example\.root 0x1/i }));
+    expect(await panel.findByText(/child lookup failed/i)).toBeInTheDocument();
+    expect(panel.getByRole("button", { name: /select com\.example\.root 0x1/i })).toBeInTheDocument();
+
+    await user.click(panel.getByRole("button", { name: /retry children for com\.example\.root 0x1/i }));
+
+    expect(await panel.findByRole("button", { name: /select com\.example\.recovered 0x2/i })).toBeInTheDocument();
+    expect(childAttempts).toBe(2);
+  });
+
+  it("labels and bounds the artifact-only flat preview", () => {
+    const manyRows = Array.from({ length: 125 }, (_, index) => ({
+      name: `ArtifactRow${index}`,
+      className: `com.example.Artifact${index}`,
+      objectId: "",
+      dominates: index,
+      retainedSize: index,
+      shallowSize: 1,
+    }));
+
+    const view = render(
+      <DominatorExplorerPanel rows={manyRows} selectedRowIndex={0} onSelectRowIndex={() => {}} />,
+    );
+    const panel = within(view.container);
+
+    expect(panel.getByText(/artifact-only bounded flat preview/i)).toBeInTheDocument();
+    expect(panel.getAllByRole("button", { name: /select com\.example\.artifact/i })).toHaveLength(100);
+    expect(panel.getByText(/showing first 100 of 125 artifact rows/i)).toBeInTheDocument();
   });
 });

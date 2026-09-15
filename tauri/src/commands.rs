@@ -1,36 +1,50 @@
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
+use mnemosyne_core::graph::build_dominator_tree_controlled;
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
     analysis::{
-        analyze_heap, analyze_heap_capturing_graph, validate_leak_id, AnalyzeRequest,
+        analyze_heap, analyze_heap_capturing_graph_controlled, analyze_heap_with_graph_controlled,
+        analyze_snapshot_from_graph_controlled, validate_leak_id, AnalyzeRequest, AnalyzeResponse,
         ObjectInspection,
     },
     diff::ObjectDiffReport,
-    evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file,
-    parse_hprof_file_with_options, parse_hprof_overview_file, propose_fix_with_config,
+    evaluate, focus_leaks, generate_ai_insights_async, parse_hprof_file_controlled,
+    parse_hprof_file_with_options_controlled, parse_hprof_overview_file, propose_fix_with_config,
     query::{execute_query, parse_query, CellValue},
+    render_report,
     report::flamegraph::{collapse, render, CollapseOptions, FlameFormat, FlameRoot},
     AllPathsRequest, AnalysisMode, FixRequest, FixResponse, FixStyle, GcPathRequest, GcPathResult,
-    HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest, OverviewOptions,
-    ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker, Severity, SourceMapResult,
+    HistogramGroupBy, HistogramResult, LeakDetectionOptions, MapToCodeRequest,
+    NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
+    OutputFormat, OverviewOptions, ParseOptions, Policy, PolicyInput, Predicate, ProvenanceMarker,
+    ReportRequest, Severity, SourceMapResult,
 };
 use mnemosyne_desktop_session::{
-    ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
-    close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
-    default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
-    find_all_gc_paths_for_session, get_ai_session_for_session, get_workflow_for_session,
-    graph_has_field_data, inspect_object_for_session, install_field_data_cache_if_still_current,
-    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
-    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
-    remove_snapshot_for_session, resume_ai_session_for_session, save_snapshot_for_session,
-    start_workflow_for_session, CreateAiSessionInput, DiffObjectsSessionInput,
-    FieldDataCacheCapture, StartWorkflowSessionInput,
+    ai_session_store_for_config, build_snapshot_workspace_hydrate, chat_session_for_session,
+    close_ai_session_for_session, close_workflow_for_session, create_ai_session_for_session,
+    default_snapshot_store, default_workflow_store, describe_workflow_for_session,
+    diff_objects_for_session, dominator_children_for_session, find_all_gc_paths_for_session,
+    get_ai_session_for_session, get_workflow_for_session, graph_has_field_data,
+    inspect_object_for_session_controlled, install_field_data_cache_if_still_current,
+    list_class_instances_for_session, list_snapshots_for_session, next_step_for_session,
+    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
+    regroup_histogram_for_session, remove_snapshot_for_session, replace_session_analysis,
+    resume_ai_session_for_session, start_workflow_for_session,
+    structured_operation_cancelled_error, CancelOperationResult, CreateAiSessionInput,
+    DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationEnvelope,
+    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
+    SnapshotWorkspaceHydrate, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
+    DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
@@ -41,6 +55,110 @@ const NO_HEAP_LOADED: &str = "No heap loaded";
 const LOCK_ERROR: &str = "Heap session lock poisoned";
 const UNKNOWN_SOURCE: &str = "Unknown heap source";
 const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin extension";
+
+type SharedOperationObserver = Option<Arc<TauriOperationObserver>>;
+
+fn require_operation_context(
+    context: Option<OperationContext>,
+) -> Result<OperationContext, String> {
+    context.ok_or_else(|| "Missing operation context".to_string())
+}
+
+fn registered_operation_observer<'a>(
+    app: &AppHandle,
+    context: Option<OperationContext>,
+    kind: &str,
+    registry: &'a OperationRegistry,
+) -> Result<(SharedOperationObserver, Option<OperationRegistration<'a>>), String> {
+    let Some(context) = context else {
+        return Ok((None, None));
+    };
+    let registration = registry
+        .register(context.clone())
+        .map_err(|error| error.to_string())?;
+    let observer = Arc::new(TauriOperationObserver::new(
+        app.clone(),
+        context,
+        kind,
+        registration.cancellation_token(),
+    ));
+    Ok((Some(observer), Some(registration)))
+}
+
+fn core_observer(observer: &SharedOperationObserver) -> &dyn OperationObserver {
+    observer
+        .as_deref()
+        .map(|observer| observer as &dyn OperationObserver)
+        .unwrap_or(&NoopOperationObserver)
+}
+
+fn ensure_observer_not_cancelled(observer: &SharedOperationObserver) -> Result<(), String> {
+    if core_observer(observer).is_cancelled() {
+        Err(structured_operation_cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_operation_can_commit(
+    registration: Option<&OperationRegistration<'_>>,
+) -> Result<(), String> {
+    if registration.is_some_and(|registration| !registration.can_commit()) {
+        Err(structured_operation_cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn emit_indeterminate(
+    observer: &SharedOperationObserver,
+    phase: OperationPhase,
+    started: std::time::Instant,
+) {
+    if let Some(observer) = observer {
+        observer.progress(OperationProgressSnapshot {
+            phase,
+            completed: None,
+            total: None,
+            unit: None,
+            indeterminate: true,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+}
+
+fn emit_completed(
+    observer: &SharedOperationObserver,
+    phase: OperationPhase,
+    started: std::time::Instant,
+) {
+    if let Some(observer) = observer {
+        observer.progress(OperationProgressSnapshot {
+            phase,
+            completed: Some(1),
+            total: Some(1),
+            unit: Some("stage".to_string()),
+            indeterminate: false,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+}
+
+fn emit_operation_error(
+    observer: &SharedOperationObserver,
+    error: &str,
+    started: std::time::Instant,
+) {
+    emit_indeterminate(
+        observer,
+        if error == "Operation cancelled" || error.starts_with("operation_cancelled:") {
+            OperationPhase::Cancelled
+        } else {
+            OperationPhase::Failed
+        },
+        started,
+    );
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +200,9 @@ fn is_supported_heap_path(path: &str) -> bool {
 
 fn map_native_error(error: impl ToString) -> String {
     let raw = error.to_string();
+    if raw == "Operation cancelled" {
+        return structured_operation_cancelled_error();
+    }
     if raw.contains('/') || raw.contains('\\') {
         return "Heap open or analysis failed. Check that the file is a valid .hprof/.bin dump."
             .to_string();
@@ -107,6 +228,8 @@ fn sanitize_analyze_response_value(mut value: Value, display_name: &str) -> Valu
 pub struct DesktopAnalysisInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
     enable_classloaders: Option<bool>,
@@ -131,8 +254,16 @@ pub struct DesktopAnalysisInput {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn run_desktop_analysis(
     input: DesktopAnalysisInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<Value, String> {
+) -> Result<OperationEnvelope<Value>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "analyze", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
     let path = {
         let sources = state
             .selected_sources
@@ -143,7 +274,6 @@ pub async fn run_desktop_analysis(
             .cloned()
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
-
     let display_name = display_name_for_path(&path);
     let mode = input.mode.as_deref().unwrap_or("incident");
     if mode.eq_ignore_ascii_case("overview") {
@@ -180,7 +310,13 @@ pub async fn run_desktop_analysis(
             .lock()
             .map_err(|_| LOCK_ERROR.to_string())?;
         state.bump_session_epoch();
-        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+        let mut dominator = state
+            .dominator
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        replace_session_analysis(&mut graph, &mut dominator, None);
+        *state.analysis.write().map_err(|_| LOCK_ERROR.to_string())? = None;
         *state
             .field_data_graph
             .write()
@@ -210,7 +346,6 @@ pub async fn run_desktop_analysis(
     };
 
     let file_bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
-    let started = std::time::Instant::now();
     tracing::info!(
         %display_name,
         source_id = %input.source_id,
@@ -226,19 +361,34 @@ pub async fn run_desktop_analysis(
         "run_desktop_analysis: starting (lean Home defaults skip field-data reports unless explicitly enabled)"
     );
 
-    let (response, object_graph, _dominator) = match analyze_heap_capturing_graph(request).await {
-        Ok(result) => result,
-        Err(error) => {
-            let mapped = map_native_error(error);
-            tracing::error!(
-                %display_name,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                error = %mapped,
-                "run_desktop_analysis: failed"
-            );
-            return Err(mapped);
-        }
-    };
+    let (response, object_graph, dominator) =
+        match analyze_heap_capturing_graph_controlled(request, core_observer(&observer)).await {
+            Ok(result) => result,
+            Err(error) => {
+                let cancelled = matches!(&error, mnemosyne_core::CoreError::OperationCancelled);
+                emit_indeterminate(
+                    &observer,
+                    if cancelled {
+                        OperationPhase::Cancelled
+                    } else {
+                        OperationPhase::Failed
+                    },
+                    started,
+                );
+                let mapped = map_native_error(error);
+                tracing::error!(
+                    %display_name,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    error = %mapped,
+                    "run_desktop_analysis: failed"
+                );
+                return Err(mapped);
+            }
+        };
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
     let object_count = object_graph.as_ref().map(|graph| graph.object_count());
     tracing::info!(
@@ -249,12 +399,29 @@ pub async fn run_desktop_analysis(
         "run_desktop_analysis: completed"
     );
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = object_graph;
+    let replacement = match (object_graph, dominator) {
+        (Some(graph), Some(dominator)) => Some((graph, dominator)),
+        (None, None) => None,
+        _ => return Err("Analysis returned an incomplete graph/dominator pair".to_string()),
+    };
+    let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
+    replace_session_analysis(&mut graph, &mut dominator, replacement);
+    *analysis_slot = Some(response.clone());
     *state
         .field_data_graph
         .write()
@@ -264,8 +431,38 @@ pub async fn run_desktop_analysis(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
-    let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
-    Ok(sanitize_analyze_response_value(raw, &display_name))
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph, &mut dominator, None);
+        *analysis_slot = None;
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    let raw = serde_json::to_value(&response).map_err(|error| error.to_string())?;
+    let result = sanitize_analyze_response_value(raw, &display_name);
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph, &mut dominator, None);
+        *analysis_slot = None;
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, result))
 }
 
 fn desktop_ci_check_exit_code(result: &mnemosyne_core::PolicyResult, fail_on: Severity) -> i32 {
@@ -468,6 +665,8 @@ pub async fn run_ci_check(
 pub struct DesktopFlamegraphInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     format: Option<String>,
@@ -476,8 +675,20 @@ pub struct DesktopFlamegraphInput {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn generate_desktop_flamegraph(
     input: DesktopFlamegraphInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<Value, String> {
+) -> Result<OperationEnvelope<Value>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) = registered_operation_observer(
+        &app,
+        Some(context.clone()),
+        "flamegraph",
+        &state.operations,
+    )?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
     let path = {
         let sources = state
             .selected_sources
@@ -488,6 +699,7 @@ pub async fn generate_desktop_flamegraph(
             .cloned()
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
+    let display_name = display_name_for_path(&path);
 
     let root = match input.root.as_deref().unwrap_or("dominator") {
         "dominator" => FlameRoot::Dominator,
@@ -508,53 +720,50 @@ pub async fn generate_desktop_flamegraph(
         .map_err(|_| LOCK_ERROR.to_string())?
         .clone();
 
-    let (graph, dominator) = {
-        let (_, graph, dominator) =
-            mnemosyne_core::analysis::analyze_heap_with_graph(AnalyzeRequest {
+    let (mut analysis, graph, dominator) = {
+        analyze_heap_with_graph_controlled(
+            AnalyzeRequest {
                 heap_path: path.clone(),
                 config,
                 leak_options: LeakDetectionOptions::default(),
                 enable_ai: false,
                 histogram_group_by: HistogramGroupBy::Class,
                 ..AnalyzeRequest::default()
-            })
-            .await
-            .map_err(map_native_error)?;
-        (graph, dominator)
+            },
+            core_observer(&observer),
+        )
+        .await
+        .map_err(map_native_error)?
     };
-
-    {
-        let _session = state
-            .session_mutation
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
-        state.bump_session_epoch();
-        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph.clone());
-        *state
-            .field_data_graph
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state
-            .heap_path
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+    analysis.summary.heap_path = display_name;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
     }
 
+    emit_indeterminate(&observer, OperationPhase::Rendering, started);
     let stacks = collapse(root, &graph, &dominator, &CollapseOptions::default());
     let mut buffer = Vec::new();
     render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
     let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
+    let mode = serde_json::to_value(analysis.mode).map_err(|error| error.to_string())?;
+    let provenance =
+        serde_json::to_value(&analysis.provenance).map_err(|error| error.to_string())?;
 
-    match format {
+    let result: Result<Value, String> = match format {
         FlameFormat::Svg => Ok(serde_json::json!({
             "format": "svg",
             "content": rendered,
             "byteLength": rendered.len(),
+            "mode": mode,
+            "provenance": provenance,
         })),
         FlameFormat::FoldedStack => Ok(serde_json::json!({
-            "format": "folded",
+            "format": "folded-stack",
             "content": rendered,
             "byteLength": rendered.len(),
+            "mode": mode,
+            "provenance": provenance,
         })),
         FlameFormat::Json => {
             let value: Value =
@@ -563,9 +772,161 @@ pub async fn generate_desktop_flamegraph(
                 "format": "json",
                 "content": value,
                 "byteLength": rendered.len(),
+                "mode": mode,
+                "provenance": provenance,
             }))
         }
+    };
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_indeterminate(&observer, OperationPhase::Committing, started);
+        let _session = state
+            .session_mutation
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        state.bump_session_epoch();
+        let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+        let mut dominator_slot = state
+            .dominator
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((graph, dominator)),
+        );
+        *analysis_slot = Some(analysis);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+            *analysis_slot = None;
+            *state
+                .field_data_graph
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+            *state
+                .heap_path
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
+    result.map(|data| OperationEnvelope::new(context, data))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopReportExportInput {
+    source_id: String,
+    format: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
+}
+
+fn parse_report_export_format(value: &str) -> Result<(OutputFormat, &'static str), String> {
+    match value.to_ascii_lowercase().as_str() {
+        "text" => Ok((OutputFormat::Text, "text")),
+        "markdown" => Ok((OutputFormat::Markdown, "markdown")),
+        "html" => Ok((OutputFormat::Html, "html")),
+        "toon" => Ok((OutputFormat::Toon, "toon")),
+        "json" => Ok((OutputFormat::Json, "json")),
+        other => Err(format!("unsupported report export format: {other}")),
+    }
+}
+
+fn render_desktop_report_export(
+    mut analysis: AnalyzeResponse,
+    display_name: &str,
+    requested_format: &str,
+) -> Result<Value, String> {
+    let (format, format_name) = parse_report_export_format(requested_format)?;
+    analysis.summary.heap_path = display_name.to_string();
+    let mode = serde_json::to_value(analysis.mode).map_err(|error| error.to_string())?;
+    let provenance =
+        serde_json::to_value(&analysis.provenance).map_err(|error| error.to_string())?;
+    let report = render_report(&ReportRequest { analysis, format }).map_err(map_native_error)?;
+    let byte_length = report.contents.as_bytes().len();
+
+    Ok(serde_json::json!({
+        "format": format_name,
+        "content": report.contents,
+        "mimeType": report.mime_type,
+        "byteLength": byte_length,
+        "mode": mode,
+        "provenance": provenance,
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn export_desktop_report(
+    input: DesktopReportExportInput,
+    app: AppHandle,
+    state: State<'_, HeapSession>,
+) -> Result<OperationEnvelope<Value>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "analyze", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+
+    let path = {
+        let sources = state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        sources
+            .get(&input.source_id)
+            .cloned()
+            .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
+    };
+    ensure_loaded_heap_matches(&state, Some(&path))?;
+    let analysis = state
+        .analysis
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| {
+            "No committed analysis is available for the active workspace; run analysis first."
+                .to_string()
+        })?;
+
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_indeterminate(&observer, OperationPhase::Rendering, started);
+    let result =
+        render_desktop_report_export(analysis, &display_name_for_path(&path), &input.format)?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, result))
 }
 
 #[derive(Debug, Deserialize)]
@@ -573,6 +934,8 @@ pub async fn generate_desktop_flamegraph(
 pub struct HeapQueryInput {
     heap_path: String,
     query: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
 }
 
 #[derive(Debug, Serialize)]
@@ -611,6 +974,8 @@ pub struct ObjectReferrersResult {
 pub struct DiffObjectsBridgeInput {
     before_key: String,
     after_key: String,
+    #[serde(default)]
+    context: Option<OperationContext>,
     strategy: Option<String>,
     top_n: Option<usize>,
     cross_reference_leaks: Option<bool>,
@@ -687,10 +1052,21 @@ pub fn get_desktop_log_path() -> String {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn cancel_operation(
+    operation_id: String,
+    state: State<'_, HeapSession>,
+) -> CancelOperationResult {
+    state.operations.cancel(&operation_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap_from_source(
     source_id: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+    let context = require_operation_context(context)?;
     let path = {
         let sources = state
             .selected_sources
@@ -702,31 +1078,63 @@ pub async fn load_heap_from_source(
             .ok_or_else(|| UNKNOWN_SOURCE.to_string())?
     };
 
-    load_heap_internal(path, Some(source_id), &state).await
+    load_heap_internal(path, Some(source_id), context, &app, &state).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn load_heap(
     path: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+    let context = require_operation_context(context)?;
     if !is_supported_heap_path(&path) {
         return Err(INVALID_HEAP_EXTENSION.to_string());
     }
-    load_heap_internal(path, None, &state).await
+    load_heap_internal(path, None, context, &app, &state).await
 }
 
 async fn load_heap_internal(
     path: String,
     source_id: Option<String>,
+    context: OperationContext,
+    app: &AppHandle,
     state: &State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
-    let graph = spawn_blocking({
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+    let started = std::time::Instant::now();
+    let (observer, registration) =
+        registered_operation_observer(app, Some(context.clone()), "open", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+    let background_observer = observer.clone();
+    let (graph, dominator) = spawn_blocking({
         let path = path.clone();
-        move || parse_hprof_file(&path).map_err(map_native_error)
+        move || {
+            ensure_observer_not_cancelled(&background_observer)?;
+            let graph = parse_hprof_file_controlled(&path, core_observer(&background_observer))
+                .map_err(map_native_error)?;
+            ensure_observer_not_cancelled(&background_observer)?;
+            emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
+            emit_indeterminate(
+                &background_observer,
+                OperationPhase::ComputingDominators,
+                started,
+            );
+            let dominator =
+                build_dominator_tree_controlled(&graph, core_observer(&background_observer))
+                    .map_err(map_native_error)?;
+            ensure_observer_not_cancelled(&background_observer)?;
+            emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
+            Ok::<_, String>((graph, dominator))
+        }
     })
     .await
     .map_err(map_native_error)??;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
     let summary = HeapLoadSummary {
         display_name: display_name_for_path(&path),
@@ -736,12 +1144,28 @@ async fn load_heap_internal(
         gc_root_count: graph.gc_roots.len(),
     };
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
+    let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator_slot = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
+    replace_session_analysis(
+        &mut graph_slot,
+        &mut dominator_slot,
+        Some((graph, dominator)),
+    );
+    *analysis_slot = None;
     *state
         .field_data_graph
         .write()
@@ -751,7 +1175,22 @@ async fn load_heap_internal(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
-    Ok(summary)
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+        *analysis_slot = None;
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, summary))
 }
 
 #[tauri::command]
@@ -761,13 +1200,19 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
     // Idempotent: Close from UI must succeed even if the graph was already cleared.
-    if graph.is_none() {
+    if graph.is_none() && dominator.is_none() && analysis.is_none() {
         return Ok(());
     }
 
     state.bump_session_epoch();
-    *graph = None;
+    replace_session_analysis(&mut graph, &mut dominator, None);
+    *analysis = None;
     *state
         .field_data_graph
         .write()
@@ -831,18 +1276,26 @@ pub async fn get_referrers(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn query_heap(
     input: HeapQueryInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapQueryResult, String> {
+) -> Result<OperationEnvelope<HeapQueryResult>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "query", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
-    let graph = require_loaded_graph(&state)?;
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    let background_observer = observer.clone();
 
-    spawn_blocking(move || {
-        let dominator = mnemosyne_core::build_dominator_tree(&graph);
+    let result = spawn_blocking(move || -> Result<HeapQueryResult, String> {
+        ensure_observer_not_cancelled(&background_observer)?;
         let query = parse_query(&input.query).map_err(|error| error.to_string())?;
         let result =
             execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
 
-        Ok(HeapQueryResult {
+        let response = HeapQueryResult {
             columns: result.columns,
             rows: result
                 .rows
@@ -853,10 +1306,26 @@ pub async fn query_heap(
                         .collect()
                 })
                 .collect(),
-        })
+        };
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok(response)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
+    }
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -864,10 +1333,100 @@ pub async fn regroup_histogram(
     group_by: String,
     state: State<'_, HeapSession>,
 ) -> Result<HistogramResult, String> {
-    let graph = require_loaded_graph(&state)?;
-    spawn_blocking(move || regroup_histogram_for_session(&graph, &group_by))
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    spawn_blocking(move || regroup_histogram_for_session(&graph, &dominator, &group_by))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_class_instances(
+    class_key: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(DEFAULT_CLASS_INSTANCES_LIMIT);
+
+    spawn_blocking(move || {
+        let page = list_class_instances_for_session(&graph, &dominator, &class_key, offset, limit)?;
+        let instances = page
+            .instances
+            .into_iter()
+            .map(|instance| {
+                serde_json::json!({
+                    "object_id": instance.object_id,
+                    "class_name": instance.class_name,
+                    "shallow_size": instance.shallow_size,
+                    "retained_size": instance.retained_size,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(serde_json::json!({
+            "class_key": page.class_key,
+            "total": page.total,
+            "returned": page.returned,
+            "offset": page.offset,
+            "limit": page.limit,
+            "truncated": page.truncated,
+            "instances": instances,
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_dominator_children(
+    parent_object_id: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    min_retained_bytes: Option<u64>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(DEFAULT_DOMINATOR_CHILDREN_LIMIT);
+    let min_retained_bytes = min_retained_bytes.unwrap_or(0);
+
+    spawn_blocking(move || {
+        let page = dominator_children_for_session(
+            &graph,
+            &dominator,
+            parent_object_id.as_deref(),
+            offset,
+            limit,
+            min_retained_bytes,
+        );
+        let children = page
+            .children
+            .into_iter()
+            .map(|child| {
+                serde_json::json!({
+                    "object_id": child.object_id,
+                    "class_name": child.class_name,
+                    "shallow_size": child.shallow_size,
+                    "retained_size": child.retained_size,
+                    "dominated_count": child.dominated_count,
+                    "has_children": child.has_children,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok::<Value, String>(serde_json::json!({
+            "total": page.total,
+            "returned": page.returned,
+            "offset": page.offset,
+            "limit": page.limit,
+            "truncated": page.truncated,
+            "children": children,
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -917,8 +1476,15 @@ pub async fn explain_leak(
 pub async fn inspect_object(
     object_id: String,
     retain_field_data: Option<bool>,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<ObjectInspection, String> {
+) -> Result<OperationEnvelope<ObjectInspection>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "inspect", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let retain_field_data = retain_field_data.unwrap_or(false);
@@ -936,6 +1502,7 @@ pub async fn inspect_object(
         None
     };
 
+    let background_observer = observer.clone();
     let (inspection, refreshed_field_graph) = spawn_blocking(move || {
         let (inspect_graph, refreshed_field_graph) = if retain_field_data
             && !graph_has_field_data(&graph)
@@ -943,30 +1510,57 @@ pub async fn inspect_object(
             if let Some(cached) = cached_field_graph.filter(|cached| graph_has_field_data(cached)) {
                 (cached, None)
             } else {
-                let reloaded = parse_hprof_file_with_options(
+                let reloaded = parse_hprof_file_with_options_controlled(
                     &heap_path,
                     ParseOptions {
                         retain_field_data: true,
                     },
+                    core_observer(&background_observer),
                 )
-                .map_err(|error| error.to_string())?;
+                .map_err(map_native_error)?;
                 (reloaded.clone(), Some(reloaded))
             }
         } else {
             (graph, None)
         };
 
-        inspect_object_for_session(&inspect_graph, &heap_path, &object_id, retain_field_data)
-            .map(|inspection| (inspection, refreshed_field_graph))
+        emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
+        ensure_observer_not_cancelled(&background_observer)?;
+        let inspection = inspect_object_for_session_controlled(
+            &inspect_graph,
+            &heap_path,
+            &object_id,
+            retain_field_data,
+            core_observer(&background_observer),
+        )
+        .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>((inspection, refreshed_field_graph))
     })
     .await
     .map_err(|error| error.to_string())??;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
+    let mut installed_field_data = false;
+    let _session = if refreshed_field_graph.is_some() {
+        Some(
+            state
+                .session_mutation
+                .lock()
+                .map_err(|_| LOCK_ERROR.to_string())?,
+        )
+    } else {
+        None
+    };
     if let Some(field_graph) = refreshed_field_graph {
-        let _session = state
-            .session_mutation
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
+        emit_indeterminate(&observer, OperationPhase::Committing, started);
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         let current_epoch = state.session_epoch.load(Ordering::Acquire);
         let current_heap_path = state
             .heap_path
@@ -978,7 +1572,7 @@ pub async fn inspect_object(
             .field_data_graph
             .write()
             .map_err(|_| LOCK_ERROR.to_string())?;
-        install_field_data_cache_if_still_current(
+        installed_field_data = install_field_data_cache_if_still_current(
             &cache_capture,
             current_epoch,
             current_heap_path.as_deref(),
@@ -987,43 +1581,108 @@ pub async fn inspect_object(
         );
     }
 
-    Ok(inspection)
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        if installed_field_data {
+            *state
+                .field_data_graph
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+        }
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, inspection))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn find_all_gc_paths(
     object_id: String,
     max_paths: Option<usize>,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<GcPathResult, String> {
+) -> Result<OperationEnvelope<GcPathResult>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "gc-path", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, None)?;
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let max_paths = max_paths.unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS);
+    let background_observer = observer.clone();
 
-    spawn_blocking(move || find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths))
-        .await
-        .map_err(|error| error.to_string())?
+    let result = spawn_blocking(move || {
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result = find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
+    }
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn find_gc_path(
     object_id: String,
     heap_path: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<mnemosyne_core::GcPathResult, String> {
+) -> Result<OperationEnvelope<mnemosyne_core::GcPathResult>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "gc-path", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let active_heap_path = ensure_loaded_heap_matches(&state, Some(&heap_path))?;
+    let background_observer = observer.clone();
 
-    spawn_blocking(move || {
-        mnemosyne_core::find_gc_path(&GcPathRequest {
+    let result = spawn_blocking(move || {
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result = mnemosyne_core::find_gc_path(&GcPathRequest {
             heap_path: active_heap_path,
             object_id,
             max_depth: None,
         })
-        .map_err(|error| error.to_string())
+        .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
+    }
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1050,14 +1709,24 @@ pub async fn map_to_code(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn diff_objects(input: DiffObjectsBridgeInput) -> Result<ObjectDiffReport, String> {
+pub async fn diff_objects(
+    input: DiffObjectsBridgeInput,
+    app: AppHandle,
+    state: State<'_, HeapSession>,
+) -> Result<OperationEnvelope<ObjectDiffReport>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "diff", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let strategy = match input.strategy.as_deref() {
         None => None,
         Some(raw) => Some(parse_identity_strategy(raw)?),
     };
 
     let store = default_snapshot_store();
-    diff_objects_for_session(
+    let result = diff_objects_for_session(
         &store,
         DiffObjectsSessionInput {
             before_key: input.before_key,
@@ -1067,7 +1736,21 @@ pub async fn diff_objects(input: DiffObjectsBridgeInput) -> Result<ObjectDiffRep
             cross_reference_leaks: input.cross_reference_leaks,
         },
     )
-    .await
+    .await;
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
+    }
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1235,14 +1918,22 @@ pub async fn list_snapshots() -> Result<Vec<SnapshotManifest>, String> {
 pub struct SaveSnapshotInput {
     source_id: String,
     #[serde(default)]
+    context: Option<OperationContext>,
+    #[serde(default)]
     retain_field_data: Option<bool>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn save_snapshot(
     input: SaveSnapshotInput,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<SnapshotManifest, String> {
+) -> Result<OperationEnvelope<SnapshotManifest>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "snapshot", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
     let path = {
         let sources = state
             .selected_sources
@@ -1256,12 +1947,51 @@ pub async fn save_snapshot(
 
     let retain_field_data = input.retain_field_data.unwrap_or(false);
     let heap_path = path.clone();
-    spawn_blocking(move || {
-        save_snapshot_for_session(&default_snapshot_store(), &heap_path, retain_field_data)
-            .map_err(map_native_error)
+    let background_observer = observer.clone();
+    let result = spawn_blocking(move || {
+        ensure_observer_not_cancelled(&background_observer)?;
+        let graph = parse_hprof_file_with_options_controlled(
+            &heap_path,
+            ParseOptions { retain_field_data },
+            core_observer(&background_observer),
+        )
+        .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
+        emit_indeterminate(
+            &background_observer,
+            OperationPhase::ComputingDominators,
+            started,
+        );
+        let dominator =
+            build_dominator_tree_controlled(&graph, core_observer(&background_observer))
+                .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        emit_indeterminate(&background_observer, OperationPhase::Committing, started);
+        let manifest = default_snapshot_store()
+            .save(&heap_path, &graph, &dominator)
+            .map_err(map_native_error)?;
+        Ok::<_, String>(manifest)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            if let Ok(manifest) = &result {
+                let _ = default_snapshot_store().remove(&manifest.heap_sha256);
+            }
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_completed(&observer, OperationPhase::Complete, started);
+    } else {
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
+    }
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1272,54 +2002,113 @@ pub async fn remove_snapshot(key: String) -> Result<Value, String> {
 /// Load a cached snapshot by SHA-256 store key into the live desktop session.
 ///
 /// Registers an opaque `sourceId` → `manifest.heap_path` for later save/ci_check
-/// and returns a display-safe summary (basename + counts only — no absolute paths).
+/// and returns one display-safe graph/facts/mode/capability hydrate.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn open_snapshot(
     key: String,
+    context: Option<OperationContext>,
+    app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
-    let (manifest, graph, _dominator) = spawn_blocking(move || {
-        open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
+) -> Result<OperationEnvelope<SnapshotWorkspaceHydrate>, String> {
+    let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
+    let (observer, registration) =
+        registered_operation_observer(&app, Some(context.clone()), "snapshot", &state.operations)?;
+    emit_completed(&observer, OperationPhase::Accepted, started);
+    emit_indeterminate(&observer, OperationPhase::Opening, started);
+    let background_observer = observer.clone();
+    let (manifest, graph, dominator) = spawn_blocking(move || {
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result =
+            open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|error| error.to_string())??;
-
-    let heap_path = manifest.heap_path;
-    let display_name = display_name_for_path(&heap_path);
-    let source_id = Uuid::new_v4().to_string();
-
-    {
-        let mut sources = state
-            .selected_sources
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
-        sources.insert(source_id.clone(), heap_path.clone());
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
     }
 
-    let summary = HeapLoadSummary {
-        display_name,
-        source_id: Some(source_id),
-        object_count: graph.object_count(),
-        class_count: graph.classes.len(),
-        gc_root_count: graph.gc_roots.len(),
-    };
+    let heap_path = manifest.heap_path.clone();
+    let display_name = display_name_for_path(&heap_path);
+    let source_id = Uuid::new_v4().to_string();
+    let config = state
+        .config
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone();
+    let analysis = analyze_snapshot_from_graph_controlled(
+        AnalyzeRequest {
+            heap_path: display_name,
+            config,
+            leak_options: LeakDetectionOptions::default(),
+            enable_ai: false,
+            histogram_group_by: HistogramGroupBy::Class,
+            enable_classloaders: true,
+            enable_threads: false,
+            enable_strings: false,
+            enable_collections: false,
+            enable_top_instances: true,
+            enable_by_referrer: false,
+            enable_duplicate_arrays: false,
+            top_n: 25,
+            min_collection_capacity: 16,
+            min_duplicate_count: 2,
+        },
+        &graph,
+        &dominator,
+        core_observer(&observer),
+    )
+    .await
+    .map_err(map_native_error)?;
+    let hydrate = build_snapshot_workspace_hydrate(&manifest, &source_id, analysis.clone());
 
+    emit_indeterminate(&observer, OperationPhase::Committing, started);
     let _session = state
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
-    state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
-    *state
+    let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator_slot = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut analysis_slot = state.analysis.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut field_data_slot = state
         .field_data_graph
         .write()
-        .map_err(|_| LOCK_ERROR.to_string())? = None;
-    *state
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut heap_path_slot = state
         .heap_path
         .write()
-        .map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
-
-    Ok(summary)
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let mut sources = state
+        .selected_sources
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let registration = registration
+        .as_ref()
+        .ok_or_else(|| "Missing operation registration".to_string())?;
+    let committed = registration.commit_if_current(|| {
+        state.bump_session_epoch();
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((graph, dominator)),
+        );
+        *analysis_slot = Some(analysis);
+        *field_data_slot = None;
+        *heap_path_slot = Some(heap_path.clone());
+        sources.insert(source_id, heap_path);
+    });
+    if committed.is_none() {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(structured_operation_cancelled_error());
+    }
+    emit_completed(&observer, OperationPhase::Complete, started);
+    Ok(OperationEnvelope::new(context, hydrate))
 }
 
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {
@@ -1340,6 +2129,34 @@ fn require_loaded_graph(
         .map_err(|_| LOCK_ERROR.to_string())?
         .clone()
         .ok_or_else(|| NO_HEAP_LOADED.to_string())
+}
+
+fn require_loaded_analysis(
+    state: &State<'_, HeapSession>,
+) -> Result<
+    (
+        mnemosyne_core::hprof::ObjectGraph,
+        mnemosyne_core::DominatorTree,
+    ),
+    String,
+> {
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let graph = state
+        .graph
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| NO_HEAP_LOADED.to_string())?;
+    let dominator = state
+        .dominator
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| NO_HEAP_LOADED.to_string())?;
+    Ok((graph, dominator))
 }
 
 fn read_config(state: &State<'_, HeapSession>) -> Result<mnemosyne_core::AppConfig, String> {
@@ -1420,8 +2237,74 @@ fn prettify_class_name(raw: &str) -> String {
 }
 
 #[cfg(test)]
+mod report_export_tests {
+    use super::render_desktop_report_export;
+    use mnemosyne_core::{graph::GraphMetrics, hprof::HeapSummary};
+    use mnemosyne_core::{AnalysisMode, AnalyzeResponse, ProvenanceKind, ProvenanceMarker};
+    use std::time::{Duration, SystemTime};
+
+    fn sample_response() -> AnalyzeResponse {
+        AnalyzeResponse {
+            mode: AnalysisMode::Deep,
+            overview: None,
+            summary: HeapSummary {
+                heap_path: "private/source/path.hprof".into(),
+                total_objects: 1,
+                total_size_bytes: 16,
+                classes: Vec::new(),
+                generated_at: SystemTime::UNIX_EPOCH,
+                header: None,
+                total_records: 1,
+                record_stats: Vec::new(),
+            },
+            leaks: Vec::new(),
+            recommendations: Vec::new(),
+            elapsed: Duration::from_millis(1),
+            graph: GraphMetrics::default(),
+            ai: None,
+            histogram: None,
+            unreachable: None,
+            thread_report: None,
+            classloader_report: None,
+            collection_report: None,
+            string_report: None,
+            array_report: None,
+            top_instances: None,
+            referrer_report: None,
+            plugin_results: Vec::new(),
+            provenance: vec![ProvenanceMarker::new(
+                ProvenanceKind::Partial,
+                "bounded analyzer output",
+            )],
+        }
+    }
+
+    #[test]
+    fn report_export_uses_existing_html_escaping_and_preserves_labels() {
+        let export =
+            render_desktop_report_export(sample_response(), "evil<script>.hprof", "html").unwrap();
+        let content = export["content"].as_str().unwrap();
+
+        assert!(content.contains("evil&lt;script&gt;.hprof"));
+        assert!(!content.contains("evil<script>.hprof"));
+        assert_eq!(export["mode"], "deep");
+        assert_eq!(export["provenance"][0]["kind"], "Partial");
+        assert_eq!(export["provenance"][0]["detail"], "bounded analyzer output");
+    }
+
+    #[test]
+    fn report_export_rejects_unknown_formats() {
+        let error =
+            render_desktop_report_export(sample_response(), "fixture.hprof", "custom:unsafe")
+                .unwrap_err();
+        assert!(error.contains("unsupported report export format"));
+    }
+}
+
+#[cfg(test)]
 mod pick_heap_file_result_tests {
-    use super::PickHeapFileResult;
+    use super::{OperationEnvelope, PickHeapFileResult};
+    use mnemosyne_desktop_session::OperationContext;
 
     #[test]
     fn selected_serializes_camel_case_fields_for_ui_bridge() {
@@ -1436,5 +2319,90 @@ mod pick_heap_file_result_tests {
         assert_eq!(value["displayName"], "fixture.hprof");
         assert!(value.get("source_id").is_none());
         assert!(value.get("display_name").is_none());
+    }
+
+    #[test]
+    fn operation_envelope_echoes_camel_case_identity_and_data() {
+        let value = serde_json::to_value(OperationEnvelope::new(
+            OperationContext {
+                workspace_id: "workspace-1".to_string(),
+                revision: 7,
+                operation_id: "operation-9".to_string(),
+            },
+            serde_json::json!({ "ok": true }),
+        ))
+        .expect("serialize");
+
+        assert_eq!(value["workspaceId"], "workspace-1");
+        assert_eq!(value["revision"], 7);
+        assert_eq!(value["operationId"], "operation-9");
+        assert_eq!(value["data"]["ok"], true);
+        assert!(value.get("context").is_none());
+    }
+}
+
+pub const OPERATION_PROGRESS_EVENT: &str = "mnemosyne://operation-progress";
+
+/// Bridges dependency-neutral core progress into correlated Tauri events.
+pub struct TauriOperationObserver {
+    app: AppHandle,
+    context: OperationContext,
+    kind: String,
+    cancellation: Arc<AtomicBool>,
+    coalescer: Mutex<OperationProgressCoalescer>,
+}
+
+impl TauriOperationObserver {
+    pub fn new(
+        app: AppHandle,
+        context: OperationContext,
+        kind: impl Into<String>,
+        cancellation: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            app,
+            context,
+            kind: kind.into(),
+            cancellation,
+            coalescer: Mutex::new(OperationProgressCoalescer::default()),
+        }
+    }
+}
+
+impl OperationObserver for TauriOperationObserver {
+    fn progress(&self, snapshot: OperationProgressSnapshot) {
+        let event =
+            OperationProgress::from_snapshot(self.context.clone(), self.kind.clone(), snapshot);
+        let phase = event.phase;
+        let elapsed_ms = event.elapsed_ms;
+        let event = match self.coalescer.lock() {
+            Ok(mut coalescer) => coalescer.coalesce(event),
+            Err(_) => {
+                tracing::warn!(
+                    operation_id = %self.context.operation_id,
+                    ?phase,
+                    elapsed_ms,
+                    error_code = "operation_progress_coalescer_unavailable",
+                    "operation progress event dropped"
+                );
+                return;
+            }
+        };
+
+        if let Some(event) = event {
+            if self.app.emit(OPERATION_PROGRESS_EVENT, event).is_err() {
+                tracing::warn!(
+                    operation_id = %self.context.operation_id,
+                    ?phase,
+                    elapsed_ms,
+                    error_code = "operation_progress_emit_failed",
+                    "operation progress event dropped"
+                );
+            }
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.load(Ordering::Acquire)
     }
 }

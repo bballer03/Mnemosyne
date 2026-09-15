@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 import {
   findAllLeakGcPaths,
   findLeakGcPath,
   isFindAllGcPathsAvailable,
   type AllGcPathsResult,
+  type GcPathNode,
   type LiveDetailResult,
 } from "./live-detail-client";
 import { useLeakWorkspaceStore } from "./leak-workspace-store";
@@ -27,6 +29,41 @@ const cardStyle = {
   display: "grid",
   gap: "0.35rem",
 } as const;
+
+function isRealObjectId(objectId: string) {
+  return /^(?:0x)?[0-9a-f]+$/i.test(objectId);
+}
+
+function renderPathNode(node: GcPathNode, key: string) {
+  const content = (
+    <>
+      <div>{node.is_root ? "Root node" : "Path node"}</div>
+      <div>{node.class_name}</div>
+      <div>Object ID: {node.object_id}</div>
+      <div>Via: {node.via ?? "Direct root path"}</div>
+    </>
+  );
+
+  if (!isRealObjectId(node.object_id)) {
+    return (
+      <article key={key} style={cardStyle}>
+        {content}
+        <div>Not navigable: synthetic/root identifier.</div>
+      </article>
+    );
+  }
+
+  return (
+    <Link
+      key={key}
+      to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(node.object_id)}`}
+      onClick={() => useInvestigationStore.getState().setObjectId(node.object_id, "gc-path")}
+      style={{ ...cardStyle, color: "inherit", textDecoration: "none" }}
+    >
+      {content}
+    </Link>
+  );
+}
 
 export function LeakGcPathPage() {
   const { artifact } = useArtifactStore();
@@ -183,14 +220,7 @@ export function LeakGcPathPage() {
             <h4 style={{ margin: 0 }}>
               Path {pathIndex + 1} of {multiCurrent.all_paths.length}
             </h4>
-            {path.map((node) => (
-              <article key={`${pathIndex}:${node.object_id}:${node.class_name}`} style={cardStyle}>
-                <div>{node.is_root ? "Root node" : "Path node"}</div>
-                <div>{node.class_name}</div>
-                <div>Object ID: {node.object_id}</div>
-                <div>Via: {node.via ?? "Direct root path"}</div>
-              </article>
-            ))}
+            {path.map((node) => renderPathNode(node, `${pathIndex}:${node.object_id}:${node.class_name}`))}
           </div>
         ))}
       </section>
@@ -213,14 +243,8 @@ export function LeakGcPathPage() {
             <div key={`${marker.kind}:${marker.detail ?? index}`}>{marker.detail ?? marker.kind}</div>
           ))
         : null}
-      {currentPath?.path.map((node) => (
-        <article key={`${node.object_id}:${node.class_name}`} style={cardStyle}>
-          <div>{node.is_root ? "Root node" : "Path node"}</div>
-          <div>{node.class_name}</div>
-          <div>Object ID: {node.object_id}</div>
-          <div>Via: {node.via ?? "Direct root path"}</div>
-        </article>
-      ))}
+      {currentPath?.truncated ? <div>GC path response was truncated by the backend.</div> : null}
+      {currentPath?.path.map((node) => renderPathNode(node, `${node.object_id}:${node.class_name}`))}
     </section>
   );
 }

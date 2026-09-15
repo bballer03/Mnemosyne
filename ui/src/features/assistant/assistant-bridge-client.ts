@@ -5,6 +5,9 @@
 // locally from measured facts. Optional `__MNEMOSYNE_ASSISTANT_BRIDGE__` wires
 // Tauri create/resume/get/close/chat over MCP `chat_session` semantics (M23.C).
 
+import type { AssistantMeasuredFinding } from "./assistant-context";
+import type { InvestigationOriginPane } from "../investigation/investigation-store";
+
 export const DEFAULT_HISTORY_MAX_TURNS = 12;
 export const HARD_MAX_HISTORY_TURNS = 32;
 
@@ -21,18 +24,20 @@ export type AssistantChatTurn = {
   model: string;
 };
 
-export type AssistantSessionContext = {
+export type AssistantSessionContext = Readonly<{
   heapDisplayName: string;
   sourceId?: string;
-  workflowId?: string;
+  workflowKind?: string;
   workflowStep?: string;
-  focusLeakId?: string;
-  focusLeakClassName?: string;
-  focusLeakSeverity?: string;
-  focusLeakDescription?: string;
-  focusObjectId?: string;
+  selection: Readonly<{
+    objectId?: string;
+    classKey?: string;
+    leakId?: string;
+    originPane?: InvestigationOriginPane;
+  }>;
+  measuredFindings: readonly AssistantMeasuredFinding[];
   totalObjects?: number;
-};
+}>;
 
 export type AssistantHostBridge = {
   createAiSession?: (input?: { sourceId?: string }) => Promise<unknown>;
@@ -114,43 +119,44 @@ export function buildRulesModeAnswer(
   context: AssistantSessionContext,
 ): AssistantChatTurn {
   const heap = displayHeapBasename(context.heapDisplayName);
-  const focusParts: string[] = [];
-
-  if (context.focusLeakId) {
-    focusParts.push(`focused leak ${context.focusLeakId}`);
+  const selectionParts: string[] = [];
+  if (context.selection.leakId) {
+    selectionParts.push(`leak ${context.selection.leakId}`);
   }
-  if (context.focusLeakClassName) {
-    focusParts.push(context.focusLeakClassName);
+  if (context.selection.objectId) {
+    selectionParts.push(`object ${context.selection.objectId}`);
   }
-  if (context.focusLeakSeverity) {
-    focusParts.push(`severity ${context.focusLeakSeverity}`);
+  if (context.selection.classKey) {
+    selectionParts.push(`class ${context.selection.classKey}`);
   }
-  if (context.focusLeakDescription) {
-    focusParts.push(context.focusLeakDescription);
+  if (context.selection.originPane) {
+    selectionParts.push(`from ${context.selection.originPane}`);
   }
-  if (context.focusObjectId) {
-    focusParts.push(`object ${context.focusObjectId}`);
-  }
-
-  const focusLine =
-    focusParts.length > 0
-      ? focusParts.join(" — ")
-      : "no focused leak yet; open Dashboard or run a triage workflow first";
+  const selectionLine =
+    selectionParts.length > 0
+      ? `current selection ${selectionParts.join(", ")}`
+      : "no stable selection yet; choose a measured finding or deterministic workbench target first";
+  const findingLine =
+    context.measuredFindings.length > 0
+      ? ` Matched measured findings: ${context.measuredFindings
+          .map((finding) => `${finding.title} — ${finding.description}`)
+          .join("; ")}.`
+      : " No measured findings match the current selection.";
 
   const objectLine =
     typeof context.totalObjects === "number"
       ? ` Measured heap ${heap} reports ${context.totalObjects} objects.`
       : ` Measured heap ${heap}.`;
 
-  const workflowLine = context.workflowId
-    ? ` Active workflow ${context.workflowId}${
+  const workflowLine = context.workflowKind
+    ? ` Active workflow ${context.workflowKind}${
         context.workflowStep ? ` at step ${context.workflowStep}` : ""
       }.`
     : "";
 
   return {
     question,
-    answerSummary: `Rules-mode guidance (offline): investigate ${focusLine}.${objectLine}${workflowLine} Use the deterministic workbench links for GC paths, dominators, and inspector views — this text is advisory, not a measured fact.`,
+    answerSummary: `Rules-mode guidance (offline): investigate ${selectionLine}.${findingLine}${objectLine}${workflowLine} Use the deterministic workbench links for GC paths, dominators, and inspector views — this text is advisory, not a measured fact.`,
     provenance: "rules",
     model: "rules",
   };
@@ -373,7 +379,7 @@ export async function askWithProviderFallback(input: {
   const result = await runProviderChat({
     sessionId: sessionId!,
     question: input.question,
-    focusLeakId: input.context.focusLeakId,
+    focusLeakId: input.context.selection.leakId,
   });
 
   if (result.status === "ready") {

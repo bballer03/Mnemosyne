@@ -22,12 +22,15 @@ fn main() {
             commands::run_desktop_analysis,
             commands::run_ci_check,
             commands::generate_desktop_flamegraph,
+            commands::export_desktop_report,
             commands::load_heap,
             commands::unload_heap,
             commands::get_references,
             commands::get_referrers,
             commands::query_heap,
             commands::regroup_histogram,
+            commands::list_class_instances,
+            commands::get_dominator_children,
             commands::explain_leak,
             commands::inspect_object,
             commands::find_all_gc_paths,
@@ -50,6 +53,7 @@ fn main() {
             commands::remove_snapshot,
             commands::open_snapshot,
             commands::get_desktop_log_path,
+            commands::cancel_operation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

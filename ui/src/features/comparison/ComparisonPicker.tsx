@@ -1,6 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { parseHeapDiffArtifact } from "../../lib/diff-types";
+import { parseHeapDiffArtifact, type IdentityStrategy } from "../../lib/diff-types";
+import { useInvestigationStore } from "../investigation/investigation-store";
+import {
+  isListSnapshotsAvailable,
+  runListSnapshots,
+  type SnapshotManifest,
+} from "../workflow-landing/workflow-bridge-client";
 
 import { isDiffObjectsAvailable, runDiffObjects } from "./comparison-bridge-client";
 import { useComparisonStore } from "./comparison-store";
@@ -35,23 +41,80 @@ const visuallyHiddenInputStyle = {
   border: 0,
 } as const;
 
+const identityStrategyDisclosure: Record<IdentityStrategy, string> = {
+  ClassRetained:
+    "Retained-size buckets are fast but size changes can split identity across snapshots.",
+  ClassDominator:
+    "Dominator chain balances continuity and precision without retaining object field bytes.",
+  FullFingerprint:
+    "Full fingerprint reparses both heaps with retained field data and may use materially more memory and time.",
+};
+
+type SnapshotListState =
+  | { status: "idle" | "loading" | "unavailable" }
+  | { status: "ready"; snapshots: SnapshotManifest[] }
+  | { status: "error"; message: string };
+
 export function ComparisonPicker() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isRunningLiveDiff, setIsRunningLiveDiff] = useState(false);
+  const [snapshotList, setSnapshotList] = useState<SnapshotListState>({ status: "idle" });
+  const persistenceIdentity = useInvestigationStore((state) => state.persistenceIdentity);
   const {
     sourceLabel,
     loadStatus,
     loadError,
     liveBeforeKey,
     liveAfterKey,
+    identityStrategy,
+    topN,
+    crossReferenceLeaks,
     setDiffReport,
     setLoadStatus,
     setLiveBeforeKey,
     setLiveAfterKey,
+    setIdentityStrategy,
+    setTopN,
+    setCrossReferenceLeaks,
   } = useComparisonStore();
+  const [topNInput, setTopNInput] = useState(String(topN));
+  const snapshots = snapshotList.status === "ready" ? snapshotList.snapshots : [];
 
   const liveDiffAvailable = isDiffObjectsAvailable();
+  const snapshotListAvailable = isListSnapshotsAvailable();
+
+  useEffect(() => {
+    if (!liveDiffAvailable || !snapshotListAvailable) {
+      setSnapshotList({ status: "unavailable" });
+      return;
+    }
+
+    let active = true;
+    setSnapshotList({ status: "loading" });
+    void runListSnapshots().then((result) => {
+      if (!active) {
+        return;
+      }
+      if (result.status === "ready") {
+        setSnapshotList({ status: "ready", snapshots: result.data });
+      } else if (result.status === "error") {
+        setSnapshotList({ status: "error", message: result.error });
+      } else {
+        setSnapshotList({ status: "unavailable" });
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [liveDiffAvailable, snapshotListAvailable]);
+
+  useEffect(() => {
+    if (persistenceIdentity?.kind === "snapshot") {
+      setLiveAfterKey(persistenceIdentity.key);
+    }
+  }, [persistenceIdentity, setLiveAfterKey]);
 
   async function loadFile(file: File | undefined) {
     if (!file) {
@@ -76,7 +139,13 @@ export function ComparisonPicker() {
     setLoadStatus("loading");
 
     try {
-      const result = await runDiffObjects({ beforeKey: liveBeforeKey, afterKey: liveAfterKey });
+      const result = await runDiffObjects({
+        beforeKey: liveBeforeKey,
+        afterKey: liveAfterKey,
+        strategy: identityStrategy,
+        topN,
+        crossReferenceLeaks,
+      });
 
       if (result.status === "ready") {
         setDiffReport(result.data, `live: ${liveBeforeKey} -> ${liveAfterKey}`, "live");
@@ -180,28 +249,110 @@ export function ComparisonPicker() {
           <p role="status" style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
             Live diff unavailable: no comparison bridge is connected. Load a precomputed diff report JSON above instead.
           </p>
+        ) : !snapshotListAvailable || snapshotList.status === "unavailable" ? (
+          <p role="status" style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
+            Snapshot picker unavailable: no snapshot-list bridge is connected. Load a precomputed diff report JSON above
+            instead.
+          </p>
+        ) : snapshotList.status === "loading" || snapshotList.status === "idle" ? (
+          <p role="status" style={{ margin: 0, color: "#94a3b8" }}>
+            Loading snapshots...
+          </p>
+        ) : snapshotList.status === "error" ? (
+          <p role="alert" style={{ margin: 0, color: "#fca5a5" }}>
+            Failed to list snapshots: {snapshotList.message}
+          </p>
+        ) : snapshots.length === 0 ? (
+          <p role="status" style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
+            No cached snapshots are available. Save snapshots before running a live comparison.
+          </p>
         ) : (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
               <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
-                <span>Before snapshot key</span>
-                <input
-                  type="text"
+                <span>Current snapshot</span>
+                <select value={liveAfterKey} onChange={(event) => setLiveAfterKey(event.target.value)} style={inputStyle}>
+                  <option value="">Select current snapshot</option>
+                  {snapshots.map((snapshot) => (
+                    <option key={`current-${snapshot.heapSha256}`} value={snapshot.heapSha256}>
+                      {snapshot.heapPath}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
+                <span>Baseline snapshot</span>
+                <select
                   value={liveBeforeKey}
                   onChange={(event) => setLiveBeforeKey(event.target.value)}
                   style={inputStyle}
-                />
+                >
+                  <option value="">Select baseline snapshot</option>
+                  {snapshots.map((snapshot) => (
+                    <option key={`baseline-${snapshot.heapSha256}`} value={snapshot.heapSha256}>
+                      {snapshot.heapPath}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(180px, 1fr) minmax(100px, 0.4fr)",
+                gap: "0.75rem",
+              }}
+            >
+              <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
+                <span>Identity strategy</span>
+                <select
+                  aria-label="Identity strategy"
+                  value={identityStrategy}
+                  onChange={(event) => setIdentityStrategy(event.target.value as IdentityStrategy)}
+                  style={inputStyle}
+                >
+                  <option value="ClassRetained">Class + retained size</option>
+                  <option value="ClassDominator">Class + dominator chain</option>
+                  <option value="FullFingerprint">Full fingerprint</option>
+                </select>
+                <small style={{ color: identityStrategy === "FullFingerprint" ? "#facc15" : "#94a3b8", lineHeight: 1.5 }}>
+                  {identityStrategyDisclosure[identityStrategy]}
+                </small>
               </label>
               <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
-                <span>After snapshot key</span>
+                <span>Top N</span>
                 <input
-                  type="text"
-                  value={liveAfterKey}
-                  onChange={(event) => setLiveAfterKey(event.target.value)}
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={topNInput}
+                  onChange={(event) => {
+                    setTopNInput(event.target.value);
+                    if (event.target.value !== "") {
+                      setTopN(event.target.valueAsNumber);
+                    }
+                  }}
+                  onBlur={() => setTopNInput(String(useComparisonStore.getState().topN))}
                   style={inputStyle}
                 />
               </label>
             </div>
+            <label
+              style={{
+                display: "flex",
+                gap: "0.55rem",
+                alignItems: "center",
+                color: "#cbd5e1",
+                fontSize: "0.9rem",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={crossReferenceLeaks}
+                onChange={(event) => setCrossReferenceLeaks(event.target.checked)}
+              />
+              Cross-reference leaks on the current snapshot
+            </label>
             <button
               type="button"
               style={buttonStyle}

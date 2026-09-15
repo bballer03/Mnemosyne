@@ -21,7 +21,7 @@ Ultra-fast heap dump analysis, leak detection, code mapping, and AI-assisted dia
 
 ![language](https://img.shields.io/badge/language-rust-orange?style=flat-square)
 ![license](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-![status](https://img.shields.io/badge/status-v0.5.0--prepared-blue?style=flat-square)
+![status](https://img.shields.io/badge/status-v0.6.0-blue?style=flat-square)
 
 ---
 
@@ -164,9 +164,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture description inc
 
 ## 🛠 Installation
 
-> Mnemosyne v0.4.3 is the current tagged release. The source tree is prepared for **v0.5.0**; no v0.5.0 tag or release exists until the human/CI cut.
-> Tagged GitHub releases publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows, plus Tauri desktop bundles on post-M16 tags. Current published GHCR images use tags `0.4.3`, `0.4`, and `latest`.
-> **v0.5.0** delivers M24 Continuous Heap Investigation A–D. M24.E in-workbench compare is gated post-0.5.0; the existing standalone `/compare` route remains available. See [release notes](docs/release-notes-v0.5.0.md).
+> Mnemosyne **v0.6.0** is the current product cut (M25–M30 MAT maturity). See [release notes](docs/release-notes-v0.6.0.md).
+> Tagged GitHub releases publish prebuilt `mnemosyne-cli` archives for x86_64 Linux, aarch64 Linux, x86_64 macOS, aarch64 macOS, and x86_64 Windows, plus Tauri desktop bundles. GHCR tags follow `0.6.0`, `0.6`, and `latest` after the release workflow completes.
+> **v0.5.0** delivered M24 Continuous Heap Investigation A–D; M24.E in-workbench compare shipped in the M27 post-0.5.0 work and is included in v0.6.0. M31+ remains gated.
 
 The repository now includes a GitHub Actions CI workflow that runs workspace `check`, `test`, `clippy`, and `fmt` on pushes and pull requests, plus a release workflow that validates version tags, builds release archives for five targets, and publishes them on tagged releases.
 

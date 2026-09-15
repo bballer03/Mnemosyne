@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
+import {
+  compactGridColumns,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
+import { useCompactLayout } from "../../app/use-compact-layout";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
-import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-client";
+import {
+  normalizeHistogramGroupBy,
+  regroupHistogram,
+  type HistogramResultView,
+} from "../heap-explorer/heap-explorer-query-client";
 import { useInvestigationStore } from "../investigation/investigation-store";
 
+import { AnalyzerEnrichmentPanel } from "./components/AnalyzerEnrichmentPanel";
 import { AnalyzerRail } from "./components/AnalyzerRail";
+import { ClassInstancesPanel } from "./components/ClassInstancesPanel";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
 import { CollectionAnalysisPanel } from "./components/CollectionAnalysisPanel";
 import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
@@ -18,7 +29,7 @@ import { TopInstancesPanel } from "./components/TopInstancesPanel";
 import { UnreachableObjectsPanel } from "./components/UnreachableObjectsPanel";
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",
@@ -26,8 +37,11 @@ const panelStyle = {
 
 export function ArtifactExplorerPage() {
   const { artifact, artifactName } = useArtifactStore();
+  const isCompactLayout = useCompactLayout();
   const selectedClassKey = useInvestigationStore((state) => state.classKey);
   const setClassKey = useInvestigationStore((state) => state.setClassKey);
+  const histogramView = useInvestigationStore((state) => state.histogramView);
+  const setHistogramView = useInvestigationStore((state) => state.setHistogramView);
   const [selectedHistogramKey, setSelectedHistogramKey] = useState<string | undefined>(
     artifact?.histogram?.entries[0]?.key,
   );
@@ -45,6 +59,12 @@ export function ArtifactExplorerPage() {
       setSelectedHistogramKey(selectedClassKey);
     }
   }, [selectedClassKey]);
+
+  useEffect(() => {
+    if (!selectedClassKey && selectedHistogramKey) {
+      setClassKey(selectedHistogramKey, "histogram");
+    }
+  }, [selectedClassKey, selectedHistogramKey, setClassKey]);
 
   const handleSelectHistogramKey = useCallback(
     (key: string | undefined) => {
@@ -69,6 +89,26 @@ export function ArtifactExplorerPage() {
     };
   }, [artifact, liveHistogram]);
 
+  const activeHistogramGroupBy =
+    normalizeHistogramGroupBy(explorerArtifact?.histogram?.groupBy) ?? histogramView.groupBy;
+
+  const handleRegroupToClass = useCallback(async () => {
+    const artifactGroupBy = normalizeHistogramGroupBy(artifact?.histogram?.groupBy);
+    if (artifactGroupBy === "class") {
+      setHistogramView({ groupBy: "class" });
+      setLiveHistogram(undefined);
+      setHistogramSource("artifact");
+      return;
+    }
+
+    const result = await regroupHistogram("class");
+    if (result.status === "ready") {
+      setHistogramView({ groupBy: "class" });
+      setLiveHistogram(result.data);
+      setHistogramSource("live");
+    }
+  }, [artifact, setHistogramView]);
+
   if (!artifact || !explorerArtifact) {
     return <Navigate to="/" replace />;
   }
@@ -83,26 +123,33 @@ export function ArtifactExplorerPage() {
               Artifact Explorer
             </Link>
           </div>
-          <div style={{ color: "#38bdf8", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
+          <div style={{ color: "var(--mn-text-accent)", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
             Artifact Explorer
           </div>
           <h1 style={{ margin: 0, fontSize: "clamp(1.8rem, 4vw, 2.6rem)", lineHeight: 1.08 }}>
             Artifact Explorer
           </h1>
-          <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
+          <p style={{ margin: 0, color: "var(--mn-text-muted)", lineHeight: 1.7, maxWidth: "68ch" }}>
             Dedicated artifact-backed exploration surface for histogram breadth and analyzer modules.
           </p>
           <div style={{ color: "#cbd5e1", overflowWrap: "anywhere" }}>{artifact.summary.heapPath}</div>
-          <div style={{ color: "#94a3b8", overflowWrap: "anywhere" }}>
+          <div style={{ color: "var(--mn-text-muted)", overflowWrap: "anywhere" }}>
             Artifact: {artifactName ?? "Unnamed artifact"}
           </div>
         </header>
       </section>
 
+      <section aria-label="Analyzer enrichment" style={panelStyle}>
+        <AnalyzerEnrichmentPanel />
+      </section>
+
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "280px minmax(0, 1fr) 320px",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "280px minmax(0, 1fr) 320px",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -121,17 +168,28 @@ export function ArtifactExplorerPage() {
             }}
             selectedKey={selectedHistogramKey}
             onSelectKey={handleSelectHistogramKey}
+            histogramView={histogramView}
+            setHistogramView={setHistogramView}
           />
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>
           <SelectedBucketDetail artifact={explorerArtifact} selectedKey={selectedHistogramKey} />
+          <div style={{ borderTop: "1px solid var(--mn-border-subtle)", marginTop: "1rem", paddingTop: "1rem" }}>
+            <ClassInstancesPanel
+              groupBy={activeHistogramGroupBy}
+              onRegroupToClass={handleRegroupToClass}
+            />
+          </div>
         </aside>
       </section>
 
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -147,7 +205,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -163,7 +224,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}

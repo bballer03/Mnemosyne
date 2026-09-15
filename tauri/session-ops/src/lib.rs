@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use mnemosyne_core::{
     analysis::{
         analyze_heap, focus_leaks, generate_ai_chat_turn_async, inspect_object, validate_leak_id,
-        AiChatTurn, AnalyzeRequest, LeakDetectionOptions, ObjectInspection,
+        AiChatTurn, AnalyzeRequest, AnalyzeResponse, LeakDetectionOptions, ObjectInspection,
     },
     build_dominator_tree, build_histogram,
     diff::{
@@ -18,18 +18,72 @@ use mnemosyne_core::{
         },
         run_diff, DiffMode, DiffRequest, DiffResult, IdentityStrategy, ObjectDiffReport,
     },
-    graph::find_all_gc_paths_in_graph,
+    graph::{build_dominator_tree_controlled, find_all_gc_paths_in_graph},
     hprof::{parse_hprof_file_with_options, ObjectGraph, ParseOptions},
     mcp::session::{
         effective_history_limit, new_session_id, timestamp_now, top_leak_ids, trim_history_to,
         McpSessionStore, PersistedAiSession, SessionAnalysisSnapshot, SessionConversationSnapshot,
         DEFAULT_SESSION_HISTORY, HARD_MAX_SESSION_HISTORY, MCP_SESSION_VERSION,
     },
+    resolve_live_instances_by_class,
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
-    AllPathsRequest, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
+    AllPathsRequest, AnalysisMode, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy,
+    HistogramResult, NoopOperationObserver, OperationObserver, VIRTUAL_ROOT_ID,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
+
+mod operation;
+pub use operation::{
+    structured_operation_cancelled_error, CancelOperationResult, OperationContext,
+    OperationEnvelope, OperationProgress, OperationProgressCoalescer, OperationRegistration,
+    OperationRegistry, OperationRegistryError, OPERATION_CANCELLED_CODE,
+};
+
+pub const DEFAULT_CLASS_INSTANCES_LIMIT: usize = 100;
+pub const MAX_CLASS_INSTANCES_LIMIT: usize = 200;
+pub const DEFAULT_DOMINATOR_CHILDREN_LIMIT: usize = 50;
+pub const MAX_DOMINATOR_CHILDREN_LIMIT: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassInstanceEntry {
+    pub object_id: String,
+    pub class_name: String,
+    pub shallow_size: u32,
+    pub retained_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassInstancesPage {
+    pub class_key: String,
+    pub total: usize,
+    pub returned: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub truncated: bool,
+    pub instances: Vec<ClassInstanceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DominatorChildEntry {
+    pub object_id: String,
+    pub class_name: String,
+    pub shallow_size: u32,
+    pub retained_size: u64,
+    pub dominated_count: usize,
+    pub has_children: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DominatorChildrenPage {
+    pub total: usize,
+    pub returned: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub truncated: bool,
+    pub children: Vec<DominatorChildEntry>,
+}
 
 /// Input for the M17 comparison bridge's `diffObjects` host method.
 #[derive(Debug, Clone)]
@@ -41,6 +95,172 @@ pub struct DiffObjectsSessionInput {
     /// Leak-progression cross-reference (M10-B): default `false` unless the
     /// UI explicitly opts in.
     pub cross_reference_leaks: Option<bool>,
+}
+
+pub fn list_class_instances_for_session(
+    graph: &ObjectGraph,
+    dominator: &DominatorTree,
+    class_key: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<ClassInstancesPage, String> {
+    let limit = limit.min(MAX_CLASS_INSTANCES_LIMIT);
+    let mut matching_ids = resolve_live_instances_by_class(graph, class_key);
+    matching_ids.sort_unstable_by(|left_id, right_id| {
+        let left_shallow = graph
+            .get_object(*left_id)
+            .map(|object| object.shallow_size)
+            .unwrap_or(0);
+        let right_shallow = graph
+            .get_object(*right_id)
+            .map(|object| object.shallow_size)
+            .unwrap_or(0);
+
+        dominator
+            .retained_size(*right_id)
+            .cmp(&dominator.retained_size(*left_id))
+            .then_with(|| right_shallow.cmp(&left_shallow))
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    let total = matching_ids.len();
+    let instances = matching_ids
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .filter_map(|object_id| {
+            graph
+                .get_object(object_id)
+                .map(|object| ClassInstanceEntry {
+                    object_id: format!(
+                        "0x{object_id:0width$X}",
+                        width = usize::from(graph.identifier_size) * 2
+                    ),
+                    class_name: graph
+                        .class_name(object.class_id)
+                        .map(|name| name.replace('/', "."))
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    shallow_size: object.shallow_size,
+                    retained_size: dominator.retained_size(object_id),
+                })
+        })
+        .collect::<Vec<_>>();
+    let returned = instances.len();
+
+    Ok(ClassInstancesPage {
+        class_key: class_key.to_string(),
+        total,
+        returned,
+        offset,
+        limit,
+        truncated: offset.saturating_add(returned) < total,
+        instances,
+    })
+}
+
+pub fn dominator_children_for_session(
+    graph: &ObjectGraph,
+    dominator: &DominatorTree,
+    parent_object_id: Option<&str>,
+    offset: usize,
+    limit: usize,
+    min_retained_bytes: u64,
+) -> DominatorChildrenPage {
+    let limit = limit.min(MAX_DOMINATOR_CHILDREN_LIMIT);
+    let parent_id = match parent_object_id {
+        None => VIRTUAL_ROOT_ID,
+        Some(parent) => match parse_inspect_object_id(parent) {
+            Some(parent_id) => parent_id,
+            None => {
+                return DominatorChildrenPage {
+                    total: 0,
+                    returned: 0,
+                    offset,
+                    limit,
+                    truncated: false,
+                    children: Vec::new(),
+                };
+            }
+        },
+    };
+
+    let mut child_ids = dominator
+        .dominated_by(parent_id)
+        .iter()
+        .copied()
+        .filter(|object_id| graph.get_object(*object_id).is_some())
+        .filter(|object_id| dominator.retained_size(*object_id) >= min_retained_bytes)
+        .collect::<Vec<_>>();
+    child_ids.sort_unstable_by(|left_id, right_id| {
+        dominator
+            .retained_size(*right_id)
+            .cmp(&dominator.retained_size(*left_id))
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    let total = child_ids.len();
+    let children = child_ids
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .filter_map(|object_id| {
+            graph.get_object(object_id).map(|object| {
+                let has_children = !dominator.dominated_by(object_id).is_empty();
+                let dominated_count = dominated_descendant_count(dominator, object_id);
+                DominatorChildEntry {
+                    object_id: format!(
+                        "0x{object_id:0width$X}",
+                        width = usize::from(graph.identifier_size) * 2
+                    ),
+                    class_name: graph
+                        .class_name(object.class_id)
+                        .map(|name| name.replace('/', "."))
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    shallow_size: object.shallow_size,
+                    retained_size: dominator.retained_size(object_id),
+                    dominated_count,
+                    has_children,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let returned = children.len();
+
+    DominatorChildrenPage {
+        total,
+        returned,
+        offset,
+        limit,
+        truncated: offset.saturating_add(returned) < total,
+        children,
+    }
+}
+
+fn dominated_descendant_count(dominator: &DominatorTree, root_id: u64) -> usize {
+    let mut count = 0;
+    let mut stack = dominator.dominated_by(root_id).to_vec();
+    while let Some(object_id) = stack.pop() {
+        count += 1;
+        stack.extend_from_slice(dominator.dominated_by(object_id));
+    }
+    count
+}
+
+pub fn replace_session_analysis(
+    graph_slot: &mut Option<ObjectGraph>,
+    dominator_slot: &mut Option<DominatorTree>,
+    replacement: Option<(ObjectGraph, DominatorTree)>,
+) {
+    match replacement {
+        Some((graph, dominator)) => {
+            *graph_slot = Some(graph);
+            *dominator_slot = Some(dominator);
+        }
+        None => {
+            *graph_slot = None;
+            *dominator_slot = None;
+        }
+    }
 }
 
 pub fn graph_has_field_data(graph: &mnemosyne_core::hprof::ObjectGraph) -> bool {
@@ -98,11 +318,28 @@ pub fn inspect_object_for_session(
     object_id: &str,
     retain_field_data: bool,
 ) -> Result<ObjectInspection, String> {
+    inspect_object_for_session_controlled(
+        graph,
+        heap_path,
+        object_id,
+        retain_field_data,
+        &NoopOperationObserver,
+    )
+}
+
+pub fn inspect_object_for_session_controlled(
+    graph: &mnemosyne_core::hprof::ObjectGraph,
+    heap_path: &str,
+    object_id: &str,
+    retain_field_data: bool,
+    observer: &dyn OperationObserver,
+) -> Result<ObjectInspection, String> {
     let target_id = parse_inspect_object_id(object_id)
         .filter(|id| graph.objects.contains_key(id))
         .ok_or_else(|| inspect_object_id_not_found(object_id, heap_path))?;
 
-    let dominator = build_dominator_tree(graph);
+    let dominator =
+        build_dominator_tree_controlled(graph, observer).map_err(|error| error.to_string())?;
     inspect_object(graph, Some(&dominator), target_id, retain_field_data)
         .ok_or_else(|| inspect_object_id_not_found(object_id, heap_path))
 }
@@ -198,11 +435,11 @@ pub fn parse_histogram_group_by(raw: &str) -> Result<HistogramGroupBy, String> {
 /// without re-running the full analyze pipeline.
 pub fn regroup_histogram_for_session(
     graph: &mnemosyne_core::hprof::ObjectGraph,
+    dominator: &DominatorTree,
     group_by: &str,
 ) -> Result<HistogramResult, String> {
     let group_by = parse_histogram_group_by(group_by)?;
-    let dominator = build_dominator_tree(graph);
-    Ok(build_histogram(graph, &dominator, group_by))
+    Ok(build_histogram(graph, dominator, group_by))
 }
 
 /// Resolve a snapshot key (SHA-256 hash) or direct heap file path to the
@@ -767,6 +1004,58 @@ pub fn remove_snapshot_for_session(store: &SnapshotStore, key: &str) -> Result<V
     Ok(json!({ "removed": true, "key": store_key }))
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceIdentity {
+    pub key: String,
+    pub display_name: String,
+    pub source_id: String,
+    pub schema_version: u32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceCapabilities {
+    pub graph: bool,
+    pub dominators: bool,
+    pub field_data: bool,
+    pub snapshot_backed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWorkspaceHydrate {
+    pub snapshot: SnapshotWorkspaceIdentity,
+    pub mode: AnalysisMode,
+    pub capabilities: SnapshotWorkspaceCapabilities,
+    pub analysis: AnalyzeResponse,
+}
+
+pub fn build_snapshot_workspace_hydrate(
+    manifest: &SnapshotManifest,
+    source_id: &str,
+    analysis: AnalyzeResponse,
+) -> SnapshotWorkspaceHydrate {
+    SnapshotWorkspaceHydrate {
+        snapshot: SnapshotWorkspaceIdentity {
+            key: manifest.heap_sha256.clone(),
+            display_name: display_name_for_path(&manifest.heap_path),
+            source_id: source_id.to_string(),
+            schema_version: manifest.schema_version,
+            created_at: manifest.created_at.clone(),
+        },
+        mode: AnalysisMode::Deep,
+        capabilities: SnapshotWorkspaceCapabilities {
+            graph: true,
+            dominators: true,
+            field_data: manifest.has_field_data,
+            snapshot_backed: true,
+        },
+        analysis,
+    }
+}
+
 /// Load a cached snapshot by validated SHA-256 store key for desktop session install.
 ///
 /// Returns the manifest plus the deserialized graph/dominator pair. Callers that
@@ -797,6 +1086,245 @@ mod tests {
     fn graph_fixture() -> mnemosyne_core::hprof::ObjectGraph {
         let bytes = build_graph_fixture();
         parse_hprof_file_with_options_from_bytes(&bytes, false).expect("fixture must parse")
+    }
+
+    fn add_rooted_big_cache(
+        graph: &mut mnemosyne_core::hprof::ObjectGraph,
+        object_id: u64,
+        shallow_size: u32,
+        child: Option<(u64, u32)>,
+    ) {
+        let mut object = graph
+            .get_object(0x1000)
+            .expect("fixture BigCache object")
+            .clone();
+        object.id = object_id;
+        object.shallow_size = shallow_size;
+        object.references = child.iter().map(|(id, _)| *id).collect();
+        graph.objects.insert(object_id, object);
+
+        if let Some((child_id, child_size)) = child {
+            let mut child_object = graph
+                .get_object(0x2000)
+                .expect("fixture Object child")
+                .clone();
+            child_object.id = child_id;
+            child_object.shallow_size = child_size;
+            child_object.references.clear();
+            graph.objects.insert(child_id, child_object);
+        }
+
+        let mut root = graph.gc_roots[0].clone();
+        root.object_id = object_id;
+        graph.gc_roots.push(root);
+    }
+
+    #[test]
+    fn list_class_instances_matches_dotted_names_and_orders_deterministically() {
+        let mut graph = graph_fixture();
+        add_rooted_big_cache(&mut graph, 0x3000, 16, None);
+        add_rooted_big_cache(&mut graph, 0x4000, 8, Some((0x4100, 16)));
+        add_rooted_big_cache(&mut graph, 0x5000, 8, Some((0x5100, 16)));
+        add_rooted_big_cache(&mut graph, 0x6000, 12, Some((0x6100, 12)));
+        let dominator = build_dominator_tree(&graph);
+
+        let page =
+            list_class_instances_for_session(&graph, &dominator, "com.example.BigCache", 0, 100)
+                .expect("dotted class name must resolve");
+
+        assert_eq!(page.class_key, "com.example.BigCache");
+        assert_eq!(page.total, 5);
+        assert_eq!(page.returned, 5);
+        assert_eq!(page.offset, 0);
+        assert_eq!(page.limit, 100);
+        assert!(!page.truncated);
+        assert_eq!(
+            page.instances
+                .iter()
+                .map(|instance| instance.object_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0x00006000",
+                "0x00004000",
+                "0x00005000",
+                "0x00003000",
+                "0x00001000",
+            ]
+        );
+        assert!(page
+            .instances
+            .iter()
+            .all(|instance| instance.class_name == "com.example.BigCache"));
+    }
+
+    #[test]
+    fn list_class_instances_caps_limit_and_reports_truncation_after_offset() {
+        let mut graph = graph_fixture();
+        for index in 0..205 {
+            add_rooted_big_cache(&mut graph, 0x10000 + index, 1, None);
+        }
+        let dominator = build_dominator_tree(&graph);
+
+        let page = list_class_instances_for_session(
+            &graph,
+            &dominator,
+            "com.example.BigCache",
+            3,
+            usize::MAX,
+        )
+        .expect("bounded page must resolve");
+
+        assert_eq!(page.total, 206);
+        assert_eq!(page.offset, 3);
+        assert_eq!(page.limit, 200);
+        assert_eq!(page.returned, 200);
+        assert_eq!(page.instances.len(), 200);
+        assert!(page.truncated);
+        assert!(page.offset + page.returned < page.total);
+    }
+
+    #[test]
+    fn dominator_children_projects_virtual_root_and_expanded_parent_deterministically() {
+        let mut graph = graph_fixture();
+        add_rooted_big_cache(&mut graph, 0x3000, 16, Some((0x3100, 64)));
+        add_rooted_big_cache(&mut graph, 0x4000, 32, Some((0x4100, 16)));
+        add_rooted_big_cache(&mut graph, 0x5000, 48, None);
+        let dominator = build_dominator_tree(&graph);
+
+        let roots = dominator_children_for_session(&graph, &dominator, None, 0, usize::MAX, 0);
+
+        assert_eq!(roots.total, 4);
+        assert_eq!(roots.returned, 4);
+        assert_eq!(roots.offset, 0);
+        assert_eq!(roots.limit, MAX_DOMINATOR_CHILDREN_LIMIT);
+        assert!(!roots.truncated);
+        assert_eq!(
+            roots
+                .children
+                .iter()
+                .map(|child| child.object_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0x00003000", "0x00004000", "0x00005000", "0x00001000",]
+        );
+        assert_eq!(roots.children[0].dominated_count, 1);
+        assert!(roots.children[0].has_children);
+
+        let expanded = dominator_children_for_session(
+            &graph,
+            &dominator,
+            Some("0x00003000"),
+            0,
+            DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+            0,
+        );
+        assert_eq!(expanded.total, 1);
+        assert_eq!(expanded.children[0].object_id, "0x00003100");
+        assert_eq!(expanded.children[0].class_name, "java.lang.Object");
+        assert_eq!(expanded.children[0].shallow_size, 64);
+        assert_eq!(expanded.children[0].retained_size, 64);
+        assert_eq!(expanded.children[0].dominated_count, 0);
+        assert!(!expanded.children[0].has_children);
+    }
+
+    #[test]
+    fn dominator_children_filters_before_pagination_and_reports_truncation() {
+        let mut graph = graph_fixture();
+        add_rooted_big_cache(&mut graph, 0x3000, 16, Some((0x3100, 64)));
+        add_rooted_big_cache(&mut graph, 0x4000, 32, Some((0x4100, 16)));
+        add_rooted_big_cache(&mut graph, 0x5000, 48, None);
+        let dominator = build_dominator_tree(&graph);
+
+        let filtered = dominator_children_for_session(
+            &graph,
+            &dominator,
+            None,
+            0,
+            DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+            49,
+        );
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.returned, 1);
+        assert_eq!(filtered.children[0].object_id, "0x00003000");
+
+        let page = dominator_children_for_session(&graph, &dominator, None, 1, 2, 0);
+        assert_eq!(page.total, 4);
+        assert_eq!(page.returned, 2);
+        assert_eq!(page.offset, 1);
+        assert_eq!(page.limit, 2);
+        assert!(page.truncated);
+        assert_eq!(page.children[0].object_id, "0x00004000");
+        assert_eq!(page.children[1].object_id, "0x00005000");
+    }
+
+    #[test]
+    fn dominator_children_reports_all_dominated_descendants() {
+        let mut graph = graph_fixture();
+        add_rooted_big_cache(&mut graph, 0x3000, 16, Some((0x3100, 32)));
+        let mut grandchild = graph
+            .get_object(0x2000)
+            .expect("fixture Object child")
+            .clone();
+        grandchild.id = 0x3200;
+        grandchild.shallow_size = 8;
+        grandchild.references.clear();
+        graph.objects.insert(0x3200, grandchild);
+        graph
+            .objects
+            .get_mut(&0x3100)
+            .expect("child must exist")
+            .references = vec![0x3200];
+        let dominator = build_dominator_tree(&graph);
+
+        let roots = dominator_children_for_session(
+            &graph,
+            &dominator,
+            None,
+            0,
+            DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+            0,
+        );
+        let root = roots
+            .children
+            .iter()
+            .find(|child| child.object_id == "0x00003000")
+            .expect("added root must be projected");
+
+        assert_eq!(root.dominated_count, 2);
+        assert!(root.has_children);
+    }
+
+    #[test]
+    fn dominator_children_lifecycle_replacement_and_unload_keep_slots_in_sync() {
+        let first_graph = graph_fixture();
+        let first_dominator = build_dominator_tree(&first_graph);
+        let mut graph_slot = None;
+        let mut dominator_slot = None;
+
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((first_graph, first_dominator)),
+        );
+        assert!(graph_slot.is_some());
+        assert!(dominator_slot.is_some());
+
+        let mut replacement_graph = graph_fixture();
+        add_rooted_big_cache(&mut replacement_graph, 0x3000, 16, None);
+        let replacement_dominator = build_dominator_tree(&replacement_graph);
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((replacement_graph, replacement_dominator)),
+        );
+        assert_eq!(graph_slot.as_ref().map(ObjectGraph::object_count), Some(3));
+        assert_eq!(
+            dominator_slot.as_ref().map(DominatorTree::node_count),
+            Some(3)
+        );
+
+        replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+        assert!(graph_slot.is_none());
+        assert!(dominator_slot.is_none());
     }
 
     fn parse_hprof_file_with_options_from_bytes(
@@ -833,7 +1361,8 @@ mod tests {
     #[test]
     fn regroup_histogram_for_session_returns_superclass_groups() {
         let graph = graph_fixture();
-        let histogram = regroup_histogram_for_session(&graph, "superclass")
+        let dominator = build_dominator_tree(&graph);
+        let histogram = regroup_histogram_for_session(&graph, &dominator, "superclass")
             .expect("superclass regroup must succeed");
         assert_eq!(histogram.group_by, HistogramGroupBy::Superclass);
         assert!(!histogram.entries.is_empty());
@@ -1302,6 +1831,51 @@ mod tests {
             assert_eq!(loaded_graph.object_count(), graph.object_count());
             assert_eq!(loaded_graph.classes.len(), graph.classes.len());
             assert_eq!(manifest.object_count, graph.object_count());
+        }
+
+        #[tokio::test]
+        async fn snapshot_hydrate_contains_identity_mode_capabilities_and_facts() {
+            let store =
+                SnapshotStore::new(tempfile::tempdir().expect("temp dir must exist").keep());
+            let (_heap_file, heap_path) = write_fixture_heap().expect("heap fixture");
+            let graph = parse_hprof_file_with_options(&heap_path, ParseOptions::default())
+                .expect("fixture must parse");
+            let dominator = build_dominator_tree(&graph);
+            let saved = store
+                .save(&heap_path, &graph, &dominator)
+                .expect("snapshot must save");
+            let (manifest, loaded_graph, loaded_dominator) =
+                open_snapshot_for_session(&store, &saved.heap_sha256).expect("open must succeed");
+            let analysis = mnemosyne_core::analysis::analyze_snapshot_from_graph_controlled(
+                AnalyzeRequest {
+                    heap_path: manifest.heap_path.clone(),
+                    enable_classloaders: true,
+                    enable_top_instances: true,
+                    ..AnalyzeRequest::default()
+                },
+                &loaded_graph,
+                &loaded_dominator,
+                &NoopOperationObserver,
+            )
+            .await
+            .expect("snapshot analysis must succeed");
+
+            let hydrate =
+                build_snapshot_workspace_hydrate(&manifest, "source-opaque", analysis);
+            let expected_display_name = display_name_for_path(&heap_path);
+
+            assert_eq!(hydrate.snapshot.key, saved.heap_sha256);
+            assert_eq!(hydrate.snapshot.display_name, expected_display_name);
+            assert_eq!(hydrate.snapshot.source_id, "source-opaque");
+            assert_eq!(hydrate.mode, AnalysisMode::Deep);
+            assert!(hydrate.capabilities.graph);
+            assert!(hydrate.capabilities.dominators);
+            assert!(!hydrate.capabilities.field_data);
+            assert!(hydrate.capabilities.snapshot_backed);
+            assert_eq!(
+                hydrate.analysis.summary.heap_path,
+                hydrate.snapshot.display_name
+            );
         }
 
         #[test]

@@ -152,11 +152,37 @@ describe("SnapshotManagerPage", () => {
       openSnapshot: async (key: string) => {
         expect(key).toBe(FULL_KEY);
         return {
-          displayName: "fixture.hprof",
-          sourceId: "src-opened",
-          objectCount: 42,
-          classCount: 3,
-          gcRootCount: 1,
+          snapshot: {
+            key: FULL_KEY,
+            displayName: "fixture.hprof",
+            sourceId: "src-opened",
+            schemaVersion: 1,
+            createdAt: "2026-09-14T00:00:00Z",
+          },
+          mode: "deep",
+          capabilities: {
+            graph: true,
+            dominators: true,
+            fieldData: false,
+            snapshotBacked: true,
+          },
+          analysis: {
+            summary: {
+              heap_path: "fixture.hprof",
+              total_objects: 42,
+              total_size_bytes: 8,
+              classes: [],
+              generated_at: "2026-09-15T00:00:00Z",
+              header: null,
+              total_records: 0,
+              record_stats: [],
+            },
+            leaks: [],
+            recommendations: [],
+            elapsed: { secs: 0, nanos: 0 },
+            graph: { node_count: 42, edge_count: 0, dominators: [] },
+            provenance: [],
+          },
         };
       },
     };
@@ -175,10 +201,10 @@ describe("SnapshotManagerPage", () => {
 
     await waitFor(() => {
       expect(view.getByRole("status")).toHaveTextContent(
-        /opened fixture\.hprof \(42 objects\).*artifact views were cleared/i,
+        /opened fixture\.hprof \(42 objects\).*cached snapshot/i,
       );
     });
-    expect(useArtifactStore.getState().artifact).toBeUndefined();
+    expect(useArtifactStore.getState().artifact?.summary.totalObjects).toBe(42);
     expect(getRememberedDesktopHeapSource()).toEqual({
       sourceId: "src-opened",
       displayName: "fixture.hprof",

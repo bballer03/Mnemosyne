@@ -10,6 +10,12 @@ export type HeapQueryResult = {
   rows: HeapQueryCell[][];
 };
 
+export type HeapQueryErrorLocation = {
+  byteOffset: number;
+  line: number;
+  column: number;
+};
+
 export type ObjectReferenceEntry = {
   objectId: string;
   className: string;
@@ -25,6 +31,41 @@ export type ObjectReferencesResult = {
 export type ObjectReferrersResult = {
   objectId: string;
   referrers: ObjectReferenceEntry[];
+};
+
+export type ClassInstanceEntry = {
+  objectId: string;
+  className: string;
+  shallowSize: number;
+  retainedSize: number;
+};
+
+export type ClassInstancesPage = {
+  classKey: string;
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  instances: ClassInstanceEntry[];
+};
+
+export type DominatorChildEntry = {
+  objectId: string;
+  className: string;
+  shallowSize: number;
+  retainedSize: number;
+  dominatedCount: number;
+  hasChildren: boolean;
+};
+
+export type DominatorChildrenPage = {
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  children: DominatorChildEntry[];
 };
 
 /// A class-name-resolved object reference, mirroring core's structured
@@ -63,6 +104,13 @@ export type HeapExplorerHostBridge = {
   inspectObject?: (objectId: string, retainFieldData?: boolean) => Promise<unknown>;
   /** M19.B — live flat regroup via session graph / MCP analyze_heap.histogram_group_by. */
   regroupHistogram?: (groupBy: string) => Promise<unknown>;
+  listClassInstances?: (classKey: string, offset?: number, limit?: number) => Promise<unknown>;
+  getDominatorChildren?: (
+    parentObjectId?: string,
+    offset?: number,
+    limit?: number,
+    minRetainedBytes?: number,
+  ) => Promise<unknown>;
 };
 
 export type HistogramGroupByMode = "class" | "package" | "class_loader" | "superclass";
@@ -139,6 +187,34 @@ function readNumber(value: unknown, field: string): number {
   return value;
 }
 
+function readCount(value: unknown, field: string): number {
+  const count = readNumber(value, field);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new TypeError(
+      `Invalid heap explorer bridge payload: expected ${field} to be a non-negative safe integer.`,
+    );
+  }
+
+  return count;
+}
+
+function readBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${field} to be a boolean.`);
+  }
+
+  return value;
+}
+
+function readObjectId(value: unknown, field: string): string {
+  const objectId = readString(value, field);
+  if (!/^(?:0x)?[0-9a-f]+$/i.test(objectId)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${field} to be an object id.`);
+  }
+
+  return objectId;
+}
+
 function readOptionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -206,6 +282,32 @@ function parseHeapQueryResult(value: unknown): HeapQueryResult {
   };
 }
 
+function parseHeapQueryErrorLocation(
+  query: string,
+  message: string,
+): HeapQueryErrorLocation | undefined {
+  const match = /\bat byte (\d+)\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+
+  const byteOffset = Number(match[1]);
+  const encodedQuery = new TextEncoder().encode(query);
+  if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > encodedQuery.length) {
+    return undefined;
+  }
+
+  const prefix = new TextDecoder().decode(encodedQuery.slice(0, byteOffset));
+  const lines = prefix.split(/\r\n|\r|\n/);
+  const currentLine = lines[lines.length - 1] ?? "";
+
+  return {
+    byteOffset,
+    line: lines.length,
+    column: Array.from(currentLine).length + 1,
+  };
+}
+
 function parseObjectReferenceEntry(value: unknown, path: string): ObjectReferenceEntry {
   if (!isRecord(value)) {
     throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
@@ -246,6 +348,95 @@ function parseObjectReferrersResult(value: unknown): ObjectReferrersResult {
   return {
     objectId: readString(value.objectId, "referrers.objectId"),
     referrers: value.referrers.map((entry, index) => parseObjectReferenceEntry(entry, `referrers.referrers[${index}]`)),
+  };
+}
+
+function parseClassInstanceEntry(value: unknown, path: string): ClassInstanceEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    objectId: readObjectId(value.object_id, `${path}.object_id`),
+    className: readString(value.class_name, `${path}.class_name`),
+    shallowSize: readCount(value.shallow_size, `${path}.shallow_size`),
+    retainedSize: readCount(value.retained_size, `${path}.retained_size`),
+  };
+}
+
+function parseClassInstancesPage(value: unknown): ClassInstancesPage {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid heap explorer bridge payload: class instances result must be an object.");
+  }
+  if (!Array.isArray(value.instances)) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: expected class_instances.instances to be an array.",
+    );
+  }
+
+  const instances = value.instances.map((entry, index) =>
+    parseClassInstanceEntry(entry, `class_instances.instances[${index}]`),
+  );
+  const returned = readCount(value.returned, "class_instances.returned");
+  if (returned !== instances.length) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: class_instances.returned must match instances.length.",
+    );
+  }
+
+  return {
+    classKey: readString(value.class_key, "class_instances.class_key"),
+    total: readCount(value.total, "class_instances.total"),
+    returned,
+    offset: readCount(value.offset, "class_instances.offset"),
+    limit: readCount(value.limit, "class_instances.limit"),
+    truncated: readBoolean(value.truncated, "class_instances.truncated"),
+    instances,
+  };
+}
+
+function parseDominatorChildEntry(value: unknown, path: string): DominatorChildEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    objectId: readObjectId(value.object_id, `${path}.object_id`),
+    className: readString(value.class_name, `${path}.class_name`),
+    shallowSize: readCount(value.shallow_size, `${path}.shallow_size`),
+    retainedSize: readCount(value.retained_size, `${path}.retained_size`),
+    dominatedCount: readCount(value.dominated_count, `${path}.dominated_count`),
+    hasChildren: readBoolean(value.has_children, `${path}.has_children`),
+  };
+}
+
+function parseDominatorChildrenPage(value: unknown): DominatorChildrenPage {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid heap explorer bridge payload: dominator children result must be an object.");
+  }
+  if (!Array.isArray(value.children)) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: expected dominator_children.children to be an array.",
+    );
+  }
+
+  const children = value.children.map((entry, index) =>
+    parseDominatorChildEntry(entry, `dominator_children.children[${index}]`),
+  );
+  const returned = readCount(value.returned, "dominator_children.returned");
+  if (returned !== children.length) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: dominator_children.returned must match children.length.",
+    );
+  }
+
+  return {
+    total: readCount(value.total, "dominator_children.total"),
+    returned,
+    offset: readCount(value.offset, "dominator_children.offset"),
+    limit: readCount(value.limit, "dominator_children.limit"),
+    truncated: readBoolean(value.truncated, "dominator_children.truncated"),
+    children,
   };
 }
 
@@ -349,6 +540,14 @@ export function isRegroupHistogramAvailable(): boolean {
   return Boolean(getHeapExplorerBridge()?.regroupHistogram);
 }
 
+export function isListClassInstancesAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.listClassInstances);
+}
+
+export function isGetDominatorChildrenAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.getDominatorChildren);
+}
+
 export function parseHistogramResult(raw: unknown): HistogramResultView {
   if (!isRecord(raw)) {
     throw new TypeError("Invalid histogram regroup payload: expected an object.");
@@ -407,6 +606,60 @@ export async function regroupHistogram(groupBy: string) {
   }
 }
 
+export async function listClassInstances(classKey: string, offset?: number, limit?: number) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.listClassInstances) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.listClassInstances(classKey, offset, limit);
+
+    return {
+      status: "ready" as const,
+      data: parseClassInstancesPage(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown class instances lookup failure.",
+    };
+  }
+}
+
+export async function getDominatorChildren(
+  parentObjectId?: string,
+  offset?: number,
+  limit?: number,
+  minRetainedBytes?: number,
+) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.getDominatorChildren) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.getDominatorChildren(
+      parentObjectId,
+      offset,
+      limit,
+      minRetainedBytes,
+    );
+
+    return {
+      status: "ready" as const,
+      data: parseDominatorChildrenPage(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown dominator children lookup failure.",
+    };
+  }
+}
+
 export async function runHeapQuery(input: HeapQueryInput) {
   const bridge = getHeapExplorerBridge();
 
@@ -422,9 +675,13 @@ export async function runHeapQuery(input: HeapQueryInput) {
       data: parseHeapQueryResult(raw),
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown heap query failure.";
+    const location = parseHeapQueryErrorLocation(input.query, message);
+
     return {
       status: "error" as const,
-      error: error instanceof Error ? error.message : "Unknown heap query failure.",
+      error: message,
+      ...(location ? { location } : {}),
     };
   }
 }

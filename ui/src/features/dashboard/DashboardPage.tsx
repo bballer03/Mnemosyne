@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
 import { Link, Navigate, useInRouterContext, useNavigate } from "react-router-dom";
 
-import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import {
+  compactGridColumns,
+  workbenchEyebrowStyle,
+  workbenchMutedStyle,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
+import { useCompactLayout } from "../../app/use-compact-layout";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
+import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { GraphMetricsPanel } from "./components/GraphMetricsPanel";
 import { HistogramPanel } from "./components/HistogramPanel";
 import { LeakTable } from "./components/LeakTable";
@@ -30,7 +36,7 @@ function formatGeneratedAt(value?: string) {
 }
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",
@@ -47,24 +53,7 @@ function formatProvenanceSummary(kinds: Array<{ kind: string }>) {
 export function DashboardPage() {
   const { artifact, artifactName } = useArtifactStore();
   const isInRouterContext = useInRouterContext();
-  const [isCompactLayout, setIsCompactLayout] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth < 980 : false,
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    function handleResize() {
-      setIsCompactLayout(window.innerWidth < 980);
-    }
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  const isCompactLayout = useCompactLayout();
 
   if (!artifact) {
     return isInRouterContext ? <Navigate to="/" replace /> : null;
@@ -83,21 +72,13 @@ export function DashboardPage() {
           }}
         >
           <div style={{ display: "grid", gap: "0.55rem" }}>
-            <p
-              style={{
-                margin: 0,
-                fontSize: "0.78rem",
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                color: "#38bdf8",
-              }}
-            >
+            <p style={workbenchEyebrowStyle}>
               JVM Engine 01
             </p>
             <h2 style={{ margin: 0, fontSize: "clamp(1.9rem, 4vw, 3rem)", lineHeight: 1.08 }}>
               Mnemosyne Triage Dashboard
             </h2>
-            <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
+            <p style={workbenchMutedStyle}>
               Browser-first triage surface powered entirely by the loaded analysis artifact.
             </p>
             {isInRouterContext ? (
@@ -113,8 +94,8 @@ export function DashboardPage() {
               display: "grid",
               gap: "0.6rem",
               borderRadius: 20,
-              border: "1px solid #1e293b",
-              background: "rgba(2, 6, 23, 0.75)",
+              border: "1px solid var(--mn-border-subtle)",
+              background: "var(--mn-surface-panel)",
               padding: "0.95rem 1rem",
             }}
           >
@@ -122,10 +103,10 @@ export function DashboardPage() {
               Loaded Artifact Context
             </div>
             <div style={{ fontSize: "1.05rem", fontWeight: 600, overflowWrap: "anywhere" }}>{artifact.summary.heapPath}</div>
-            <div style={{ color: "#94a3b8", overflowWrap: "anywhere" }}>Artifact: {artifactName ?? "Unnamed artifact"}</div>
-            <div style={{ color: "#94a3b8" }}>Generated: {formatGeneratedAt(artifact.summary.generatedAt)}</div>
+            <div style={{ color: "var(--mn-text-muted)", overflowWrap: "anywhere" }}>Artifact: {artifactName ?? "Unnamed artifact"}</div>
+            <div style={{ color: "var(--mn-text-muted)" }}>Generated: {formatGeneratedAt(artifact.summary.generatedAt)}</div>
             <div style={{ color: "#cbd5e1", fontSize: "0.9rem" }}>{formatProvenanceSummary(artifact.provenance)}</div>
-            <div style={{ color: "#86efac", fontSize: "0.9rem" }}>Status: artifact loaded locally</div>
+            <div style={{ color: "var(--mn-success-text)", fontSize: "0.9rem" }}>Status: artifact loaded locally</div>
           </div>
         </div>
       </section>
@@ -135,9 +116,10 @@ export function DashboardPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: isCompactLayout
-            ? "minmax(0, 1fr)"
-            : "minmax(0, 1.7fr) minmax(280px, 0.95fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1.7fr) minmax(280px, 0.95fr)",
+          ),
           gap: "1.25rem",
           alignItems: "start",
         }}

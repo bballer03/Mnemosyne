@@ -5,12 +5,13 @@ import { ExplorerCrossNavActions } from "./components/ExplorerCrossNavActions";
 import { ObjectInspectorPanel } from "./components/ObjectInspectorPanel";
 
 export function HeapObjectInspectorPage() {
-  const { artifact, selectedObject, resolvedLeakId, selectedRowIndex } = useOutletContext<HeapExplorerOutletContext>();
+  const { artifact, objectId, selectedObject, resolvedLeakId, selectedRowIndex } =
+    useOutletContext<HeapExplorerOutletContext>();
 
   return (
     <section style={{ display: "grid", gap: "0.9rem" }}>
-      <ExplorerCrossNavActions objectId={selectedObject?.objectId || undefined} leakId={resolvedLeakId} />
-      <ObjectInspectorPanel artifact={artifact} selectedRowIndex={selectedRowIndex} />
+      <ExplorerCrossNavActions objectId={objectId} leakId={resolvedLeakId} />
+      <ObjectInspectorPanel artifact={artifact} objectId={objectId} selectedRowIndex={selectedRowIndex} />
     </section>
   );
 }

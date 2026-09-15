@@ -9,13 +9,16 @@ use crate::{
     config::{AnalysisConfig, AppConfig},
     errors::{CoreError, CoreResult},
     graph::{
-        build_dominator_tree, build_graph_metrics_from_dominator, build_histogram,
+        build_dominator_tree_controlled, build_graph_metrics_from_dominator, build_histogram,
         find_unreachable_objects, summarize_graph, DominatorTree, GraphMetrics, HistogramGroupBy,
         HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
     hprof::{
-        parse_heap, parse_hprof_file_with_options, ClassDelta, ClassStat, HeapDiff, HeapParseJob,
-        HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
+        parse_heap, parse_hprof_file_with_options_controlled, ClassDelta, ClassStat, HeapDiff,
+        HeapParseJob, HeapSummary, ObjectGraph, ObjectId, OverviewSummary, ParseOptions,
+    },
+    operation::{
+        NoopOperationObserver, OperationObserver, OperationPhase, OperationProgressSnapshot,
     },
     plugin::{AnalyzerResult, PluginRegistry},
 };
@@ -318,20 +321,29 @@ fn assemble_graph_backed_analysis(
     dom: &DominatorTree,
     summary: &HeapSummary,
     request: &AnalyzeRequest,
-) -> GraphBackedAssembly {
+    observer: &dyn OperationObserver,
+) -> CoreResult<GraphBackedAssembly> {
+    ensure_not_cancelled(observer)?;
     let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+    ensure_not_cancelled(observer)?;
     let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+    ensure_not_cancelled(observer)?;
     let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+    ensure_not_cancelled(observer)?;
     let unreachable = Some(find_unreachable_objects(obj_graph));
+    ensure_not_cancelled(observer)?;
     let thread_report = request
         .enable_threads
         .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     let classloader_report = request
         .enable_classloaders
         .then(|| analyze_classloaders(obj_graph, Some(dom)));
+    ensure_not_cancelled(observer)?;
     let collection_report = request
         .enable_collections
         .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
+    ensure_not_cancelled(observer)?;
     let string_report = request.enable_strings.then(|| {
         analyze_strings(
             obj_graph,
@@ -340,19 +352,23 @@ fn assemble_graph_backed_analysis(
             request.min_duplicate_count,
         )
     });
+    ensure_not_cancelled(observer)?;
     let array_report = request
         .enable_duplicate_arrays
         .then(|| analyze_duplicate_arrays(obj_graph, request.min_duplicate_count));
+    ensure_not_cancelled(observer)?;
     let top_instances = request
         .enable_top_instances
         .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     let referrer_report = request
         .enable_by_referrer
         .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     // If graph-backed produced no leaks (e.g. all filtered), fall back
     if graph_leaks.is_empty() {
         let fallback_leaks = synthesize_leaks(summary, &request.leak_options);
-        (
+        Ok((
             graph_metrics,
             fallback_leaks,
             histogram,
@@ -365,9 +381,9 @@ fn assemble_graph_backed_analysis(
             top_instances,
             referrer_report,
             fallback_provenance(),
-        )
+        ))
     } else {
-        (
+        Ok((
             graph_metrics,
             graph_leaks,
             histogram,
@@ -380,7 +396,7 @@ fn assemble_graph_backed_analysis(
             top_instances,
             referrer_report,
             Vec::new(),
-        )
+        ))
     }
 }
 
@@ -392,9 +408,12 @@ fn assemble_graph_backed_analysis(
 async fn analyze_heap_internal(
     request: AnalyzeRequest,
     registry: Option<&PluginRegistry>,
+    observer: &dyn OperationObserver,
 ) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
+    ensure_not_cancelled(observer)?;
+    report_indeterminate_phase(observer, OperationPhase::Parsing, start);
 
     let parse_job = HeapParseJob {
         path: request.heap_path.clone(),
@@ -402,13 +421,17 @@ async fn analyze_heap_internal(
         max_objects: request.config.parser.max_objects,
     };
     let summary = parse_heap(&parse_job)?;
+    ensure_not_cancelled(observer)?;
     let retain_field_data = request.enable_strings
         || request.enable_collections
         || request.enable_threads
         || request.enable_duplicate_arrays;
 
     // Attempt graph-backed analysis
-    let dominator_result = try_build_dominator(&request.heap_path, retain_field_data);
+    let dominator_result =
+        try_build_dominator_controlled(&request.heap_path, retain_field_data, observer, start)?;
+    report_indeterminate_phase(observer, OperationPhase::Analyzing, start);
+    ensure_not_cancelled(observer)?;
 
     let (
         graph,
@@ -424,9 +447,11 @@ async fn analyze_heap_internal(
         referrer_report,
         provenance,
     ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
-        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request)
+        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, observer)?
     } else {
+        ensure_not_cancelled(observer)?;
         let graph = summarize_graph(&summary);
+        ensure_not_cancelled(observer)?;
         let leaks = synthesize_leaks(&summary, &request.leak_options);
         (
             graph,
@@ -444,12 +469,14 @@ async fn analyze_heap_internal(
         )
     };
 
+    ensure_not_cancelled(observer)?;
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
         Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
     } else {
         None
     };
+    ensure_not_cancelled(observer)?;
 
     // M15 Slice 15.F: run registered AnalyzerPlugins over the graph-backed
     // pipeline's own (ObjectGraph, DominatorTree) pair. Only possible when
@@ -464,6 +491,7 @@ async fn analyze_heap_internal(
         (Some(registry), Some((obj_graph, dom))) => registry.run_analyzers(obj_graph, Some(dom)),
         _ => Vec::new(),
     };
+    ensure_not_cancelled(observer)?;
 
     let has_graph = dominator_result.is_some();
     let response = AnalyzeResponse {
@@ -503,6 +531,7 @@ async fn analyze_heap_internal(
         None => (None, None),
     };
 
+    ensure_not_cancelled(observer)?;
     Ok(AnalysisArtifacts {
         response,
         object_graph,
@@ -511,7 +540,17 @@ async fn analyze_heap_internal(
 }
 
 pub async fn analyze_heap(request: AnalyzeRequest) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request, None).await?.response)
+    analyze_heap_controlled(request, &NoopOperationObserver).await
+}
+
+/// Execute the analysis workflow with dependency-neutral progress observation.
+pub async fn analyze_heap_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<AnalyzeResponse> {
+    Ok(analyze_heap_internal(request, None, observer)
+        .await?
+        .response)
 }
 
 /// Like [`analyze_heap`], but runs every [`crate::plugin::AnalyzerPlugin`]
@@ -526,9 +565,11 @@ pub async fn analyze_heap_with_plugins(
     request: AnalyzeRequest,
     registry: &PluginRegistry,
 ) -> CoreResult<AnalyzeResponse> {
-    Ok(analyze_heap_internal(request, Some(registry))
-        .await?
-        .response)
+    Ok(
+        analyze_heap_internal(request, Some(registry), &NoopOperationObserver)
+            .await?
+            .response,
+    )
 }
 
 /// Like [`analyze_heap`], but also returns the `(ObjectGraph,
@@ -543,22 +584,38 @@ pub async fn analyze_heap_with_plugins(
 pub async fn analyze_heap_capturing_graph(
     request: AnalyzeRequest,
 ) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
+    analyze_heap_capturing_graph_controlled(request, &NoopOperationObserver).await
+}
+
+/// Like [`analyze_heap_capturing_graph`], with progress observation.
+pub async fn analyze_heap_capturing_graph_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<(AnalyzeResponse, Option<ObjectGraph>, Option<DominatorTree>)> {
     let AnalysisArtifacts {
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request, None).await?;
+    } = analyze_heap_internal(request, None, observer).await?;
     Ok((response, object_graph, dominator_tree))
 }
 
 pub async fn analyze_heap_with_graph(
     request: AnalyzeRequest,
 ) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
+    analyze_heap_with_graph_controlled(request, &NoopOperationObserver).await
+}
+
+/// Like [`analyze_heap_with_graph`], with progress observation.
+pub async fn analyze_heap_with_graph_controlled(
+    request: AnalyzeRequest,
+    observer: &dyn OperationObserver,
+) -> CoreResult<(AnalyzeResponse, ObjectGraph, DominatorTree)> {
     let AnalysisArtifacts {
         response,
         object_graph,
         dominator_tree,
-    } = analyze_heap_internal(request, None).await?;
+    } = analyze_heap_internal(request, None, observer).await?;
 
     match (object_graph, dominator_tree) {
         (Some(graph), Some(dom)) => Ok((response, graph, dom)),
@@ -612,7 +669,7 @@ pub async fn analyze_heap_from_graph(
         top_instances,
         referrer_report,
         provenance,
-    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request);
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, &NoopOperationObserver)?;
 
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights (from cached graph)");
@@ -646,6 +703,135 @@ pub async fn analyze_heap_from_graph(
         // plugin-registry-aware -- see `analyze_heap_with_plugins` for the
         // entry point that is. Named exclusion, not a silent gap: no
         // caller of this function passes a registry today.
+        plugin_results: Vec::new(),
+        provenance,
+    })
+}
+
+fn derive_snapshot_summary(heap_path: &str, graph: &ObjectGraph) -> HeapSummary {
+    let mut classes_by_name: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut total_size_bytes = 0_u64;
+
+    for object in graph.objects.values() {
+        let shallow_size = u64::from(object.shallow_size);
+        total_size_bytes = total_size_bytes.saturating_add(shallow_size);
+        let class_name = graph
+            .class_name(object.class_id)
+            .unwrap_or("<unknown>")
+            .to_string();
+        let entry = classes_by_name.entry(class_name).or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = entry.1.saturating_add(shallow_size);
+    }
+
+    let mut classes = classes_by_name
+        .into_iter()
+        .map(|(name, (instances, class_bytes))| ClassStat {
+            name,
+            instances,
+            total_size_bytes: class_bytes,
+            percentage: if total_size_bytes == 0 {
+                0.0
+            } else {
+                ((class_bytes as f64 / total_size_bytes as f64) * 100.0) as f32
+            },
+        })
+        .collect::<Vec<_>>();
+    classes.sort_by(|left, right| {
+        right
+            .total_size_bytes
+            .cmp(&left.total_size_bytes)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let display_name = std::path::Path::new(heap_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("snapshot.hprof")
+        .to_string();
+
+    HeapSummary {
+        heap_path: display_name,
+        total_objects: graph.object_count() as u64,
+        total_size_bytes,
+        classes,
+        generated_at: std::time::SystemTime::now(),
+        header: None,
+        total_records: 0,
+        record_stats: Vec::new(),
+    }
+}
+
+/// Build display-safe analysis facts entirely from a cached snapshot graph.
+///
+/// Unlike [`analyze_heap_from_graph`], this entry point never reopens the
+/// original HPROF. Raw record/header facts are therefore unavailable and the
+/// response carries explicit partial provenance.
+pub async fn analyze_snapshot_from_graph_controlled(
+    request: AnalyzeRequest,
+    obj_graph: &ObjectGraph,
+    dom: &DominatorTree,
+    observer: &dyn OperationObserver,
+) -> CoreResult<AnalyzeResponse> {
+    info!(
+        heap = %request.heap_path,
+        "starting source-independent analysis from cached snapshot graph"
+    );
+    let start = Instant::now();
+    ensure_not_cancelled(observer)?;
+    report_indeterminate_phase(observer, OperationPhase::Analyzing, start);
+    let summary = derive_snapshot_summary(&request.heap_path, obj_graph);
+
+    let (
+        graph,
+        leaks,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
+        mut provenance,
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, observer)?;
+
+    ensure_not_cancelled(observer)?;
+    let ai = if request.enable_ai || request.config.ai.enabled {
+        Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
+    } else {
+        None
+    };
+    ensure_not_cancelled(observer)?;
+    provenance.push(ProvenanceMarker::new(
+        ProvenanceKind::Partial,
+        "snapshot-backed summary totals use cached object shallow sizes; raw HPROF header, \
+         record counts, and record statistics are unavailable without re-reading the source",
+    ));
+
+    Ok(AnalyzeResponse {
+        mode: AnalysisMode::Deep,
+        overview: None,
+        summary,
+        leaks,
+        recommendations: vec![
+            "Snapshot-backed graph analysis complete. Retained sizes are computed from the cached dominator tree."
+                .into(),
+        ],
+        elapsed: start.elapsed(),
+        graph,
+        ai,
+        histogram,
+        unreachable,
+        thread_report,
+        classloader_report,
+        collection_report,
+        string_report,
+        array_report,
+        top_instances,
+        referrer_report,
         plugin_results: Vec::new(),
         provenance,
     })
@@ -838,22 +1024,70 @@ pub(crate) fn try_build_dominator(
     heap_path: &str,
     retain_field_data: bool,
 ) -> Option<(ObjectGraph, DominatorTree)> {
-    match parse_hprof_file_with_options(heap_path, ParseOptions { retain_field_data }) {
+    try_build_dominator_controlled(
+        heap_path,
+        retain_field_data,
+        &NoopOperationObserver,
+        Instant::now(),
+    )
+    .expect("the no-op observer cannot cancel graph construction")
+}
+
+fn try_build_dominator_controlled(
+    heap_path: &str,
+    retain_field_data: bool,
+    observer: &dyn OperationObserver,
+    started: Instant,
+) -> CoreResult<Option<(ObjectGraph, DominatorTree)>> {
+    match parse_hprof_file_with_options_controlled(
+        heap_path,
+        ParseOptions { retain_field_data },
+        observer,
+    ) {
         Ok(graph) => {
             if graph.objects.is_empty() {
-                return None;
+                return Ok(None);
             }
-            let dom = build_dominator_tree(&graph);
+            ensure_not_cancelled(observer)?;
+            report_indeterminate_phase(observer, OperationPhase::BuildingGraph, started);
+            ensure_not_cancelled(observer)?;
+            report_indeterminate_phase(observer, OperationPhase::ComputingDominators, started);
+            let dom = build_dominator_tree_controlled(&graph, observer)?;
             if dom.node_count() == 0 {
-                return None;
+                return Ok(None);
             }
-            Some((graph, dom))
+            ensure_not_cancelled(observer)?;
+            Ok(Some((graph, dom)))
         }
+        Err(CoreError::OperationCancelled) => Err(CoreError::OperationCancelled),
         Err(e) => {
             info!(error = %e, "HPROF object graph parsing failed; falling back to heuristic analysis");
-            None
+            Ok(None)
         }
     }
+}
+
+fn ensure_not_cancelled(observer: &dyn OperationObserver) -> CoreResult<()> {
+    if observer.is_cancelled() {
+        Err(CoreError::OperationCancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn report_indeterminate_phase(
+    observer: &dyn OperationObserver,
+    phase: OperationPhase,
+    started: Instant,
+) {
+    observer.progress(OperationProgressSnapshot {
+        phase,
+        completed: None,
+        total: None,
+        unit: None,
+        indeterminate: true,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    });
 }
 
 /// Produce leak insights from the dominator tree's top retained objects.
@@ -1419,7 +1653,51 @@ mod tests {
     use super::*;
     use crate::hprof::{ClassInfo, ClassStat, RecordStat};
     use std::io::Write;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    };
     use std::time::{Duration, SystemTime};
+
+    #[derive(Default)]
+    struct RecordingOperationObserver {
+        events: Mutex<Vec<crate::OperationProgressSnapshot>>,
+    }
+
+    impl crate::OperationObserver for RecordingOperationObserver {
+        fn progress(&self, event: crate::OperationProgressSnapshot) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    impl RecordingOperationObserver {
+        fn events(&self) -> Vec<crate::OperationProgressSnapshot> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct AnalysisCancellingObserver {
+        cancelled: AtomicBool,
+        checks: AtomicUsize,
+    }
+
+    impl crate::OperationObserver for AnalysisCancellingObserver {
+        fn progress(&self, event: crate::OperationProgressSnapshot) {
+            if event.phase == crate::OperationPhase::Analyzing {
+                self.cancelled.store(true, Ordering::Release);
+            }
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.checks.fetch_add(1, Ordering::AcqRel);
+            self.cancelled.load(Ordering::Acquire)
+        }
+    }
 
     fn summary_with_size(bytes: u64) -> HeapSummary {
         HeapSummary {
@@ -1532,6 +1810,108 @@ mod tests {
         assert!(!graph.objects.is_empty());
         assert!(dom.node_count() > 0);
         assert_eq!(response_with_graph.graph.node_count, dom.node_count());
+    }
+
+    #[tokio::test]
+    async fn snapshot_analysis_survives_missing_source_heap() {
+        let bytes = crate::test_fixtures::build_graph_fixture();
+        let graph =
+            crate::hprof::parse_hprof_with_options(&bytes, ParseOptions::default()).unwrap();
+        let dominator = crate::build_dominator_tree(&graph);
+        let request = AnalyzeRequest {
+            heap_path: "/missing/private/fixture.hprof".into(),
+            enable_classloaders: true,
+            enable_top_instances: true,
+            ..AnalyzeRequest::default()
+        };
+
+        let response = analyze_snapshot_from_graph_controlled(
+            request,
+            &graph,
+            &dominator,
+            &NoopOperationObserver,
+        )
+        .await
+        .expect("cached graph must hydrate without reopening the HPROF");
+
+        assert_eq!(response.mode, AnalysisMode::Deep);
+        assert_eq!(response.summary.heap_path, "fixture.hprof");
+        assert_eq!(response.summary.total_objects, graph.object_count() as u64);
+        assert!(response.histogram.is_some());
+        assert!(response.classloader_report.is_some());
+        assert!(response.top_instances.is_some());
+        assert!(response
+            .provenance
+            .iter()
+            .any(|marker| marker.kind == ProvenanceKind::Partial));
+    }
+
+    #[tokio::test]
+    async fn operation_progress_orders_graph_dominator_and_analysis_phases() {
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let observer = RecordingOperationObserver::default();
+
+        let (controlled, graph, dominator) =
+            analyze_heap_capturing_graph_controlled(request.clone(), &observer)
+                .await
+                .unwrap();
+        let legacy = analyze_heap(request).await.unwrap();
+        let phases = observer
+            .events()
+            .into_iter()
+            .map(|event| {
+                if event.total.is_none() {
+                    assert!(
+                        event.indeterminate,
+                        "phases without totals must be explicitly indeterminate"
+                    );
+                }
+                event.phase
+            })
+            .collect::<Vec<_>>();
+
+        let phase_index = |phase| {
+            phases
+                .iter()
+                .position(|candidate| *candidate == phase)
+                .unwrap_or_else(|| panic!("missing operation phase {phase:?}: {phases:?}"))
+        };
+        assert!(
+            phase_index(crate::OperationPhase::Parsing)
+                < phase_index(crate::OperationPhase::BuildingGraph)
+        );
+        assert!(
+            phase_index(crate::OperationPhase::BuildingGraph)
+                < phase_index(crate::OperationPhase::ComputingDominators)
+        );
+        assert!(
+            phase_index(crate::OperationPhase::ComputingDominators)
+                < phase_index(crate::OperationPhase::Analyzing)
+        );
+        assert!(graph.is_some());
+        assert!(dominator.is_some());
+        assert_eq!(
+            normalized_analysis_bytes(&controlled),
+            normalized_analysis_bytes(&legacy)
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_cancelled_between_analysis_stages_returns_no_success_payload() {
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let observer = AnalysisCancellingObserver::default();
+
+        let error = analyze_heap_controlled(request, &observer)
+            .await
+            .expect_err("cancelled analysis must not return a response");
+
+        assert!(matches!(error, CoreError::OperationCancelled));
+        assert!(
+            observer.checks.load(Ordering::Acquire) > 0,
+            "analysis must consult cancellation between expensive stages"
+        );
     }
 
     #[tokio::test]

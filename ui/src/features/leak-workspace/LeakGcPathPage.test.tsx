@@ -1,11 +1,12 @@
 import "../../test/setup";
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 import { LeakGcPathPage } from "./LeakGcPathPage";
 import { useLeakWorkspaceStore } from "./leak-workspace-store";
@@ -76,6 +77,7 @@ describe("LeakGcPathPage", () => {
     act(() => {
       useArtifactStore.getState().reset();
       useLeakWorkspaceStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
 
     clearLeakWorkspaceBridge();
@@ -87,6 +89,7 @@ describe("LeakGcPathPage", () => {
     act(() => {
       useArtifactStore.getState().reset();
       useLeakWorkspaceStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
 
     clearLeakWorkspaceBridge();
@@ -142,6 +145,7 @@ describe("LeakGcPathPage", () => {
             is_root: false,
           },
         ],
+        truncated: true,
         provenance: [],
       }),
     };
@@ -158,6 +162,65 @@ describe("LeakGcPathPage", () => {
     expect(await view.findByText(/current object target: 0x1000/i)).toBeInTheDocument();
     expect(view.getByText(/root node/i)).toBeInTheDocument();
     expect(view.getByText(/via: entries/i)).toBeInTheDocument();
+    expect(view.getByText(/gc path response was truncated by the backend/i)).toBeInTheDocument();
+  });
+
+  it("navigates a real shortest-path node through shared object selection and leaves synthetic roots inert", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+
+    seedArtifact();
+    const user = userEvent.setup();
+    globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
+      findGcPath: async () => ({
+        object_id: "0x00af",
+        path_length: 2,
+        path: [
+          {
+            object_id: "GC_ROOT_thread",
+            class_name: "synthetic.Root",
+            field: "ROOT",
+            is_root: true,
+          },
+          {
+            object_id: "0x00af",
+            class_name: "com.example.Cache",
+            field: "entries",
+            is_root: false,
+          },
+        ],
+        provenance: [{ kind: "FALLBACK", detail: "Synthetic root only; real target retained." }],
+      }),
+    };
+    act(() => {
+      useLeakWorkspaceStore.getState().setSelection({ objectId: "0x00af" });
+    });
+
+    const router = createMemoryRouter(
+      [
+        { path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> },
+        { path: "/heap-explorer/object-inspector", element: <div>Inspector target</div> },
+      ],
+      { initialEntries: ["/leaks/leak-1/gc-path"] },
+    );
+    const view = render(<RouterProvider router={router} />);
+
+    const targetLink = await view.findByRole("link", { name: /com\.example\.cache/i });
+    const syntheticCard = view.getByText("synthetic.Root").closest("article");
+
+    expect(targetLink).toHaveAttribute("href", "/heap-explorer/object-inspector?objectId=0x00af");
+    expect(syntheticCard).not.toBeNull();
+    expect(within(syntheticCard as HTMLElement).queryByRole("link")).toBeNull();
+    expect(within(syntheticCard as HTMLElement).getByText(/not navigable: synthetic\/root identifier/i)).toBeInTheDocument();
+
+    await user.click(targetLink);
+    expect(useInvestigationStore.getState()).toMatchObject({
+      objectId: "0x00af",
+      originPane: "gc-path",
+    });
+    expect(router.state.location.pathname).toBe("/heap-explorer/object-inspector");
+    expect(router.state.location.search).toBe("?objectId=0x00af");
   });
 
   it("renders fallback provenance details for a bridge-backed fallback gc path", async () => {
@@ -203,6 +266,7 @@ describe("LeakGcPathPage", () => {
     expect(await view.findByText(/gc path includes backend-reported fallback provenance\./i)).toBeInTheDocument();
     expect(view.getByText(/gc path was synthesized from summary-level heap information\./i)).toBeInTheDocument();
     expect(view.getByText(/no real gc root chain could be resolved; best-effort fallback path returned\./i)).toBeInTheDocument();
+    expect(view.queryByText(/\bcomplete\b/i)).toBeNull();
   });
 
   it("refreshes the current gc path when the operator requests it", async () => {
@@ -361,6 +425,7 @@ describe("LeakGcPathPage", () => {
     }
 
     seedArtifact();
+    const user = userEvent.setup();
     const calls: Array<{ objectId: string; maxPaths: number | undefined }> = [];
     globalWindow.window.__MNEMOSYNE_LEAK_WORKSPACE_BRIDGE__ = {
       findAllGcPaths: async (objectId: string, maxPaths?: number) => {
@@ -388,9 +453,13 @@ describe("LeakGcPathPage", () => {
       useLeakWorkspaceStore.getState().setSelection({ objectId: "0x1000" });
     });
 
-    const router = createMemoryRouter([{ path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> }], {
-      initialEntries: ["/leaks/leak-1/gc-path"],
-    });
+    const router = createMemoryRouter(
+      [
+        { path: "/leaks/:leakId/gc-path", element: <LeakGcPathPage /> },
+        { path: "/heap-explorer/object-inspector", element: <div>Inspector target</div> },
+      ],
+      { initialEntries: ["/leaks/leak-1/gc-path"] },
+    );
     const view = render(<RouterProvider router={router} />);
 
     expect(await view.findByLabelText(/path count/i)).toBeInTheDocument();
@@ -398,6 +467,16 @@ describe("LeakGcPathPage", () => {
     expect(view.getByText(/path 2 of 2/i)).toBeInTheDocument();
     expect(view.getByText(/java\.lang\.thread/i)).toBeInTheDocument();
     expect(calls[0]).toEqual({ objectId: "0x1000", maxPaths: 5 });
+
+    const pathNodeLink = view.getByRole("link", { name: /java\.lang\.thread/i });
+    expect(pathNodeLink).toHaveAttribute("href", "/heap-explorer/object-inspector?objectId=0x2000");
+
+    await user.click(pathNodeLink);
+    expect(useInvestigationStore.getState()).toMatchObject({
+      objectId: "0x2000",
+      originPane: "gc-path",
+    });
+    expect(router.state.location.search).toBe("?objectId=0x2000");
   });
 
   it("re-requests multi-path results with the newly selected path count", async () => {
