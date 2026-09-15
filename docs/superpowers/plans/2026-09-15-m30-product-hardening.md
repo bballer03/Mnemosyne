@@ -40,7 +40,7 @@
 - Migrate: workbench shell files listed above to import from `theme-tokens.ts`
 - Test: `ui/src/app/theme-tokens.test.ts`, narrow-width cases in `GuidedLanding.test.tsx`, `ArtifactLoaderPage.test.tsx`, `HeapExplorerLayout.test.tsx`, `ArtifactExplorerPage.test.tsx`
 
-- [ ] **Step 1: Write failing token contract test**
+- [x] **Step 1: Write failing token contract test**
 
 ```typescript
 // ui/src/app/theme-tokens.test.ts
@@ -50,13 +50,13 @@ it("exports workbench panel styles that reference CSS custom properties", () => 
 });
 ```
 
-- [ ] **Step 2: Run test — expect FAIL** (`bun test ui/src/app/theme-tokens.test.ts`)
+- [x] **Step 2: Run test — expect FAIL** (`bun test ui/src/app/theme-tokens.test.ts`)
 
-- [ ] **Step 3: Expand globals.css tokens and add theme-tokens.ts + use-compact-layout.ts**
+- [x] **Step 3: Expand globals.css tokens and add theme-tokens.ts + use-compact-layout.ts**
 
-- [ ] **Step 4: Run token test — expect PASS**
+- [x] **Step 4: Run token test — expect PASS**
 
-- [ ] **Step 5: Write failing narrow-width primary-action tests**
+- [x] **Step 5: Write failing narrow-width primary-action tests**
 
 ```typescript
 // GuidedLanding.test.tsx — workflow cards remain queryable at 720px
@@ -64,13 +64,13 @@ it("exports workbench panel styles that reference CSS custom properties", () => 
 // ArtifactExplorerPage.test.tsx — histogram grid stacks to one column at 720px
 ```
 
-- [ ] **Step 6: Migrate shared workbench shells to theme tokens + compactGridColumns**
+- [x] **Step 6: Migrate shared workbench shells to theme tokens + compactGridColumns**
 
-- [ ] **Step 7: Run focused tests + `bun run build` in ui/**
+- [x] **Step 7: Run focused tests + `bun run build` in ui/**
 
 Run: `cd ui && bun test src/app/theme-tokens.test.ts src/features/workflow-landing/GuidedLanding.test.tsx src/features/artifact-loader/ArtifactLoaderPage.test.tsx src/features/heap-explorer/HeapExplorerLayout.test.tsx src/features/artifact-explorer/ArtifactExplorerPage.test.tsx`
 
-- [ ] **Step 8: Commit** `feat(ui): expand theme tokens for hardening`
+- [x] **Step 8: Commit** `feat(ui): expand theme tokens for hardening`
 
 **Leftover gaps (explicit):**
 - Leaf panel components still carry literal hex colors (ClassInstancesPanel, QueryConsolePanel, WorkflowCard, etc.)

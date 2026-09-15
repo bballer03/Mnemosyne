@@ -1,11 +1,12 @@
 import { useState } from "react";
 
+import { workbenchPanelStyle } from "../../app/theme-tokens";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { ComparisonPicker } from "./ComparisonPicker";
 import { ComparisonResults } from "./ComparisonResults";
 
 const chromeStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 12,
   background: "rgba(15, 23, 42, 0.9)",
   padding: "0.75rem",

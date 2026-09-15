@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { InvestigationBreadcrumbs } from "../../app/InvestigationBreadcrumbs";
+import {
+  compactGridColumns,
+  workbenchEyebrowStyle,
+  workbenchMutedStyle,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
+import { useCompactLayout } from "../../app/use-compact-layout";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { useInvestigationStore } from "../investigation/investigation-store";
@@ -11,7 +18,7 @@ import { ObjectInspectorPanel } from "./components/ObjectInspectorPanel";
 import { resolveObjectToLeak } from "./resolve-object-to-leak";
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",
@@ -51,9 +58,7 @@ export function HeapExplorerLayout() {
     return artifact?.graph.dominators[0] ? 0 : undefined;
   });
   const [seededSearch, setSeededSearch] = useState<string | undefined>();
-  const [isCompactLayout, setIsCompactLayout] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth < 980 : false,
-  );
+  const isCompactLayout = useCompactLayout();
 
   function handleSelectedRowIndexChange(rowIndex: number | undefined) {
     setSelectedRowIndex(rowIndex);
@@ -122,21 +127,6 @@ export function HeapExplorerLayout() {
     }
   }, [artifact, selectedObjectId]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    function handleResize() {
-      setIsCompactLayout(window.innerWidth < 980);
-    }
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
   if (!artifact) {
     return <Navigate to="/" replace />;
   }
@@ -178,15 +168,15 @@ export function HeapExplorerLayout() {
             </NavLink>
           </div>
           <InvestigationBreadcrumbs />
-          <div style={{ color: "#38bdf8", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
+          <div style={workbenchEyebrowStyle}>
             Heap Explorer
           </div>
           <h1 style={{ margin: 0, fontSize: "clamp(1.8rem, 4vw, 2.6rem)", lineHeight: 1.08 }}>Heap Explorer</h1>
-          <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
+          <p style={workbenchMutedStyle}>
             Heap graph shell for dominator-driven navigation and object inspection.
           </p>
           <div style={{ color: "#cbd5e1", overflowWrap: "anywhere" }}>{artifact.summary.heapPath}</div>
-          <div style={{ color: "#94a3b8", overflowWrap: "anywhere" }}>
+          <div style={{ color: "var(--mn-text-muted)", overflowWrap: "anywhere" }}>
             Artifact: {artifactName ?? "Unnamed artifact"}
           </div>
         </header>
@@ -195,11 +185,10 @@ export function HeapExplorerLayout() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: isCompactLayout
-            ? "minmax(0, 1fr)"
-            : showInspectorPane
-            ? "260px minmax(0, 1fr) 320px"
-            : "260px minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            showInspectorPane ? "260px minmax(0, 1fr) 320px" : "260px minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}

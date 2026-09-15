@@ -1,9 +1,10 @@
+import { workbenchPanelStyle } from "../../app/theme-tokens";
 import { useComparisonStore } from "./comparison-store";
 import { MatchQualityBadge } from "./MatchQualityBadge";
 import { ObjectDeltaTable } from "./ObjectDeltaTable";
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  border: workbenchPanelStyle.border,
   borderRadius: 18,
   background: "rgba(2, 6, 23, 0.78)",
   padding: "1rem",

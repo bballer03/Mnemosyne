@@ -1,9 +1,10 @@
+import { workbenchPanelStyle } from "../../app/theme-tokens";
 import { Link } from "react-router-dom";
 
 import { ComparisonWorkbenchPanel } from "./ComparisonWorkbenchPanel";
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  border: workbenchPanelStyle.border,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",

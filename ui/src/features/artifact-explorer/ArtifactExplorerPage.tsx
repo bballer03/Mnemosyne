@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
+import {
+  compactGridColumns,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
+import { useCompactLayout } from "../../app/use-compact-layout";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import {
   normalizeHistogramGroupBy,
@@ -24,7 +29,7 @@ import { TopInstancesPanel } from "./components/TopInstancesPanel";
 import { UnreachableObjectsPanel } from "./components/UnreachableObjectsPanel";
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",
@@ -32,6 +37,7 @@ const panelStyle = {
 
 export function ArtifactExplorerPage() {
   const { artifact, artifactName } = useArtifactStore();
+  const isCompactLayout = useCompactLayout();
   const selectedClassKey = useInvestigationStore((state) => state.classKey);
   const setClassKey = useInvestigationStore((state) => state.setClassKey);
   const histogramView = useInvestigationStore((state) => state.histogramView);
@@ -117,17 +123,17 @@ export function ArtifactExplorerPage() {
               Artifact Explorer
             </Link>
           </div>
-          <div style={{ color: "#38bdf8", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
+          <div style={{ color: "var(--mn-text-accent)", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
             Artifact Explorer
           </div>
           <h1 style={{ margin: 0, fontSize: "clamp(1.8rem, 4vw, 2.6rem)", lineHeight: 1.08 }}>
             Artifact Explorer
           </h1>
-          <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.7, maxWidth: "68ch" }}>
+          <p style={{ margin: 0, color: "var(--mn-text-muted)", lineHeight: 1.7, maxWidth: "68ch" }}>
             Dedicated artifact-backed exploration surface for histogram breadth and analyzer modules.
           </p>
           <div style={{ color: "#cbd5e1", overflowWrap: "anywhere" }}>{artifact.summary.heapPath}</div>
-          <div style={{ color: "#94a3b8", overflowWrap: "anywhere" }}>
+          <div style={{ color: "var(--mn-text-muted)", overflowWrap: "anywhere" }}>
             Artifact: {artifactName ?? "Unnamed artifact"}
           </div>
         </header>
@@ -140,7 +146,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "280px minmax(0, 1fr) 320px",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "280px minmax(0, 1fr) 320px",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -165,7 +174,7 @@ export function ArtifactExplorerPage() {
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>
           <SelectedBucketDetail artifact={explorerArtifact} selectedKey={selectedHistogramKey} />
-          <div style={{ borderTop: "1px solid #1e293b", marginTop: "1rem", paddingTop: "1rem" }}>
+          <div style={{ borderTop: "1px solid var(--mn-border-subtle)", marginTop: "1rem", paddingTop: "1rem" }}>
             <ClassInstancesPanel
               groupBy={activeHistogramGroupBy}
               onRegroupToClass={handleRegroupToClass}
@@ -177,7 +186,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -193,7 +205,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}
@@ -209,7 +224,10 @@ export function ArtifactExplorerPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1fr) minmax(0, 1fr)",
+          ),
           gap: "1rem",
           alignItems: "start",
         }}

@@ -1,19 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 
-import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
-import { ArtifactDropzone } from "./ArtifactDropzone";
-import { getDesktopLogPath } from "./desktop-heap-client";
-import { formatHostError } from "../../host/format-host-error";
-import { useArtifactStore } from "./use-artifact-store";
-import { useDashboardStore } from "../dashboard/dashboard-store";
-import { GuidedLanding } from "../workflow-landing/GuidedLanding";
 import { TopNav } from "../../app/TopNav";
+import {
+  compactGridColumns,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
+import { useCompactLayout } from "../../app/use-compact-layout";
+import { formatHostError } from "../../host/format-host-error";
+import { useDashboardStore } from "../dashboard/dashboard-store";
 import {
   applyOpenedHeap,
   openDesktopHeapFromSource,
   openDesktopHeapLean,
 } from "../investigation/workspace-actions";
+import { GuidedLanding } from "../workflow-landing/GuidedLanding";
+import { ArtifactDropzone } from "./ArtifactDropzone";
+import { getDesktopLogPath } from "./desktop-heap-client";
+import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
+import { useArtifactStore } from "./use-artifact-store";
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) {
@@ -43,9 +48,8 @@ function displayNameForPath(path: string) {
 
 function panelStyle() {
   return {
-    border: "1px solid #1e293b",
+    ...workbenchPanelStyle,
     borderRadius: 20,
-    background: "rgba(15, 23, 42, 0.88)",
     padding: "1.25rem",
   } as const;
 }
@@ -100,9 +104,7 @@ export function ArtifactLoaderPage() {
   const [heapOpenPhase, setHeapOpenPhase] = useState<"idle" | "picking" | "analyzing">("idle");
   const [desktopHeapMessage, setDesktopHeapMessage] = useState<string | undefined>();
   const [desktopLogPath, setDesktopLogPath] = useState<string | undefined>();
-  const [isCompactLayout, setIsCompactLayout] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth < 980 : false,
-  );
+  const isCompactLayout = useCompactLayout();
   const [statusLines, setStatusLines] = useState<string[]>([
     "[00:00:00] system initialized",
     "[00:00:00] ready for local artifact input",
@@ -111,21 +113,6 @@ export function ArtifactLoaderPage() {
   const latestRequestId = useRef(0);
   const [shouldNavigateToDashboard, setShouldNavigateToDashboard] = useState(false);
   const isInRouterContext = useInRouterContext();
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return undefined;
-    }
-
-    function handleResize() {
-      setIsCompactLayout(window.innerWidth < 980);
-    }
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,7 +299,7 @@ export function ArtifactLoaderPage() {
             fontSize: "0.78rem",
             letterSpacing: "0.16em",
             textTransform: "uppercase",
-            color: "#38bdf8",
+            color: "var(--mn-text-accent)",
           }}
         >
           Artifact Loader
@@ -330,7 +317,7 @@ export function ArtifactLoaderPage() {
           style={{
             margin: 0,
             maxWidth: "64ch",
-            color: "#94a3b8",
+            color: "var(--mn-text-muted)",
             lineHeight: 1.7,
           }}
         >
@@ -343,9 +330,10 @@ export function ArtifactLoaderPage() {
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: isCompactLayout
-            ? "minmax(0, 1fr)"
-            : "minmax(0, 1.65fr) minmax(280px, 0.95fr)",
+          gridTemplateColumns: compactGridColumns(
+            isCompactLayout,
+            "minmax(0, 1.65fr) minmax(280px, 0.95fr)",
+          ),
           gap: "1.5rem",
           alignItems: "start",
         }}
@@ -354,7 +342,7 @@ export function ArtifactLoaderPage() {
           <section style={panelStyle()}>
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <h3 style={{ margin: 0 }}>Open heap dump</h3>
-              <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
+              <p style={{ margin: 0, color: "var(--mn-text-muted)", lineHeight: 1.6 }}>
                 Desktop first-run path: select a local `.hprof` or `.bin` file. The absolute path
                 stays in the native session; React only sees the filename and an opaque source id.
               </p>
@@ -366,7 +354,7 @@ export function ArtifactLoaderPage() {
                 disabled={heapOpenPhase !== "idle" || isLoading}
                 style={{
                   justifySelf: "start",
-                  border: "1px solid #38bdf8",
+                  border: "1px solid var(--mn-border-accent)",
                   borderRadius: 999,
                   background: "rgba(56, 189, 248, 0.12)",
                   color: "#e0f2fe",
@@ -474,7 +462,7 @@ export function ArtifactLoaderPage() {
 
           <section style={panelStyle()}>
             <h3 style={{ marginTop: 0 }}>Recent Loads</h3>
-            <p style={{ marginTop: 0, color: "#94a3b8" }}>
+            <p style={{ marginTop: 0, color: "var(--mn-text-muted)" }}>
               Local metadata only for this browser session.
             </p>
             {recentLoads.length === 0 ? (
@@ -483,7 +471,7 @@ export function ArtifactLoaderPage() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr style={{ textAlign: "left", color: "#94a3b8" }}>
+                    <tr style={{ textAlign: "left", color: "var(--mn-text-muted)" }}>
                       <th style={{ padding: "0 0 0.6rem" }}>Filename</th>
                       <th style={{ padding: "0 0 0.6rem" }}>Size</th>
                       <th style={{ padding: "0 0 0.6rem" }}>Timestamp</th>
@@ -493,17 +481,17 @@ export function ArtifactLoaderPage() {
                   <tbody>
                     {recentLoads.map((entry) => (
                       <tr key={`${entry.fileName}-${entry.loadedAtLabel}`}>
-                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
+                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid var(--mn-border-subtle)" }}>
                           <div>{entry.fileName}</div>
                           <div style={{ color: "#64748b", fontSize: "0.85rem" }}>{entry.heapPath}</div>
                         </td>
-                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
+                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid var(--mn-border-subtle)" }}>
                           {entry.sizeLabel}
                         </td>
-                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
+                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid var(--mn-border-subtle)" }}>
                           {entry.loadedAtLabel}
                         </td>
-                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
+                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid var(--mn-border-subtle)" }}>
                           <button
                             type="button"
                             aria-label={`Open ${entry.fileName}`}
@@ -549,13 +537,13 @@ export function ArtifactLoaderPage() {
                 key={item.title}
                 style={{
                   borderRadius: 16,
-                  border: "1px solid #1e293b",
+                  border: "1px solid var(--mn-border-subtle)",
                   background: "rgba(2, 6, 23, 0.75)",
                   padding: "0.9rem 1rem",
                 }}
               >
                 <h4 style={{ margin: "0 0 0.45rem", fontSize: "1rem" }}>{item.title}</h4>
-                <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>{item.description}</p>
+                <p style={{ margin: 0, color: "var(--mn-text-muted)", lineHeight: 1.6 }}>{item.description}</p>
               </section>
             ))}
           </div>

@@ -227,6 +227,16 @@ describe("ArtifactExplorerPage", () => {
     expect(view.getByTestId("location")).toHaveTextContent("/");
   });
 
+  it("stacks the primary explorer grid to one column at a narrow width", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 720 });
+    seedArtifactWithHistogram();
+
+    const view = renderArtifactExplorer();
+    const histogram = view.getByRole("region", { name: /histogram explorer/i });
+    expect(histogram).toBeInTheDocument();
+    expect(view.getByRole("button", { name: /select com\.example\.cache/i })).toBeInTheDocument();
+  });
+
   it("renders all histogram rows with retained and shallow comparisons", () => {
     seedArtifactWithHistogram();
 

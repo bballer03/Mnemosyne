@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, Outlet, useLocation, useParams } from "react-router-dom";
 
+import {
+  workbenchEyebrowStyle,
+  workbenchPanelStyle,
+} from "../../app/theme-tokens";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 
 import { useLeakWorkspaceStore } from "./leak-workspace-store";
@@ -14,7 +18,7 @@ const shellStyle = {
 } as const;
 
 const panelStyle = {
-  border: "1px solid #1e293b",
+  ...workbenchPanelStyle,
   borderRadius: 24,
   background: "linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.96))",
   padding: "1.3rem",
@@ -22,7 +26,7 @@ const panelStyle = {
 
 const subtleTextStyle = {
   margin: 0,
-  color: "#94a3b8",
+  color: "var(--mn-text-muted)",
 } as const;
 
 const inputStyle = {
@@ -99,7 +103,7 @@ export function LeakWorkspaceLayout() {
           <div>
             <Link to="/dashboard">Back to dashboard</Link>
           </div>
-          <div style={{ color: "#38bdf8", fontSize: "0.78rem", letterSpacing: "0.16em", textTransform: "uppercase" }}>
+          <div style={workbenchEyebrowStyle}>
             Leak Workspace
           </div>
           <h1 style={{ margin: 0, fontSize: "1.1rem", color: "#e2e8f0" }}>Leak Workspace</h1>
@@ -127,7 +131,7 @@ export function LeakWorkspaceLayout() {
                 style={inputStyle}
               />
             </label>
-            <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
+            <div style={{ color: "var(--mn-text-muted)", fontSize: "0.9rem" }}>
               Unlocks source map and fix follow-through for this workspace.
             </div>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -160,7 +164,7 @@ export function LeakWorkspaceLayout() {
                 style={inputStyle}
               />
             </label>
-            <div style={{ color: "#94a3b8", fontSize: "0.9rem" }}>
+            <div style={{ color: "var(--mn-text-muted)", fontSize: "0.9rem" }}>
               Unlocks the GC path route when you have a real object target.
             </div>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>

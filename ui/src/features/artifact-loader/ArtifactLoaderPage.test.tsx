@@ -68,6 +68,16 @@ describe("ArtifactLoaderPage", () => {
     });
   });
 
+  it("keeps the Open heap dump primary action visible at a narrow width", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 720 });
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+
+    expect(page.getByRole("button", { name: /open heap dump/i })).toBeInTheDocument();
+    expect(page.getByRole("heading", { name: /load analysis artifact/i })).toBeInTheDocument();
+  });
+
   it("shows the selected artifact name after a valid JSON load", async () => {
     const user = userEvent.setup();
     const view = render(<ArtifactLoaderPage />);
