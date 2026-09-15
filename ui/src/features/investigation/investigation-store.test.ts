@@ -2,7 +2,10 @@ import "../../test/setup";
 
 import { beforeEach, describe, expect, it } from "bun:test";
 
-import { useInvestigationStore } from "./investigation-store";
+import {
+  useInvestigationStore,
+  type FindingFact,
+} from "./investigation-store";
 import {
   WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
   createWorkspacePersistence,
@@ -14,6 +17,23 @@ const persistenceIdentity: WorkspacePersistenceIdentity = {
   kind: "workspace",
   key: "source-a",
 };
+
+function findingFact(
+  id: string,
+  source: FindingFact["source"] = "artifact",
+): FindingFact {
+  return {
+    id,
+    source,
+    kind: source === "policy" ? "policy" : "leak",
+    severity: "HIGH",
+    title: `Finding ${id}`,
+    description: `Measured fact ${id}`,
+    target: { kind: "leak", leakId: id.replace(/^leak:/, "") },
+    provenance: [{ kind: "FALLBACK", detail: "fixture" }],
+    metrics: { retainedBytes: 1024 },
+  };
+}
 
 function persistedWorkspace(
   overrides: Partial<PersistedWorkspaceV1> = {},
@@ -60,6 +80,8 @@ describe("useInvestigationStore", () => {
       persistenceIdentity: undefined,
       notes: [],
       bookmarks: [],
+      findingFacts: [],
+      findingStatuses: {},
       lastPersistenceNotice: undefined,
       histogramView: {
         searchText: "",
@@ -443,5 +465,114 @@ describe("useInvestigationStore", () => {
     expect(values).toContain("object-current");
     expect(values).not.toContain("operationId");
     expect(values).not.toContain("activeOperation");
+  });
+
+  it("freezes accepted facts while keeping user status separate", () => {
+    const fact = findingFact("leak:leak-1");
+    const context = { workspaceId: "workspace-1", revision: 0 };
+
+    expect(
+      useInvestigationStore
+        .getState()
+        .replaceFindings(context, "artifact", [fact]),
+    ).toBe(true);
+
+    const accepted = useInvestigationStore.getState().findingFacts[0];
+    expect(accepted).toEqual(fact);
+    expect(Object.isFrozen(accepted)).toBe(true);
+    expect(Object.isFrozen(accepted.target)).toBe(true);
+    expect(Object.isFrozen(accepted.provenance)).toBe(true);
+    expect(Object.isFrozen(accepted.provenance[0])).toBe(true);
+    expect(Object.isFrozen(accepted.metrics)).toBe(true);
+
+    expect(
+      useInvestigationStore.getState().setFindingStatus(fact.id, "resolved"),
+    ).toBe(true);
+    expect(useInvestigationStore.getState().findingFacts[0]).toBe(accepted);
+    expect(useInvestigationStore.getState().findingStatuses).toEqual({
+      [fact.id]: "resolved",
+    });
+  });
+
+  it("rejects finding payloads from stale workspaces and revisions", () => {
+    const current = findingFact("leak:current");
+    const stale = findingFact("leak:stale");
+    const store = useInvestigationStore.getState();
+
+    expect(
+      store.replaceFindings(
+        { workspaceId: "workspace-1", revision: 0 },
+        "artifact",
+        [current],
+      ),
+    ).toBe(true);
+    expect(
+      useInvestigationStore.getState().replaceFindings(
+        { workspaceId: "workspace-old", revision: 0 },
+        "artifact",
+        [stale],
+      ),
+    ).toBe(false);
+    expect(
+      useInvestigationStore.getState().replaceFindings(
+        { workspaceId: "workspace-1", revision: -1 },
+        "artifact",
+        [stale],
+      ),
+    ).toBe(false);
+    expect(useInvestigationStore.getState().findingFacts).toEqual([current]);
+  });
+
+  it("replaces one source without disturbing the other source or unchanged statuses", () => {
+    const context = { workspaceId: "workspace-1", revision: 0 };
+    const retained = findingFact("leak:retained");
+    const removed = findingFact("leak:removed");
+    const policy = findingFact("policy:rule:leak_count", "policy");
+
+    useInvestigationStore
+      .getState()
+      .replaceFindings(context, "artifact", [retained, removed]);
+    useInvestigationStore
+      .getState()
+      .setFindingStatus(retained.id, "deferred");
+    useInvestigationStore
+      .getState()
+      .setFindingStatus(removed.id, "resolved");
+    useInvestigationStore
+      .getState()
+      .replaceFindings(context, "policy", [policy]);
+
+    expect(
+      useInvestigationStore
+        .getState()
+        .replaceFindings(context, "artifact", [retained]),
+    ).toBe(true);
+    expect(
+      useInvestigationStore.getState().findingFacts.map((fact) => fact.id),
+    ).toEqual([retained.id, policy.id]);
+    expect(useInvestigationStore.getState().findingStatuses).toEqual({
+      [retained.id]: "deferred",
+    });
+    expect(
+      useInvestigationStore
+        .getState()
+        .setFindingStatus("missing-finding", "resolved"),
+    ).toBe(false);
+  });
+
+  it("clears findings and statuses when the artifact revision changes", () => {
+    const context = { workspaceId: "workspace-1", revision: 0 };
+    const fact = findingFact("leak:leak-1");
+    useInvestigationStore
+      .getState()
+      .replaceFindings(context, "artifact", [fact]);
+    useInvestigationStore
+      .getState()
+      .setFindingStatus(fact.id, "resolved");
+
+    useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+
+    expect(useInvestigationStore.getState().findingFacts).toEqual([]);
+    expect(useInvestigationStore.getState().findingStatuses).toEqual({});
   });
 });

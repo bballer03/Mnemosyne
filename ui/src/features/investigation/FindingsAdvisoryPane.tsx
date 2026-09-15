@@ -1,48 +1,138 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { ProvenanceBadge } from "../dashboard/components/ProvenanceBadge";
-import { useInvestigationStore } from "./investigation-store";
+import {
+  buildArtifactFindingFacts,
+  findingHref,
+} from "./finding-adapters";
+import {
+  useInvestigationStore,
+  type FindingFact,
+  type FindingTarget,
+} from "./investigation-store";
 
 const MAX_VISIBLE_FINDINGS = 8;
 
-type LeakFinding = AnalysisArtifact["leaks"][number] & {
-  objectId?: string;
-};
-
-function findObjectId(
-  leak: AnalysisArtifact["leaks"][number],
-  artifact: AnalysisArtifact,
-): string | undefined {
-  return artifact.graph.dominators.find(
-    (entry) => entry.className === leak.className && entry.objectId.length > 0,
-  )?.objectId;
-}
-
-function buildLeakFindings(artifact: AnalysisArtifact): LeakFinding[] {
-  return artifact.leaks
-    .map((leak) => ({
-      ...leak,
-      objectId: findObjectId(leak, artifact),
-    }))
-    .sort(
-      (left, right) =>
-        (right.suspectScore ?? 0) - (left.suspectScore ?? 0) ||
-        right.retainedSizeBytes - left.retainedSizeBytes,
-    )
-    .slice(0, MAX_VISIBLE_FINDINGS);
-}
-
-function syncFindingSelection(finding: LeakFinding) {
+function syncFindingSelection(target: FindingTarget) {
   const investigation = useInvestigationStore.getState();
   investigation.clearSelection();
-  investigation.setLeakId(finding.id, "findings");
-  investigation.setClassKey(finding.className, "findings");
-  if (finding.objectId) {
-    investigation.setObjectId(finding.objectId, "findings");
+  if (target.kind === "leak") {
+    investigation.setLeakId(target.leakId, "findings");
+    if (target.classKey) {
+      investigation.setClassKey(target.classKey, "findings");
+    }
+    if (target.objectId) {
+      investigation.setObjectId(target.objectId, "findings");
+    }
+    return;
   }
+  if (target.kind === "class") {
+    investigation.setClassKey(target.classKey, "findings");
+    return;
+  }
+  if (target.classKey) {
+    investigation.setClassKey(target.classKey, "findings");
+  }
+  investigation.setObjectId(target.objectId, "findings");
+}
+
+function FindingRow({
+  finding,
+  status,
+}: {
+  finding: FindingFact;
+  status: "open" | "resolved" | "deferred";
+}) {
+  const setFindingStatus = useInvestigationStore(
+    (state) => state.setFindingStatus,
+  );
+  return (
+    <li
+      style={{
+        border: "1px solid var(--mn-border)",
+        borderRadius: 10,
+        background: "var(--mn-surface-raised)",
+        padding: "0.65rem 0.75rem",
+        display: "grid",
+        gap: "0.35rem",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <Link
+          to={findingHref(finding.target)}
+          onClick={() => syncFindingSelection(finding.target)}
+          style={{ color: "var(--mn-text-primary)", fontWeight: 650 }}
+        >
+          {finding.title}
+        </Link>
+        <span style={{ color: "var(--mn-warning-text)", fontSize: "0.78rem" }}>
+          {finding.severity}
+        </span>
+      </div>
+      <span style={{ color: "var(--mn-text-muted)", fontSize: "0.84rem" }}>
+        {finding.description}
+      </span>
+      <div
+        style={{
+          display: "flex",
+          gap: "0.4rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            color: "var(--mn-text-muted)",
+            fontSize: "0.72rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+          }}
+        >
+          {finding.source} finding · {finding.kind}
+        </span>
+        {finding.provenance.map((marker) => (
+          <ProvenanceBadge
+            key={`${finding.id}-${marker.kind}-${marker.detail ?? ""}`}
+            kind={marker.kind}
+          />
+        ))}
+      </div>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.45rem",
+          color: "var(--mn-text-muted)",
+          fontSize: "0.8rem",
+        }}
+      >
+        <span>Status</span>
+        <select
+          aria-label={`Status for ${finding.title}`}
+          value={status}
+          onChange={(event) =>
+            setFindingStatus(
+              finding.id,
+              event.target.value as "open" | "resolved" | "deferred",
+            )
+          }
+        >
+          <option value="open">open</option>
+          <option value="resolved">resolved</option>
+          <option value="deferred">deferred</option>
+        </select>
+      </label>
+    </li>
+  );
 }
 
 /**
@@ -55,10 +145,28 @@ function syncFindingSelection(finding: LeakFinding) {
 export function FindingsAdvisoryPane() {
   const artifact = useArtifactStore((state) => state.artifact);
   const [expanded, setExpanded] = useState(true);
-  const findings = useMemo(
-    () => (artifact ? buildLeakFindings(artifact) : []),
+  const workspaceId = useInvestigationStore((state) => state.workspaceId);
+  const revision = useInvestigationStore((state) => state.revision);
+  const findingFacts = useInvestigationStore((state) => state.findingFacts);
+  const findingStatuses = useInvestigationStore(
+    (state) => state.findingStatuses,
+  );
+  const replaceFindings = useInvestigationStore(
+    (state) => state.replaceFindings,
+  );
+  const artifactFacts = useMemo(
+    () => (artifact ? buildArtifactFindingFacts(artifact) : []),
     [artifact],
   );
+  const findings = findingFacts.slice(0, MAX_VISIBLE_FINDINGS);
+
+  useEffect(() => {
+    replaceFindings(
+      { workspaceId, revision },
+      "artifact",
+      artifactFacts,
+    );
+  }, [artifactFacts, replaceFindings, revision, workspaceId]);
 
   if (!artifact) {
     return null;
@@ -141,7 +249,7 @@ export function FindingsAdvisoryPane() {
           </p>
           {findings.length === 0 ? (
             <div style={{ color: "var(--mn-text-muted)", fontSize: "0.88rem" }}>
-              No leak findings are present in this artifact.{" "}
+              No actionable findings are present in this artifact.{" "}
               <Link to="/dashboard" style={{ color: "var(--mn-advisory-link)" }}>
                 Review measured dashboard facts
               </Link>
@@ -152,91 +260,13 @@ export function FindingsAdvisoryPane() {
               aria-label="Actionable findings"
               style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: "0.55rem" }}
             >
-              {findings.map((finding) => {
-                const primaryTarget = finding.objectId
-                  ? `/heap-explorer/object-inspector?objectId=${encodeURIComponent(finding.objectId)}`
-                  : `/leaks/${encodeURIComponent(finding.id)}/overview`;
-
-                return (
-                  <li
-                    key={finding.id}
-                    style={{
-                      border: "1px solid var(--mn-border)",
-                      borderRadius: 10,
-                      background: "var(--mn-surface-raised)",
-                      padding: "0.65rem 0.75rem",
-                      display: "grid",
-                      gap: "0.35rem",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: "0.75rem",
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <Link
-                        to={primaryTarget}
-                        onClick={() => syncFindingSelection(finding)}
-                        style={{ color: "var(--mn-text-primary)", fontWeight: 650 }}
-                      >
-                        Inspect {finding.className}
-                      </Link>
-                      <span style={{ color: "var(--mn-warning-text)", fontSize: "0.78rem" }}>
-                        {finding.severity}
-                      </span>
-                    </div>
-                    <span style={{ color: "var(--mn-text-muted)", fontSize: "0.84rem" }}>
-                      {finding.description}
-                    </span>
-                    <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                      <span
-                        style={{
-                          color: "var(--mn-text-muted)",
-                          fontSize: "0.72rem",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                        }}
-                      >
-                        Artifact finding
-                      </span>
-                      {finding.provenance.map((marker) => (
-                        <ProvenanceBadge
-                          key={`${finding.id}-${marker.kind}-${marker.detail ?? ""}`}
-                          kind={marker.kind}
-                        />
-                      ))}
-                    </div>
-                    <nav
-                      aria-label={`Finding actions for ${finding.className}`}
-                      style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", fontSize: "0.8rem" }}
-                    >
-                      <Link
-                        to={`/leaks/${encodeURIComponent(finding.id)}/overview`}
-                        onClick={() => syncFindingSelection(finding)}
-                      >
-                        Open leak workspace
-                      </Link>
-                      <Link
-                        to="/artifacts/explorer"
-                        onClick={() => syncFindingSelection(finding)}
-                      >
-                        Show class in histogram
-                      </Link>
-                      {finding.objectId ? (
-                        <Link
-                          to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(finding.objectId)}`}
-                          onClick={() => syncFindingSelection(finding)}
-                        >
-                          Inspect object {finding.objectId}
-                        </Link>
-                      ) : null}
-                    </nav>
-                  </li>
-                );
-              })}
+              {findings.map((finding) => (
+                <FindingRow
+                  key={finding.id}
+                  finding={finding}
+                  status={findingStatuses[finding.id] ?? "open"}
+                />
+              ))}
             </ol>
           )}
         </div>

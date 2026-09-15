@@ -68,6 +68,38 @@ export type WorkspaceAnalysisCapabilities = {
   snapshotBacked: true;
 };
 
+export type FindingStatus = "open" | "resolved" | "deferred";
+export type FindingSource = "artifact" | "policy";
+export type FindingKind =
+  | "leak"
+  | "classloader"
+  | "collection-waste"
+  | "string-waste"
+  | "array-waste"
+  | "policy";
+
+export type FindingTarget =
+  | Readonly<{ kind: "leak"; leakId: string; classKey?: string; objectId?: string }>
+  | Readonly<{ kind: "class"; classKey: string }>
+  | Readonly<{ kind: "object"; objectId: string; classKey?: string }>;
+
+export type FindingFact = Readonly<{
+  id: string;
+  source: FindingSource;
+  kind: FindingKind;
+  severity: string;
+  title: string;
+  description: string;
+  target: FindingTarget;
+  provenance: readonly Readonly<{ kind: string; detail?: string }>[];
+  metrics: Readonly<Record<string, string | number>>;
+}>;
+
+export type FindingContext = Readonly<{
+  workspaceId: string;
+  revision: number;
+}>;
+
 type InvestigationState = InvestigationSelection & {
   workspaceId: string;
   activeOperation?: ActiveOperation;
@@ -77,6 +109,8 @@ type InvestigationState = InvestigationSelection & {
   persistenceIdentity?: WorkspacePersistenceIdentity;
   notes: WorkspaceNote[];
   bookmarks: WorkspaceBookmark[];
+  findingFacts: readonly FindingFact[];
+  findingStatuses: Readonly<Record<string, FindingStatus>>;
   lastPersistenceNotice?: string;
   beginOperation: (kind: OperationKind) => OperationContext;
   acceptOperationResult: (context: OperationContext) => boolean;
@@ -104,6 +138,13 @@ type InvestigationState = InvestigationSelection & {
   removeNote: (noteId: string) => void;
   upsertBookmark: (bookmark: WorkspaceBookmark) => void;
   removeBookmark: (bookmarkId: string) => void;
+  replaceFindings: (
+    context: FindingContext,
+    source: FindingSource,
+    facts: readonly FindingFact[],
+  ) => boolean;
+  setFindingStatus: (findingId: string, status: FindingStatus) => boolean;
+  clearFindings: () => void;
   clearSelection: () => void;
   bumpRevisionOnArtifactChange: () => void;
 };
@@ -124,6 +165,27 @@ const defaultHistogramView: HistogramViewState = {
 };
 
 const terminalOperationPhases = new Set<OperationPhase>(["cancelled", "complete", "failed"]);
+
+function freezeFindingFact(fact: FindingFact): FindingFact {
+  const target = Object.freeze({ ...fact.target }) as FindingTarget;
+  const provenance = Object.freeze(
+    fact.provenance.map((marker) => Object.freeze({ ...marker })),
+  );
+  const metrics = Object.freeze({ ...fact.metrics });
+  return Object.freeze({
+    ...fact,
+    target,
+    provenance,
+    metrics,
+  });
+}
+
+function findingContextMatches(state: InvestigationState, context: FindingContext): boolean {
+  return (
+    context.workspaceId === state.workspaceId &&
+    context.revision === state.revision
+  );
+}
 
 function workspacePersistence() {
   return createWorkspacePersistence();
@@ -219,6 +281,8 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   persistenceIdentity: undefined,
   notes: [],
   bookmarks: [],
+  findingFacts: [],
+  findingStatuses: {},
   lastPersistenceNotice: undefined,
   beginOperation: (kind) => {
     const state = get();
@@ -401,6 +465,8 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       histogramView: { ...defaultHistogramView },
       notes: [],
       bookmarks: [],
+      findingFacts: [],
+      findingStatuses: {},
       lastPersistenceNotice:
         loadResult.status === "missing" || loadResult.status === "unavailable"
           ? undefined
@@ -461,6 +527,44 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     set((state) => ({
       bookmarks: state.bookmarks.filter((entry) => entry.id !== bookmarkId),
     })),
+  replaceFindings: (context, source, facts) => {
+    const state = get();
+    if (
+      !findingContextMatches(state, context) ||
+      facts.some((fact) => fact.source !== source)
+    ) {
+      return false;
+    }
+
+    const accepted = facts.map(freezeFindingFact);
+    const other = state.findingFacts.filter((fact) => fact.source !== source);
+    const findingFacts = Object.freeze(
+      source === "artifact" ? [...accepted, ...other] : [...other, ...accepted],
+    );
+    const liveIds = new Set(findingFacts.map((fact) => fact.id));
+    const findingStatuses = Object.freeze(
+      Object.fromEntries(
+        Object.entries(state.findingStatuses).filter(([id]) => liveIds.has(id)),
+      ),
+    );
+    set({ findingFacts, findingStatuses });
+    return true;
+  },
+  setFindingStatus: (findingId, status) => {
+    const state = get();
+    if (!state.findingFacts.some((fact) => fact.id === findingId)) {
+      return false;
+    }
+    const findingStatuses = { ...state.findingStatuses };
+    if (status === "open") {
+      delete findingStatuses[findingId];
+    } else {
+      findingStatuses[findingId] = status;
+    }
+    set({ findingStatuses: Object.freeze(findingStatuses) });
+    return true;
+  },
+  clearFindings: () => set({ findingFacts: [], findingStatuses: {} }),
   clearSelection: () => set(clearedSelection),
   bumpRevisionOnArtifactChange: () => {
     savePersistedWorkspace(get());
@@ -474,6 +578,8 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       persistenceIdentity: undefined,
       notes: [],
       bookmarks: [],
+      findingFacts: [],
+      findingStatuses: {},
       lastPersistenceNotice: undefined,
     }));
   },

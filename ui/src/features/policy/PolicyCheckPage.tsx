@@ -7,6 +7,8 @@ import {
   pickDesktopBaselineSource,
   runCiCheck,
 } from "./policy-bridge-client";
+import { buildPolicyFindingFacts } from "../investigation/finding-adapters";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 const DEFAULT_POLICY = `[[rule]]
 id = "leak-budget"
@@ -30,6 +32,11 @@ export function PolicyCheckPage() {
     /^\s*predicate\s*=\s*["']object_growth_threshold["']\s*(?:#.*)?$/m.test(policyToml);
 
   async function handleRun() {
+    const investigation = useInvestigationStore.getState();
+    const findingContext = {
+      workspaceId: investigation.workspaceId,
+      revision: investigation.revision,
+    };
     setRunning(true);
     setResponse(undefined);
     try {
@@ -66,14 +73,33 @@ export function PolicyCheckPage() {
         mode,
         baselineSourceId: baseline?.sourceId,
       });
-      setResponse(result);
       if (result.status === "ready") {
+        const currentInvestigation = useInvestigationStore.getState();
+        const policyFacts = buildPolicyFindingFacts(
+          result.data.result.violations,
+          currentInvestigation.findingFacts.filter(
+            (fact) => fact.source === "artifact",
+          ),
+        );
+        if (
+          !currentInvestigation.replaceFindings(
+            findingContext,
+            "policy",
+            policyFacts,
+          )
+        ) {
+          setStatus("Ignored a stale policy result from a previous workspace revision.");
+          return;
+        }
+        setResponse(result);
         setStatus(
           `Finished with exit classification ${result.data.exit_code} (fail_on=${result.data.fail_on}).`,
         );
       } else if (result.status === "error") {
+        setResponse(result);
         setStatus(result.error);
       } else {
+        setResponse(result);
         setStatus("Policy check unavailable.");
       }
     } finally {

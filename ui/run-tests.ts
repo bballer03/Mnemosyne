@@ -112,6 +112,12 @@ const testBatches = [
     "src/host/operation-protocol.test.ts",
     "src/features/investigation/HeapSessionBar.test.tsx",
   ],
+  [
+    // M29.A keeps the unified queue's pure adapters and focused pane mount
+    // together, isolated from every production route tree.
+    "src/features/investigation/finding-adapters.test.ts",
+    "src/features/investigation/FindingsAdvisoryPane.test.tsx",
+  ],
 ];
 
 for (const batch of testBatches) {

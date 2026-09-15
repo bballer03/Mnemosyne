@@ -1,8 +1,8 @@
 import "../../test/setup";
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryRouter } from "react-router-dom";
 
 import {
@@ -10,9 +10,42 @@ import {
   getRememberedDesktopHeapSource,
   rememberDesktopHeapSource,
 } from "../artifact-loader/desktop-heap-session";
+import {
+  useInvestigationStore,
+  type FindingFact,
+} from "../investigation/investigation-store";
+import type { CiCheckResponse } from "./policy-bridge-client";
 import { PolicyCheckPage } from "./PolicyCheckPage";
 
+function measuredLeak(id = "leak:leak-cache"): FindingFact {
+  return {
+    id,
+    source: "artifact",
+    kind: "leak",
+    severity: "HIGH",
+    title: "Leak suspect: com.example.Cache",
+    description: "Measured leak fact.",
+    target: {
+      kind: "leak",
+      leakId: "leak-cache",
+      classKey: "com.example.Cache",
+      objectId: "0x2a",
+    },
+    provenance: [],
+    metrics: { retainedBytes: 1024 },
+  };
+}
+
 describe("PolicyCheckPage", () => {
+  beforeEach(() => {
+    useInvestigationStore.setState({
+      workspaceId: "workspace-policy",
+      revision: 0,
+      findingFacts: [],
+      findingStatuses: {},
+    });
+  });
+
   afterEach(() => {
     cleanup();
     clearRememberedDesktopHeapSource();
@@ -195,5 +228,133 @@ describe("PolicyCheckPage", () => {
     };
     await user.click(view.getByRole("button", { name: /select baseline heap/i }));
     expect(view.getByRole("status")).toHaveTextContent(/baseline picker is unavailable/i);
+  });
+
+  it("publishes ready policy violations against stable measured targets", async () => {
+    const user = userEvent.setup();
+    const context = {
+      workspaceId: "workspace-policy",
+      revision: 0,
+    };
+    useInvestigationStore
+      .getState()
+      .replaceFindings(context, "artifact", [measuredLeak()]);
+    rememberDesktopHeapSource("src-1", "fixture.hprof");
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      runCiCheck: async () => ({
+        result: {
+          mode_used: "DEEP",
+          mode_requested: "DEEP",
+          violations: [
+            {
+              rule_id: "leak-budget",
+              predicate: "leak_count",
+              severity: "error",
+              message: "expected leak_count <= 0, got 1",
+              remediation_hint: "Inspect the leak suspect.",
+            },
+          ],
+          evaluations: [],
+          skipped: [],
+        },
+        exit_code: 1,
+        fail_on: "error",
+        evaluation_complete: true,
+      }),
+    };
+    const view = render(
+      <MemoryRouter>
+        <PolicyCheckPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(view.getByRole("button", { name: /run policy check/i }));
+    await waitFor(() => {
+      expect(
+        useInvestigationStore
+          .getState()
+          .findingFacts.some(
+            (fact) => fact.id === "policy:leak-budget:leak_count",
+          ),
+      ).toBe(true);
+    });
+    expect(
+      useInvestigationStore
+        .getState()
+        .findingFacts.find(
+          (fact) => fact.id === "policy:leak-budget:leak_count",
+        )?.target,
+    ).toEqual({
+      kind: "leak",
+      leakId: "leak-cache",
+      classKey: "com.example.Cache",
+      objectId: "0x2a",
+    });
+  });
+
+  it("rejects a late policy response after the workspace revision changes", async () => {
+    const user = userEvent.setup();
+    let resolveCheck: ((value: CiCheckResponse) => void) | undefined;
+    const pending = new Promise<CiCheckResponse>((resolve) => {
+      resolveCheck = resolve;
+    });
+    useInvestigationStore.getState().replaceFindings(
+      { workspaceId: "workspace-policy", revision: 0 },
+      "artifact",
+      [measuredLeak()],
+    );
+    rememberDesktopHeapSource("src-1", "fixture.hprof");
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      runCiCheck: async () => pending,
+    };
+    const view = render(
+      <MemoryRouter>
+        <PolicyCheckPage />
+      </MemoryRouter>,
+    );
+
+    await user.click(view.getByRole("button", { name: /run policy check/i }));
+    await waitFor(() =>
+      expect(view.getByRole("button", { name: /running/i })).toBeDisabled(),
+    );
+    act(() => {
+      useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+      useInvestigationStore.getState().replaceFindings(
+        { workspaceId: "workspace-policy", revision: 1 },
+        "artifact",
+        [measuredLeak("leak:new-workspace")],
+      );
+    });
+    resolveCheck?.({
+      result: {
+        mode_used: "DEEP",
+        mode_requested: "DEEP",
+        violations: [
+          {
+            rule_id: "late-rule",
+            predicate: "leak_count",
+            severity: "error",
+            message: "stale policy result",
+          },
+        ],
+        evaluations: [],
+        skipped: [],
+      },
+      exit_code: 1,
+      fail_on: "error",
+      evaluation_complete: true,
+    });
+
+    await waitFor(() =>
+      expect(view.getByRole("button", { name: /run policy check/i })).toBeEnabled(),
+    );
+    expect(
+      useInvestigationStore
+        .getState()
+        .findingFacts.some((fact) => fact.id.includes("late-rule")),
+    ).toBe(false);
+    expect(
+      useInvestigationStore.getState().findingFacts.map((fact) => fact.id),
+    ).toEqual(["leak:new-workspace"]);
   });
 });
