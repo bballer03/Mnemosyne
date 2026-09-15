@@ -380,12 +380,12 @@
 - Modify: `docs/roadmap.md`
 - Create: `docs/evidence/m26-async-platform.md`
 
-- [ ] Run `bun run lint` and focused operation/store/race suites in fresh bounded processes.
-- [ ] Run `cargo test -p mnemosyne-core cancellation` and `cargo test --manifest-path tauri/session-ops/Cargo.toml`.
-- [ ] Run `cargo check --manifest-path tauri/Cargo.toml`; leave full workspace/native package validation to CI.
-- [ ] Record event examples with sanitized IDs, phase order, cancellation cleanup, race evidence, and explicit `NOT PROVEN` native GUI rows.
-- [ ] Update status/capability docs only for verified operations; list any command still indeterminate or non-cancellable.
-- [ ] Commit with `docs(m26): record async platform evidence`.
+- [x] Run `bun run lint` and focused operation/store/race suites in fresh bounded processes.
+- [x] Run `cargo test -p mnemosyne-core cancellation` and `cargo test --manifest-path tauri/session-ops/Cargo.toml`. (`--lib` was required to isolate the intended core tests from feature-gated integration fixtures; see evidence.)
+- [x] Run `cargo check --manifest-path tauri/Cargo.toml`; leave full workspace/native package validation to CI. (Attempted; WSL lacks JavaScriptCoreGTK/WebKitGTK development packages.)
+- [x] Record event examples with sanitized IDs, phase order, cancellation cleanup, race evidence, and explicit `NOT PROVEN` native GUI rows in [the M26 evidence note](../../evidence/m26-async-platform.md).
+- [x] Update status/capability docs only for verified operations; list any command still indeterminate or non-cancellable.
+- [x] Commit with `docs(m26): record async platform evidence`.
 
 ## M26 completion gate
 

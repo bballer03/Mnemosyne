@@ -1,8 +1,8 @@
-# UI capability matrix (M20–M25)
+# UI capability matrix (M20–M26)
 
 Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
@@ -37,6 +37,8 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Continuous heap lifecycle | investigation store + desktop host | **shipped** | M24.A/B: persistent heap identity with **Open / Open another / Close**; failed replacement opens preserve the current session; recent/snapshot opens commit transactionally. |
 | Shared investigation selection | investigation store | **shipped** | M24.C: `objectId` / `classKey` / `leakId` selection synchronizes histogram, dominators, inspector, and deep-linked routes without stale-object precedence. |
 | Findings + Assistant advisory | rules-derived findings + investigation selection | **shipped** | M24.D: collapsible, Rules-labelled advisory pane with deterministic deep-links; findings remain guidance over deterministic analysis. |
+| Correlated operation progress / stale-result rejection | operation registry + Tauri envelopes + investigation store | **shipped** | M26: open/analyze/query/diff/snapshot/flamegraph/GC-path/field-data inspect echo workspace/revision/operation identity; generation-N race tests reject late progress/success. Determinate values appear only when bounded; other phases are explicitly indeterminate. |
+| Cooperative Cancel | core checkpoints + registry commit guards + HeapSessionBar | **partial** | M26 proves prompt cooperative stop in parser/dominator/analysis checkpoints and prevents publication for every protocol-wired family. Query/diff/GC traversal/flame rendering/snapshot I/O have boundary/commit guards but no inner loop checkpoint. `run_ci_check`, explain/fix, source mapping, and workflow/AI lifecycle are not protocol-wired. |
 | In-workbench compare | existing comparison backend and `/compare` route | **deferred** | M24.E gated to post-v0.5.0 / the next slice. The standalone `/compare` route stays shipped and unchanged. |
 
 ## Honesty bar
@@ -46,3 +48,4 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 - Screenshot gallery per workbench family was **not** captured in the 20.H closeout; visual proof is absent, not implied.
 - M23 assistant Ask is **advisory** with explicit provenance; deterministic power tools remain the analysis path.
 - M24 findings remain **Rules-derived advisory** content, and compare remains an honest standalone surface until the post-v0.5.0 in-workbench slice.
+- M26 focused tests prove correlation, rejection, cleanup, and controlled core checkpoints. They do **not** prove packaged-GUI behavior, native Tauri compilation on WSL, or prompt interruption inside every indeterminate operation.

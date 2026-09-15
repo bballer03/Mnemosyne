@@ -105,6 +105,13 @@ const testBatches = [
     // Run the panel in a fresh process to keep the full gate deterministic.
     "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
   ],
+  [
+    // M26 operation status mounts timers and host cancellation controls.
+    // Keep the jsdom-heavy status suite in a fresh process; pair only the
+    // pure wire-protocol contract with it.
+    "src/host/operation-protocol.test.ts",
+    "src/features/investigation/HeapSessionBar.test.tsx",
+  ],
 ];
 
 for (const batch of testBatches) {

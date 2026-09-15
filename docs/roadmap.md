@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-15 (**v0.5.0 shipped**; **M25** MAT loop depth evidenced on `feature/mat-maturity-m25-plus` — [m25 evidence](evidence/m25-mat-loop-depth.md); next **M26** async platform; M24.E compare gated; full catalog **M24–M31+** — [maturity roadmap](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md))
+> **Last updated:** 2026-09-15 (**v0.5.0 shipped**; **M26** operation/async platform evidenced on `feature/mat-maturity-m25-plus` — [m26 evidence](evidence/m26-async-platform.md); next **M27** durable investigations/compare; M24.E compare gated; full catalog **M24–M31+** — [maturity roadmap](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md))
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
@@ -476,6 +476,8 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M16 Desktop Packaging & Distribution** | [design/milestone-16-desktop-packaging.md](design/milestone-16-desktop-packaging.md) | ✅ Shipped (slices 16.A–16.C implementation, 16.D doc-sync; unsigned default, post-M16 tags only) |
 | **M23 AI-First Guided Investigation (UI-first plan)** | [design/milestone-23-ai-first-guided-investigation.md](design/milestone-23-ai-first-guided-investigation.md), [evidence/m23-guided-investigation.md](evidence/m23-guided-investigation.md) | 🟡 Slices 23.A–C shipped; 23.D evidence recorded; Terra/Sol final verdict pending |
 | **M24 Continuous Heap Investigation** | [superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md) | ✅ A–D ready for the **v0.5.0** cut after release prep lands: persistent Open / **Open another / Close**, transactional recent/snapshot open, shared selection, and findings advisory. **M24.E in-workbench compare is gated post-0.5.0**; the existing standalone `/compare` route remains available. |
+| **M25 MAT Investigation-Loop Depth** | [evidence/m25-mat-loop-depth.md](evidence/m25-mat-loop-depth.md) | ✅ Focused command/UI evidence; packaged GUI smoke not proven on WSL |
+| **M26 Operation and Async Platform** | [superpowers/plans/2026-09-15-m26-async-platform.md](superpowers/plans/2026-09-15-m26-async-platform.md), [evidence/m26-async-platform.md](evidence/m26-async-platform.md) | ✅ Focused correlation, race, cancellation-checkpoint, and cleanup evidence; native Tauri compile and packaged GUI not proven on WSL; some indeterminate engines retain boundary-only cancellation |
 | **UI → MAT maturity program (M24–M32)** | [superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) | 🧭 Design proposed 2026-09-15; Approach C (M32 deps → M24 shell → depth); [dependency inventory](product/dependency-currency-inventory.md) |
 | **M32 Dependency & toolchain currency** | [product/dependency-currency-inventory.md](product/dependency-currency-inventory.md) | 🧭 First track; registry-verified latest; closes Dependabot #50–#52 |
 
