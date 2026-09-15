@@ -2288,7 +2288,8 @@ mod report_export_tests {
         assert!(content.contains("evil&lt;script&gt;.hprof"));
         assert!(!content.contains("evil<script>.hprof"));
         assert_eq!(export["mode"], "deep");
-        assert_eq!(export["provenance"][0]["kind"], "Partial");
+        // ProvenanceKind serializes as SCREAMING_SNAKE_CASE for the UI bridge.
+        assert_eq!(export["provenance"][0]["kind"], "PARTIAL");
         assert_eq!(export["provenance"][0]["detail"], "bounded analyzer output");
     }
 
