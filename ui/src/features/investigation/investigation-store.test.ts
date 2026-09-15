@@ -1,9 +1,52 @@
+import "../../test/setup";
+
 import { beforeEach, describe, expect, it } from "bun:test";
 
 import { useInvestigationStore } from "./investigation-store";
+import {
+  WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+  createWorkspacePersistence,
+  type PersistedWorkspaceV1,
+  type WorkspacePersistenceIdentity,
+} from "./workspace-persistence";
+
+const persistenceIdentity: WorkspacePersistenceIdentity = {
+  kind: "workspace",
+  key: "source-a",
+};
+
+function persistedWorkspace(
+  overrides: Partial<PersistedWorkspaceV1> = {},
+): PersistedWorkspaceV1 {
+  return {
+    schemaVersion: WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+    identity: persistenceIdentity,
+    revision: 2,
+    layout: { activePane: "inspector" },
+    filters: {
+      histogram: {
+        searchText: "cache",
+        groupBy: "class",
+        sortKey: "retained",
+        sortDirection: "desc",
+        pageOffset: 100,
+      },
+    },
+    selection: {
+      revision: 2,
+      objectId: "object-current",
+      classKey: "class-current",
+      leakId: "leak-stale",
+    },
+    notes: [],
+    bookmarks: [],
+    ...overrides,
+  };
+}
 
 describe("useInvestigationStore", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     useInvestigationStore.setState({
       workspaceId: "workspace-1",
       revision: 0,
@@ -12,6 +55,10 @@ describe("useInvestigationStore", () => {
       classKey: undefined,
       leakId: undefined,
       originPane: undefined,
+      persistenceIdentity: undefined,
+      notes: [],
+      bookmarks: [],
+      lastPersistenceNotice: undefined,
       histogramView: {
         searchText: "",
         groupBy: "class",
@@ -281,5 +328,118 @@ describe("useInvestigationStore", () => {
         pageOffset: 0,
       },
     });
+  });
+
+  it("restores only IDs compatible with the current workspace revision", () => {
+    createWorkspacePersistence(window.sessionStorage).save(persistedWorkspace());
+
+    const restored = useInvestigationStore.getState().activatePersistence(
+      persistenceIdentity,
+      {
+        identity: persistenceIdentity,
+        revision: 4,
+        objectIds: new Set(["object-current"]),
+        classKeys: new Set(["class-current"]),
+        leakIds: new Set<string>(),
+      },
+    );
+
+    expect(restored?.selection).toEqual({
+      revision: 4,
+      objectId: "object-current",
+      classKey: "class-current",
+    });
+    expect(useInvestigationStore.getState()).toMatchObject({
+      revision: 4,
+      objectId: "object-current",
+      classKey: "class-current",
+      leakId: undefined,
+      originPane: "inspector",
+      histogramView: {
+        searchText: "cache",
+        pageOffset: 100,
+      },
+    });
+    expect(useInvestigationStore.getState().lastPersistenceNotice).toContain(
+      "leak-stale",
+    );
+  });
+
+  it("isolates notes and bookmarks by opaque workspace identity", () => {
+    const compatibility = {
+      identity: persistenceIdentity,
+      revision: 1,
+      objectIds: new Set<string>(),
+      classKeys: new Set<string>(),
+      leakIds: new Set<string>(),
+    };
+    useInvestigationStore
+      .getState()
+      .activatePersistence(persistenceIdentity, compatibility);
+    useInvestigationStore.getState().upsertNote({
+      id: "note-a",
+      target: { kind: "workspace", id: "workspace-note" },
+      text: "Revisit retained cache.",
+    });
+    useInvestigationStore.getState().upsertBookmark({
+      id: "bookmark-a",
+      target: { kind: "class", id: "class-a" },
+      label: "Cache",
+    });
+    useInvestigationStore.getState().deactivatePersistence();
+
+    const otherIdentity: WorkspacePersistenceIdentity = {
+      kind: "workspace",
+      key: "source-b",
+    };
+    useInvestigationStore.getState().activatePersistence(otherIdentity, {
+      ...compatibility,
+      identity: otherIdentity,
+      revision: 2,
+    });
+    expect(useInvestigationStore.getState().notes).toEqual([]);
+    expect(useInvestigationStore.getState().bookmarks).toEqual([]);
+
+    useInvestigationStore.getState().deactivatePersistence();
+    useInvestigationStore
+      .getState()
+      .activatePersistence(persistenceIdentity, compatibility);
+    expect(useInvestigationStore.getState().notes).toEqual([
+      {
+        id: "note-a",
+        target: { kind: "workspace", id: "workspace-note" },
+        text: "Revisit retained cache.",
+      },
+    ]);
+    expect(useInvestigationStore.getState().bookmarks).toEqual([
+      {
+        id: "bookmark-a",
+        target: { kind: "class", id: "class-a" },
+        label: "Cache",
+      },
+    ]);
+  });
+
+  it("persists metadata without active operation payloads", () => {
+    const compatibility = {
+      identity: persistenceIdentity,
+      revision: 0,
+      objectIds: new Set(["object-current"]),
+      classKeys: new Set<string>(),
+      leakIds: new Set<string>(),
+    };
+    useInvestigationStore
+      .getState()
+      .activatePersistence(persistenceIdentity, compatibility);
+    useInvestigationStore.getState().setObjectId("object-current", "inspector");
+    useInvestigationStore.getState().beginOperation("inspect");
+
+    const values = Array.from(
+      { length: window.sessionStorage.length },
+      (_, index) => window.sessionStorage.getItem(window.sessionStorage.key(index)!),
+    ).join("\n");
+    expect(values).toContain("object-current");
+    expect(values).not.toContain("operationId");
+    expect(values).not.toContain("activeOperation");
   });
 });

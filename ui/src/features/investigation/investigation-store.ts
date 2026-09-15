@@ -9,6 +9,17 @@ import {
   type OperationProgress,
 } from "../../host/operation-protocol";
 import type { HistogramGroupByMode } from "../heap-explorer/heap-explorer-query-client";
+import {
+  WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+  createWorkspacePersistence,
+  restoreCompatibleWorkspace,
+  type PersistedWorkspaceV1,
+  type WorkspaceBookmark,
+  type WorkspaceCompatibility,
+  type WorkspaceNote,
+  type WorkspacePersistenceIdentity,
+  type WorkspaceRestoreResult,
+} from "./workspace-persistence";
 
 export type InvestigationOriginPane =
   | "histogram"
@@ -52,6 +63,10 @@ type InvestigationState = InvestigationSelection & {
   workspaceId: string;
   activeOperation?: ActiveOperation;
   histogramView: HistogramViewState;
+  persistenceIdentity?: WorkspacePersistenceIdentity;
+  notes: WorkspaceNote[];
+  bookmarks: WorkspaceBookmark[];
+  lastPersistenceNotice?: string;
   beginOperation: (kind: OperationKind) => OperationContext;
   acceptOperationResult: (context: OperationContext) => boolean;
   updateOperationProgress: (progress: OperationProgress) => boolean;
@@ -63,6 +78,15 @@ type InvestigationState = InvestigationSelection & {
   setObjectId: (objectId: string | undefined, originPane: InvestigationOriginPane) => void;
   setClassKey: (classKey: string | undefined, originPane: InvestigationOriginPane) => void;
   setLeakId: (leakId: string | undefined, originPane: InvestigationOriginPane) => void;
+  activatePersistence: (
+    identity: WorkspacePersistenceIdentity,
+    compatibility: WorkspaceCompatibility,
+  ) => WorkspaceRestoreResult | undefined;
+  deactivatePersistence: () => void;
+  upsertNote: (note: WorkspaceNote) => void;
+  removeNote: (noteId: string) => void;
+  upsertBookmark: (bookmark: WorkspaceBookmark) => void;
+  removeBookmark: (bookmarkId: string) => void;
   clearSelection: () => void;
   bumpRevisionOnArtifactChange: () => void;
 };
@@ -83,6 +107,66 @@ const defaultHistogramView: HistogramViewState = {
 };
 
 const terminalOperationPhases = new Set<OperationPhase>(["cancelled", "complete", "failed"]);
+
+function workspacePersistence() {
+  return createWorkspacePersistence();
+}
+
+function buildPersistedWorkspace(state: InvestigationState): PersistedWorkspaceV1 | undefined {
+  if (!state.persistenceIdentity) {
+    return undefined;
+  }
+  return {
+    schemaVersion: WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
+    identity: state.persistenceIdentity,
+    revision: state.revision,
+    layout: state.originPane ? { activePane: state.originPane } : {},
+    filters: { histogram: { ...state.histogramView } },
+    selection: {
+      revision: state.revision,
+      ...(state.objectId ? { objectId: state.objectId } : {}),
+      ...(state.classKey ? { classKey: state.classKey } : {}),
+      ...(state.leakId ? { leakId: state.leakId } : {}),
+    },
+    notes: state.notes,
+    bookmarks: state.bookmarks,
+  };
+}
+
+function savePersistedWorkspace(state: InvestigationState) {
+  const record = buildPersistedWorkspace(state);
+  if (record) {
+    workspacePersistence().save(record);
+  }
+}
+
+function formatDroppedSelectionNotice(
+  dropped: WorkspaceRestoreResult["droppedSelectionIds"],
+): string | undefined {
+  if (dropped.length === 0) {
+    return undefined;
+  }
+  return `Dropped stale workspace selections: ${dropped
+    .map((entry) => `${entry.kind} ${entry.id}`)
+    .join(", ")}`;
+}
+
+function persistenceMetadataChanged(
+  current: InvestigationState,
+  previous: InvestigationState,
+): boolean {
+  return (
+    current.persistenceIdentity !== previous.persistenceIdentity ||
+    current.revision !== previous.revision ||
+    current.objectId !== previous.objectId ||
+    current.classKey !== previous.classKey ||
+    current.leakId !== previous.leakId ||
+    current.originPane !== previous.originPane ||
+    current.histogramView !== previous.histogramView ||
+    current.notes !== previous.notes ||
+    current.bookmarks !== previous.bookmarks
+  );
+}
 
 function operationMatches(
   state: Pick<InvestigationState, "workspaceId" | "revision" | "activeOperation">,
@@ -113,6 +197,10 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   activeOperation: undefined,
   ...clearedSelection,
   histogramView: { ...defaultHistogramView },
+  persistenceIdentity: undefined,
+  notes: [],
+  bookmarks: [],
+  lastPersistenceNotice: undefined,
   beginOperation: (kind) => {
     const state = get();
     const context: OperationContext = {
@@ -247,12 +335,90 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   setObjectId: (objectId, originPane) => set({ objectId, originPane }),
   setClassKey: (classKey, originPane) => set({ classKey, originPane }),
   setLeakId: (leakId, originPane) => set({ leakId, originPane }),
+  activatePersistence: (identity, compatibility) => {
+    const loadResult = workspacePersistence().load(identity);
+    if (loadResult.status !== "ready") {
+      set({
+        persistenceIdentity: identity,
+        revision: compatibility.revision,
+        notes: [],
+        bookmarks: [],
+        lastPersistenceNotice:
+          loadResult.status === "missing" || loadResult.status === "unavailable"
+            ? undefined
+            : `Workspace metadata was not restored: ${loadResult.status}`,
+      });
+      return undefined;
+    }
+
+    const restored = restoreCompatibleWorkspace(loadResult.record, {
+      ...compatibility,
+      identity,
+    });
+    set({
+      persistenceIdentity: identity,
+      revision: restored.revision,
+      activeOperation: undefined,
+      ...restored.selection,
+      originPane: restored.layout.activePane,
+      histogramView: { ...restored.filters.histogram },
+      notes: restored.notes,
+      bookmarks: restored.bookmarks,
+      lastPersistenceNotice: formatDroppedSelectionNotice(
+        restored.droppedSelectionIds,
+      ),
+    });
+    return restored;
+  },
+  deactivatePersistence: () => {
+    savePersistedWorkspace(get());
+    set({
+      persistenceIdentity: undefined,
+      notes: [],
+      bookmarks: [],
+      lastPersistenceNotice: undefined,
+    });
+  },
+  upsertNote: (note) =>
+    set((state) => ({
+      notes: [note, ...state.notes.filter((entry) => entry.id !== note.id)].slice(
+        0,
+        100,
+      ),
+    })),
+  removeNote: (noteId) =>
+    set((state) => ({
+      notes: state.notes.filter((entry) => entry.id !== noteId),
+    })),
+  upsertBookmark: (bookmark) =>
+    set((state) => ({
+      bookmarks: [
+        bookmark,
+        ...state.bookmarks.filter((entry) => entry.id !== bookmark.id),
+      ].slice(0, 100),
+    })),
+  removeBookmark: (bookmarkId) =>
+    set((state) => ({
+      bookmarks: state.bookmarks.filter((entry) => entry.id !== bookmarkId),
+    })),
   clearSelection: () => set(clearedSelection),
-  bumpRevisionOnArtifactChange: () =>
+  bumpRevisionOnArtifactChange: () => {
+    savePersistedWorkspace(get());
     set((state) => ({
       revision: state.revision + 1,
       activeOperation: undefined,
       ...clearedSelection,
       histogramView: { ...defaultHistogramView },
-    })),
+      persistenceIdentity: undefined,
+      notes: [],
+      bookmarks: [],
+      lastPersistenceNotice: undefined,
+    }));
+  },
 }));
+
+useInvestigationStore.subscribe((state, previousState) => {
+  if (state.persistenceIdentity && persistenceMetadataChanged(state, previousState)) {
+    savePersistedWorkspace(state);
+  }
+});

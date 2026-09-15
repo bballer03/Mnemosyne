@@ -490,7 +490,7 @@ function storageKey(identity: WorkspacePersistenceIdentity): string {
 
 function resolveSessionStorage(): Storage | undefined {
   try {
-    return globalThis.sessionStorage;
+    return globalThis.sessionStorage ?? globalThis.window?.sessionStorage;
   } catch {
     return undefined;
   }
