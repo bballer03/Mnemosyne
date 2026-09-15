@@ -285,25 +285,25 @@
 - Retained-percent input range: `0`–`100`; convert to `minRetainedBytes = totalSizeBytes * percent / 100`.
 - Artifact-only fallback remains a clearly labelled bounded flat preview.
 
-- [ ] **Step 1: Write failing lazy-tree tests**
+- [x] **Step 1: Write failing lazy-tree tests**
 
   Assert children are absent before expansion, one request occurs after expansion, collapse removes descendant DOM, a 1% filter changes the request floor, truncated children show `Load next children`, and selecting a child updates shared `objectId`.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx src/features/heap-explorer/HeapDominatorPage.test.tsx --max-concurrency=1`
 
   Expected: FAIL against the current flat `rows.map`.
 
-- [ ] **Step 3: Implement branch-local state**
+- [x] **Step 3: Implement branch-local state**
 
   Key node state by object ID: `collapsed | loading | ready(page) | error`. A failed child request keeps the parent visible and offers retry. Never recursively preload descendants.
 
-- [ ] **Step 4: Re-run tests and type-check**
+- [x] **Step 4: Re-run tests and type-check**
 
   Expected: PASS; the fixture’s unexpanded descendants are not in the DOM.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/features/heap-explorer/HeapDominatorPage.tsx ui/src/features/heap-explorer/HeapDominatorPage.test.tsx ui/src/features/heap-explorer/components/DominatorExplorerPanel.tsx ui/src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx

@@ -1,7 +1,7 @@
 import "../../test/setup";
 
 import userEvent from "@testing-library/user-event";
-import { act, cleanup, render, within } from "@testing-library/react";
+import { act, cleanup, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
@@ -69,6 +69,7 @@ function createMatchingLeak() {
 
 describe("HeapDominatorPage", () => {
   beforeEach(() => {
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
     act(() => {
       useArtifactStore.getState().reset();
       useInvestigationStore.setState({
@@ -83,6 +84,7 @@ describe("HeapDominatorPage", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -134,6 +136,58 @@ describe("HeapDominatorPage", () => {
     );
     expect(page.getByText(/selected target/i)).toBeInTheDocument();
     expect(page.getAllByText(/0xcafebabe/i).length).toBeGreaterThan(0);
+  });
+
+  it("updates shared selection by object id when a live child is selected", async () => {
+    const user = userEvent.setup();
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      getDominatorChildren: async (parentObjectId) => ({
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children:
+          parentObjectId === undefined
+            ? [
+                {
+                  object_id: "0x1",
+                  class_name: "com.example.LiveRoot",
+                  shallow_size: 64,
+                  retained_size: 2048,
+                  dominated_count: 1,
+                  has_children: true,
+                },
+              ]
+            : [
+                {
+                  object_id: "0x2",
+                  class_name: "com.example.LiveChild",
+                  shallow_size: 32,
+                  retained_size: 1024,
+                  dominated_count: 0,
+                  has_children: false,
+                },
+              ],
+      }),
+    };
+    act(() => {
+      useArtifactStore.setState({
+        artifactName: "fixture.json",
+        loadError: undefined,
+        artifact: createArtifactFixture(),
+      });
+    });
+
+    const router = createMemoryRouter(heapExplorerRoutes(), { initialEntries: ["/heap-explorer/dominators"] });
+    const view = render(<RouterProvider router={router} />);
+    const page = within(view.container);
+
+    await user.click(await page.findByRole("button", { name: /expand com\.example\.liveroot 0x1/i }));
+    await user.click(await page.findByRole("button", { name: /select com\.example\.livechild 0x2/i }));
+
+    await waitFor(() => expect(useInvestigationStore.getState().objectId).toBe("0x2"));
+    expect(useInvestigationStore.getState().originPane).toBe("dominators");
   });
 
   it("renders cross-navigation links for the selected object with encoded query handoff", () => {
