@@ -70,6 +70,7 @@ export function ComparisonPicker() {
     setCrossReferenceLeaks,
   } = useComparisonStore();
   const [topNInput, setTopNInput] = useState(String(topN));
+  const snapshots = snapshotList.status === "ready" ? snapshotList.snapshots : [];
 
   const liveDiffAvailable = isDiffObjectsAvailable();
   const snapshotListAvailable = isListSnapshotsAvailable();
@@ -252,7 +253,7 @@ export function ComparisonPicker() {
           <p role="alert" style={{ margin: 0, color: "#fca5a5" }}>
             Failed to list snapshots: {snapshotList.message}
           </p>
-        ) : snapshotList.snapshots.length === 0 ? (
+        ) : snapshots.length === 0 ? (
           <p role="status" style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
             No cached snapshots are available. Save snapshots before running a live comparison.
           </p>
@@ -263,7 +264,7 @@ export function ComparisonPicker() {
                 <span>Current snapshot</span>
                 <select value={liveAfterKey} onChange={(event) => setLiveAfterKey(event.target.value)} style={inputStyle}>
                   <option value="">Select current snapshot</option>
-                  {snapshotList.snapshots.map((snapshot) => (
+                  {snapshots.map((snapshot) => (
                     <option key={`current-${snapshot.heapSha256}`} value={snapshot.heapSha256}>
                       {snapshot.heapPath}
                     </option>
@@ -278,7 +279,7 @@ export function ComparisonPicker() {
                   style={inputStyle}
                 >
                   <option value="">Select baseline snapshot</option>
-                  {snapshotList.snapshots.map((snapshot) => (
+                  {snapshots.map((snapshot) => (
                     <option key={`baseline-${snapshot.heapSha256}`} value={snapshot.heapSha256}>
                       {snapshot.heapPath}
                     </option>

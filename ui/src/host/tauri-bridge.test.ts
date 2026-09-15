@@ -279,6 +279,9 @@ describe("tauri-bridge", () => {
         window.__MNEMOSYNE_COMPARISON_BRIDGE__?.diffObjects?.({
           beforeKey: "before",
           afterKey: "after",
+          strategy: "ClassDominator",
+          topN: 50,
+          crossReferenceLeaks: false,
         }),
       latestData: { generation: "latest-diff" },
     },
