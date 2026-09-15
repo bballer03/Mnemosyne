@@ -275,9 +275,261 @@ git commit -m "feat(ui): unify workspace findings queue"
 
 ### M29.B — Workflow binding
 
-- [ ] Bind one active workflow ID/kind/current step to workspace revision.
-- [ ] Auto-close or detach on workspace Close/replace; recover persisted workflows only when compatible.
-- [ ] Surface current step in workbench chrome and Assistant without exposing heap paths.
+#### M29.B file map
+
+- Create `ui/src/features/workflow-landing/workflow-types.ts` — shared workflow kind and workspace-binding types without bridge or React dependencies.
+- Create `ui/src/features/workflow-landing/workflow-binding.ts` — workspace-correlated start/resume/advance/close adapter; UI callers never supply workflow IDs.
+- Create `ui/src/features/workflow-landing/workflow-binding.test.ts` — focused stale-result, supersession, recovery, close, and path-safety tests.
+- Modify `ui/src/features/investigation/investigation-store.ts` — one revision-bound active workflow plus separate workflow/Assistant request correlation slots.
+- Modify `ui/src/features/investigation/investigation-store.test.ts` — binding uniqueness, stale request rejection, revision invalidation, and persistence recovery tests.
+- Modify `ui/src/features/investigation/workspace-persistence.ts` — optional display-safe workflow binding in the existing workspace record.
+- Modify `ui/src/features/investigation/workspace-persistence.test.ts` — schema validation and identity/revision compatibility tests.
+- Modify `ui/src/features/investigation/workspace-actions.ts` — best-effort close, otherwise detach, before Close/replace commits a new revision.
+- Modify `ui/src/features/investigation/workspace-actions.test.ts` — focused Close/replace workflow cleanup tests.
+- Modify `ui/src/features/workflow-landing/WorkflowCard.tsx` and `WorkflowCard.test.tsx` — bind cards to the active workspace workflow and remove pasted-ID resume.
+- Modify `ui/src/features/workflow-landing/NaturalLanguageInputBar.tsx` and `NaturalLanguageInputBar.test.tsx` — route workflow starts through the same binding adapter.
+- Modify `ui/src/features/investigation/HeapSessionBar.tsx` and `HeapSessionBar.test.tsx` — show kind/current step only.
+- Modify `ui/src/features/assistant/InvestigationAssistantPage.tsx` and `InvestigationAssistantPage.test.tsx` — show and consume the current bound step; reject late turns after workspace change.
+- Modify `ui/src/features/assistant/assistant-bridge-client.ts` and `assistant-bridge-client.test.ts` — use display-safe workflow kind/step context without exposing the workflow ID.
+
+#### Workflow binding contract
+
+```ts
+export type WorkspaceWorkflowBinding = Readonly<{
+  workspaceId: string;
+  revision: number;
+  workflowId: string;
+  kind: WorkflowKindId;
+  currentStep: string;
+}>;
+
+export type WorkspaceRequestContext = Readonly<{
+  workspaceId: string;
+  revision: number;
+  operationId: string;
+}>;
+```
+
+Only the binding adapter reads or passes `workflowId`. React controls start, resume, advance, and close through the active binding; no text input accepts an ID and no chrome/Assistant copy renders one. Every asynchronous workflow or Assistant request captures `{ workspaceId, revision, operationId }`; only the latest matching request may commit. A revision bump clears request slots and detaches the active binding so late success cannot repopulate the replaced workspace.
+
+Persistence stores only `{ workflowId, kind, currentStep, revision }` under the already opaque workspace/snapshot identity. It never stores a heap path, step result, workflow history, or Assistant history. Restore accepts the candidate only when the persisted identity matches, the workflow revision matches the persisted workspace revision, kind/ID/step pass strict validation, and `getWorkflow` confirms the same ID and kind. Failed/unavailable recovery detaches locally and leaves deterministic workbench tools usable.
+
+#### Task M29.B.1: Revision-bound workflow state and persistence
+
+**Interfaces:**
+- `beginWorkspaceRequest("workflow" | "assistant"): WorkspaceRequestContext`
+- `acceptWorkspaceRequest(slot, context): boolean`
+- `bindWorkflow(context, kind, result): boolean`
+- `detachWorkflow(expectedWorkflowId?): WorkspaceWorkflowBinding | undefined`
+- `PersistedWorkspaceV1.workflow?: PersistedWorkflowBinding`
+
+- [ ] **Step 1: Write failing store and persistence tests**
+
+Add focused tests proving:
+
+```ts
+const request = store.beginWorkspaceRequest("workflow");
+expect(store.bindWorkflow(request, "tune_gc", {
+  workflowId: "wf-1",
+  currentStep: "thread_local_review",
+})).toBe(true);
+expect(useInvestigationStore.getState().activeWorkflow).toMatchObject({
+  workspaceId: "workspace-1",
+  revision: 0,
+  workflowId: "wf-1",
+  kind: "tune_gc",
+  currentStep: "thread_local_review",
+});
+```
+
+Also assert that another workspace, old revision, and superseded request ID return `false`; only one binding exists; `bumpRevisionOnArtifactChange()` clears both request slots and the binding; persisted JSON contains kind/step/ID but no step result, history, or heap path; invalid kinds/path-like IDs are rejected; and restore drops a workflow whose workflow revision differs from the persisted workspace revision.
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test \
+  src/features/investigation/investigation-store.test.ts \
+  src/features/investigation/workspace-persistence.test.ts \
+  --max-concurrency=1
+```
+
+Expected: FAIL because request slots, active workflow state, and persisted workflow validation do not exist.
+
+- [ ] **Step 3: Implement the minimal state and schema**
+
+Add the shared workflow types, one active binding, independent workflow/Assistant request slots, strict request acceptance, and an optional workflow persistence field. Rebind a structurally compatible persisted candidate to the newly opened revision, but mark it for host confirmation before a workflow card may advance it. Keep operation payloads, results, histories, absolute paths, and raw field values out of persistence.
+
+- [ ] **Step 4: Re-run focused tests and verify GREEN**
+
+Run the Step 2 command. Expected: PASS.
+
+#### Task M29.B.2: Context-safe workflow lifecycle adapter
+
+**Interfaces:**
+- `startWorkspaceWorkflow(kind, params): Promise<WorkspaceWorkflowResult>`
+- `recoverWorkspaceWorkflow(): Promise<WorkspaceWorkflowResult>`
+- `advanceWorkspaceWorkflow(input?): Promise<WorkspaceWorkflowResult>`
+- `closeWorkspaceWorkflow(): Promise<WorkspaceWorkflowResult>`
+- `closeOrDetachWorkspaceWorkflow(): Promise<void>`
+
+- [ ] **Step 1: Write failing adapter tests**
+
+Using only the Zustand store plus a fake `__MNEMOSYNE_WORKFLOW_BRIDGE__`, assert:
+
+1. start captures the current request context and binds the returned ID/kind/step;
+2. a deferred start resolved after a revision bump returns `stale` and does not bind;
+3. the older of two same-revision starts cannot overwrite the newer request;
+4. advance obtains the ID from the active binding and rejects a late result after replacement;
+5. recovery calls `getWorkflow` with the persisted internal ID, accepts only the same ID/kind, and detaches on mismatch/corruption/unavailability;
+6. close sends the internal ID and detaches only the matching binding;
+7. serialized/display-facing results contain no heap path.
+
+- [ ] **Step 2: Run adapter tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/workflow-landing/workflow-binding.test.ts --max-concurrency=1
+```
+
+Expected: FAIL because `workflow-binding.ts` does not exist.
+
+- [ ] **Step 3: Implement the minimal lifecycle adapter**
+
+Wrap the existing bridge client. Begin a workflow request before each host call, commit only through the matching request context, and return a distinct `stale` result when the workspace/revision/request no longer matches. Starting a new kind first best-effort closes the prior binding; host absence or close failure detaches locally. Recovery validates host ID and kind before clearing the persisted-candidate marker. Do not add native commands or widen core workflow payloads.
+
+- [ ] **Step 4: Re-run adapter tests and verify GREEN**
+
+Run the Step 2 command. Expected: PASS.
+
+#### Task M29.B.3: ID-free workflow cards and natural-language starts
+
+**Interfaces:**
+- `WorkflowCard` selects `activeWorkflow` and never accepts a resume ID from the user.
+- A matching persisted candidate is recovered automatically on focused card mount.
+- Continue/close call the binding adapter without an ID argument.
+- `NaturalLanguageInputBar` uses `startWorkspaceWorkflow`.
+
+- [ ] **Step 1: Replace pasted-ID tests with focused failing binding tests**
+
+Render one `WorkflowCard` inside `MemoryRouter`; never mount `App` or production routes. Assert there is no “Resume workflow id” textbox and no rendered workflow ID. Seed a compatible persisted binding, render its matching card, and assert `getWorkflow("wf-internal")` runs automatically and the current step appears. Assert another kind does not recover or advance that binding. Start/continue/close through the card and verify store step updates.
+
+For `NaturalLanguageInputBar`, assert a free-text start populates `activeWorkflow`; resolve an older deferred start after a newer start and assert the older result is not rendered or stored.
+
+- [ ] **Step 2: Run component tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test \
+  src/features/workflow-landing/WorkflowCard.test.tsx \
+  src/features/workflow-landing/NaturalLanguageInputBar.test.tsx \
+  --max-concurrency=1
+```
+
+Expected: FAIL because both components still call raw bridge methods and the card exposes pasted-ID resume.
+
+- [ ] **Step 3: Implement bound workflow controls**
+
+Remove `resumeId`, the ID textbox, and every rendered workflow ID. Select the matching active binding, automatically confirm compatible persisted state, and route start/continue/close through the lifecycle adapter. Render only display-safe kind labels, current step, deterministic deep links, and bounded status/error copy; do not render raw host workflow state or heap paths.
+
+- [ ] **Step 4: Re-run component tests and verify GREEN**
+
+Run the Step 2 command. Expected: PASS.
+
+#### Task M29.B.4: Workspace cleanup, chrome, and Assistant correlation
+
+**Interfaces:**
+- `applyOpenedHeap`, `applySnapshotWorkspaceHydrate`, and `closeInvestigationWorkspace` close-or-detach the prior active workflow before committing replacement.
+- `HeapSessionBar` renders `Workflow: <kind label> · current step: <step>`.
+- `InvestigationAssistantPage` reads the same binding and captures an Assistant request context before awaiting provider/rules execution.
+
+- [ ] **Step 1: Write focused failing lifecycle and UI tests**
+
+Add tests that:
+
+- Close calls `closeWorkflow` once with the internal ID and clears the binding even when close rejects or is unavailable;
+- heap and snapshot replacement detach immediately, and a late close result cannot clear a newer binding;
+- `HeapSessionBar` shows kind/current step but contains neither workflow ID nor `/secret/heap.hprof`;
+- Assistant measured facts show the same kind/current step without ID/path;
+- Assistant rules context mentions kind/current step, not ID;
+- a deferred Assistant response resolved after `bumpRevisionOnArtifactChange()` does not append a turn or restore a session into the new workspace.
+
+Render `HeapSessionBar` with a small `MemoryRouter` and render `InvestigationAssistantPage` with `MemoryRouter`; do not use `App`, `router.tsx`, or a production route tree.
+
+- [ ] **Step 2: Run lifecycle and UI tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test \
+  src/features/investigation/workspace-actions.test.ts \
+  src/features/investigation/HeapSessionBar.test.tsx \
+  src/features/assistant/assistant-bridge-client.test.ts \
+  src/features/assistant/InvestigationAssistantPage.test.tsx \
+  --max-concurrency=1
+```
+
+Expected: FAIL because workspace actions do not close workflows, chrome/Assistant do not select the binding, and Assistant responses are not revision-correlated.
+
+- [ ] **Step 3: Implement lifecycle cleanup and display-safe step surfaces**
+
+Capture and detach the old binding before revision replacement; invoke host close best-effort so failure cannot block Open/Close. In chrome and Assistant, map kind to a human label and render only current step. Replace Assistant’s local workflow placeholders with the active binding, omit workflow ID from local rules/provider context, and append a turn/session only when the captured Assistant request remains current.
+
+- [ ] **Step 4: Run the complete focused M29.B suite**
+
+Run:
+
+```bash
+cd ui
+bun test \
+  src/features/investigation/investigation-store.test.ts \
+  src/features/investigation/workspace-persistence.test.ts \
+  src/features/investigation/workspace-actions.test.ts \
+  src/features/investigation/HeapSessionBar.test.tsx \
+  src/features/workflow-landing/workflow-bridge-client.test.ts \
+  src/features/workflow-landing/workflow-binding.test.ts \
+  src/features/workflow-landing/WorkflowCard.test.tsx \
+  src/features/workflow-landing/NaturalLanguageInputBar.test.tsx \
+  src/features/assistant/assistant-bridge-client.test.ts \
+  src/features/assistant/InvestigationAssistantPage.test.tsx \
+  --max-concurrency=1
+bun run build
+```
+
+Expected: all focused tests PASS and the TypeScript/Vite production build exits 0.
+
+- [ ] **Step 5: Commit M29.B implementation**
+
+```bash
+git add \
+  ui/src/features/investigation/investigation-store.ts \
+  ui/src/features/investigation/investigation-store.test.ts \
+  ui/src/features/investigation/workspace-persistence.ts \
+  ui/src/features/investigation/workspace-persistence.test.ts \
+  ui/src/features/investigation/workspace-actions.ts \
+  ui/src/features/investigation/workspace-actions.test.ts \
+  ui/src/features/investigation/HeapSessionBar.tsx \
+  ui/src/features/investigation/HeapSessionBar.test.tsx \
+  ui/src/features/workflow-landing/workflow-types.ts \
+  ui/src/features/workflow-landing/workflow-binding.ts \
+  ui/src/features/workflow-landing/workflow-binding.test.ts \
+  ui/src/features/workflow-landing/WorkflowCard.tsx \
+  ui/src/features/workflow-landing/WorkflowCard.test.tsx \
+  ui/src/features/workflow-landing/NaturalLanguageInputBar.tsx \
+  ui/src/features/workflow-landing/NaturalLanguageInputBar.test.tsx \
+  ui/src/features/assistant/assistant-bridge-client.ts \
+  ui/src/features/assistant/assistant-bridge-client.test.ts \
+  ui/src/features/assistant/InvestigationAssistantPage.tsx \
+  ui/src/features/assistant/InvestigationAssistantPage.test.tsx
+git commit -m "feat(ui): bind workflows to workspaces"
+```
 
 ### M29.C — Contextual Assistant
 
