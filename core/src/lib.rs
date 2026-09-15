@@ -46,7 +46,8 @@ pub use graph::{
     HistogramGroupBy, HistogramResult, UnreachableClassEntry, UnreachableSet, VIRTUAL_ROOT_ID,
 };
 pub use hprof::{
-    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_with_options, parse_hprof_overview,
+    parse_heap, parse_hprof, parse_hprof_file, parse_hprof_file_controlled,
+    parse_hprof_file_with_options, parse_hprof_file_with_options_controlled, parse_hprof_overview,
     parse_hprof_overview_file, parse_hprof_with_options, ClassLevelDelta, GcRootKind, HeapDiff,
     HeapParseJob, HeapSummary, HprofHeader, OverviewClassStat, OverviewClassStats,
     OverviewInstanceStat, OverviewOptions, OverviewSummary, OverviewThreadFrame, ParseOptions,

@@ -9,7 +9,7 @@ use crate::{
     config::{AnalysisConfig, AppConfig},
     errors::{CoreError, CoreResult},
     graph::{
-        build_dominator_tree, build_graph_metrics_from_dominator, build_histogram,
+        build_dominator_tree_controlled, build_graph_metrics_from_dominator, build_histogram,
         find_unreachable_objects, summarize_graph, DominatorTree, GraphMetrics, HistogramGroupBy,
         HistogramResult, UnreachableSet, VIRTUAL_ROOT_ID,
     },
@@ -321,20 +321,29 @@ fn assemble_graph_backed_analysis(
     dom: &DominatorTree,
     summary: &HeapSummary,
     request: &AnalyzeRequest,
-) -> GraphBackedAssembly {
+    observer: &dyn OperationObserver,
+) -> CoreResult<GraphBackedAssembly> {
+    ensure_not_cancelled(observer)?;
     let graph_metrics = build_graph_metrics_from_dominator(dom, obj_graph);
+    ensure_not_cancelled(observer)?;
     let graph_leaks = graph_backed_leaks(dom, obj_graph, &request.leak_options);
+    ensure_not_cancelled(observer)?;
     let histogram = Some(build_histogram(obj_graph, dom, request.histogram_group_by));
+    ensure_not_cancelled(observer)?;
     let unreachable = Some(find_unreachable_objects(obj_graph));
+    ensure_not_cancelled(observer)?;
     let thread_report = request
         .enable_threads
         .then(|| inspect_threads(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     let classloader_report = request
         .enable_classloaders
         .then(|| analyze_classloaders(obj_graph, Some(dom)));
+    ensure_not_cancelled(observer)?;
     let collection_report = request
         .enable_collections
         .then(|| inspect_collections(obj_graph, Some(dom), request.min_collection_capacity));
+    ensure_not_cancelled(observer)?;
     let string_report = request.enable_strings.then(|| {
         analyze_strings(
             obj_graph,
@@ -343,19 +352,23 @@ fn assemble_graph_backed_analysis(
             request.min_duplicate_count,
         )
     });
+    ensure_not_cancelled(observer)?;
     let array_report = request
         .enable_duplicate_arrays
         .then(|| analyze_duplicate_arrays(obj_graph, request.min_duplicate_count));
+    ensure_not_cancelled(observer)?;
     let top_instances = request
         .enable_top_instances
         .then(|| find_top_instances(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     let referrer_report = request
         .enable_by_referrer
         .then(|| analyze_by_referrer(obj_graph, Some(dom), request.top_n));
+    ensure_not_cancelled(observer)?;
     // If graph-backed produced no leaks (e.g. all filtered), fall back
     if graph_leaks.is_empty() {
         let fallback_leaks = synthesize_leaks(summary, &request.leak_options);
-        (
+        Ok((
             graph_metrics,
             fallback_leaks,
             histogram,
@@ -368,9 +381,9 @@ fn assemble_graph_backed_analysis(
             top_instances,
             referrer_report,
             fallback_provenance(),
-        )
+        ))
     } else {
-        (
+        Ok((
             graph_metrics,
             graph_leaks,
             histogram,
@@ -383,7 +396,7 @@ fn assemble_graph_backed_analysis(
             top_instances,
             referrer_report,
             Vec::new(),
-        )
+        ))
     }
 }
 
@@ -399,6 +412,7 @@ async fn analyze_heap_internal(
 ) -> CoreResult<AnalysisArtifacts> {
     info!(heap = %request.heap_path, "starting analysis pipeline");
     let start = Instant::now();
+    ensure_not_cancelled(observer)?;
     report_indeterminate_phase(observer, OperationPhase::Parsing, start);
 
     let parse_job = HeapParseJob {
@@ -407,6 +421,7 @@ async fn analyze_heap_internal(
         max_objects: request.config.parser.max_objects,
     };
     let summary = parse_heap(&parse_job)?;
+    ensure_not_cancelled(observer)?;
     let retain_field_data = request.enable_strings
         || request.enable_collections
         || request.enable_threads
@@ -414,8 +429,9 @@ async fn analyze_heap_internal(
 
     // Attempt graph-backed analysis
     let dominator_result =
-        try_build_dominator_controlled(&request.heap_path, retain_field_data, observer, start);
+        try_build_dominator_controlled(&request.heap_path, retain_field_data, observer, start)?;
     report_indeterminate_phase(observer, OperationPhase::Analyzing, start);
+    ensure_not_cancelled(observer)?;
 
     let (
         graph,
@@ -431,9 +447,11 @@ async fn analyze_heap_internal(
         referrer_report,
         provenance,
     ) = if let Some((ref obj_graph, ref dom)) = dominator_result {
-        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request)
+        assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, observer)?
     } else {
+        ensure_not_cancelled(observer)?;
         let graph = summarize_graph(&summary);
+        ensure_not_cancelled(observer)?;
         let leaks = synthesize_leaks(&summary, &request.leak_options);
         (
             graph,
@@ -451,12 +469,14 @@ async fn analyze_heap_internal(
         )
     };
 
+    ensure_not_cancelled(observer)?;
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights");
         Some(generate_ai_insights_async(&summary, &leaks, &request.config.ai).await?)
     } else {
         None
     };
+    ensure_not_cancelled(observer)?;
 
     // M15 Slice 15.F: run registered AnalyzerPlugins over the graph-backed
     // pipeline's own (ObjectGraph, DominatorTree) pair. Only possible when
@@ -471,6 +491,7 @@ async fn analyze_heap_internal(
         (Some(registry), Some((obj_graph, dom))) => registry.run_analyzers(obj_graph, Some(dom)),
         _ => Vec::new(),
     };
+    ensure_not_cancelled(observer)?;
 
     let has_graph = dominator_result.is_some();
     let response = AnalyzeResponse {
@@ -510,6 +531,7 @@ async fn analyze_heap_internal(
         None => (None, None),
     };
 
+    ensure_not_cancelled(observer)?;
     Ok(AnalysisArtifacts {
         response,
         object_graph,
@@ -647,7 +669,7 @@ pub async fn analyze_heap_from_graph(
         top_instances,
         referrer_report,
         provenance,
-    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request);
+    ) = assemble_graph_backed_analysis(obj_graph, dom, &summary, &request, &NoopOperationObserver)?;
 
     let ai = if request.enable_ai || request.config.ai.enabled {
         info!(model = %request.config.ai.model, "generating synthetic AI insights (from cached graph)");
@@ -879,6 +901,7 @@ pub(crate) fn try_build_dominator(
         &NoopOperationObserver,
         Instant::now(),
     )
+    .expect("the no-op observer cannot cancel graph construction")
 }
 
 fn try_build_dominator_controlled(
@@ -886,7 +909,7 @@ fn try_build_dominator_controlled(
     retain_field_data: bool,
     observer: &dyn OperationObserver,
     started: Instant,
-) -> Option<(ObjectGraph, DominatorTree)> {
+) -> CoreResult<Option<(ObjectGraph, DominatorTree)>> {
     match parse_hprof_file_with_options_controlled(
         heap_path,
         ParseOptions { retain_field_data },
@@ -894,20 +917,32 @@ fn try_build_dominator_controlled(
     ) {
         Ok(graph) => {
             if graph.objects.is_empty() {
-                return None;
+                return Ok(None);
             }
+            ensure_not_cancelled(observer)?;
             report_indeterminate_phase(observer, OperationPhase::BuildingGraph, started);
+            ensure_not_cancelled(observer)?;
             report_indeterminate_phase(observer, OperationPhase::ComputingDominators, started);
-            let dom = build_dominator_tree(&graph);
+            let dom = build_dominator_tree_controlled(&graph, observer)?;
             if dom.node_count() == 0 {
-                return None;
+                return Ok(None);
             }
-            Some((graph, dom))
+            ensure_not_cancelled(observer)?;
+            Ok(Some((graph, dom)))
         }
+        Err(CoreError::OperationCancelled) => Err(CoreError::OperationCancelled),
         Err(e) => {
             info!(error = %e, "HPROF object graph parsing failed; falling back to heuristic analysis");
-            None
+            Ok(None)
         }
+    }
+}
+
+fn ensure_not_cancelled(observer: &dyn OperationObserver) -> CoreResult<()> {
+    if observer.is_cancelled() {
+        Err(CoreError::OperationCancelled)
+    } else {
+        Ok(())
     }
 }
 
@@ -1489,7 +1524,10 @@ mod tests {
     use super::*;
     use crate::hprof::{ClassInfo, ClassStat, RecordStat};
     use std::io::Write;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    };
     use std::time::{Duration, SystemTime};
 
     #[derive(Default)]
@@ -1510,6 +1548,25 @@ mod tests {
     impl RecordingOperationObserver {
         fn events(&self) -> Vec<crate::OperationProgressSnapshot> {
             self.events.lock().unwrap().clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct AnalysisCancellingObserver {
+        cancelled: AtomicBool,
+        checks: AtomicUsize,
+    }
+
+    impl crate::OperationObserver for AnalysisCancellingObserver {
+        fn progress(&self, event: crate::OperationProgressSnapshot) {
+            if event.phase == crate::OperationPhase::Analyzing {
+                self.cancelled.store(true, Ordering::Release);
+            }
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.checks.fetch_add(1, Ordering::AcqRel);
+            self.cancelled.load(Ordering::Acquire)
         }
     }
 
@@ -1674,6 +1731,23 @@ mod tests {
         assert_eq!(
             normalized_analysis_bytes(&controlled),
             normalized_analysis_bytes(&legacy)
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_cancelled_between_analysis_stages_returns_no_success_payload() {
+        let fixture = write_graph_fixture_file();
+        let request = request_for_fixture(fixture.path().to_str().unwrap());
+        let observer = AnalysisCancellingObserver::default();
+
+        let error = analyze_heap_controlled(request, &observer)
+            .await
+            .expect_err("cancelled analysis must not return a response");
+
+        assert!(matches!(error, CoreError::OperationCancelled));
+        assert!(
+            observer.checks.load(Ordering::Acquire) > 0,
+            "analysis must consult cancellation between expensive stages"
         );
     }
 

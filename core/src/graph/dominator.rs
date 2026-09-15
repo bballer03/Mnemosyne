@@ -4,10 +4,21 @@ use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 
+use crate::errors::{CoreError, CoreResult};
 use crate::hprof::{ObjectGraph, ObjectId};
+use crate::operation::{NoopOperationObserver, OperationObserver};
 
 /// Virtual super-root ID that doesn't collide with real HPROF object IDs.
 pub const VIRTUAL_ROOT_ID: ObjectId = u64::MAX;
+const CANCELLATION_CHECK_INTERVAL: usize = 1024;
+
+fn ensure_not_cancelled(observer: &dyn OperationObserver) -> CoreResult<()> {
+    if observer.is_cancelled() {
+        Err(CoreError::OperationCancelled)
+    } else {
+        Ok(())
+    }
+}
 
 /// The result of dominator tree computation over an `ObjectGraph`.
 ///
@@ -35,12 +46,22 @@ pub struct DominatorTree {
 /// 3. Runs Lengauer–Tarjan (`simple_fast`) from the virtual root.
 /// 4. Computes retained sizes via post-order traversal.
 pub fn build_dominator_tree(graph: &ObjectGraph) -> DominatorTree {
+    build_dominator_tree_controlled(graph, &NoopOperationObserver)
+        .expect("the no-op observer cannot cancel dominator construction")
+}
+
+/// Build a dominator tree with bounded cooperative cancellation checkpoints.
+pub fn build_dominator_tree_controlled(
+    graph: &ObjectGraph,
+    observer: &dyn OperationObserver,
+) -> CoreResult<DominatorTree> {
+    ensure_not_cancelled(observer)?;
     if graph.objects.is_empty() {
-        return DominatorTree {
+        return Ok(DominatorTree {
             immediate_dominators: HashMap::new(),
             dominated_children: HashMap::new(),
             retained_sizes: HashMap::new(),
-        };
+        });
     }
 
     // -- 1. Build petgraph -------------------------------------------------
@@ -52,41 +73,63 @@ pub fn build_dominator_tree(graph: &ObjectGraph) -> DominatorTree {
     id_to_node.insert(VIRTUAL_ROOT_ID, virtual_root_node);
 
     // Add a node for every real object
-    for &obj_id in graph.objects.keys() {
+    for (index, &obj_id) in graph.objects.keys().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         let node = digraph.add_node(obj_id);
         id_to_node.insert(obj_id, node);
     }
 
     // -- 2. GC-root edges (deduplicated) -----------------------------------
-    let root_ids: HashSet<ObjectId> = graph
-        .gc_roots
-        .iter()
-        .map(|r| r.object_id)
-        .filter(|id| graph.objects.contains_key(id))
-        .collect();
+    let mut root_ids = HashSet::new();
+    for (index, root) in graph.gc_roots.iter().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
+        if graph.objects.contains_key(&root.object_id) {
+            root_ids.insert(root.object_id);
+        }
+    }
 
-    for &root_id in &root_ids {
+    for (index, &root_id) in root_ids.iter().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         digraph.add_edge(virtual_root_node, id_to_node[&root_id], ());
     }
 
     // -- 3. Reference edges ------------------------------------------------
-    for obj in graph.objects.values() {
+    let mut edge_count = 0usize;
+    for (object_index, obj) in graph.objects.values().enumerate() {
+        if object_index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         let from = id_to_node[&obj.id];
         for &ref_id in &obj.references {
+            if edge_count.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                ensure_not_cancelled(observer)?;
+            }
             if let Some(&to) = id_to_node.get(&ref_id) {
                 digraph.add_edge(from, to, ());
             }
+            edge_count += 1;
         }
     }
 
     // -- 4. Run dominators -------------------------------------------------
+    ensure_not_cancelled(observer)?;
     let dom_result = simple_fast(&digraph, virtual_root_node);
+    ensure_not_cancelled(observer)?;
 
     // -- 5. Build immediate_dominators map ---------------------------------
     let mut immediate_dominators: HashMap<ObjectId, ObjectId> = HashMap::new();
     let mut dominated_children: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
 
-    for (&obj_id, &node) in &id_to_node {
+    for (index, (&obj_id, &node)) in id_to_node.iter().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         if obj_id == VIRTUAL_ROOT_ID {
             continue;
         }
@@ -98,27 +141,33 @@ pub fn build_dominator_tree(graph: &ObjectGraph) -> DominatorTree {
     }
 
     // -- 7. Compute retained sizes (post-order) ----------------------------
-    let retained_sizes = compute_retained_sizes(graph, &dominated_children);
+    let retained_sizes = compute_retained_sizes_controlled(graph, &dominated_children, observer)?;
 
-    DominatorTree {
+    Ok(DominatorTree {
         immediate_dominators,
         dominated_children,
         retained_sizes,
-    }
+    })
 }
 
 /// Post-order traversal of the dominator tree to accumulate retained sizes.
-fn compute_retained_sizes(
+fn compute_retained_sizes_controlled(
     graph: &ObjectGraph,
     children: &HashMap<ObjectId, Vec<ObjectId>>,
-) -> HashMap<ObjectId, u64> {
+    observer: &dyn OperationObserver,
+) -> CoreResult<HashMap<ObjectId, u64>> {
     let mut sizes: HashMap<ObjectId, u64> = HashMap::new();
 
     // Iterative post-order using an explicit stack.
     // Start from VIRTUAL_ROOT_ID so we visit the whole tree.
     let mut stack: Vec<(ObjectId, bool)> = vec![(VIRTUAL_ROOT_ID, false)];
 
+    let mut traversal_count = 0usize;
     while let Some((id, visited)) = stack.pop() {
+        if traversal_count.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
+        traversal_count += 1;
         if visited {
             let shallow = graph
                 .objects
@@ -144,7 +193,7 @@ fn compute_retained_sizes(
         }
     }
 
-    sizes
+    Ok(sizes)
 }
 
 impl DominatorTree {
@@ -195,6 +244,21 @@ impl DominatorTree {
 mod tests {
     use super::*;
     use crate::hprof::{GcRoot, GcRootType, HeapObject, ObjectKind};
+    use crate::{OperationObserver, OperationProgressSnapshot};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CancellingObserver {
+        cancel_on_check: usize,
+        checks: AtomicUsize,
+    }
+
+    impl OperationObserver for CancellingObserver {
+        fn progress(&self, _event: OperationProgressSnapshot) {}
+
+        fn is_cancelled(&self) -> bool {
+            self.checks.fetch_add(1, Ordering::AcqRel) + 1 >= self.cancel_on_check
+        }
+    }
 
     /// Helper: build a programmatic ObjectGraph from a compact description.
     fn make_graph(
@@ -231,6 +295,31 @@ mod tests {
         let tree = build_dominator_tree(&graph);
         assert_eq!(tree.node_count(), 0);
         assert!(tree.top_retained(10).is_empty());
+    }
+
+    #[test]
+    fn cancellation_stops_dominator_construction_before_success_payload() {
+        let objects = (1..=4096)
+            .map(|id| {
+                let references = if id < 4096 { vec![id + 1] } else { Vec::new() };
+                (id, 1, references)
+            })
+            .collect::<Vec<_>>();
+        let compact = objects
+            .iter()
+            .map(|(id, size, refs)| (*id, *size, refs.as_slice()))
+            .collect::<Vec<_>>();
+        let graph = make_graph(&compact, &[1]);
+        let observer = CancellingObserver {
+            cancel_on_check: 2,
+            checks: AtomicUsize::new(0),
+        };
+
+        let error = build_dominator_tree_controlled(&graph, &observer)
+            .expect_err("cancelled dominator construction must not return a tree");
+
+        assert!(matches!(error, crate::CoreError::OperationCancelled));
+        assert_eq!(observer.checks.load(Ordering::Acquire), 2);
     }
 
     // -- test_dominator_tree_linear_chain -----------------------------------

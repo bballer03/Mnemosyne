@@ -18,7 +18,7 @@ use mnemosyne_core::{
         },
         run_diff, DiffMode, DiffRequest, DiffResult, IdentityStrategy, ObjectDiffReport,
     },
-    graph::find_all_gc_paths_in_graph,
+    graph::{build_dominator_tree_controlled, find_all_gc_paths_in_graph},
     hprof::{parse_hprof_file_with_options, ObjectGraph, ParseOptions},
     mcp::session::{
         effective_history_limit, new_session_id, timestamp_now, top_leak_ids, trim_history_to,
@@ -29,7 +29,7 @@ use mnemosyne_core::{
     snapshot::{SnapshotManifest, SnapshotStore},
     workflow::{self, WorkflowDescription, WorkflowKind, WorkflowState, WorkflowStore},
     AllPathsRequest, AppConfig, DominatorTree, GcPathResult, HistogramGroupBy, HistogramResult,
-    VIRTUAL_ROOT_ID,
+    NoopOperationObserver, OperationObserver, VIRTUAL_ROOT_ID,
 };
 use serde_json::{json, Value};
 
@@ -317,11 +317,28 @@ pub fn inspect_object_for_session(
     object_id: &str,
     retain_field_data: bool,
 ) -> Result<ObjectInspection, String> {
+    inspect_object_for_session_controlled(
+        graph,
+        heap_path,
+        object_id,
+        retain_field_data,
+        &NoopOperationObserver,
+    )
+}
+
+pub fn inspect_object_for_session_controlled(
+    graph: &mnemosyne_core::hprof::ObjectGraph,
+    heap_path: &str,
+    object_id: &str,
+    retain_field_data: bool,
+    observer: &dyn OperationObserver,
+) -> Result<ObjectInspection, String> {
     let target_id = parse_inspect_object_id(object_id)
         .filter(|id| graph.objects.contains_key(id))
         .ok_or_else(|| inspect_object_id_not_found(object_id, heap_path))?;
 
-    let dominator = build_dominator_tree(graph);
+    let dominator =
+        build_dominator_tree_controlled(graph, observer).map_err(|error| error.to_string())?;
     inspect_object(graph, Some(&dominator), target_id, retain_field_data)
         .ok_or_else(|| inspect_object_id_not_found(object_id, heap_path))
 }

@@ -20,6 +20,15 @@ use std::time::{Duration, Instant};
 
 const MAX_RETAINED_PRIMITIVE_ARRAY_BYTES: u64 = 1024 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+const CANCELLATION_CHECK_INTERVAL: usize = 1024;
+
+fn ensure_not_cancelled(observer: &dyn OperationObserver) -> CoreResult<()> {
+    if observer.is_cancelled() {
+        Err(CoreError::OperationCancelled)
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
@@ -165,6 +174,7 @@ fn parse_hprof_reader<R: Read>(
 ) -> CoreResult<ObjectGraph> {
     let mut progress = ParserProgress::new(observer, total_bytes);
     progress.report(0, true);
+    ensure_not_cancelled(observer)?;
 
     // ── Header ─────────────────────────────────────────────────────
     // Read null-terminated format string.
@@ -203,6 +213,7 @@ fn parse_hprof_reader<R: Read>(
 
     // ── Top-level record loop ──────────────────────────────────────
     loop {
+        ensure_not_cancelled(observer)?;
         let tag = match reader.read_u8() {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -217,7 +228,7 @@ fn parse_hprof_reader<R: Read>(
             TAG_STACK_FRAME => read_stack_frame(reader, &mut state, id_size, length)?,
             TAG_STACK_TRACE => read_stack_trace(reader, &mut state, id_size, length)?,
             TAG_HEAP_DUMP | TAG_HEAP_DUMP_SEGMENT => {
-                read_heap_dump(reader, &mut state, id_size, length)?;
+                read_heap_dump(reader, &mut state, id_size, length, observer)?;
             }
             _ => skip_bytes(reader, length as u64)?,
         }
@@ -226,7 +237,8 @@ fn parse_hprof_reader<R: Read>(
     }
 
     // ── Post-processing: resolve class names ───────────────────────
-    resolve_class_names(&mut state);
+    resolve_class_names(&mut state, observer)?;
+    ensure_not_cancelled(observer)?;
     progress.report(total_bytes, true);
 
     Ok(state.graph)
@@ -357,6 +369,7 @@ fn read_heap_dump<R: Read>(
     state: &mut ParserState,
     id_size: u8,
     length: u32,
+    observer: &dyn OperationObserver,
 ) -> CoreResult<()> {
     // Read the entire segment into memory so we can use a bounded cursor.
     let mut segment_data = vec![0u8; length as usize];
@@ -364,9 +377,14 @@ fn read_heap_dump<R: Read>(
     let mut cursor = Cursor::new(segment_data);
     let segment_len = length as u64;
 
+    let mut sub_record_count = 0usize;
     while cursor.position() < segment_len {
+        if sub_record_count.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         let sub_tag = cursor.read_u8()?;
         parse_heap_sub_record(&mut cursor, state, id_size, sub_tag)?;
+        sub_record_count += 1;
     }
     Ok(())
 }
@@ -757,17 +775,26 @@ fn parse_prim_array_dump<R: Read>(
 
 // ── Post-processing ────────────────────────────────────────────────
 
-fn resolve_class_names(state: &mut ParserState) {
+fn resolve_class_names(
+    state: &mut ParserState,
+    observer: &dyn OperationObserver,
+) -> CoreResult<()> {
     // Build a map: class_obj_id → name string from loaded_classes + string table.
     let mut class_names: HashMap<ClassId, String> = HashMap::new();
-    for lc in state.graph.loaded_classes.values() {
+    for (index, lc) in state.graph.loaded_classes.values().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         if let Some(name) = state.graph.strings.get(&lc.name_string_id) {
             class_names.insert(lc.class_obj_id, name.clone());
         }
     }
 
     // Resolve names and build proper FieldDescriptor lists.
-    for (&class_id, raw) in &state.raw_classes {
+    for (index, (&class_id, raw)) in state.raw_classes.iter().enumerate() {
+        if index.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+            ensure_not_cancelled(observer)?;
+        }
         if let Some(ci) = state.graph.classes.get_mut(&class_id) {
             ci.name = class_names.get(&class_id).cloned();
             ci.instance_fields = raw
@@ -780,6 +807,7 @@ fn resolve_class_names(state: &mut ParserState) {
                 .collect();
         }
     }
+    Ok(())
 }
 
 // ── Layout resolution (inherited fields) ───────────────────────────
@@ -860,7 +888,10 @@ mod tests {
         build_segment_fixture, build_simple_fixture, HeapDumpBuilder, HprofBuilder,
     };
     use crate::{OperationObserver, OperationPhase, OperationProgressSnapshot};
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
 
     #[derive(Default)]
     struct RecordingObserver {
@@ -880,6 +911,22 @@ mod tests {
     impl RecordingObserver {
         fn events(&self) -> Vec<OperationProgressSnapshot> {
             self.events.lock().unwrap().clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct CancellingObserver {
+        checks: AtomicUsize,
+        events: Mutex<Vec<OperationProgressSnapshot>>,
+    }
+
+    impl OperationObserver for CancellingObserver {
+        fn progress(&self, event: OperationProgressSnapshot) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn is_cancelled(&self) -> bool {
+            self.checks.fetch_add(1, Ordering::AcqRel) + 1 >= 2
         }
     }
 
@@ -941,6 +988,28 @@ mod tests {
             serde_json::to_value(controlled).unwrap(),
             serde_json::to_value(legacy).unwrap(),
             "controlled parsing must preserve the legacy graph"
+        );
+    }
+
+    #[test]
+    fn cancellation_stops_parser_before_success_payload() {
+        let data = build_simple_fixture();
+        let observer = CancellingObserver::default();
+
+        let error = parse_hprof_controlled(&data, &observer)
+            .expect_err("cancelled parsing must not return an object graph");
+
+        assert!(matches!(error, CoreError::OperationCancelled));
+        assert_eq!(observer.checks.load(Ordering::Acquire), 2);
+        let events = observer.events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "cancelled parsing must not report completion"
+        );
+        assert_ne!(
+            events.last().and_then(|event| event.completed),
+            Some(data.len() as u64)
         );
     }
 

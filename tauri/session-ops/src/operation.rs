@@ -71,6 +71,25 @@ impl OperationRegistration<'_> {
     pub fn cancellation_token(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancellation)
     }
+
+    /// Returns whether this exact correlated registration may still publish.
+    pub fn can_commit(&self) -> bool {
+        self.commit_if_current(|| ()).is_some()
+    }
+
+    /// Runs a short commit while cancellation for this operation is excluded.
+    pub fn commit_if_current<T>(&self, commit: impl FnOnce() -> T) -> Option<T> {
+        let operations = self.registry.operations.lock().ok()?;
+        let entry = operations.get(&self.context.operation_id)?;
+        let is_current = entry.context == self.context
+            && Arc::ptr_eq(&entry.cancellation, &self.cancellation)
+            && !entry.cancellation.load(Ordering::Acquire);
+        if !is_current {
+            return None;
+        }
+
+        Some(commit())
+    }
 }
 
 impl Drop for OperationRegistration<'_> {
@@ -363,7 +382,7 @@ mod operation_registry_tests {
         OperationRegistryError, OPERATION_CANCELLED_CODE,
     };
     use serde_json::json;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn context(operation_id: &str, workspace_id: &str, revision: u64) -> OperationContext {
         OperationContext {
@@ -467,5 +486,32 @@ mod operation_registry_tests {
         assert!(first.cancellation_token().load(Ordering::Acquire));
         assert!(!second.cancellation_token().load(Ordering::Acquire));
         assert_eq!(registry.active_len().expect("registry available"), 2);
+    }
+
+    #[test]
+    fn operation_registry_commit_guard_rejects_cancelled_operation() {
+        let registry = OperationRegistry::default();
+        let registration = registry
+            .register(context("operation-1", "workspace-1", 7))
+            .expect("registration must succeed");
+
+        let committed = AtomicBool::new(false);
+        assert!(registration
+            .commit_if_current(|| committed.store(true, Ordering::Release))
+            .is_some());
+        assert!(committed.load(Ordering::Acquire));
+        assert!(registry.cancel("operation-1").accepted);
+        assert!(
+            !registration.can_commit(),
+            "cancelled work must not install or serialize its local result"
+        );
+        committed.store(false, Ordering::Release);
+        assert!(registration
+            .commit_if_current(|| committed.store(true, Ordering::Release))
+            .is_none());
+        assert!(
+            !committed.load(Ordering::Acquire),
+            "cancelled commit closures must not run"
+        );
     }
 }

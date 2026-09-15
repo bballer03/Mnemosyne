@@ -264,11 +264,11 @@
 - Controlled functions check `observer.is_cancelled()` at top-level record boundaries, dominator traversal boundaries, and between analyzer stages.
 - Return `CoreError` mapped to machine code `operation_cancelled`; legacy no-op calls cannot produce it.
 
-- [ ] **Step 1: Write deterministic cancellation tests**
+- [x] **Step 1: Write deterministic cancellation tests**
 
   Use an observer that cancels after a known progress callback/check count. Assert parsing, dominator construction, and analysis stop before completion and no success payload is returned.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run:
 
@@ -279,19 +279,19 @@
 
   Expected: FAIL before checkpoints are implemented.
 
-- [ ] **Step 3: Implement checkpoints without per-object callback overhead**
+- [x] **Step 3: Implement checkpoints without per-object callback overhead**
 
   Check in bounded batches. Preserve the current algorithms and outputs when the token is unset.
 
-- [ ] **Step 4: Add a Tauri commit guard**
+- [x] **Step 4: Add a Tauri commit guard**
 
   Immediately before installing graph/dominator/cache or serializing success, re-check cancellation and the operation context. A cancelled operation must drop local results.
 
-- [ ] **Step 5: Re-run focused core/session tests**
+- [x] **Step 5: Re-run focused core/session tests**
 
   Expected: PASS; cancellation produces no installed session state.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add core/src/hprof/binary_parser.rs core/src/graph/dominator.rs core/src/analysis/engine.rs tauri/src/commands.rs tauri/session-ops/src/lib.rs

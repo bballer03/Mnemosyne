@@ -4,6 +4,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
+use mnemosyne_core::graph::build_dominator_tree_controlled;
 use mnemosyne_core::snapshot::SnapshotManifest;
 use mnemosyne_core::workflow::WorkflowDescription;
 use mnemosyne_core::{
@@ -27,7 +28,7 @@ use mnemosyne_desktop_session::{
     close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
     default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
     dominator_children_for_session, find_all_gc_paths_for_session, get_ai_session_for_session,
-    get_workflow_for_session, graph_has_field_data, inspect_object_for_session,
+    get_workflow_for_session, graph_has_field_data, inspect_object_for_session_controlled,
     install_field_data_cache_if_still_current, list_class_instances_for_session,
     list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
     parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
@@ -81,6 +82,24 @@ fn core_observer(observer: &SharedOperationObserver) -> &dyn OperationObserver {
         .unwrap_or(&NoopOperationObserver)
 }
 
+fn ensure_observer_not_cancelled(observer: &SharedOperationObserver) -> Result<(), String> {
+    if core_observer(observer).is_cancelled() {
+        Err(structured_operation_cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_operation_can_commit(
+    registration: Option<&OperationRegistration<'_>>,
+) -> Result<(), String> {
+    if registration.is_some_and(|registration| !registration.can_commit()) {
+        Err(structured_operation_cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn emit_indeterminate(
     observer: &SharedOperationObserver,
     phase: OperationPhase,
@@ -113,6 +132,22 @@ fn emit_completed(
             elapsed_ms: started.elapsed().as_millis() as u64,
         });
     }
+}
+
+fn emit_operation_error(
+    observer: &SharedOperationObserver,
+    error: &str,
+    started: std::time::Instant,
+) {
+    emit_indeterminate(
+        observer,
+        if error == "Operation cancelled" || error.starts_with("operation_cancelled:") {
+            OperationPhase::Cancelled
+        } else {
+            OperationPhase::Failed
+        },
+        started,
+    );
 }
 
 #[derive(Debug, Serialize)]
@@ -213,7 +248,7 @@ pub async fn run_desktop_analysis(
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, input.context.clone(), "analyze", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
@@ -319,7 +354,16 @@ pub async fn run_desktop_analysis(
         match analyze_heap_capturing_graph_controlled(request, core_observer(&observer)).await {
             Ok(result) => result,
             Err(error) => {
-                emit_indeterminate(&observer, OperationPhase::Failed, started);
+                let cancelled = matches!(&error, mnemosyne_core::CoreError::OperationCancelled);
+                emit_indeterminate(
+                    &observer,
+                    if cancelled {
+                        OperationPhase::Cancelled
+                    } else {
+                        OperationPhase::Failed
+                    },
+                    started,
+                );
                 let mapped = map_native_error(error);
                 tracing::error!(
                     %display_name,
@@ -330,6 +374,10 @@ pub async fn run_desktop_analysis(
                 return Err(mapped);
             }
         };
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
     let object_count = object_graph.as_ref().map(|graph| graph.object_count());
     tracing::info!(
@@ -345,6 +393,10 @@ pub async fn run_desktop_analysis(
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     state.bump_session_epoch();
     let replacement = match (object_graph, dominator) {
         (Some(graph), Some(dominator)) => Some((graph, dominator)),
@@ -366,8 +418,34 @@ pub async fn run_desktop_analysis(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph, &mut dominator, None);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     let raw = serde_json::to_value(response).map_err(|error| error.to_string())?;
     let result = sanitize_analyze_response_value(raw, &display_name);
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph, &mut dominator, None);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     emit_completed(&observer, OperationPhase::Complete, started);
     Ok(result)
 }
@@ -586,7 +664,7 @@ pub async fn generate_desktop_flamegraph(
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) = registered_operation_observer(
+    let (observer, registration) = registered_operation_observer(
         &app,
         input.context.clone(),
         "flamegraph",
@@ -641,32 +719,9 @@ pub async fn generate_desktop_flamegraph(
         .map_err(map_native_error)?;
         (graph, dominator)
     };
-
-    emit_indeterminate(&observer, OperationPhase::Committing, started);
-    {
-        let _session = state
-            .session_mutation
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
-        state.bump_session_epoch();
-        let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
-        let mut dominator_slot = state
-            .dominator
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())?;
-        replace_session_analysis(
-            &mut graph_slot,
-            &mut dominator_slot,
-            Some((graph.clone(), dominator.clone())),
-        );
-        *state
-            .field_data_graph
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = None;
-        *state
-            .heap_path
-            .write()
-            .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
     }
 
     emit_indeterminate(&observer, OperationPhase::Rendering, started);
@@ -675,7 +730,7 @@ pub async fn generate_desktop_flamegraph(
     render(&stacks, format, Some("Mnemosyne"), &mut buffer).map_err(map_native_error)?;
     let rendered = String::from_utf8(buffer).map_err(|error| error.to_string())?;
 
-    let result = match format {
+    let result: Result<Value, String> = match format {
         FlameFormat::Svg => Ok(serde_json::json!({
             "format": "svg",
             "content": rendered,
@@ -697,9 +752,58 @@ pub async fn generate_desktop_flamegraph(
         }
     };
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        emit_indeterminate(&observer, OperationPhase::Committing, started);
+        let _session = state
+            .session_mutation
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
+        state.bump_session_epoch();
+        let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+        let mut dominator_slot = state
+            .dominator
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((graph, dominator)),
+        );
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+            *state
+                .field_data_graph
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+            *state
+                .heap_path
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -876,7 +980,7 @@ async fn load_heap_internal(
     state: &State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(app, context, "open", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
@@ -884,21 +988,30 @@ async fn load_heap_internal(
     let (graph, dominator) = spawn_blocking({
         let path = path.clone();
         move || {
+            ensure_observer_not_cancelled(&background_observer)?;
             let graph = parse_hprof_file_controlled(&path, core_observer(&background_observer))
                 .map_err(map_native_error)?;
+            ensure_observer_not_cancelled(&background_observer)?;
             emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
             emit_indeterminate(
                 &background_observer,
                 OperationPhase::ComputingDominators,
                 started,
             );
-            let dominator = mnemosyne_core::build_dominator_tree(&graph);
+            let dominator =
+                build_dominator_tree_controlled(&graph, core_observer(&background_observer))
+                    .map_err(map_native_error)?;
+            ensure_observer_not_cancelled(&background_observer)?;
             emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
             Ok::<_, String>((graph, dominator))
         }
     })
     .await
     .map_err(map_native_error)??;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
     let summary = HeapLoadSummary {
         display_name: display_name_for_path(&path),
@@ -913,6 +1026,10 @@ async fn load_heap_internal(
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     state.bump_session_epoch();
     let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
     let mut dominator_slot = state
@@ -933,6 +1050,19 @@ async fn load_heap_internal(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(path);
 
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     emit_completed(&observer, OperationPhase::Complete, started);
     Ok(summary)
 }
@@ -1022,19 +1152,21 @@ pub async fn query_heap(
     state: State<'_, HeapSession>,
 ) -> Result<HeapQueryResult, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, input.context.clone(), "query", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
     let (graph, dominator) = require_loaded_analysis(&state)?;
+    let background_observer = observer.clone();
 
-    let result = spawn_blocking(move || {
+    let result = spawn_blocking(move || -> Result<HeapQueryResult, String> {
+        ensure_observer_not_cancelled(&background_observer)?;
         let query = parse_query(&input.query).map_err(|error| error.to_string())?;
         let result =
             execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
 
-        Ok(HeapQueryResult {
+        let response = HeapQueryResult {
             columns: result.columns,
             rows: result
                 .rows
@@ -1045,14 +1177,24 @@ pub async fn query_heap(
                         .collect()
                 })
                 .collect(),
-        })
+        };
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok(response)
     })
     .await
     .map_err(|error| error.to_string())?;
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -1210,7 +1352,7 @@ pub async fn inspect_object(
     state: State<'_, HeapSession>,
 ) -> Result<ObjectInspection, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, context, "inspect", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let graph = require_loaded_graph(&state)?;
@@ -1245,7 +1387,7 @@ pub async fn inspect_object(
                     },
                     core_observer(&background_observer),
                 )
-                .map_err(|error| error.to_string())?;
+                .map_err(map_native_error)?;
                 (reloaded.clone(), Some(reloaded))
             }
         } else {
@@ -1253,18 +1395,42 @@ pub async fn inspect_object(
         };
 
         emit_indeterminate(&background_observer, OperationPhase::Analyzing, started);
-        inspect_object_for_session(&inspect_graph, &heap_path, &object_id, retain_field_data)
-            .map(|inspection| (inspection, refreshed_field_graph))
+        ensure_observer_not_cancelled(&background_observer)?;
+        let inspection = inspect_object_for_session_controlled(
+            &inspect_graph,
+            &heap_path,
+            &object_id,
+            retain_field_data,
+            core_observer(&background_observer),
+        )
+        .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>((inspection, refreshed_field_graph))
     })
     .await
     .map_err(|error| error.to_string())??;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
+    let mut installed_field_data = false;
+    let _session = if refreshed_field_graph.is_some() {
+        Some(
+            state
+                .session_mutation
+                .lock()
+                .map_err(|_| LOCK_ERROR.to_string())?,
+        )
+    } else {
+        None
+    };
     if let Some(field_graph) = refreshed_field_graph {
         emit_indeterminate(&observer, OperationPhase::Committing, started);
-        let _session = state
-            .session_mutation
-            .lock()
-            .map_err(|_| LOCK_ERROR.to_string())?;
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         let current_epoch = state.session_epoch.load(Ordering::Acquire);
         let current_heap_path = state
             .heap_path
@@ -1276,7 +1442,7 @@ pub async fn inspect_object(
             .field_data_graph
             .write()
             .map_err(|_| LOCK_ERROR.to_string())?;
-        install_field_data_cache_if_still_current(
+        installed_field_data = install_field_data_cache_if_still_current(
             &cache_capture,
             current_epoch,
             current_heap_path.as_deref(),
@@ -1285,6 +1451,16 @@ pub async fn inspect_object(
         );
     }
 
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        if installed_field_data {
+            *state
+                .field_data_graph
+                .write()
+                .map_err(|_| LOCK_ERROR.to_string())? = None;
+        }
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     emit_completed(&observer, OperationPhase::Complete, started);
     Ok(inspection)
 }
@@ -1298,7 +1474,7 @@ pub async fn find_all_gc_paths(
     state: State<'_, HeapSession>,
 ) -> Result<GcPathResult, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, context, "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
@@ -1306,16 +1482,28 @@ pub async fn find_all_gc_paths(
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
     let max_paths = max_paths.unwrap_or(AllPathsRequest::DEFAULT_MAX_PATHS);
+    let background_observer = observer.clone();
 
     let result = spawn_blocking(move || {
-        find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result = find_all_gc_paths_for_session(&graph, &heap_path, &object_id, max_paths)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|error| error.to_string())?;
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -1329,26 +1517,38 @@ pub async fn find_gc_path(
     state: State<'_, HeapSession>,
 ) -> Result<mnemosyne_core::GcPathResult, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, context, "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let active_heap_path = ensure_loaded_heap_matches(&state, Some(&heap_path))?;
+    let background_observer = observer.clone();
 
     let result = spawn_blocking(move || {
-        mnemosyne_core::find_gc_path(&GcPathRequest {
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result = mnemosyne_core::find_gc_path(&GcPathRequest {
             heap_path: active_heap_path,
             object_id,
             max_depth: None,
         })
-        .map_err(|error| error.to_string())
+        .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|error| error.to_string())?;
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -1383,7 +1583,7 @@ pub async fn diff_objects(
     state: State<'_, HeapSession>,
 ) -> Result<ObjectDiffReport, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, input.context.clone(), "diff", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
@@ -1405,9 +1605,17 @@ pub async fn diff_objects(
     )
     .await;
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -1589,7 +1797,7 @@ pub async fn save_snapshot(
     state: State<'_, HeapSession>,
 ) -> Result<SnapshotManifest, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, input.context.clone(), "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let path = {
@@ -1607,30 +1815,47 @@ pub async fn save_snapshot(
     let heap_path = path.clone();
     let background_observer = observer.clone();
     let result = spawn_blocking(move || {
+        ensure_observer_not_cancelled(&background_observer)?;
         let graph = parse_hprof_file_with_options_controlled(
             &heap_path,
             ParseOptions { retain_field_data },
             core_observer(&background_observer),
         )
         .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
         emit_indeterminate(&background_observer, OperationPhase::BuildingGraph, started);
         emit_indeterminate(
             &background_observer,
             OperationPhase::ComputingDominators,
             started,
         );
-        let dominator = mnemosyne_core::build_dominator_tree(&graph);
+        let dominator =
+            build_dominator_tree_controlled(&graph, core_observer(&background_observer))
+                .map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
         emit_indeterminate(&background_observer, OperationPhase::Committing, started);
-        default_snapshot_store()
+        let manifest = default_snapshot_store()
             .save(&heap_path, &graph, &dominator)
-            .map_err(map_native_error)
+            .map_err(map_native_error)?;
+        Ok::<_, String>(manifest)
     })
     .await
     .map_err(|error| error.to_string())?;
     if result.is_ok() {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            if let Ok(manifest) = &result {
+                let _ = default_snapshot_store().remove(&manifest.heap_sha256);
+            }
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         emit_completed(&observer, OperationPhase::Complete, started);
     } else {
-        emit_indeterminate(&observer, OperationPhase::Failed, started);
+        emit_operation_error(
+            &observer,
+            result.as_ref().expect_err("checked error result"),
+            started,
+        );
     }
     result
 }
@@ -1652,21 +1877,34 @@ pub async fn open_snapshot(
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
     let started = std::time::Instant::now();
-    let (observer, _registration) =
+    let (observer, registration) =
         registered_operation_observer(&app, context, "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
+    let background_observer = observer.clone();
     let (manifest, graph, dominator) = spawn_blocking(move || {
-        open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
+        ensure_observer_not_cancelled(&background_observer)?;
+        let result =
+            open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)?;
+        ensure_observer_not_cancelled(&background_observer)?;
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|error| error.to_string())??;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
 
     let heap_path = manifest.heap_path;
     let display_name = display_name_for_path(&heap_path);
     let source_id = Uuid::new_v4().to_string();
 
     {
+        if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+            emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+            return Err(error);
+        }
         let mut sources = state
             .selected_sources
             .lock()
@@ -1676,7 +1914,7 @@ pub async fn open_snapshot(
 
     let summary = HeapLoadSummary {
         display_name,
-        source_id: Some(source_id),
+        source_id: Some(source_id.clone()),
         object_count: graph.object_count(),
         class_count: graph.classes.len(),
         gc_root_count: graph.gc_roots.len(),
@@ -1687,6 +1925,15 @@ pub async fn open_snapshot(
         .session_mutation
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?
+            .remove(&source_id);
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     state.bump_session_epoch();
     let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
     let mut dominator_slot = state
@@ -1707,6 +1954,24 @@ pub async fn open_snapshot(
         .write()
         .map_err(|_| LOCK_ERROR.to_string())? = Some(heap_path);
 
+    if let Err(error) = ensure_operation_can_commit(registration.as_ref()) {
+        replace_session_analysis(&mut graph_slot, &mut dominator_slot, None);
+        *state
+            .field_data_graph
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        *state
+            .heap_path
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())? = None;
+        state
+            .selected_sources
+            .lock()
+            .map_err(|_| LOCK_ERROR.to_string())?
+            .remove(&source_id);
+        emit_indeterminate(&observer, OperationPhase::Cancelled, started);
+        return Err(error);
+    }
     emit_completed(&observer, OperationPhase::Complete, started);
     Ok(summary)
 }
