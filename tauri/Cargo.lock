@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "mnemosyne-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "mnemosyne-desktop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dirs 7.0.0",
  "mnemosyne-core",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "mnemosyne-desktop-session"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dirs 7.0.0",
  "mnemosyne-core",

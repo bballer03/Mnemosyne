@@ -11,14 +11,12 @@
 //! Override directory with `MNEMOSYNE_LOG_DIR`. Level via `RUST_LOG`
 //! (default `info,mnemosyne_desktop=debug`).
 
-mod log_redact;
+pub(crate) mod log_redact;
 
 use std::{fs, path::PathBuf, sync::OnceLock};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-pub use log_redact::redact_log_message;
 
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
