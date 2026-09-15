@@ -13,11 +13,14 @@ import {
 } from "./run-tests-rss";
 
 const pollIntervalMs = 50;
+/** After wall-clock timeout, escalate SIGTERM → SIGKILL so hung Bun/jsdom cannot pin WSL RAM. */
+export const batchKillEscalationMs = 5_000;
 
 export type RunBatchOptions = {
   bunExecutable?: string;
   inheritStdio?: boolean;
   pollPeakRss?: (pid: number) => number | undefined;
+  killEscalationMs?: number;
 };
 
 function defaultPollPeakRss(pid: number): number | undefined {
@@ -32,6 +35,7 @@ export async function runUiTestBatch(
   const inheritStdio = options.inheritStdio ?? true;
   const pollPeakRss = options.pollPeakRss ?? defaultPollPeakRss;
   const timeoutMs = batch.timeoutMs ?? defaultBatchTimeoutMs;
+  const killEscalationMs = options.killEscalationMs ?? batchKillEscalationMs;
 
   let child: ChildProcessWithoutNullStreams | undefined;
   let timedOut = false;
@@ -57,21 +61,32 @@ export async function runUiTestBatch(
 
       sampleChildRss();
 
+      let killEscalationTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
         child?.kill("SIGTERM");
+        killEscalationTimer = setTimeout(() => {
+          // Bun/jsdom regex hangs often ignore SIGTERM; force-reclaim WSL memory.
+          child?.kill("SIGKILL");
+        }, killEscalationMs);
       }, timeoutMs);
 
       const pollTimer = setInterval(sampleChildRss, pollIntervalMs);
 
       child.on("error", (error) => {
         clearTimeout(timer);
+        if (killEscalationTimer) {
+          clearTimeout(killEscalationTimer);
+        }
         clearInterval(pollTimer);
         reject(error);
       });
 
       child.on("close", (exitCode, signal) => {
         clearTimeout(timer);
+        if (killEscalationTimer) {
+          clearTimeout(killEscalationTimer);
+        }
         clearInterval(pollTimer);
         sampleChildRss();
         resolve({ exitCode, signal });

@@ -265,13 +265,15 @@ describe("HistogramExplorerPanel", () => {
 
   it("filters before pagination and mounts at most 100 flat histogram rows", async () => {
     const user = userEvent.setup();
+    // Keep fixtures small: 150 matches still exercise the 100-row page cap without
+    // allocating ~1000 jsdom nodes (that peak has crashed lean WSL2 hosts).
     const matchingEntries = Array.from({ length: 150 }, (_, index) => ({
       key: `match-${index.toString().padStart(3, "0")}`,
       instanceCount: 1,
       shallowSize: index + 1,
       retainedSize: index + 1,
     }));
-    const otherEntries = Array.from({ length: 850 }, (_, index) => ({
+    const otherEntries = Array.from({ length: 20 }, (_, index) => ({
       key: `other-${index.toString().padStart(3, "0")}`,
       instanceCount: 1,
       shallowSize: index + 1,
@@ -280,8 +282,8 @@ describe("HistogramExplorerPanel", () => {
     const artifact = buildArtifact({
       histogram: {
         groupBy: "class",
-        totalInstances: 1_000,
-        totalShallowSize: 1_000,
+        totalInstances: matchingEntries.length + otherEntries.length,
+        totalShallowSize: matchingEntries.length + otherEntries.length,
         entries: [...otherEntries, ...matchingEntries].reverse(),
       },
     });

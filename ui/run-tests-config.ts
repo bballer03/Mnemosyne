@@ -99,7 +99,8 @@ export const uiTestBatches: readonly UiTestBatch[] = [
   },
   {
     id: "investigation-assistant",
-    rssCeilingMiB: 768,
+    // Observed ~438 MiB on Bun 1.2.5/jsdom 24; keep leaner headroom for ~10Gi WSL.
+    rssCeilingMiB: 560,
     files: [
       // InvestigationAssistant used to import production `routes` and OOM WSL/CI
       // when batched after TopNav. Fresh process even with assistantRoutes().
@@ -134,6 +135,16 @@ export const uiTestBatches: readonly UiTestBatch[] = [
     files: [
       "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
       "src/features/artifact-explorer/components/ClassInstancesPanel.test.tsx",
+    ],
+  },
+  {
+    id: "histogram-explorer",
+    // Fresh process: pagination fixtures + jsdom row mounts previously hung/OOM'd
+    // lean WSL hosts when combined with other artifact-explorer suites.
+    rssCeilingMiB: 384,
+    timeoutMs: 90_000,
+    files: [
+      "src/features/artifact-explorer/components/HistogramExplorerPanel.test.tsx",
     ],
   },
   {

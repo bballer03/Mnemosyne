@@ -9,7 +9,7 @@ import {
   formatBatchGateFailure,
   parseProcStatusPeakRssKiB,
 } from "./run-tests-rss";
-import { runUiTestBatch } from "./run-tests-runner";
+import { runUiTestBatch, batchKillEscalationMs } from "./run-tests-runner";
 
 describe("run-tests RSS gate", () => {
   it("prefers VmHWM over VmRSS when parsing /proc status", () => {
@@ -102,7 +102,9 @@ describe("run-tests batch config", () => {
       ids.add(batch.id);
 
       expect(batch.rssCeilingMiB).toBeGreaterThan(0);
-      expect(batch.timeoutMs ?? defaultBatchTimeoutMs).toBe(defaultBatchTimeoutMs);
+      const timeoutMs = batch.timeoutMs ?? defaultBatchTimeoutMs;
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(defaultBatchTimeoutMs);
 
       for (const file of batch.files) {
         expect(existsSync(join(import.meta.dir, file))).toBeTrue();
@@ -114,6 +116,11 @@ describe("run-tests batch config", () => {
     const assistant = uiTestBatches.find((batch) => batch.id === "investigation-assistant");
     const maxCeiling = Math.max(...uiTestBatches.map((batch) => batch.rssCeilingMiB));
     expect(assistant?.rssCeilingMiB).toBe(maxCeiling);
+  });
+
+  it("escalates hung batches from SIGTERM to SIGKILL within a short grace window", () => {
+    expect(batchKillEscalationMs).toBeGreaterThan(0);
+    expect(batchKillEscalationMs).toBeLessThanOrEqual(10_000);
   });
 });
 
