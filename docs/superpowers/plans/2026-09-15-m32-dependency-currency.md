@@ -65,15 +65,15 @@
 
 ### Task 32.C — jsdom 30 + Bun CI pin
 
-- [ ] Bump jsdom; run CI; if SIGTERM/OOM, isolate batches further or document temporary exception with RSS evidence
+- [x] Attempted jsdom 30.0.1 — Bun hung >2min after focused tests; **deferred** with dated inventory exception (keep ^24.1.1); commit `2b4de0e`
 - [ ] Only raise `bun-version` above 1.2.5 with measured RSS
-- [ ] Commit
+- [x] Exception documented (do not force jsdom 30)
 
 ### Task 32.F — Closeout
 
-- [ ] Comment+close Dependabot #50–#52 as superseded
-- [ ] Refresh inventory table; STATUS; CHANGELOG Unreleased
-- [ ] Open/merge PR for M32
+- [x] Comment+close Dependabot #50–#52 as superseded
+- [x] Inventory refreshed (jsdom exception dated)
+- [ ] Merge PR #93 when CI green / remaining M24 slices land
 
 ---
 
