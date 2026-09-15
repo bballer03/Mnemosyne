@@ -3,9 +3,11 @@ import "../../test/setup";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import {
+  getDominatorChildren,
   getObjectReferrers,
   getObjectReferences,
   inspectObject,
+  isGetDominatorChildrenAvailable,
   isInspectObjectAvailable,
   isListClassInstancesAvailable,
   isReferencesAvailable,
@@ -174,6 +176,129 @@ describe("heap explorer query client", () => {
     });
 
     const result = await listClassInstances("com.example.BigCache");
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("getDominatorChildren returns unavailable when no bridge exists", async () => {
+    expect(isGetDominatorChildrenAvailable()).toBeFalse();
+    expect(await getDominatorChildren()).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("getDominatorChildren parses a bounded snake_case page", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 2,
+        returned: 2,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: 1,
+            has_children: true,
+          },
+          {
+            object_id: "0x00002000",
+            class_name: "java.lang.Object",
+            shallow_size: 16,
+            retained_size: 16,
+            dominated_count: 0,
+            has_children: false,
+          },
+        ],
+      }),
+    });
+
+    expect(isGetDominatorChildrenAvailable()).toBeTrue();
+    expect(await getDominatorChildren(undefined, 0, 50, 128)).toEqual({
+      status: "ready",
+      data: {
+        total: 2,
+        returned: 2,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            objectId: "0x00001000",
+            className: "com.example.BigCache",
+            shallowSize: 32,
+            retainedSize: 256,
+            dominatedCount: 1,
+            hasChildren: true,
+          },
+          {
+            objectId: "0x00002000",
+            className: "java.lang.Object",
+            shallowSize: 16,
+            retainedSize: 16,
+            dominatedCount: 0,
+            hasChildren: false,
+          },
+        ],
+      },
+    });
+  });
+
+  it("getDominatorChildren strictly rejects malformed counts", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: -1,
+            has_children: true,
+          },
+        ],
+      }),
+    });
+
+    const result = await getDominatorChildren();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Invalid heap explorer bridge payload"),
+    });
+  });
+
+  it("getDominatorChildren strictly rejects malformed booleans", async () => {
+    setHeapExplorerBridge({
+      getDominatorChildren: async () => ({
+        total: 1,
+        returned: 1,
+        offset: 0,
+        limit: 50,
+        truncated: false,
+        children: [
+          {
+            object_id: "0x00001000",
+            class_name: "com.example.BigCache",
+            shallow_size: 32,
+            retained_size: 256,
+            dominated_count: 1,
+            has_children: "yes",
+          },
+        ],
+      }),
+    });
+
+    const result = await getDominatorChildren();
     expect(result).toMatchObject({
       status: "error",
       error: expect.stringContaining("Invalid heap explorer bridge payload"),

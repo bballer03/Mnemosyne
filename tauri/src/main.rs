@@ -29,6 +29,7 @@ fn main() {
             commands::query_heap,
             commands::regroup_histogram,
             commands::list_class_instances,
+            commands::get_dominator_children,
             commands::explain_leak,
             commands::inspect_object,
             commands::find_all_gc_paths,

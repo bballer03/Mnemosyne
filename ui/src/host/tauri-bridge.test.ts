@@ -76,4 +76,26 @@ describe("tauri-bridge", () => {
       },
     });
   });
+
+  it("wires lazy dominator-child arguments to the native command", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    await window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__?.getDominatorChildren?.(
+      "0x00001000",
+      25,
+      100,
+      1_048_576,
+    );
+
+    expect(invokeCalls).toContainEqual({
+      command: "get_dominator_children",
+      args: {
+        parentObjectId: "0x00001000",
+        offset: 25,
+        limit: 100,
+        minRetainedBytes: 1_048_576,
+      },
+    });
+  });
 });

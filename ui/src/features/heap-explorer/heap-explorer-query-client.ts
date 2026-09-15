@@ -44,6 +44,24 @@ export type ClassInstancesPage = {
   instances: ClassInstanceEntry[];
 };
 
+export type DominatorChildEntry = {
+  objectId: string;
+  className: string;
+  shallowSize: number;
+  retainedSize: number;
+  dominatedCount: number;
+  hasChildren: boolean;
+};
+
+export type DominatorChildrenPage = {
+  total: number;
+  returned: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  children: DominatorChildEntry[];
+};
+
 /// A class-name-resolved object reference, mirroring core's structured
 /// `analysis::inspector::ObjectRef` (`{ object_id, class_name }`) -- kept
 /// separate from `ObjectReferenceEntry` above (which carries `shallowSize`/
@@ -81,6 +99,12 @@ export type HeapExplorerHostBridge = {
   /** M19.B — live flat regroup via session graph / MCP analyze_heap.histogram_group_by. */
   regroupHistogram?: (groupBy: string) => Promise<unknown>;
   listClassInstances?: (classKey: string, offset?: number, limit?: number) => Promise<unknown>;
+  getDominatorChildren?: (
+    parentObjectId?: string,
+    offset?: number,
+    limit?: number,
+    minRetainedBytes?: number,
+  ) => Promise<unknown>;
 };
 
 export type HistogramGroupByMode = "class" | "package" | "class_loader" | "superclass";
@@ -339,6 +363,51 @@ function parseClassInstancesPage(value: unknown): ClassInstancesPage {
   };
 }
 
+function parseDominatorChildEntry(value: unknown, path: string): DominatorChildEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
+  }
+
+  return {
+    objectId: readObjectId(value.object_id, `${path}.object_id`),
+    className: readString(value.class_name, `${path}.class_name`),
+    shallowSize: readCount(value.shallow_size, `${path}.shallow_size`),
+    retainedSize: readCount(value.retained_size, `${path}.retained_size`),
+    dominatedCount: readCount(value.dominated_count, `${path}.dominated_count`),
+    hasChildren: readBoolean(value.has_children, `${path}.has_children`),
+  };
+}
+
+function parseDominatorChildrenPage(value: unknown): DominatorChildrenPage {
+  if (!isRecord(value)) {
+    throw new TypeError("Invalid heap explorer bridge payload: dominator children result must be an object.");
+  }
+  if (!Array.isArray(value.children)) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: expected dominator_children.children to be an array.",
+    );
+  }
+
+  const children = value.children.map((entry, index) =>
+    parseDominatorChildEntry(entry, `dominator_children.children[${index}]`),
+  );
+  const returned = readCount(value.returned, "dominator_children.returned");
+  if (returned !== children.length) {
+    throw new TypeError(
+      "Invalid heap explorer bridge payload: dominator_children.returned must match children.length.",
+    );
+  }
+
+  return {
+    total: readCount(value.total, "dominator_children.total"),
+    returned,
+    offset: readCount(value.offset, "dominator_children.offset"),
+    limit: readCount(value.limit, "dominator_children.limit"),
+    truncated: readBoolean(value.truncated, "dominator_children.truncated"),
+    children,
+  };
+}
+
 function parseObjectInspectionRef(value: unknown, path: string): ObjectInspectionRef {
   if (!isRecord(value)) {
     throw new TypeError(`Invalid heap explorer bridge payload: expected ${path} to be an object.`);
@@ -443,6 +512,10 @@ export function isListClassInstancesAvailable(): boolean {
   return Boolean(getHeapExplorerBridge()?.listClassInstances);
 }
 
+export function isGetDominatorChildrenAvailable(): boolean {
+  return Boolean(getHeapExplorerBridge()?.getDominatorChildren);
+}
+
 export function parseHistogramResult(raw: unknown): HistogramResultView {
   if (!isRecord(raw)) {
     throw new TypeError("Invalid histogram regroup payload: expected an object.");
@@ -519,6 +592,38 @@ export async function listClassInstances(classKey: string, offset?: number, limi
     return {
       status: "error" as const,
       error: error instanceof Error ? error.message : "Unknown class instances lookup failure.",
+    };
+  }
+}
+
+export async function getDominatorChildren(
+  parentObjectId?: string,
+  offset?: number,
+  limit?: number,
+  minRetainedBytes?: number,
+) {
+  const bridge = getHeapExplorerBridge();
+
+  if (!bridge?.getDominatorChildren) {
+    return { status: "unavailable" as const };
+  }
+
+  try {
+    const raw = await bridge.getDominatorChildren(
+      parentObjectId,
+      offset,
+      limit,
+      minRetainedBytes,
+    );
+
+    return {
+      status: "ready" as const,
+      data: parseDominatorChildrenPage(raw),
+    };
+  } catch (error) {
+    return {
+      status: "error" as const,
+      error: error instanceof Error ? error.message : "Unknown dominator children lookup failure.",
     };
   }
 }

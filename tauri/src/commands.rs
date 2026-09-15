@@ -20,14 +20,15 @@ use mnemosyne_desktop_session::{
     ai_session_store_for_config, chat_session_for_session, close_ai_session_for_session,
     close_workflow_for_session, create_ai_session_for_session, default_snapshot_store,
     default_workflow_store, describe_workflow_for_session, diff_objects_for_session,
-    find_all_gc_paths_for_session, get_ai_session_for_session, get_workflow_for_session,
-    graph_has_field_data, inspect_object_for_session, install_field_data_cache_if_still_current,
-    list_class_instances_for_session, list_snapshots_for_session, next_step_for_session,
-    open_snapshot_for_session, parse_identity_strategy, parse_object_id,
-    regroup_histogram_for_session, remove_snapshot_for_session, resume_ai_session_for_session,
+    dominator_children_for_session, find_all_gc_paths_for_session, get_ai_session_for_session,
+    get_workflow_for_session, graph_has_field_data, inspect_object_for_session,
+    install_field_data_cache_if_still_current, list_class_instances_for_session,
+    list_snapshots_for_session, next_step_for_session, open_snapshot_for_session,
+    parse_identity_strategy, parse_object_id, regroup_histogram_for_session,
+    remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
     save_snapshot_for_session, start_workflow_for_session, CreateAiSessionInput,
     DiffObjectsSessionInput, FieldDataCacheCapture, StartWorkflowSessionInput,
-    DEFAULT_CLASS_INSTANCES_LIMIT,
+    DEFAULT_CLASS_INSTANCES_LIMIT, DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -181,7 +182,12 @@ pub async fn run_desktop_analysis(
             .lock()
             .map_err(|_| LOCK_ERROR.to_string())?;
         state.bump_session_epoch();
-        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = None;
+        let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+        let mut dominator = state
+            .dominator
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        replace_session_analysis(&mut graph, &mut dominator, None);
         *state
             .field_data_graph
             .write()
@@ -227,7 +233,7 @@ pub async fn run_desktop_analysis(
         "run_desktop_analysis: starting (lean Home defaults skip field-data reports unless explicitly enabled)"
     );
 
-    let (response, object_graph, _dominator) = match analyze_heap_capturing_graph(request).await {
+    let (response, object_graph, dominator) = match analyze_heap_capturing_graph(request).await {
         Ok(result) => result,
         Err(error) => {
             let mapped = map_native_error(error);
@@ -255,7 +261,17 @@ pub async fn run_desktop_analysis(
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = object_graph;
+    let replacement = match (object_graph, dominator) {
+        (Some(graph), Some(dominator)) => Some((graph, dominator)),
+        (None, None) => None,
+        _ => return Err("Analysis returned an incomplete graph/dominator pair".to_string()),
+    };
+    let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    replace_session_analysis(&mut graph, &mut dominator, replacement);
     *state
         .field_data_graph
         .write()
@@ -530,7 +546,16 @@ pub async fn generate_desktop_flamegraph(
             .lock()
             .map_err(|_| LOCK_ERROR.to_string())?;
         state.bump_session_epoch();
-        *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph.clone());
+        let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+        let mut dominator_slot = state
+            .dominator
+            .write()
+            .map_err(|_| LOCK_ERROR.to_string())?;
+        replace_session_analysis(
+            &mut graph_slot,
+            &mut dominator_slot,
+            Some((graph.clone(), dominator.clone())),
+        );
         *state
             .field_data_graph
             .write()
@@ -722,9 +747,13 @@ async fn load_heap_internal(
     source_id: Option<String>,
     state: &State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
-    let graph = spawn_blocking({
+    let (graph, dominator) = spawn_blocking({
         let path = path.clone();
-        move || parse_hprof_file(&path).map_err(map_native_error)
+        move || {
+            let graph = parse_hprof_file(&path).map_err(map_native_error)?;
+            let dominator = mnemosyne_core::build_dominator_tree(&graph);
+            Ok::<_, String>((graph, dominator))
+        }
     })
     .await
     .map_err(map_native_error)??;
@@ -742,7 +771,16 @@ async fn load_heap_internal(
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
+    let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator_slot = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    replace_session_analysis(
+        &mut graph_slot,
+        &mut dominator_slot,
+        Some((graph, dominator)),
+    );
     *state
         .field_data_graph
         .write()
@@ -762,13 +800,17 @@ pub fn unload_heap(state: State<'_, HeapSession>) -> Result<(), String> {
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     let mut graph = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
     // Idempotent: Close from UI must succeed even if the graph was already cleared.
-    if graph.is_none() {
+    if graph.is_none() && dominator.is_none() {
         return Ok(());
     }
 
     state.bump_session_epoch();
-    *graph = None;
+    replace_session_analysis(&mut graph, &mut dominator, None);
     *state
         .field_data_graph
         .write()
@@ -835,10 +877,9 @@ pub async fn query_heap(
     state: State<'_, HeapSession>,
 ) -> Result<HeapQueryResult, String> {
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
-    let graph = require_loaded_graph(&state)?;
+    let (graph, dominator) = require_loaded_analysis(&state)?;
 
     spawn_blocking(move || {
-        let dominator = mnemosyne_core::build_dominator_tree(&graph);
         let query = parse_query(&input.query).map_err(|error| error.to_string())?;
         let result =
             execute_query(&query, &graph, Some(&dominator)).map_err(|error| error.to_string())?;
@@ -865,8 +906,8 @@ pub async fn regroup_histogram(
     group_by: String,
     state: State<'_, HeapSession>,
 ) -> Result<HistogramResult, String> {
-    let graph = require_loaded_graph(&state)?;
-    spawn_blocking(move || regroup_histogram_for_session(&graph, &group_by))
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    spawn_blocking(move || regroup_histogram_for_session(&graph, &dominator, &group_by))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -878,12 +919,11 @@ pub async fn list_class_instances(
     limit: Option<usize>,
     state: State<'_, HeapSession>,
 ) -> Result<Value, String> {
-    let graph = require_loaded_graph(&state)?;
+    let (graph, dominator) = require_loaded_analysis(&state)?;
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(DEFAULT_CLASS_INSTANCES_LIMIT);
 
     spawn_blocking(move || {
-        let dominator = mnemosyne_core::build_dominator_tree(&graph);
         let page = list_class_instances_for_session(&graph, &dominator, &class_key, offset, limit)?;
         let instances = page
             .instances
@@ -906,6 +946,56 @@ pub async fn list_class_instances(
             "limit": page.limit,
             "truncated": page.truncated,
             "instances": instances,
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_dominator_children(
+    parent_object_id: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    min_retained_bytes: Option<u64>,
+    state: State<'_, HeapSession>,
+) -> Result<Value, String> {
+    let (graph, dominator) = require_loaded_analysis(&state)?;
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(DEFAULT_DOMINATOR_CHILDREN_LIMIT);
+    let min_retained_bytes = min_retained_bytes.unwrap_or(0);
+
+    spawn_blocking(move || {
+        let page = dominator_children_for_session(
+            &graph,
+            &dominator,
+            parent_object_id.as_deref(),
+            offset,
+            limit,
+            min_retained_bytes,
+        );
+        let children = page
+            .children
+            .into_iter()
+            .map(|child| {
+                serde_json::json!({
+                    "object_id": child.object_id,
+                    "class_name": child.class_name,
+                    "shallow_size": child.shallow_size,
+                    "retained_size": child.retained_size,
+                    "dominated_count": child.dominated_count,
+                    "has_children": child.has_children,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok::<Value, String>(serde_json::json!({
+            "total": page.total,
+            "returned": page.returned,
+            "offset": page.offset,
+            "limit": page.limit,
+            "truncated": page.truncated,
+            "children": children,
         }))
     })
     .await
@@ -1320,7 +1410,7 @@ pub async fn open_snapshot(
     key: String,
     state: State<'_, HeapSession>,
 ) -> Result<HeapLoadSummary, String> {
-    let (manifest, graph, _dominator) = spawn_blocking(move || {
+    let (manifest, graph, dominator) = spawn_blocking(move || {
         open_snapshot_for_session(&default_snapshot_store(), &key).map_err(map_native_error)
     })
     .await
@@ -1351,7 +1441,16 @@ pub async fn open_snapshot(
         .lock()
         .map_err(|_| LOCK_ERROR.to_string())?;
     state.bump_session_epoch();
-    *state.graph.write().map_err(|_| LOCK_ERROR.to_string())? = Some(graph);
+    let mut graph_slot = state.graph.write().map_err(|_| LOCK_ERROR.to_string())?;
+    let mut dominator_slot = state
+        .dominator
+        .write()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    replace_session_analysis(
+        &mut graph_slot,
+        &mut dominator_slot,
+        Some((graph, dominator)),
+    );
     *state
         .field_data_graph
         .write()
@@ -1382,6 +1481,34 @@ fn require_loaded_graph(
         .map_err(|_| LOCK_ERROR.to_string())?
         .clone()
         .ok_or_else(|| NO_HEAP_LOADED.to_string())
+}
+
+fn require_loaded_analysis(
+    state: &State<'_, HeapSession>,
+) -> Result<
+    (
+        mnemosyne_core::hprof::ObjectGraph,
+        mnemosyne_core::DominatorTree,
+    ),
+    String,
+> {
+    let _session = state
+        .session_mutation
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?;
+    let graph = state
+        .graph
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| NO_HEAP_LOADED.to_string())?;
+    let dominator = state
+        .dominator
+        .read()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .clone()
+        .ok_or_else(|| NO_HEAP_LOADED.to_string())?;
+    Ok((graph, dominator))
 }
 
 fn read_config(state: &State<'_, HeapSession>) -> Result<mnemosyne_core::AppConfig, String> {

@@ -242,29 +242,29 @@
 - Response node: `{ object_id, class_name, shallow_size, retained_size, dominated_count, has_children }`.
 - Response page includes `{ total, returned, offset, limit, truncated }`; default 50, hard maximum 100.
 
-- [ ] **Step 1: Write failing lifecycle and projection tests**
+- [x] **Step 1: Write failing lifecycle and projection tests**
 
   Assert virtual-root children, one expanded parent, retained-byte filtering before pagination, deterministic retained/object-ID ordering, and tree clearing on unload/replacement.
 
-- [ ] **Step 2: Run focused Rust tests**
+- [x] **Step 2: Run focused Rust tests**
 
   Run: `cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures dominator_children`
 
   Expected: FAIL until the projection exists.
 
-- [ ] **Step 3: Retain the dominator produced by `analyze_heap_capturing_graph`**
+- [x] **Step 3: Retain the dominator produced by `analyze_heap_capturing_graph`**
 
   Stop discarding `_dominator` in `run_desktop_analysis`. For `load_heap_internal`, build once after parse. Do not rebuild it in `query_heap`, `regroup_histogram`, or per tree expansion after the cache is installed.
 
-- [ ] **Step 4: Add and validate the host contract**
+- [x] **Step 4: Add and validate the host contract**
 
   Inject `getDominatorChildren(parentObjectId?, offset?, limit?, minRetainedBytes?)` and parse all counts/booleans strictly.
 
-- [ ] **Step 5: Run focused Rust/client tests**
+- [x] **Step 5: Run focused Rust/client tests**
 
   Expected: PASS; no command returns an unbounded child vector.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add tauri/src tauri/session-ops/src/lib.rs ui/src/host/tauri-bridge.ts ui/src/features/heap-explorer/heap-explorer-query-client.ts ui/src/features/heap-explorer/heap-explorer-query-client.test.ts
