@@ -344,27 +344,27 @@
 - Modify: `ui/src/features/investigation/workspace-actions.ts`
 - Modify: query/diff/snapshot/flamegraph/GC-path/inspector clients and tests
 
-- [ ] **Step 1: Add race tests per operation family**
+- [x] **Step 1: Add race tests per operation family**
 
   For open/analyze, query, diff, snapshot, flamegraph, GC paths, and field-data inspect: start generation N, bump revision/start N+1, resolve N last, and assert N cannot mutate store/UI.
 
-- [ ] **Step 2: Run focused race suites**
+- [x] **Step 2: Run focused race suites**
 
   Run only the named files with `bun test ... --max-concurrency=1`; do not import `app/router.tsx` or the production `routes` array.
 
-- [ ] **Step 3: Wrap native success responses**
+- [x] **Step 3: Wrap native success responses**
 
   Return `OperationEnvelope<T>` for operation-aware bridge methods. Keep any externally documented CLI/MCP JSON contracts unchanged; this is the Tauri host boundary only.
 
-- [ ] **Step 4: Replace ad-hoc request keys/cleanup booleans as acceptance authority**
+- [x] **Step 4: Replace ad-hoc request keys/cleanup booleans as acceptance authority**
 
   Local cleanup may prevent unnecessary component state work, but only the investigation store context decides whether results are current.
 
-- [ ] **Step 5: Re-run all focused race tests**
+- [x] **Step 5: Re-run all focused race tests**
 
   Expected: PASS for generation N/N+1 and cancelled-late-result cases.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add tauri/src/commands.rs ui/src/host ui/src/features

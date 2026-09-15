@@ -36,8 +36,8 @@ use serde_json::{json, Value};
 mod operation;
 pub use operation::{
     structured_operation_cancelled_error, CancelOperationResult, OperationContext,
-    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
-    OperationRegistryError, OPERATION_CANCELLED_CODE,
+    OperationEnvelope, OperationProgress, OperationProgressCoalescer, OperationRegistration,
+    OperationRegistry, OperationRegistryError, OPERATION_CANCELLED_CODE,
 };
 
 pub const DEFAULT_CLASS_INSTANCES_LIMIT: usize = 100;

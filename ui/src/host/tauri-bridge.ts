@@ -9,6 +9,7 @@ import { formatHostError } from "./format-host-error";
 import type { PickHeapFileResult } from "../features/artifact-loader/desktop-heap-client";
 import { useInvestigationStore } from "../features/investigation/investigation-store";
 import {
+  isOperationEnvelope,
   isOperationCancelledError,
   parseCancelOperationResult,
   parseOperationProgress,
@@ -67,11 +68,11 @@ async function subscribeToOperationProgress(): Promise<void> {
 
 async function invokeOperation<T>(
   kind: OperationKind,
-  invoke: (context: OperationContext) => Promise<T>,
+  invoke: (context: OperationContext) => Promise<unknown>,
 ): Promise<T> {
   const store = useInvestigationStore.getState();
   const context = store.beginOperation(kind);
-  let result: T;
+  let result: unknown;
   try {
     result = await invoke(context);
   } catch (error) {
@@ -80,13 +81,25 @@ async function invokeOperation<T>(
       .finishOperation(context, isOperationCancelledError(error) ? "cancelled" : "failed");
     throw error;
   }
+  if (!isOperationEnvelope<T>(result)) {
+    useInvestigationStore.getState().finishOperation(context, "failed");
+    throw new Error("Operation host returned a response without an operation envelope.");
+  }
+  if (
+    result.workspaceId !== context.workspaceId ||
+    result.revision !== context.revision ||
+    result.operationId !== context.operationId
+  ) {
+    useInvestigationStore.getState().finishOperation(context, "failed");
+    throw new Error("Operation response identity does not match the active request.");
+  }
 
   const currentStore = useInvestigationStore.getState();
-  if (!currentStore.acceptOperationResult(context)) {
+  if (!currentStore.acceptOperationResult(result)) {
     throw new Error("Operation result was ignored because the request is no longer active.");
   }
-  currentStore.finishOperation(context, "complete");
-  return result;
+  currentStore.finishOperation(result, "complete");
+  return result.data;
 }
 
 async function cancelOperationWithInvoke(

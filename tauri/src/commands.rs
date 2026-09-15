@@ -35,8 +35,9 @@ use mnemosyne_desktop_session::{
     remove_snapshot_for_session, replace_session_analysis, resume_ai_session_for_session,
     start_workflow_for_session, structured_operation_cancelled_error, CancelOperationResult,
     CreateAiSessionInput, DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext,
-    OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
-    StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT, DEFAULT_DOMINATOR_CHILDREN_LIMIT,
+    OperationEnvelope, OperationProgress, OperationProgressCoalescer, OperationRegistration,
+    OperationRegistry, StartWorkflowSessionInput, DEFAULT_CLASS_INSTANCES_LIMIT,
+    DEFAULT_DOMINATOR_CHILDREN_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +54,12 @@ const UNKNOWN_SOURCE: &str = "Unknown heap source";
 const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin extension";
 
 type SharedOperationObserver = Option<Arc<TauriOperationObserver>>;
+
+fn require_operation_context(
+    context: Option<OperationContext>,
+) -> Result<OperationContext, String> {
+    context.ok_or_else(|| "Missing operation context".to_string())
+}
 
 fn registered_operation_observer<'a>(
     app: &AppHandle,
@@ -246,10 +253,11 @@ pub async fn run_desktop_analysis(
     input: DesktopAnalysisInput,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<Value, String> {
+) -> Result<OperationEnvelope<Value>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
     let (observer, registration) =
-        registered_operation_observer(&app, input.context.clone(), "analyze", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "analyze", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
 
@@ -447,7 +455,7 @@ pub async fn run_desktop_analysis(
         return Err(error);
     }
     emit_completed(&observer, OperationPhase::Complete, started);
-    Ok(result)
+    Ok(OperationEnvelope::new(context, result))
 }
 
 fn desktop_ci_check_exit_code(result: &mnemosyne_core::PolicyResult, fail_on: Severity) -> i32 {
@@ -662,11 +670,12 @@ pub async fn generate_desktop_flamegraph(
     input: DesktopFlamegraphInput,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<Value, String> {
+) -> Result<OperationEnvelope<Value>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
     let (observer, registration) = registered_operation_observer(
         &app,
-        input.context.clone(),
+        Some(context.clone()),
         "flamegraph",
         &state.operations,
     )?;
@@ -805,7 +814,7 @@ pub async fn generate_desktop_flamegraph(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[derive(Debug, Deserialize)]
@@ -944,7 +953,8 @@ pub async fn load_heap_from_source(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+    let context = require_operation_context(context)?;
     let path = {
         let sources = state
             .selected_sources
@@ -965,7 +975,8 @@ pub async fn load_heap(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
+    let context = require_operation_context(context)?;
     if !is_supported_heap_path(&path) {
         return Err(INVALID_HEAP_EXTENSION.to_string());
     }
@@ -975,13 +986,13 @@ pub async fn load_heap(
 async fn load_heap_internal(
     path: String,
     source_id: Option<String>,
-    context: Option<OperationContext>,
+    context: OperationContext,
     app: &AppHandle,
     state: &State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
     let started = std::time::Instant::now();
     let (observer, registration) =
-        registered_operation_observer(app, context, "open", &state.operations)?;
+        registered_operation_observer(app, Some(context.clone()), "open", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
     let background_observer = observer.clone();
@@ -1064,7 +1075,7 @@ async fn load_heap_internal(
         return Err(error);
     }
     emit_completed(&observer, OperationPhase::Complete, started);
-    Ok(summary)
+    Ok(OperationEnvelope::new(context, summary))
 }
 
 #[tauri::command]
@@ -1150,10 +1161,11 @@ pub async fn query_heap(
     input: HeapQueryInput,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapQueryResult, String> {
+) -> Result<OperationEnvelope<HeapQueryResult>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
     let (observer, registration) =
-        registered_operation_observer(&app, input.context.clone(), "query", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "query", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, Some(&input.heap_path))?;
@@ -1196,7 +1208,7 @@ pub async fn query_heap(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1350,10 +1362,11 @@ pub async fn inspect_object(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<ObjectInspection, String> {
+) -> Result<OperationEnvelope<ObjectInspection>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
     let (observer, registration) =
-        registered_operation_observer(&app, context, "inspect", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "inspect", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let graph = require_loaded_graph(&state)?;
     let heap_path = require_loaded_heap_path(&state)?;
@@ -1462,7 +1475,7 @@ pub async fn inspect_object(
         return Err(error);
     }
     emit_completed(&observer, OperationPhase::Complete, started);
-    Ok(inspection)
+    Ok(OperationEnvelope::new(context, inspection))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1472,10 +1485,11 @@ pub async fn find_all_gc_paths(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<GcPathResult, String> {
+) -> Result<OperationEnvelope<GcPathResult>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
     let (observer, registration) =
-        registered_operation_observer(&app, context, "gc-path", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     ensure_loaded_heap_matches(&state, None)?;
@@ -1505,7 +1519,7 @@ pub async fn find_all_gc_paths(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1515,10 +1529,11 @@ pub async fn find_gc_path(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<mnemosyne_core::GcPathResult, String> {
+) -> Result<OperationEnvelope<mnemosyne_core::GcPathResult>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
     let (observer, registration) =
-        registered_operation_observer(&app, context, "gc-path", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "gc-path", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let active_heap_path = ensure_loaded_heap_matches(&state, Some(&heap_path))?;
@@ -1550,7 +1565,7 @@ pub async fn find_gc_path(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1581,10 +1596,11 @@ pub async fn diff_objects(
     input: DiffObjectsBridgeInput,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<ObjectDiffReport, String> {
+) -> Result<OperationEnvelope<ObjectDiffReport>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
     let (observer, registration) =
-        registered_operation_observer(&app, input.context.clone(), "diff", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "diff", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Analyzing, started);
     let strategy = match input.strategy.as_deref() {
@@ -1617,7 +1633,7 @@ pub async fn diff_objects(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1795,10 +1811,11 @@ pub async fn save_snapshot(
     input: SaveSnapshotInput,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<SnapshotManifest, String> {
+) -> Result<OperationEnvelope<SnapshotManifest>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(input.context.clone())?;
     let (observer, registration) =
-        registered_operation_observer(&app, input.context.clone(), "snapshot", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     let path = {
         let sources = state
@@ -1857,7 +1874,7 @@ pub async fn save_snapshot(
             started,
         );
     }
-    result
+    result.map(|data| OperationEnvelope::new(context, data))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1875,10 +1892,11 @@ pub async fn open_snapshot(
     context: Option<OperationContext>,
     app: AppHandle,
     state: State<'_, HeapSession>,
-) -> Result<HeapLoadSummary, String> {
+) -> Result<OperationEnvelope<HeapLoadSummary>, String> {
     let started = std::time::Instant::now();
+    let context = require_operation_context(context)?;
     let (observer, registration) =
-        registered_operation_observer(&app, context, "snapshot", &state.operations)?;
+        registered_operation_observer(&app, Some(context.clone()), "snapshot", &state.operations)?;
     emit_completed(&observer, OperationPhase::Accepted, started);
     emit_indeterminate(&observer, OperationPhase::Opening, started);
     let background_observer = observer.clone();
@@ -1973,7 +1991,7 @@ pub async fn open_snapshot(
         return Err(error);
     }
     emit_completed(&observer, OperationPhase::Complete, started);
-    Ok(summary)
+    Ok(OperationEnvelope::new(context, summary))
 }
 
 fn require_loaded_heap_path(state: &State<'_, HeapSession>) -> Result<String, String> {
@@ -2103,7 +2121,8 @@ fn prettify_class_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod pick_heap_file_result_tests {
-    use super::PickHeapFileResult;
+    use super::{OperationEnvelope, PickHeapFileResult};
+    use mnemosyne_desktop_session::OperationContext;
 
     #[test]
     fn selected_serializes_camel_case_fields_for_ui_bridge() {
@@ -2118,6 +2137,25 @@ mod pick_heap_file_result_tests {
         assert_eq!(value["displayName"], "fixture.hprof");
         assert!(value.get("source_id").is_none());
         assert!(value.get("display_name").is_none());
+    }
+
+    #[test]
+    fn operation_envelope_echoes_camel_case_identity_and_data() {
+        let value = serde_json::to_value(OperationEnvelope::new(
+            OperationContext {
+                workspace_id: "workspace-1".to_string(),
+                revision: 7,
+                operation_id: "operation-9".to_string(),
+            },
+            serde_json::json!({ "ok": true }),
+        ))
+        .expect("serialize");
+
+        assert_eq!(value["workspaceId"], "workspace-1");
+        assert_eq!(value["revision"], 7);
+        assert_eq!(value["operationId"], "operation-9");
+        assert_eq!(value["data"]["ok"], true);
+        assert!(value.get("context").is_none());
     }
 }
 

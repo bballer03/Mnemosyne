@@ -24,6 +24,21 @@ pub struct OperationContext {
     pub operation_id: String,
 }
 
+/// Correlated success payload returned by every operation-aware desktop command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationEnvelope<T> {
+    #[serde(flatten)]
+    pub context: OperationContext,
+    pub data: T,
+}
+
+impl<T> OperationEnvelope<T> {
+    pub fn new(context: OperationContext, data: T) -> Self {
+        Self { context, data }
+    }
+}
+
 #[derive(Debug)]
 struct RegisteredOperation {
     context: OperationContext,
@@ -236,7 +251,9 @@ impl OperationProgressCoalescer {
 
 #[cfg(test)]
 mod operation_progress_tests {
-    use super::{OperationContext, OperationProgress, OperationProgressCoalescer};
+    use super::{
+        OperationContext, OperationEnvelope, OperationProgress, OperationProgressCoalescer,
+    };
     use mnemosyne_core::{
         CancellationToken, CoreError, NoopOperationObserver, OperationObserver, OperationPhase,
         OperationProgressSnapshot,
@@ -249,6 +266,18 @@ mod operation_progress_tests {
             revision: 7,
             operation_id: "operation-test".to_string(),
         }
+    }
+
+    #[test]
+    fn operation_envelope_echoes_camel_case_identity_and_data() {
+        let value = serde_json::to_value(OperationEnvelope::new(context(), json!({ "ok": true })))
+            .expect("serialize");
+
+        assert_eq!(value["workspaceId"], "workspace-test");
+        assert_eq!(value["revision"], 7);
+        assert_eq!(value["operationId"], "operation-test");
+        assert_eq!(value["data"]["ok"], true);
+        assert!(value.get("context").is_none());
     }
 
     fn snapshot(
