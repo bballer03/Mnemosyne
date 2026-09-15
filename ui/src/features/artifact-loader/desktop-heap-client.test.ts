@@ -7,6 +7,7 @@ import {
   loadHeapFromSource,
   pickHeapFile,
   runDesktopAnalysis,
+  takeStartupHeapFile,
   type PickHeapFileResult,
 } from "./desktop-heap-client";
 
@@ -47,6 +48,20 @@ describe("desktop-heap-client", () => {
       },
     };
     await expect(pickHeapFile()).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("takes an opaque startup heap selection without exposing its path", async () => {
+    const selected: PickHeapFileResult = {
+      status: "selected",
+      sourceId: "startup-opaque",
+      displayName: "startup.hprof",
+    };
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      takeStartupHeapFile: async () => selected,
+    };
+
+    await expect(takeStartupHeapFile()).resolves.toEqual(selected);
+    expect(JSON.stringify(await takeStartupHeapFile())).not.toMatch(/[/\\](Users|home)[/\\]/i);
   });
 
   it("loads a heap by opaque source id without exposing a path", async () => {

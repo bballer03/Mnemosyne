@@ -46,6 +46,38 @@ pub const MAX_CLASS_INSTANCES_LIMIT: usize = 200;
 pub const DEFAULT_DOMINATOR_CHILDREN_LIMIT: usize = 50;
 pub const MAX_DOMINATOR_CHILDREN_LIMIT: usize = 100;
 
+/// Parse the desktop executable's heap-open arguments.
+///
+/// Accepts either `Mnemosyne.exe <heap>` or `Mnemosyne.exe --open <heap>`.
+/// The caller owns filesystem validation and keeps the resulting path native.
+pub fn startup_heap_path_from_args<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut args = args.into_iter();
+    let mut selected: Option<PathBuf> = None;
+
+    while let Some(argument) = args.next() {
+        let argument = argument.as_ref();
+        let candidate = if argument == "--open" {
+            args.next()
+                .map(|value| PathBuf::from(value.as_ref()))
+                .ok_or_else(|| "--open requires a heap dump path".to_string())?
+        } else if argument.to_string_lossy().starts_with('-') {
+            return Err("unsupported desktop argument; expected --open <heap>".to_string());
+        } else {
+            PathBuf::from(argument)
+        };
+
+        if selected.replace(candidate).is_some() {
+            return Err("desktop startup accepts exactly one heap dump".to_string());
+        }
+    }
+
+    Ok(selected)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassInstanceEntry {
     pub object_id: String,
@@ -1086,6 +1118,27 @@ mod tests {
     fn graph_fixture() -> mnemosyne_core::hprof::ObjectGraph {
         let bytes = build_graph_fixture();
         parse_hprof_file_with_options_from_bytes(&bytes, false).expect("fixture must parse")
+    }
+
+    #[test]
+    fn startup_heap_args_accept_positional_and_open_flag_forms() {
+        assert_eq!(
+            startup_heap_path_from_args(["C:\\dumps\\small.hprof"]).unwrap(),
+            Some(PathBuf::from("C:\\dumps\\small.hprof"))
+        );
+        assert_eq!(
+            startup_heap_path_from_args(["--open", "C:\\dumps\\small.hprof"]).unwrap(),
+            Some(PathBuf::from("C:\\dumps\\small.hprof"))
+        );
+    }
+
+    #[test]
+    fn startup_heap_args_reject_missing_duplicate_and_unknown_values() {
+        assert!(startup_heap_path_from_args(["--open"]).is_err());
+        assert!(startup_heap_path_from_args(["one.hprof", "two.hprof"])
+            .unwrap_err()
+            .contains("one heap"));
+        assert!(startup_heap_path_from_args(["--unexpected"]).is_err());
     }
 
     fn add_rooted_big_cache(

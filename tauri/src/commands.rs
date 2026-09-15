@@ -35,7 +35,7 @@ use mnemosyne_desktop_session::{
     list_class_instances_for_session, list_snapshots_for_session, next_step_for_session,
     open_snapshot_for_session, parse_identity_strategy, parse_object_id,
     regroup_histogram_for_session, remove_snapshot_for_session, replace_session_analysis,
-    resume_ai_session_for_session, start_workflow_for_session,
+    resume_ai_session_for_session, start_workflow_for_session, startup_heap_path_from_args,
     structured_operation_cancelled_error, CancelOperationResult, CreateAiSessionInput,
     DiffObjectsSessionInput, FieldDataCacheCapture, OperationContext, OperationEnvelope,
     OperationProgress, OperationProgressCoalescer, OperationRegistration, OperationRegistry,
@@ -55,6 +55,7 @@ const NO_HEAP_LOADED: &str = "No heap loaded";
 const LOCK_ERROR: &str = "Heap session lock poisoned";
 const UNKNOWN_SOURCE: &str = "Unknown heap source";
 const INVALID_HEAP_EXTENSION: &str = "Selected file must use a .hprof or .bin extension";
+static STARTUP_HEAP_TAKEN: AtomicBool = AtomicBool::new(false);
 
 type SharedOperationObserver = Option<Arc<TauriOperationObserver>>;
 
@@ -1035,6 +1036,38 @@ pub async fn pick_heap_file(
         file_bytes,
         "pick_heap_file: selected"
     );
+
+    Ok(PickHeapFileResult::Selected {
+        source_id,
+        display_name,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn take_startup_heap_file(state: State<'_, HeapSession>) -> Result<PickHeapFileResult, String> {
+    if STARTUP_HEAP_TAKEN.swap(true, Ordering::AcqRel) {
+        return Ok(PickHeapFileResult::Cancelled);
+    }
+
+    let Some(path) = startup_heap_path_from_args(std::env::args_os().skip(1))? else {
+        return Ok(PickHeapFileResult::Cancelled);
+    };
+    let path_string = path.to_string_lossy().into_owned();
+    let display_name = display_name_for_path(&path_string);
+    if !is_supported_heap_path(&path_string) {
+        return Err(INVALID_HEAP_EXTENSION.to_string());
+    }
+    if !path.is_file() {
+        return Err(format!("Startup heap '{display_name}' was not found."));
+    }
+
+    let source_id = Uuid::new_v4().to_string();
+    state
+        .selected_sources
+        .lock()
+        .map_err(|_| LOCK_ERROR.to_string())?
+        .insert(source_id.clone(), path_string);
+    tracing::info!(%display_name, %source_id, "startup heap source registered");
 
     Ok(PickHeapFileResult::Selected {
         source_id,

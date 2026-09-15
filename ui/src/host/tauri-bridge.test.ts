@@ -156,6 +156,27 @@ describe("tauri-bridge", () => {
     });
   });
 
+  it("wires the one-shot startup heap command through the picker normalizer", async () => {
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeOverride = async (command) =>
+      command === "take_startup_heap_file"
+        ? { status: "selected", sourceId: "startup-opaque", displayName: "startup.hprof" }
+        : { status: "cancelled" };
+    await expect(injectHostBridges()).resolves.toBe(true);
+
+    await expect(
+      window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__?.takeStartupHeapFile?.(),
+    ).resolves.toEqual({
+      status: "selected",
+      sourceId: "startup-opaque",
+      displayName: "startup.hprof",
+    });
+    expect(invokeCalls).toContainEqual({
+      command: "take_startup_heap_file",
+      args: undefined,
+    });
+  });
+
   it("adds operation context to long native calls", async () => {
     (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     await expect(injectHostBridges()).resolves.toBe(true);

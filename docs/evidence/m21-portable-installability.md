@@ -1,7 +1,7 @@
 # M21 portable installability evidence
 
-**Branch:** `sync/m15g-m16bcd`  
-**Date:** 2026-09-14  
+**Branch:** `feature/mat-equivalent-wave0`
+**Date:** 2026-09-15
 **Tip at write:** see `git log -1` on this branch
 
 ## Command-layer (proven on this host / in CI scripts)
@@ -20,7 +20,7 @@
 
 | Platform asset | Built in CI | Attached | Signed | Launch-tested | Open heap dump |
 | --- | --- | --- | --- | --- | --- |
-| Windows portable zip | configured | configured | conditional secrets | **launch-tested 2026-09-15** (see below) | **NOT PROVEN** (no automated Open-heap click) |
+| Windows portable zip | configured | configured | conditional secrets | **launch-tested 2026-09-15** (see below) | **NOT PROVEN** (UI Automation could not reach WebView content) |
 | macOS aarch64 app zip | configured | configured | conditional secrets | **not launch-tested** | **not** |
 | macOS x64 app zip | configured | configured | conditional secrets | **not launch-tested** | **not** |
 | Linux x86_64 AppImage | configured | configured | unsigned by design | **not launch-tested** | **not** |
@@ -29,7 +29,7 @@
 ## 2026-09-15 Windows portable launch (partial closeout)
 
 **Branch:** `docs/m21-windows-launch-partial`  
-**Host:** Windows 10.0.26200 (user `sarfa`) under dual-boot / WSL partner machine `DESKTOP-8KSNRFK`  
+**Host:** Windows 10.0.26200 under WSL interop
 **WebView2 Evergreen:** present (`152.0.4191.66`)  
 **Asset:** `Mnemosyne-0.6.0-windows-x64-portable.zip`  
 **SHA-256:** `b2c4843d3c731ee04991da08a65abc1bb00a991e946a615ea642cf866570ad54`  
@@ -53,7 +53,7 @@ Synthetic fixture beside the exe: `fixture-simple.hprof` (655 bytes from `build_
 | Portable extract | pass |
 | Process starts (`Mnemosyne`) | **pass** (Pid 8676 / 14572; `HasExited=False` after 5–6s) |
 | WebView2 prerequisite | present on host |
-| Interactive Open heap dump (UI click) | **NOT PROVEN** — no UI automation this run |
+| Interactive Open heap dump (UI click) | **NOT PROVEN** in the initial run; follow-up automation below also failed |
 | MSI / setup.exe silent install | **NOT run** |
 | macOS / Linux launch | **not launch-tested** (out of scope for this partial) |
 
@@ -69,6 +69,58 @@ Synthetic fixture beside the exe: `fixture-simple.hprof` (655 bytes from `build_
 - **Date:** 2026-09-15
 
 WSL alone still contributes **no** packaged GUI launch claim; this row was proven via `powershell.exe` on the Windows host.
+
+## 2026-09-15 Open-heap follow-up
+
+### Packaged v0.6.0 UI Automation
+
+The portable executable was launched through `powershell.exe`. Two Windows UI
+Automation searches attempted to invoke the **Open heap dump** button:
+
+1. search descendants associated with the Mnemosyne process;
+2. search globally, accounting for WebView2 child processes.
+
+Both attempts returned `button_not_found`; no file dialog appeared. A later
+diagnostic launch recorded WebView2 error `0x80070578` (`Invalid window handle`)
+before app content rendered. The process and native window remained observable,
+but the web UI was unavailable to UI Automation in this desktop session.
+
+Synthetic fixture: `fixture-simple.hprof`, 655 bytes, SHA-256
+`b52b188291234428514c9bea6ad5b30764303d3ac5fecb7c65d352982b29330d`.
+No absolute fixture path is retained here.
+
+| Check | Result |
+| --- | --- |
+| Portable process/native window starts | **pass** |
+| UI Automation finds **Open heap dump** | **fail** (`button_not_found`) |
+| Native file dialog appears | **NOT PROVEN** |
+| Fixture selected and analyzed through packaged UI | **NOT PROVEN** |
+
+### Startup-argument improvement
+
+This branch adds one-shot startup opening for both forms:
+
+```powershell
+Mnemosyne.exe fixture-simple.hprof
+Mnemosyne.exe --open fixture-simple.hprof
+```
+
+Rust validates exactly one startup path, the `.hprof` extension, and file
+existence, then registers the path in `HeapSession` under an opaque `sourceId`.
+React receives only that ID plus the basename and reuses
+`load_heap_from_source`; no absolute heap path crosses into the web UI.
+
+| Check | Result |
+| --- | --- |
+| Startup argument parser unit tests | **pass** |
+| Opaque startup picker bridge/UI tests | **pass** |
+| Native Windows `cargo check` | **pass** (`CARGO_INCREMENTAL=0` for WSL filesystem compatibility) |
+| Production UI build | **pass** |
+| Updated executable starts and analyzes fixture end to end | **NOT PROVEN** — same host-session WebView2 `0x80070578` failure prevented the frontend from invoking the startup command |
+| Released portable v0.6.0 supports startup args | **no** — the release predates this change |
+
+The product path is implemented and covered below the native window boundary;
+packaged end-to-end Open-heap remains an explicit native-host validation item.
 
 See also [m21-m22-remaining.md](m21-m22-remaining.md).
 

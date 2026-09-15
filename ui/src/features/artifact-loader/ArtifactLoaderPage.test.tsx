@@ -180,6 +180,30 @@ describe("ArtifactLoaderPage", () => {
     expect(page.queryByText(/C:\\/i)).not.toBeInTheDocument();
   });
 
+  it("automatically opens a startup heap by opaque source id", async () => {
+    let analyzedSourceId: string | undefined;
+    window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
+      takeStartupHeapFile: async () => ({
+        status: "selected",
+        sourceId: "startup-opaque",
+        displayName: "startup.hprof",
+      }),
+      runDesktopAnalysis: async (input) => {
+        analyzedSourceId = input.sourceId;
+        return JSON.parse(createArtifactJson());
+      },
+    };
+
+    const view = render(<ArtifactLoaderPage />);
+    const page = within(view.container);
+
+    await waitFor(() => {
+      expect(page.getByText(/analyzed startup\.hprof/i)).toBeInTheDocument();
+    });
+    expect(analyzedSourceId).toBe("startup-opaque");
+    expect(page.queryByText(/[/\\](Users|home)[/\\]/i)).not.toBeInTheDocument();
+  });
+
   it("reopens a desktop recent load by its opaque source id", async () => {
     const user = userEvent.setup();
     const analyzedSourceIds: string[] = [];

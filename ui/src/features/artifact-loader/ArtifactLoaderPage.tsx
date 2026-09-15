@@ -16,7 +16,7 @@ import {
 } from "../investigation/workspace-actions";
 import { GuidedLanding } from "../workflow-landing/GuidedLanding";
 import { ArtifactDropzone } from "./ArtifactDropzone";
-import { getDesktopLogPath } from "./desktop-heap-client";
+import { getDesktopLogPath, takeStartupHeapFile } from "./desktop-heap-client";
 import { loadAnalysisArtifactFromText } from "./load-analysis-artifact";
 import { useArtifactStore } from "./use-artifact-store";
 
@@ -111,6 +111,7 @@ export function ArtifactLoaderPage() {
     "[00:00:01] waiting for analysis json selection",
   ]);
   const latestRequestId = useRef(0);
+  const startupHeapAttempted = useRef(false);
   const [shouldNavigateToDashboard, setShouldNavigateToDashboard] = useState(false);
   const isInRouterContext = useInRouterContext();
 
@@ -132,6 +133,61 @@ export function ArtifactLoaderPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    if (startupHeapAttempted.current) {
+      return;
+    }
+    startupHeapAttempted.current = true;
+
+    void takeStartupHeapFile()
+      .then(async (picked) => {
+        if (picked.status !== "selected") {
+          return;
+        }
+        setDesktopHeapMessage(`Opening ${picked.displayName} from the command line…`);
+        setStatusLines((current) => [
+          `[${formatTimestamp(new Date())}] command-line heap received: ${picked.displayName}`,
+          ...current,
+        ]);
+
+        const result = await openDesktopHeapFromSource(
+          picked.sourceId,
+          picked.displayName,
+          setHeapOpenPhase,
+        );
+        if (result.status === "unavailable" || result.status === "error") {
+          setDesktopHeapMessage(result.message);
+          setStatusLines((current) => [
+            `[${formatTimestamp(new Date())}] command-line heap open: ${result.message}`,
+            ...current,
+          ]);
+          return;
+        }
+        if (result.status === "cancelled") {
+          return;
+        }
+
+        const loadedAt = new Date();
+        applyOpenedHeap(result.displayName, result.artifact, result.sourceId);
+        setShouldNavigateToDashboard(true);
+        setDesktopHeapMessage(
+          `Analyzed ${result.displayName}: ${result.artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
+        );
+        setStatusLines((current) => [
+          `[${formatTimestamp(loadedAt)}] command-line analysis ready: ${result.displayName}`,
+          ...current,
+        ]);
+      })
+      .catch((error) => {
+        const message = formatHostError(error, "Failed to open command-line heap dump");
+        setDesktopHeapMessage(message);
+        setStatusLines((current) => [
+          `[${formatTimestamp(new Date())}] command-line heap open: ${message}`,
+          ...current,
+        ]);
+      });
   }, []);
 
   async function handleFile(file: File) {
