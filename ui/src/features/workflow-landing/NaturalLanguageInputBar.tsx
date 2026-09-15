@@ -2,7 +2,8 @@ import { useState, type FormEvent } from "react";
 
 import { isHeapQueryAvailable, runHeapQuery, type HeapQueryResult } from "../heap-explorer/heap-explorer-query-client";
 import { looksLikeOqlQuery, routeFreeTextToWorkflow } from "./natural-language-router";
-import { isStartWorkflowAvailable, runStartWorkflow, type WorkflowStepResult } from "./workflow-bridge-client";
+import { isStartWorkflowAvailable, type WorkflowStepResult } from "./workflow-bridge-client";
+import { startWorkspaceWorkflow } from "./workflow-binding";
 
 export type NaturalLanguageInputBarProps = {
   heapPath?: string;
@@ -122,12 +123,14 @@ export function NaturalLanguageInputBar({ heapPath }: NaturalLanguageInputBarPro
       return;
     }
 
-    const result = await runStartWorkflow(kind, { heapPath });
+    const result = await startWorkspaceWorkflow(kind, { heapPath });
 
-    if (result.status === "unavailable") {
+    if (result.status === "unavailable" || result.status === "stale" || result.status === "idle") {
       setOutcome({ kind: "unavailable", reason: "Workflow execution is unavailable in this session." });
     } else if (result.status === "error") {
       setOutcome({ kind: "error", message: result.error });
+    } else if (result.status === "incompatible") {
+      setOutcome({ kind: "error", message: "Saved workflow is not compatible with this workspace." });
     } else {
       setOutcome({ kind: "workflow-result", workflowKindLabel: WORKFLOW_LABELS[kind] ?? kind, data: result.data });
     }
@@ -197,20 +200,6 @@ export function NaturalLanguageInputBar({ heapPath }: NaturalLanguageInputBarPro
           <div style={{ color: "#67e8f9", fontSize: "0.85rem" }}>
             Started {outcome.workflowKindLabel} -- current step: {outcome.data.currentStep}
           </div>
-          <pre
-            style={{
-              margin: 0,
-              background: "#020617",
-              border: "1px solid #0f172a",
-              borderRadius: 10,
-              padding: "0.6rem",
-              fontSize: "0.78rem",
-              overflowX: "auto",
-              color: "#cbd5e1",
-            }}
-          >
-            {JSON.stringify(outcome.data.stepResult, null, 2)}
-          </pre>
         </div>
       ) : null}
     </section>

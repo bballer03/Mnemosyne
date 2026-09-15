@@ -24,7 +24,7 @@ export type AssistantChatTurn = {
 export type AssistantSessionContext = {
   heapDisplayName: string;
   sourceId?: string;
-  workflowId?: string;
+  workflowKind?: string;
   workflowStep?: string;
   focusLeakId?: string;
   focusLeakClassName?: string;
@@ -142,8 +142,8 @@ export function buildRulesModeAnswer(
       ? ` Measured heap ${heap} reports ${context.totalObjects} objects.`
       : ` Measured heap ${heap}.`;
 
-  const workflowLine = context.workflowId
-    ? ` Active workflow ${context.workflowId}${
+  const workflowLine = context.workflowKind
+    ? ` Active workflow ${context.workflowKind}${
         context.workflowStep ? ` at step ${context.workflowStep}` : ""
       }.`
     : "";

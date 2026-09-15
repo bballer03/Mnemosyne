@@ -9,6 +9,12 @@ import {
   type OperationProgress,
 } from "../../host/operation-protocol";
 import type { HistogramGroupByMode } from "../heap-explorer/heap-explorer-query-client";
+import type {
+  WorkflowKindId,
+  WorkspaceRequestContext,
+  WorkspaceRequestSlot,
+  WorkspaceWorkflowBinding,
+} from "../workflow-landing/workflow-types";
 import {
   WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
   createWorkspacePersistence,
@@ -111,6 +117,9 @@ type InvestigationState = InvestigationSelection & {
   bookmarks: WorkspaceBookmark[];
   findingFacts: readonly FindingFact[];
   findingStatuses: Readonly<Record<string, FindingStatus>>;
+  activeWorkflow?: WorkspaceWorkflowBinding;
+  workflowNeedsRecovery: boolean;
+  workspaceRequests: Partial<Record<WorkspaceRequestSlot, WorkspaceRequestContext>>;
   lastPersistenceNotice?: string;
   beginOperation: (kind: OperationKind) => OperationContext;
   acceptOperationResult: (context: OperationContext) => boolean;
@@ -145,6 +154,22 @@ type InvestigationState = InvestigationSelection & {
   ) => boolean;
   setFindingStatus: (findingId: string, status: FindingStatus) => boolean;
   clearFindings: () => void;
+  beginWorkspaceRequest: (slot: WorkspaceRequestSlot) => WorkspaceRequestContext;
+  acceptWorkspaceRequest: (
+    slot: WorkspaceRequestSlot,
+    context: WorkspaceRequestContext,
+  ) => boolean;
+  finishWorkspaceRequest: (
+    slot: WorkspaceRequestSlot,
+    context: WorkspaceRequestContext,
+  ) => boolean;
+  bindWorkflow: (
+    context: WorkspaceRequestContext,
+    kind: WorkflowKindId,
+    result: { workflowId: string; currentStep: string },
+  ) => boolean;
+  confirmWorkflowRecovery: (workflowId: string) => boolean;
+  detachWorkflow: (expectedWorkflowId?: string) => WorkspaceWorkflowBinding | undefined;
   clearSelection: () => void;
   bumpRevisionOnArtifactChange: () => void;
 };
@@ -209,6 +234,18 @@ function buildPersistedWorkspace(state: InvestigationState): PersistedWorkspaceV
     },
     notes: state.notes,
     bookmarks: state.bookmarks,
+    ...(state.activeWorkflow &&
+    state.activeWorkflow.workspaceId === state.workspaceId &&
+    state.activeWorkflow.revision === state.revision
+      ? {
+          workflow: {
+            workflowId: state.activeWorkflow.workflowId,
+            kind: state.activeWorkflow.kind,
+            currentStep: state.activeWorkflow.currentStep,
+            revision: state.revision,
+          },
+        }
+      : {}),
   };
 }
 
@@ -243,7 +280,8 @@ function persistenceMetadataChanged(
     current.originPane !== previous.originPane ||
     current.histogramView !== previous.histogramView ||
     current.notes !== previous.notes ||
-    current.bookmarks !== previous.bookmarks
+    current.bookmarks !== previous.bookmarks ||
+    current.activeWorkflow !== previous.activeWorkflow
   );
 }
 
@@ -283,6 +321,9 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   bookmarks: [],
   findingFacts: [],
   findingStatuses: {},
+  activeWorkflow: undefined,
+  workflowNeedsRecovery: false,
+  workspaceRequests: {},
   lastPersistenceNotice: undefined,
   beginOperation: (kind) => {
     const state = get();
@@ -426,6 +467,9 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
         revision: compatibility.revision,
         notes: [],
         bookmarks: [],
+        activeWorkflow: undefined,
+        workflowNeedsRecovery: false,
+        workspaceRequests: {},
         lastPersistenceNotice:
           loadResult.status === "missing" || loadResult.status === "unavailable"
             ? undefined
@@ -446,6 +490,11 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       histogramView: { ...restored.filters.histogram },
       notes: restored.notes,
       bookmarks: restored.bookmarks,
+      activeWorkflow: restored.workflow
+        ? { ...restored.workflow, workspaceId: get().workspaceId }
+        : undefined,
+      workflowNeedsRecovery: Boolean(restored.workflow),
+      workspaceRequests: {},
       lastPersistenceNotice: formatDroppedSelectionNotice(
         restored.droppedSelectionIds,
       ),
@@ -465,6 +514,9 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       histogramView: { ...defaultHistogramView },
       notes: [],
       bookmarks: [],
+      activeWorkflow: undefined,
+      workflowNeedsRecovery: false,
+      workspaceRequests: {},
       findingFacts: [],
       findingStatuses: {},
       lastPersistenceNotice:
@@ -490,6 +542,11 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       histogramView: { ...restored.filters.histogram },
       notes: restored.notes,
       bookmarks: restored.bookmarks,
+      activeWorkflow: restored.workflow
+        ? { ...restored.workflow, workspaceId: get().workspaceId }
+        : undefined,
+      workflowNeedsRecovery: Boolean(restored.workflow),
+      workspaceRequests: {},
       lastPersistenceNotice: formatDroppedSelectionNotice(
         restored.droppedSelectionIds,
       ),
@@ -565,6 +622,89 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     return true;
   },
   clearFindings: () => set({ findingFacts: [], findingStatuses: {} }),
+  beginWorkspaceRequest: (slot) => {
+    const state = get();
+    const context: WorkspaceRequestContext = {
+      workspaceId: state.workspaceId,
+      revision: state.revision,
+      operationId: createOperationId(),
+    };
+    set({
+      workspaceRequests: {
+        ...state.workspaceRequests,
+        [slot]: context,
+      },
+    });
+    return context;
+  },
+  acceptWorkspaceRequest: (slot, context) => {
+    const state = get();
+    const active = state.workspaceRequests[slot];
+    return (
+      active !== undefined &&
+      active.workspaceId === context.workspaceId &&
+      active.revision === context.revision &&
+      active.operationId === context.operationId &&
+      state.workspaceId === context.workspaceId &&
+      state.revision === context.revision
+    );
+  },
+  finishWorkspaceRequest: (slot, context) => {
+    const state = get();
+    if (!state.acceptWorkspaceRequest(slot, context)) {
+      return false;
+    }
+    const workspaceRequests = { ...state.workspaceRequests };
+    delete workspaceRequests[slot];
+    set({ workspaceRequests });
+    return true;
+  },
+  bindWorkflow: (context, kind, result) => {
+    const state = get();
+    if (!state.acceptWorkspaceRequest("workflow", context)) {
+      return false;
+    }
+    const workspaceRequests = { ...state.workspaceRequests };
+    delete workspaceRequests.workflow;
+    set({
+      activeWorkflow: {
+        workspaceId: context.workspaceId,
+        revision: context.revision,
+        workflowId: result.workflowId,
+        kind,
+        currentStep: result.currentStep,
+      },
+      workflowNeedsRecovery: false,
+      workspaceRequests,
+    });
+    return true;
+  },
+  confirmWorkflowRecovery: (workflowId) => {
+    const state = get();
+    if (
+      !state.activeWorkflow ||
+      state.activeWorkflow.workflowId !== workflowId ||
+      state.activeWorkflow.workspaceId !== state.workspaceId ||
+      state.activeWorkflow.revision !== state.revision
+    ) {
+      return false;
+    }
+    set({ workflowNeedsRecovery: false });
+    return true;
+  },
+  detachWorkflow: (expectedWorkflowId) => {
+    const state = get();
+    if (
+      !state.activeWorkflow ||
+      (expectedWorkflowId !== undefined &&
+        state.activeWorkflow.workflowId !== expectedWorkflowId)
+    ) {
+      return undefined;
+    }
+    const detached = state.activeWorkflow;
+    set({ activeWorkflow: undefined, workflowNeedsRecovery: false });
+    return detached;
+  },
   clearSelection: () => set(clearedSelection),
   bumpRevisionOnArtifactChange: () => {
     savePersistedWorkspace(get());
@@ -578,6 +718,9 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       persistenceIdentity: undefined,
       notes: [],
       bookmarks: [],
+      activeWorkflow: undefined,
+      workflowNeedsRecovery: false,
+      workspaceRequests: {},
       findingFacts: [],
       findingStatuses: {},
       lastPersistenceNotice: undefined,

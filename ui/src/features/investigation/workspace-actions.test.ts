@@ -80,6 +80,9 @@ beforeEach(() => {
   useInvestigationStore.setState({
     revision: 0,
     activeOperation: undefined,
+    activeWorkflow: undefined,
+    workflowNeedsRecovery: false,
+    workspaceRequests: {},
     analysisMode: undefined,
     capabilities: undefined,
     objectId: undefined,
@@ -178,6 +181,26 @@ describe("closeInvestigationWorkspace", () => {
     expect(useArtifactStore.getState().artifact).toBeUndefined();
     expect(getRememberedDesktopHeapSource()).toBeUndefined();
   });
+
+  it("auto-closes the active workflow and detaches even when host close fails", async () => {
+    const request = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    useInvestigationStore.getState().bindWorkflow(request, "tune_gc", {
+      workflowId: "wf-close",
+      currentStep: "top_retainers",
+    });
+    let closedId: string | undefined;
+    window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      closeWorkflow: async (workflowId) => {
+        closedId = workflowId;
+        throw new Error("close failed");
+      },
+    };
+
+    await closeInvestigationWorkspace();
+
+    expect(closedId).toBe("wf-close");
+    expect(useInvestigationStore.getState().activeWorkflow).toBeUndefined();
+  });
 });
 
 describe("workspace persistence lifecycle", () => {
@@ -231,6 +254,19 @@ describe("workspace persistence lifecycle", () => {
 
     expect(useInvestigationStore.getState().persistenceIdentity).toBeUndefined();
     expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it("detaches the previous workflow before replacing the heap", () => {
+    const request = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    useInvestigationStore.getState().bindWorkflow(request, "triage_memory_leak", {
+      workflowId: "wf-old",
+      currentStep: "investigate_suspect",
+    });
+
+    applyOpenedHeap("next.hprof", buildArtifact({}), "source-next");
+
+    expect(useInvestigationStore.getState().activeWorkflow).toBeUndefined();
+    expect(useInvestigationStore.getState().revision).toBe(1);
   });
 });
 

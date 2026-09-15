@@ -57,6 +57,9 @@ describe("InvestigationAssistantPage", () => {
       useArtifactStore.getState().reset();
       useInvestigationStore.setState({
         revision: 0,
+        activeWorkflow: undefined,
+        workflowNeedsRecovery: false,
+        workspaceRequests: {},
         objectId: undefined,
         classKey: undefined,
         leakId: undefined,
@@ -231,6 +234,46 @@ describe("InvestigationAssistantPage", () => {
     expect((view.getByLabelText(/focus leak/i) as HTMLSelectElement).value).toBe("leak-low");
     const facts = view.getByRole("region", { name: /measured heap facts/i });
     expect(within(facts).getByText(/low severity cache/i)).toBeInTheDocument();
+  });
+
+  it("shows the bound workflow kind and current step without id or heap path", () => {
+    seedArtifact();
+    const request = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    useInvestigationStore.getState().bindWorkflow(request, "tune_gc", {
+      workflowId: "wf-internal-secret",
+      currentStep: "thread_local_review",
+    });
+
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
+    const view = render(<RouterProvider router={router} />);
+    const facts = view.getByRole("region", { name: /measured heap facts/i });
+    expect(facts.textContent ?? "").toMatch(/Tune GC.*current step.*thread_local_review/i);
+    expect(facts.textContent ?? "").not.toContain("wf-internal-secret");
+    expect(document.body.textContent ?? "").not.toContain("/secret/path");
+  });
+
+  it("ignores an Assistant turn resolved after the workspace revision changes", async () => {
+    const user = userEvent.setup();
+    seedArtifact();
+    let resolveChat!: (value: unknown) => void;
+    const chat = new Promise<unknown>((resolve) => {
+      resolveChat = resolve;
+    });
+    window.__MNEMOSYNE_ASSISTANT_BRIDGE__ = {
+      createAiSession: async () => ({ session_id: "session-stale" }),
+      chatSession: async () => chat,
+    };
+    const router = createMemoryRouter(assistantRoutes(), { initialEntries: ["/assistant"] });
+    const view = render(<RouterProvider router={router} />);
+
+    await user.type(view.getByLabelText(/ask a follow-up/i), "stale question");
+    await user.click(view.getByRole("button", { name: /^ask$/i }));
+    useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+    resolveChat({ summary: "stale answer", model: "provider" });
+
+    await waitFor(() => expect(view.getByRole("button", { name: /^ask$/i })).not.toBeDisabled());
+    expect(view.queryByText(/stale answer/i)).not.toBeInTheDocument();
+    expect(view.queryByText(/Q: stale question/i)).not.toBeInTheDocument();
   });
 
   it("evicts history past twelve turns in the workspace", async () => {

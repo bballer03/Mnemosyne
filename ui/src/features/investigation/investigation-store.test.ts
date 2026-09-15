@@ -71,6 +71,9 @@ describe("useInvestigationStore", () => {
       workspaceId: "workspace-1",
       revision: 0,
       activeOperation: undefined,
+      activeWorkflow: undefined,
+      workflowNeedsRecovery: false,
+      workspaceRequests: {},
       analysisMode: undefined,
       capabilities: undefined,
       objectId: undefined,
@@ -253,6 +256,46 @@ describe("useInvestigationStore", () => {
     });
     expect(useInvestigationStore.getState().acceptOperationResult(context)).toBe(false);
     expect(useInvestigationStore.getState().finishOperation(context, "failed")).toBe(false);
+  });
+
+  it("binds only the latest matching workflow request to this revision", () => {
+    const stale = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    const current = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+
+    expect(
+      useInvestigationStore.getState().bindWorkflow(stale, "tune_gc", {
+        workflowId: "wf-stale",
+        currentStep: "thread_local_review",
+      }),
+    ).toBe(false);
+    expect(
+      useInvestigationStore.getState().bindWorkflow(current, "tune_gc", {
+        workflowId: "wf-current",
+        currentStep: "thread_local_review",
+      }),
+    ).toBe(true);
+    expect(useInvestigationStore.getState().activeWorkflow).toEqual({
+      workspaceId: "workspace-1",
+      revision: 0,
+      workflowId: "wf-current",
+      kind: "tune_gc",
+      currentStep: "thread_local_review",
+    });
+  });
+
+  it("invalidates workflow and Assistant requests with the workspace revision", () => {
+    const workflow = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    const assistant = useInvestigationStore.getState().beginWorkspaceRequest("assistant");
+    useInvestigationStore.getState().bindWorkflow(workflow, "triage_memory_leak", {
+      workflowId: "wf-1",
+      currentStep: "investigate_suspect",
+    });
+
+    useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+
+    expect(useInvestigationStore.getState().activeWorkflow).toBeUndefined();
+    expect(useInvestigationStore.getState().acceptWorkspaceRequest("workflow", workflow)).toBe(false);
+    expect(useInvestigationStore.getState().acceptWorkspaceRequest("assistant", assistant)).toBe(false);
   });
 
   it("stores a stable object id and its origin pane", () => {
@@ -465,6 +508,44 @@ describe("useInvestigationStore", () => {
     expect(values).toContain("object-current");
     expect(values).not.toContain("operationId");
     expect(values).not.toContain("activeOperation");
+  });
+
+  it("persists and restores only a revision-compatible workflow candidate", () => {
+    const compatibility = {
+      identity: persistenceIdentity,
+      revision: 0,
+      objectIds: new Set<string>(),
+      classKeys: new Set<string>(),
+      leakIds: new Set<string>(),
+    };
+    useInvestigationStore.getState().activatePersistence(persistenceIdentity, compatibility);
+    const request = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    useInvestigationStore.getState().bindWorkflow(request, "tune_gc", {
+      workflowId: "wf-persisted",
+      currentStep: "thread_local_review",
+    });
+    useInvestigationStore.getState().deactivatePersistence();
+
+    useInvestigationStore.getState().activatePersistence(persistenceIdentity, {
+      ...compatibility,
+      revision: 4,
+    });
+
+    expect(useInvestigationStore.getState().activeWorkflow).toEqual({
+      workspaceId: "workspace-1",
+      revision: 4,
+      workflowId: "wf-persisted",
+      kind: "tune_gc",
+      currentStep: "thread_local_review",
+    });
+    expect(useInvestigationStore.getState().workflowNeedsRecovery).toBe(true);
+    const persisted = Array.from(
+      { length: window.sessionStorage.length },
+      (_, index) => window.sessionStorage.getItem(window.sessionStorage.key(index)!),
+    ).join("\n");
+    expect(persisted).toContain("wf-persisted");
+    expect(persisted).not.toContain("stepResult");
+    expect(persisted).not.toContain("heapPath");
   });
 
   it("freezes accepted facts while keeping user status separate", () => {

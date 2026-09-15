@@ -46,13 +46,9 @@
 // bridge capability in this codebase.
 
 import { parseAnalysisArtifact, type AnalysisArtifact } from "../../lib/analysis-types";
+import type { WorkflowKindId } from "./workflow-types";
 
-export type WorkflowKindId =
-  | "triage_memory_leak"
-  | "tune_gc"
-  | "traverse_object_graph"
-  | "compare_snapshots"
-  | "classloader_leak";
+export type { WorkflowKindId } from "./workflow-types";
 
 export type StartWorkflowParams = {
   heapPath?: string;

@@ -47,6 +47,18 @@ describe("assistant-bridge-client rules mode", () => {
     expect(answer.answerSummary).toMatch(/leak-cache-1|com\.example\.Cache|Cache retaining/i);
     expect(answer.answerSummary).not.toMatch(/\/var\/heaps/);
   });
+
+  it("describes workflow kind and step without an internal id", () => {
+    const answer = buildRulesModeAnswer("What next?", {
+      heapDisplayName: "fixture.hprof",
+      workflowKind: "Tune GC",
+      workflowStep: "thread_local_review",
+    });
+
+    expect(answer.answerSummary).toContain("Tune GC");
+    expect(answer.answerSummary).toContain("thread_local_review");
+    expect(answer.answerSummary).not.toContain("wf-internal");
+  });
 });
 
 describe("assistant-bridge-client history eviction", () => {

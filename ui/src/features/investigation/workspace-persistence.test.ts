@@ -121,6 +121,31 @@ describe("workspace persistence schema", () => {
     });
   });
 
+  it("accepts only display-safe revision-bound workflow metadata", () => {
+    const withWorkflow = {
+      ...validRecord,
+      workflow: {
+        workflowId: "wf-internal",
+        kind: "tune_gc" as const,
+        currentStep: "thread_local_review",
+        revision: validRecord.revision,
+      },
+    };
+    expect(parsePersistedWorkspace(withWorkflow)).toEqual({
+      status: "ready",
+      record: withWorkflow,
+    });
+
+    for (const workflow of [
+      { ...withWorkflow.workflow, workflowId: "/secret/workflow" },
+      { ...withWorkflow.workflow, kind: "unknown" },
+      { ...withWorkflow.workflow, currentStep: "/secret/heap.hprof" },
+      { ...withWorkflow.workflow, revision: -1 },
+    ]) {
+      expect(parsePersistedWorkspace({ ...validRecord, workflow }).status).toBe("rejected");
+    }
+  });
+
   it("rebinds compatible IDs to the current revision and reports stale IDs", () => {
     const restored = restoreCompatibleWorkspace(validRecord, {
       identity,
@@ -156,6 +181,38 @@ describe("workspace persistence schema", () => {
       { kind: "class", id: "class-current" },
       { kind: "leak", id: "leak-stale" },
     ]);
+  });
+
+  it("restores a workflow only when it matched the persisted workspace revision", () => {
+    const workflow = {
+      workflowId: "wf-internal",
+      kind: "tune_gc" as const,
+      currentStep: "thread_local_review",
+      revision: validRecord.revision,
+    };
+    const compatible = restoreCompatibleWorkspace(
+      { ...validRecord, workflow },
+      {
+        identity,
+        revision: 10,
+        objectIds: new Set<string>(),
+        classKeys: new Set<string>(),
+        leakIds: new Set<string>(),
+      },
+    );
+    expect(compatible.workflow).toEqual({ ...workflow, revision: 10 });
+
+    const stale = restoreCompatibleWorkspace(
+      { ...validRecord, workflow: { ...workflow, revision: validRecord.revision - 1 } },
+      {
+        identity,
+        revision: 10,
+        objectIds: new Set<string>(),
+        classKeys: new Set<string>(),
+        leakIds: new Set<string>(),
+      },
+    );
+    expect(stale.workflow).toBeUndefined();
   });
 });
 

@@ -15,6 +15,7 @@ import {
   type AssistantChatTurn,
   type AssistantProvenance,
 } from "./assistant-bridge-client";
+import { WORKFLOW_KIND_LABELS } from "../workflow-landing/workflow-types";
 
 const pageStyle = {
   display: "grid",
@@ -76,6 +77,9 @@ export function InvestigationAssistantPage() {
   const leaks = artifact?.leaks ?? [];
   const defaultLeakId = pickDefaultLeakId(leaks);
   const selectedLeakId = useInvestigationStore((state) => state.leakId);
+  const activeWorkflow = useInvestigationStore((state) =>
+    state.workflowNeedsRecovery ? undefined : state.activeWorkflow,
+  );
   const initialLeakId = leaks.some((leak) => leak.id === selectedLeakId)
     ? selectedLeakId
     : defaultLeakId;
@@ -87,8 +91,6 @@ export function InvestigationAssistantPage() {
   const [outboundNotice, setOutboundNotice] = useState<string | undefined>();
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [asking, setAsking] = useState(false);
-  const [workflowId] = useState<string | undefined>();
-  const [workflowStep] = useState<string | undefined>();
 
   const focusedLeak = useMemo(
     () => leaks.find((leak) => leak.id === focusLeakId),
@@ -120,8 +122,10 @@ export function InvestigationAssistantPage() {
     const context = {
       heapDisplayName,
       sourceId: remembered?.sourceId,
-      workflowId,
-      workflowStep,
+      workflowKind: activeWorkflow
+        ? WORKFLOW_KIND_LABELS[activeWorkflow.kind]
+        : undefined,
+      workflowStep: activeWorkflow?.currentStep,
       focusLeakId: focusedLeak?.id,
       focusLeakClassName: focusedLeak?.className,
       focusLeakSeverity: focusedLeak?.severity,
@@ -129,6 +133,9 @@ export function InvestigationAssistantPage() {
       totalObjects: artifact?.summary.totalObjects,
     };
 
+    const request = useInvestigationStore
+      .getState()
+      .beginWorkspaceRequest("assistant");
     setAsking(true);
     try {
       const result = await askWithProviderFallback({
@@ -137,6 +144,13 @@ export function InvestigationAssistantPage() {
         sessionId,
         sourceId: remembered?.sourceId,
       });
+      if (
+        !useInvestigationStore
+          .getState()
+          .acceptWorkspaceRequest("assistant", request)
+      ) {
+        return;
+      }
 
       if (result.sessionId) {
         setSessionId(result.sessionId);
@@ -153,6 +167,13 @@ export function InvestigationAssistantPage() {
       setHistory((prev) => appendBoundedTurn(prev, result.turn));
       setQuestion("");
     } catch (error) {
+      if (
+        !useInvestigationStore
+          .getState()
+          .acceptWorkspaceRequest("assistant", request)
+      ) {
+        return;
+      }
       const fallback = {
         ...buildRulesModeAnswer(trimmed, context),
         provenance: "fallback" as const,
@@ -165,6 +186,9 @@ export function InvestigationAssistantPage() {
       );
       setQuestion("");
     } finally {
+      useInvestigationStore
+        .getState()
+        .finishWorkspaceRequest("assistant", request);
       setAsking(false);
     }
   }
@@ -222,10 +246,10 @@ export function InvestigationAssistantPage() {
         ) : (
           <div>Load an artifact or open a desktop heap to populate measured facts.</div>
         )}
-        {workflowId ? (
+        {activeWorkflow ? (
           <div>
-            Workflow: {workflowId}
-            {workflowStep ? ` · step ${workflowStep}` : ""}
+            Workflow: {WORKFLOW_KIND_LABELS[activeWorkflow.kind]} · current step:{" "}
+            {activeWorkflow.currentStep}
           </div>
         ) : (
           <div>Workflow: none active in this workspace yet</div>

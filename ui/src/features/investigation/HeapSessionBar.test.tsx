@@ -43,6 +43,9 @@ afterEach(() => {
     workspaceId: "workspace-1",
     revision: 0,
     activeOperation: undefined,
+    activeWorkflow: undefined,
+    workflowNeedsRecovery: false,
+    workspaceRequests: {},
   });
   clearRememberedDesktopHeapSource();
   delete window.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__;
@@ -74,6 +77,28 @@ describe("HeapSessionBar", () => {
     expect(page.getByRole("button", { name: /open another/i })).toBeTruthy();
     expect(page.getByRole("button", { name: /close/i })).toBeTruthy();
     expect(page.getByText("demo.hprof")).toBeTruthy();
+  });
+
+  it("shows the active workflow kind and step without its id or heap path", () => {
+    useArtifactStore.getState().setArtifact(
+      "demo.hprof",
+      minimalArtifact("/secret/heaps/demo.hprof"),
+    );
+    const request = useInvestigationStore.getState().beginWorkspaceRequest("workflow");
+    useInvestigationStore.getState().bindWorkflow(request, "tune_gc", {
+      workflowId: "wf-secret",
+      currentStep: "thread_local_review",
+    });
+    const router = createMemoryRouter(
+      [{ path: "/", element: <HeapSessionBar /> }],
+      { initialEntries: ["/"] },
+    );
+
+    const view = render(<RouterProvider router={router} />);
+    const text = view.container.textContent ?? "";
+    expect(text).toMatch(/Tune GC.*current step.*thread_local_review/i);
+    expect(text).not.toContain("wf-secret");
+    expect(text).not.toContain("/secret/heaps");
   });
 
   it("renders named determinate progress with percent, unit, operation id, and elapsed time", () => {

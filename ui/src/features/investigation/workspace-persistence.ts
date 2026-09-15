@@ -4,6 +4,11 @@ import type {
   HistogramViewState,
   InvestigationOriginPane,
 } from "./investigation-store";
+import {
+  WORKFLOW_KIND_IDS,
+  type PersistedWorkflowBinding,
+  type WorkflowKindId,
+} from "../workflow-landing/workflow-types";
 
 export const WORKSPACE_PERSISTENCE_SCHEMA_VERSION = 1 as const;
 
@@ -76,6 +81,7 @@ export type PersistedWorkspaceV1 = {
   };
   notes: WorkspaceNote[];
   bookmarks: WorkspaceBookmark[];
+  workflow?: PersistedWorkflowBinding;
 };
 
 export type WorkspaceParseResult =
@@ -103,6 +109,7 @@ export type WorkspaceRestoreResult = {
   selection: PersistedWorkspaceV1["selection"];
   notes: WorkspaceNote[];
   bookmarks: WorkspaceBookmark[];
+  workflow?: PersistedWorkflowBinding;
   droppedSelectionIds: DroppedSelectionId[];
 };
 
@@ -221,6 +228,36 @@ function parseOptionalId(value: unknown): string | undefined | null {
   return readDisplaySafeString(value, 1, ID_MAX_LENGTH) ?? null;
 }
 
+function parseWorkflow(value: unknown): PersistedWorkflowBinding | undefined {
+  if (
+    !isRecord(value) ||
+    hasExactKeys(value, ["workflowId", "kind", "currentStep", "revision"])
+  ) {
+    return undefined;
+  }
+  const workflowId = readDisplaySafeString(value.workflowId, 1, ID_MAX_LENGTH);
+  const currentStep = readDisplaySafeString(value.currentStep, 1, ENTRY_ID_MAX_LENGTH);
+  if (
+    !workflowId ||
+    workflowId.includes("/") ||
+    workflowId.includes("\\") ||
+    !currentStep ||
+    currentStep.includes("/") ||
+    currentStep.includes("\\") ||
+    typeof value.kind !== "string" ||
+    !WORKFLOW_KIND_IDS.includes(value.kind as WorkflowKindId) ||
+    !isNonNegativeSafeInteger(value.revision)
+  ) {
+    return undefined;
+  }
+  return {
+    workflowId,
+    kind: value.kind as WorkflowKindId,
+    currentStep,
+    revision: value.revision,
+  };
+}
+
 function parseNote(value: unknown): WorkspaceNote | undefined {
   if (!isRecord(value) || hasExactKeys(value, ["id", "target", "text"])) {
     return undefined;
@@ -315,6 +352,7 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
     "selection",
     "notes",
     "bookmarks",
+    "workflow",
   ]);
   if (unexpectedField) {
     return { status: "rejected", reason: `unexpected field ${unexpectedField}` };
@@ -385,6 +423,11 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
   if (!hasUniqueIds(safeNotes) || !hasUniqueIds(safeBookmarks)) {
     return { status: "rejected", reason: "duplicate metadata id" };
   }
+  const workflow =
+    value.workflow === undefined ? undefined : parseWorkflow(value.workflow);
+  if (value.workflow !== undefined && !workflow) {
+    return { status: "rejected", reason: "invalid workflow binding" };
+  }
 
   return {
     status: "ready",
@@ -402,6 +445,7 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
       },
       notes: safeNotes,
       bookmarks: safeBookmarks,
+      ...(workflow ? { workflow } : {}),
     },
   };
 }
@@ -493,6 +537,9 @@ export function restoreCompatibleWorkspace(
     selection,
     notes: record.notes,
     bookmarks: record.bookmarks,
+    ...(record.workflow?.revision === record.revision
+      ? { workflow: { ...record.workflow, revision: compatibility.revision } }
+      : {}),
     droppedSelectionIds,
   };
 }

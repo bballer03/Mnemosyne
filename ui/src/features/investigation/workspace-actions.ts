@@ -18,6 +18,7 @@ import {
   type SnapshotWorkspaceHydrate,
   type WorkflowBridgeResult,
 } from "../workflow-landing/workflow-bridge-client";
+import { closeOrDetachWorkspaceWorkflow } from "../workflow-landing/workflow-binding";
 import { useInvestigationStore } from "./investigation-store";
 import type { WorkspaceCompatibility } from "./workspace-persistence";
 
@@ -135,6 +136,7 @@ export async function openDesktopHeapLean(
 }
 
 export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact, sourceId?: string) {
+  void closeOrDetachWorkspaceWorkflow();
   useInvestigationStore.getState().bumpRevisionOnArtifactChange();
   useArtifactStore.getState().setArtifact(displayName, artifact);
   if (sourceId) {
@@ -158,6 +160,7 @@ export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact,
 }
 
 export function applySnapshotWorkspaceHydrate(hydrate: SnapshotWorkspaceHydrate) {
+  void closeOrDetachWorkspaceWorkflow();
   const { snapshot, analysis, mode, capabilities } = hydrate;
   const nextRevision = useInvestigationStore.getState().revision + 1;
   const recentLoad = {
@@ -205,6 +208,7 @@ export async function openSnapshotWorkspace(
 
 /** Close investigation: unload host graph (if any) and clear heap-bound UI state. */
 export async function closeInvestigationWorkspace(): Promise<void> {
+  await closeOrDetachWorkspaceWorkflow();
   try {
     await unloadHeap();
   } catch {

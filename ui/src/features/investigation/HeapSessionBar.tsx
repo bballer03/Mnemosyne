@@ -15,6 +15,7 @@ import {
   type OperationCancellationHost,
 } from "../../host/tauri-bridge";
 import { isOperationCancelledError } from "../../host/operation-protocol";
+import { WORKFLOW_KIND_LABELS } from "../workflow-landing/workflow-types";
 
 const phaseLabels: Record<ActiveOperation["status"], string> = {
   accepted: "Accepted",
@@ -121,6 +122,9 @@ export function HeapSessionBar({
   const artifactName = useArtifactStore((s) => s.artifactName);
   const artifact = useArtifactStore((s) => s.artifact);
   const activeOperation = useInvestigationStore((s) => s.activeOperation);
+  const activeWorkflow = useInvestigationStore((s) =>
+    s.workflowNeedsRecovery ? undefined : s.activeWorkflow,
+  );
   const navigate = useNavigate();
   const [openPhase, setOpenPhase] = useState<OpenHeapPhase>("idle");
   const [message, setMessage] = useState<string | undefined>();
@@ -231,6 +235,12 @@ export function HeapSessionBar({
         </div>
       ) : null}
       {activeOperation ? <OperationStatus operation={activeOperation} /> : null}
+      {activeWorkflow ? (
+        <div style={{ color: "#67e8f9", fontSize: "0.78rem" }}>
+          Workflow: {WORKFLOW_KIND_LABELS[activeWorkflow.kind]} · current step:{" "}
+          {activeWorkflow.currentStep}
+        </div>
+      ) : null}
       {message ? (
         <div style={{ color: "#fcd34d", fontSize: "0.75rem", marginTop: 2 }}>{message}</div>
       ) : null}
