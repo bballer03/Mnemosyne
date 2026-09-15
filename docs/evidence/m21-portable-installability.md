@@ -1,7 +1,7 @@
 # M21 portable installability evidence
 
-**Branch:** `feature/mat-equivalent-wave0`
-**Date:** 2026-09-15
+**Branch:** `fix/windows-webview2-open-heap`
+**Date:** 2026-09-16
 **Tip at write:** see `git log -1` on this branch
 
 ## Command-layer (proven on this host / in CI scripts)
@@ -20,7 +20,7 @@
 
 | Platform asset | Built in CI | Attached | Signed | Launch-tested | Open heap dump |
 | --- | --- | --- | --- | --- | --- |
-| Windows portable zip | configured | configured | conditional secrets | **launch-tested 2026-09-15** (see below) | **NOT PROVEN** (UI Automation could not reach WebView content) |
+| Windows portable zip | configured | configured | conditional secrets | **launch-tested 2026-09-15** (see below) | Packaged v0.6.0 click/selection **NOT PROVEN**; post-PR #103 local build `--open` **PROVEN** in an interactive Windows session (2026-09-16) |
 | macOS aarch64 app zip | configured | configured | conditional secrets | **not launch-tested** | **not** |
 | macOS x64 app zip | configured | configured | conditional secrets | **not launch-tested** | **not** |
 | Linux x86_64 AppImage | configured | configured | unsigned by design | **not launch-tested** | **not** |
@@ -123,4 +123,86 @@ The product path is implemented and covered below the native window boundary;
 packaged end-to-end Open-heap remains an explicit native-host validation item.
 
 See also [m21-m22-remaining.md](m21-m22-remaining.md).
+
+## 2026-09-16 Windows launch-context diagnosis and argv proof
+
+### Build and fixture
+
+- Source: latest `main` after PR #103, commit `e5b1d5f`.
+- UI: production build completed before the Windows desktop build.
+- Desktop: local Windows production-protocol build through the Tauri CLI.
+- Executable SHA-256:
+  `ca8ce338a036c7ed06d3d7a18e33e2c7732cdf64ac02f02384e698bec87e5312`.
+- Synthetic fixture: `fixture-simple.hprof`, 655 bytes, SHA-256
+  `b52b188291234428514c9bea6ad5b30764303d3ac5fecb7c65d352982b29330d`.
+- Executable and fixture were staged below `%LOCALAPPDATA%\Temp`; no absolute
+  user path is retained here.
+
+A plain `cargo build --release` diagnostic binary displayed a localhost
+`ERR_CONNECTION_REFUSED` page because it used Tauri's development protocol.
+It was discarded. All results below use the production-protocol Tauri build
+with embedded UI assets.
+
+### Session discriminator
+
+The WSL-interoperability PowerShell process ran as the current Windows user in
+session 0 with `UserInteractive=false`. The same user's Explorer shell was
+running in session 1. This distinguished user identity from desktop-session
+attachment before the launch methods were compared.
+
+| Launch method | Observed session/result |
+| --- | --- |
+| Direct WSL-spawned PowerShell `Start-Process` | Session 0; WebView2 `0x80070578` (`Invalid window handle`); no analysis |
+| `cmd.exe /c start` from WSL-spawned PowerShell | Session 0; same WebView2 `0x80070578`; no analysis |
+| `explorer.exe` with the executable path | No Mnemosyne process became observable in this automation context |
+| Interactive one-shot `schtasks` (`/IT`, current Windows user) | Session 1; native window and WebView content available; no `0x80070578` |
+
+The interactive task had to execute the staged files from the current user's
+local temp directory. An initial task action targeting `C:\Windows\Temp`
+returned access denied and is not app evidence.
+
+### UI and Open-heap proof
+
+UI Automation was run by a second interactive one-shot task in the same
+session as Mnemosyne. It found:
+
+- native window title: `Mnemosyne - JVM Heap Analysis`;
+- WebView document: `Mnemosyne UI - Web content`;
+- accessible `Open heap dump` button.
+
+The post-PR #103 executable was then launched in session 1 with:
+
+```powershell
+Mnemosyne.exe --open fixture-simple.hprof
+```
+
+The desktop log under
+`%LOCALAPPDATA%\mnemosyne\logs\desktop.<date>` recorded, in order:
+
+1. `startup heap source registered`;
+2. `run_desktop_analysis: starting`;
+3. `run_desktop_analysis: completed`.
+
+The process remained in session 1 and no invalid-window-handle error was
+recorded. This proves native argv-to-UI heap opening and analysis completion
+for a latest-main local Windows build. The opaque `sourceId` boundary remains
+intact; no absolute heap path is included in this evidence.
+
+### Diagnosis and remaining limits
+
+The reproduced WebView2 failure is launch-context dependent: WSL-spawned
+PowerShell and `cmd start` remain in non-interactive session 0, while the
+interactive scheduled task runs in the user's session 1 and succeeds with the
+same production executable. No Tauri window-creation code change is justified
+by this evidence.
+
+Still **NOT PROVEN**:
+
+- clicking the packaged v0.6.0 `Open heap dump` button, selecting a fixture in
+  its native dialog, and completing analysis;
+- released portable v0.6.0 startup argv handling (the release predates PR
+  #103);
+- `explorer.exe` delegation from this WSL automation context;
+- MSI / setup.exe install-and-open;
+- macOS and Linux packaged launches.
 
