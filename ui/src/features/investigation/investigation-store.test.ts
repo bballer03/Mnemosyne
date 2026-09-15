@@ -5,7 +5,9 @@ import { useInvestigationStore } from "./investigation-store";
 describe("useInvestigationStore", () => {
   beforeEach(() => {
     useInvestigationStore.setState({
+      workspaceId: "workspace-1",
       revision: 0,
+      activeOperation: undefined,
       objectId: undefined,
       classKey: undefined,
       leakId: undefined,
@@ -18,6 +20,90 @@ describe("useInvestigationStore", () => {
         pageOffset: 0,
       },
     });
+  });
+
+  it("accepts, applies, and finishes a matching operation response", () => {
+    const context = useInvestigationStore.getState().beginOperation("query");
+    let applied = false;
+
+    expect(context).toMatchObject({
+      workspaceId: "workspace-1",
+      revision: 0,
+      operationId: expect.any(String),
+    });
+    expect(useInvestigationStore.getState().activeOperation).toMatchObject({
+      ...context,
+      kind: "query",
+      status: "accepted",
+    });
+    expect(useInvestigationStore.getState().acceptOperationResult(context)).toBe(true);
+    expect(
+      useInvestigationStore.getState().applyOperationResult(context, () => {
+        applied = true;
+      }),
+    ).toBe(true);
+    expect(applied).toBe(true);
+    expect(useInvestigationStore.getState().finishOperation(context, "complete")).toBe(true);
+    expect(useInvestigationStore.getState().activeOperation).toBeUndefined();
+  });
+
+  it("rejects a response from another workspace", () => {
+    const context = useInvestigationStore.getState().beginOperation("analyze");
+    const wrongWorkspace = { ...context, workspaceId: "workspace-2" };
+    let applied = false;
+
+    expect(useInvestigationStore.getState().acceptOperationResult(wrongWorkspace)).toBe(false);
+    expect(
+      useInvestigationStore.getState().applyOperationResult(wrongWorkspace, () => {
+        applied = true;
+      }),
+    ).toBe(false);
+    expect(applied).toBe(false);
+  });
+
+  it("rejects a response from an old revision", () => {
+    useInvestigationStore.setState({ revision: 2 });
+    const context = useInvestigationStore.getState().beginOperation("inspect");
+
+    expect(
+      useInvestigationStore
+        .getState()
+        .acceptOperationResult({ ...context, revision: context.revision - 1 }),
+    ).toBe(false);
+  });
+
+  it("rejects an operation superseded by a newer operation id", () => {
+    const superseded = useInvestigationStore.getState().beginOperation("query");
+    const current = useInvestigationStore.getState().beginOperation("diff");
+
+    expect(useInvestigationStore.getState().acceptOperationResult(superseded)).toBe(false);
+    expect(useInvestigationStore.getState().acceptOperationResult(current)).toBe(true);
+  });
+
+  it("does not finish the current operation when a stale operation completes", () => {
+    const stale = useInvestigationStore.getState().beginOperation("snapshot");
+    const current = useInvestigationStore.getState().beginOperation("flamegraph");
+
+    expect(useInvestigationStore.getState().finishOperation(stale, "complete")).toBe(false);
+    expect(useInvestigationStore.getState().activeOperation).toMatchObject({
+      ...current,
+      kind: "flamegraph",
+      status: "accepted",
+    });
+  });
+
+  it("invalidates every outstanding operation when the revision changes", () => {
+    const context = useInvestigationStore.getState().beginOperation("open");
+
+    useInvestigationStore.getState().bumpRevisionOnArtifactChange();
+
+    expect(useInvestigationStore.getState()).toMatchObject({
+      workspaceId: "workspace-1",
+      revision: 1,
+      activeOperation: undefined,
+    });
+    expect(useInvestigationStore.getState().acceptOperationResult(context)).toBe(false);
+    expect(useInvestigationStore.getState().finishOperation(context, "failed")).toBe(false);
   });
 
   it("stores a stable object id and its origin pane", () => {

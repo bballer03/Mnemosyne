@@ -58,25 +58,25 @@
 - `OperationEnvelope<T> = OperationContext & { data: T }`
 - Store actions: `beginOperation(kind): OperationContext`, `acceptOperationResult(context): boolean`, `applyOperationResult(context, apply): boolean`, `finishOperation(context, status): boolean`.
 
-- [ ] **Step 1: Write failing pure/store tests**
+- [x] **Step 1: Write failing pure/store tests**
 
   Cover a matching response, wrong workspace, old revision, superseded operation ID, completion of a stale operation, and revision bump invalidating all outstanding requests.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
   Run: `cd ui && bun test src/host/operation-protocol.test.ts src/features/investigation/investigation-store.test.ts --max-concurrency=1`
 
   Expected: FAIL because operation context and acceptance actions do not exist.
 
-- [ ] **Step 3: Implement the protocol and store gate**
+- [x] **Step 3: Implement the protocol and store gate**
 
   Generate opaque IDs with `crypto.randomUUID()` where available and a non-secret monotonic fallback for tests. Never derive identity from heap name, path, or row position.
 
-- [ ] **Step 4: Re-run focused tests**
+- [x] **Step 4: Re-run focused tests**
 
   Expected: PASS; generation N cannot apply to generation N+1.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/host/operation-protocol.ts ui/src/host/operation-protocol.test.ts ui/src/features/investigation/investigation-store.ts ui/src/features/investigation/investigation-store.test.ts
