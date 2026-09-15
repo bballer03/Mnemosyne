@@ -11,6 +11,7 @@ import { GuidedLanding } from "../workflow-landing/GuidedLanding";
 import { TopNav } from "../../app/TopNav";
 import {
   applyOpenedHeap,
+  openDesktopHeapFromSource,
   openDesktopHeapLean,
 } from "../investigation/workspace-actions";
 
@@ -33,6 +34,11 @@ function formatTimestamp(date: Date) {
     second: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function displayNameForPath(path: string) {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
 }
 
 function panelStyle() {
@@ -165,7 +171,7 @@ export function ArtifactLoaderPage() {
         fileName: file.name,
         sizeLabel: formatBytes(file.size),
         loadedAtLabel: formatTimestamp(loadedAt),
-        heapPath: parsed.summary.heapPath,
+        heapPath: displayNameForPath(parsed.summary.heapPath),
       });
       setStatusLines((current) => [
         `[${formatTimestamp(loadedAt)}] artifact validated: ${file.name}`,
@@ -218,13 +224,42 @@ export function ArtifactLoaderPage() {
     }
 
     const loadedAt = new Date();
-    applyOpenedHeap(result.displayName, result.artifact);
+    applyOpenedHeap(result.displayName, result.artifact, result.sourceId);
     setShouldNavigateToDashboard(true);
     setDesktopHeapMessage(
       `Analyzed ${result.displayName}: ${result.artifact.summary.totalObjects.toLocaleString()} objects in artifact view.`,
     );
     setStatusLines((current) => [
       `[${formatTimestamp(loadedAt)}] desktop analysis ready: ${result.displayName}`,
+      ...current,
+    ]);
+  }
+
+  async function handleOpenRecent(entry: (typeof recentLoads)[number]) {
+    if (!entry.sourceId) {
+      return;
+    }
+
+    setDesktopHeapMessage(undefined);
+    const result = await openDesktopHeapFromSource(entry.sourceId, entry.fileName, setHeapOpenPhase);
+    if (result.status === "unavailable" || result.status === "error") {
+      setDesktopHeapMessage(result.message);
+      setStatusLines((current) => [
+        `[${formatTimestamp(new Date())}] recent heap open: ${result.message}`,
+        ...current,
+      ]);
+      return;
+    }
+    if (result.status === "cancelled") {
+      return;
+    }
+
+    const loadedAt = new Date();
+    applyOpenedHeap(result.displayName, result.artifact, result.sourceId);
+    setShouldNavigateToDashboard(true);
+    setDesktopHeapMessage(`Reopened ${result.displayName}.`);
+    setStatusLines((current) => [
+      `[${formatTimestamp(loadedAt)}] recent heap analysis ready: ${result.displayName}`,
       ...current,
     ]);
   }
@@ -452,6 +487,7 @@ export function ArtifactLoaderPage() {
                       <th style={{ padding: "0 0 0.6rem" }}>Filename</th>
                       <th style={{ padding: "0 0 0.6rem" }}>Size</th>
                       <th style={{ padding: "0 0 0.6rem" }}>Timestamp</th>
+                      <th style={{ padding: "0 0 0.6rem" }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -466,6 +502,21 @@ export function ArtifactLoaderPage() {
                         </td>
                         <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
                           {entry.loadedAtLabel}
+                        </td>
+                        <td style={{ padding: "0.65rem 0", borderTop: "1px solid #1e293b" }}>
+                          <button
+                            type="button"
+                            aria-label={`Open ${entry.fileName}`}
+                            disabled={!entry.sourceId || heapOpenPhase !== "idle" || isLoading}
+                            onClick={() => void handleOpenRecent(entry)}
+                          >
+                            Open
+                          </button>
+                          {!entry.sourceId ? (
+                            <div style={{ color: "#64748b", fontSize: "0.78rem", marginTop: "0.3rem" }}>
+                              Import this artifact again to reopen it; browser file access was not retained.
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     ))}

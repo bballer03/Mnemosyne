@@ -11,6 +11,7 @@ type ArtifactState = {
     sizeLabel: string;
     loadedAtLabel: string;
     heapPath: string;
+    sourceId?: string;
   }>;
   setArtifact: (artifactName: string, artifact: AnalysisArtifact) => void;
   setLoadError: (message: string) => void;
@@ -19,6 +20,7 @@ type ArtifactState = {
     sizeLabel: string;
     loadedAtLabel: string;
     heapPath: string;
+    sourceId?: string;
   }) => void;
   reset: () => void;
 };

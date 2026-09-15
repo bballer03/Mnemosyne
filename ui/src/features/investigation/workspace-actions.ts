@@ -23,8 +23,64 @@ export type OpenDesktopHeapResult =
   | {
       status: "ready";
       displayName: string;
+      sourceId: string;
       artifact: AnalysisArtifact;
     };
+
+function recentTimestamp() {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date());
+}
+
+function displayNameForPath(path: string) {
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] || path;
+}
+
+async function analyzeDesktopHeapSource(
+  sourceId: string,
+  displayName: string,
+): Promise<OpenDesktopHeapResult> {
+  try {
+    const raw = await runDesktopAnalysis({
+      sourceId,
+      mode: "incident",
+      enableClassloaders: true,
+      enableTopInstances: true,
+      enableThreads: false,
+      enableStrings: false,
+      enableCollections: false,
+      enableByReferrer: false,
+      enableDuplicateArrays: false,
+    });
+    const artifact = parseAnalysisArtifact(raw);
+    rememberDesktopHeapSource(sourceId, displayName);
+    return { status: "ready", displayName, sourceId, artifact };
+  } catch (error) {
+    return {
+      status: "error",
+      message: formatHostError(error, "Failed to open heap dump"),
+    };
+  }
+}
+
+/** Reopen a session-local recent heap via its opaque host source id. */
+export async function openDesktopHeapFromSource(
+  sourceId: string,
+  displayName: string,
+  onPhase?: (phase: OpenHeapPhase) => void,
+): Promise<OpenDesktopHeapResult> {
+  onPhase?.("analyzing");
+  try {
+    return await analyzeDesktopHeapSource(sourceId, displayName);
+  } finally {
+    onPhase?.("idle");
+  }
+}
 
 /** Lean first-open / open-another: remember source only after success. */
 export async function openDesktopHeapLean(
@@ -48,20 +104,7 @@ export async function openDesktopHeapLean(
     }
 
     onPhase?.("analyzing");
-    const raw = await runDesktopAnalysis({
-      sourceId: picked.sourceId,
-      mode: "incident",
-      enableClassloaders: true,
-      enableTopInstances: true,
-      enableThreads: false,
-      enableStrings: false,
-      enableCollections: false,
-      enableByReferrer: false,
-      enableDuplicateArrays: false,
-    });
-    const artifact = parseAnalysisArtifact(raw);
-    rememberDesktopHeapSource(picked.sourceId, picked.displayName);
-    return { status: "ready", displayName: picked.displayName, artifact };
+    return await analyzeDesktopHeapSource(picked.sourceId, picked.displayName);
   } catch (error) {
     return {
       status: "error",
@@ -72,19 +115,42 @@ export async function openDesktopHeapLean(
   }
 }
 
-export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact) {
+export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact, sourceId?: string) {
   useArtifactStore.getState().setArtifact(displayName, artifact);
   useDashboardStore.getState().reset();
   useArtifactStore.getState().addRecentLoad({
     fileName: displayName,
     sizeLabel: `${artifact.summary.totalObjects.toLocaleString()} objects`,
-    loadedAtLabel: new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(new Date()),
-    heapPath: artifact.summary.heapPath,
+    loadedAtLabel: recentTimestamp(),
+    heapPath: displayNameForPath(artifact.summary.heapPath),
+    sourceId,
+  });
+}
+
+/**
+ * Snapshot open installs a host graph but does not return an AnalysisArtifact.
+ * Clear heap-bound React facts so graph B can never remain beside artifact A.
+ */
+export function applyOpenedSnapshotSession(
+  displayName: string,
+  sourceId: string,
+  objectCount: number,
+) {
+  rememberDesktopHeapSource(sourceId, displayName);
+  useArtifactStore.setState({
+    artifactName: undefined,
+    artifact: undefined,
+    loadError: undefined,
+  });
+  useDashboardStore.getState().reset();
+  useComparisonStore.getState().reset();
+  useLeakWorkspaceStore.getState().reset();
+  useArtifactStore.getState().addRecentLoad({
+    fileName: displayName,
+    sizeLabel: `${objectCount.toLocaleString()} objects`,
+    loadedAtLabel: recentTimestamp(),
+    heapPath: displayName,
+    sourceId,
   });
 }
 

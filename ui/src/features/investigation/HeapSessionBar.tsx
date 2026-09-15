@@ -52,7 +52,7 @@ export function HeapSessionBar() {
       setMessage(result.message);
       return;
     }
-    applyOpenedHeap(result.displayName, result.artifact);
+    applyOpenedHeap(result.displayName, result.artifact, result.sourceId);
     setMessage(`Opened ${result.displayName}.`);
     navigate("/dashboard");
   }
