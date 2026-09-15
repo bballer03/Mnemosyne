@@ -712,14 +712,21 @@ describe("heap explorer query client", () => {
     setHeapExplorerBridge({
       regroupHistogram: async (groupBy) => ({
         group_by: groupBy,
-        total_instances: 2,
-        total_shallow_size: 16,
+        total_instances: 3,
+        total_shallow_size: 24,
         entries: [
           {
-            key: "java.lang.Object",
+            key: "<java.lang.Object>",
+            instance_count: 1,
+            shallow_size: 8,
+            retained_size: 40,
+          },
+          {
+            key: "java.util.AbstractList",
+            parent_key: "<java.lang.Object>",
             instance_count: 2,
             shallow_size: 16,
-            retained_size: 40,
+            retained_size: 32,
           },
         ],
       }),
@@ -730,14 +737,21 @@ describe("heap explorer query client", () => {
       status: "ready",
       data: {
         groupBy: "superclass",
-        totalInstances: 2,
-        totalShallowSize: 16,
+        totalInstances: 3,
+        totalShallowSize: 24,
         entries: [
           {
-            key: "java.lang.Object",
+            key: "<java.lang.Object>",
+            instanceCount: 1,
+            shallowSize: 8,
+            retainedSize: 40,
+          },
+          {
+            key: "java.util.AbstractList",
+            parentKey: "<java.lang.Object>",
             instanceCount: 2,
             shallowSize: 16,
-            retainedSize: 40,
+            retainedSize: 32,
           },
         ],
       },

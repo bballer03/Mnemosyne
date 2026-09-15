@@ -8,7 +8,7 @@ function labelForPath(pathname: string): string {
     return "Object Inspector";
   }
   if (pathname.includes("/dominators")) {
-    return "Dominators";
+    return "Dominator Tree";
   }
   if (pathname.includes("/query-console")) {
     return "Query Console";

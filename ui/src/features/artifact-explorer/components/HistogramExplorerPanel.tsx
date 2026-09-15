@@ -218,7 +218,7 @@ export function HistogramExplorerPanel({
   if (!activeHistogram) {
     return (
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram Explorer</h2>
+        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram</h2>
         <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
           Histogram data is absent from this artifact.
         </p>
@@ -229,7 +229,7 @@ export function HistogramExplorerPanel({
   if (activeHistogram.entries.length === 0) {
     return (
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram Explorer</h2>
+        <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram</h2>
         <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
           This artifact includes histogram metadata, but no grouped entries are available.
         </p>
@@ -256,7 +256,7 @@ export function HistogramExplorerPanel({
     <div style={{ display: "grid", gap: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
         <div style={{ display: "grid", gap: "0.35rem" }}>
-          <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram Explorer</h2>
+          <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Histogram</h2>
           <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
             {presentationLabel}. Live regroup does not invent superclass ancestry from flat keys.
           </p>

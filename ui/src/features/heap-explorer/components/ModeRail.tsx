@@ -23,7 +23,7 @@ export function ModeRail({ selectedObject }: { selectedObject?: SelectedObject }
     <div style={{ display: "grid", gap: "1rem" }}>
       <nav aria-label="Heap explorer modes" style={{ display: "grid", gap: "0.65rem" }}>
         <NavLink to="/heap-explorer/dominators" style={linkStyle}>
-          Dominators
+          Dominator Tree
         </NavLink>
         <NavLink to="/heap-explorer/object-inspector" style={linkStyle}>
           Object Inspector

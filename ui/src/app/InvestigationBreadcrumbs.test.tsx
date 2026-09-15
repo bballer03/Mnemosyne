@@ -22,7 +22,7 @@ describe("InvestigationBreadcrumbs", () => {
 
     const nav = view.getByRole("navigation", { name: /investigation/i });
     expect(nav).toHaveTextContent("Home");
-    expect(nav).toHaveTextContent("Dominators");
+    expect(nav).toHaveTextContent("Dominator Tree");
   });
 
   it("adds an object crumb when objectId is present outside the inspector", () => {

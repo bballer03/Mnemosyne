@@ -78,6 +78,8 @@ export const uiTestBatches: readonly UiTestBatch[] = [
       "src/features/workflow-landing/natural-language-router.test.ts",
       "src/features/investigation/investigation-store.test.ts",
       "src/features/investigation/workspace-actions.test.ts",
+      "src/features/investigation/PerspectiveSwitcher.test.tsx",
+      "src/app/InvestigationBreadcrumbs.test.tsx",
     ],
   },
   {
@@ -144,6 +146,7 @@ export const uiTestBatches: readonly UiTestBatch[] = [
     rssCeilingMiB: 384,
     timeoutMs: 90_000,
     files: [
+      "src/features/artifact-explorer/components/histogram-hierarchy.test.ts",
       "src/features/artifact-explorer/components/HistogramExplorerPanel.test.tsx",
     ],
   },

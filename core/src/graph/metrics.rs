@@ -31,6 +31,10 @@ pub struct DominatorNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistogramEntry {
     pub key: String,
+    /// Explicit parent bucket for superclass grouping. Omitted unless the
+    /// graph resolves a real parent and that parent is present in this result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_key: Option<String>,
     pub instance_count: u64,
     pub shallow_size: u64,
     pub retained_size: u64,
@@ -82,6 +86,7 @@ pub fn build_histogram(
     group_by: HistogramGroupBy,
 ) -> HistogramResult {
     let mut entries_by_key: HashMap<String, HistogramEntry> = HashMap::new();
+    let mut superclass_parents: HashMap<String, Option<String>> = HashMap::new();
     let mut total_instances = 0_u64;
     let mut total_shallow_size = 0_u64;
 
@@ -90,8 +95,21 @@ pub fn build_histogram(
         let retained_size = dom.retained_size(obj_id);
         let key = resolve_histogram_key(graph, obj_id, group_by);
 
+        if group_by == HistogramGroupBy::Superclass {
+            let candidate = resolve_superclass_parent_key(graph, obj.class_id);
+            superclass_parents
+                .entry(key.clone())
+                .and_modify(|known| {
+                    if known != &candidate {
+                        *known = None;
+                    }
+                })
+                .or_insert(candidate);
+        }
+
         let entry = entries_by_key.entry(key.clone()).or_insert(HistogramEntry {
             key,
+            parent_key: None,
             instance_count: 0,
             shallow_size: 0,
             retained_size: 0,
@@ -105,6 +123,22 @@ pub fn build_histogram(
     }
 
     let mut entries: Vec<HistogramEntry> = entries_by_key.into_values().collect();
+    if group_by == HistogramGroupBy::Superclass {
+        let returned_keys: HashSet<String> =
+            entries.iter().map(|entry| entry.key.clone()).collect();
+        for entry in &mut entries {
+            entry.parent_key = superclass_parents
+                .remove(&entry.key)
+                .flatten()
+                .filter(|parent| parent != &entry.key && returned_keys.contains(parent.as_str()));
+        }
+
+        if histogram_parent_links_have_cycle(&entries) {
+            for entry in &mut entries {
+                entry.parent_key = None;
+            }
+        }
+    }
     entries.sort_by(|a, b| {
         b.retained_size
             .cmp(&a.retained_size)
@@ -284,6 +318,41 @@ fn resolve_superclass_key(graph: &ObjectGraph, class_id: ClassId) -> String {
             .unwrap_or_else(|| format!("<class:{super_id}>")),
         None => String::from("<java.lang.Object>"),
     }
+}
+
+fn resolve_superclass_parent_key(graph: &ObjectGraph, class_id: ClassId) -> Option<String> {
+    let super_id = resolve_superclass_chain(graph, class_id, MAX_SUPERCLASS_CHAIN_DEPTH)
+        .first()
+        .copied()?;
+    graph
+        .classes
+        .contains_key(&super_id)
+        .then(|| resolve_superclass_key(graph, super_id))
+}
+
+fn histogram_parent_links_have_cycle(entries: &[HistogramEntry]) -> bool {
+    let parent_by_key: HashMap<&str, &str> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .parent_key
+                .as_deref()
+                .map(|parent| (entry.key.as_str(), parent))
+        })
+        .collect();
+
+    for entry in entries {
+        let mut seen = HashSet::new();
+        let mut current = entry.key.as_str();
+        while let Some(parent) = parent_by_key.get(current).copied() {
+            if !seen.insert(current) {
+                return true;
+            }
+            current = parent;
+        }
+    }
+
+    false
 }
 
 fn extract_package_name(class_name: &str) -> String {
@@ -685,6 +754,7 @@ mod tests {
             .expect("Leaf + OtherLeaf instances group under their shared immediate superclass Mid");
         assert_eq!(mid_group.instance_count, 3); // 2 Leaf + 1 OtherLeaf
         assert_eq!(mid_group.shallow_size, 35);
+        assert_eq!(mid_group.parent_key.as_deref(), Some("com.example.Root"));
 
         let root_group = histogram
             .entries
@@ -693,6 +763,7 @@ mod tests {
             .expect("Mid's own instance groups under its immediate superclass Root");
         assert_eq!(root_group.instance_count, 1);
         assert_eq!(root_group.shallow_size, 30);
+        assert_eq!(root_group.parent_key.as_deref(), Some("<java.lang.Object>"));
 
         let object_group = histogram
             .entries
@@ -701,6 +772,18 @@ mod tests {
             .expect("Root's own instance has no named superclass (super_class_id == 0)");
         assert_eq!(object_group.instance_count, 1);
         assert_eq!(object_group.shallow_size, 40);
+        assert_eq!(object_group.parent_key, None);
+
+        let serialized = serde_json::to_value(&histogram).expect("histogram must serialize");
+        let mid_wire_entry = serialized["entries"]
+            .as_array()
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry["key"] == "com.example.Mid")
+            })
+            .expect("serialized Mid bucket");
+        assert_eq!(mid_wire_entry["parent_key"], "com.example.Root");
     }
 
     #[test]
@@ -712,6 +795,21 @@ mod tests {
 
         assert_eq!(histogram.entries.len(), 1);
         assert_eq!(histogram.entries[0].key, "<unknown>");
+    }
+
+    #[test]
+    fn histogram_superclass_parent_is_omitted_when_parent_bucket_is_not_returned() {
+        let mut graph = make_test_graph(&[(1, 300, 10, &[])], &[1]);
+        add_class_with_super(&mut graph, 100, "com.example.Root", 0, 0);
+        add_class_with_super(&mut graph, 200, "com.example.Mid", 0, 100);
+        add_class_with_super(&mut graph, 300, "com.example.Leaf", 0, 200);
+
+        let dom = build_dominator_tree(&graph);
+        let histogram = build_histogram(&graph, &dom, HistogramGroupBy::Superclass);
+
+        assert_eq!(histogram.entries.len(), 1);
+        assert_eq!(histogram.entries[0].key, "com.example.Mid");
+        assert_eq!(histogram.entries[0].parent_key, None);
     }
 
     /// A self-referential class (its own `super_class_id` points back at

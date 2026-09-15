@@ -101,6 +101,7 @@ describe("HistogramExplorerPanel", () => {
       />,
     );
 
+    expect(view.getByRole("heading", { name: "Histogram" })).toBeTruthy();
     expect(view.getAllByText(/precomputed artifact grouping/i).length).toBeGreaterThan(0);
     const select = view.getByLabelText("Histogram group by") as HTMLSelectElement;
     expect(select.value).toBe("class");

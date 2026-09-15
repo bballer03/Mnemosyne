@@ -9,9 +9,9 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Open heap dump (`.hprof`/`.bin`) | Tauri dialog + opaque `sourceId` | **shipped** | Absolute path never enters React (`9af0f47`) |
 | Desktop analyze → artifact | `analyze_heap_capturing_graph` | **shipped** | Incident defaults; path redacted in JSON (`f6c627c`) |
 | JSON artifact import | parser | **shipped** | Browser path; remains available beside desktop open |
-| Histogram / regroup | core + session-ops | **shipped** | Live flat regroup on desktop; superclass stays flat unless payload carries explicit parent links; M25.A: sortable ≤100-row pages + shared `histogramView` |
+| Histogram / regroup | core + session-ops | **shipped** | Live desktop regroup; superclass entries now carry optional graph-resolved `parent_key` links when the parent bucket is returned; M25.A: sortable ≤100-row pages + shared `histogramView` |
 | Histogram class → instances → Inspector | `list_class_instances` + investigation store | **shipped** | M25.A: class grouping only; bounded pages (100/200); shared `objectId` handoff (`9d00e2e`) |
-| Superclass collapsible tree | (no parent contract on regroup) | **open** | M22.D: expand/collapse only when returned entries include resolvable `parentKey`; current regroup/artifact payloads do not — no invented ancestry |
+| Superclass collapsible tree | core `super_class_id` + regroup | **shipped** | Existing M22.D expand/collapse consumes graph-resolved `parentKey`; absent, conflicting, dangling, self, or cyclic relations remain flat — no invented ancestry |
 | Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes; M28.A adds structured OQL locations, bounded in-memory history/examples, object-ID navigation, named syntax deferrals, and stale-response rejection. |
 | Lazy dominator tree | session DominatorTree + `getDominatorChildren` | **shipped** | M25.B: expand-on-demand; retained-% filter; paired clear on unload (`8001f7c`, `104d62b`) |
 | Opt-in object fields | `inspect_object` retainFieldData | **shipped** | M25.C: lean inspect by default; CTA + memory-cost disclosure; unavailable vs empty (`9e587ce`) |
