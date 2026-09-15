@@ -40,6 +40,7 @@ function buildArtifact(options: {
     })),
     recommendations: [],
     elapsedSeconds: 0,
+    provenance: [],
     graph: {
       nodeCount: options.objectIds?.length ?? 0,
       edgeCount: 0,

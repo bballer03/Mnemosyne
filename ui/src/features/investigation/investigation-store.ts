@@ -357,7 +357,6 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     });
     set({
       persistenceIdentity: identity,
-      revision: restored.revision,
       activeOperation: undefined,
       ...restored.selection,
       originPane: restored.layout.activePane,
