@@ -533,7 +533,231 @@ git commit -m "feat(ui): bind workflows to workspaces"
 
 ### M29.C — Contextual Assistant
 
-- [ ] Seed advisory context from current stable selection and measured findings only.
-- [ ] Preserve 12-turn default/32-turn hard history bounds and provenance on every turn.
-- [ ] Keep deterministic panes usable when provider/bridge is unavailable.
-- [ ] Record focused rules-mode evidence and mark live-provider/native behavior `NOT PROVEN` unless run.
+#### M29.C file map
+
+- Create `ui/src/features/assistant/assistant-context.ts` — pure projection from the revision-stable workspace selection and immutable measured findings into bounded, display-safe advisory context.
+- Create `ui/src/features/assistant/assistant-context.test.ts` — focused selection matching, bounded ordering, path-safety, and immutability tests.
+- Modify `ui/src/features/assistant/assistant-bridge-client.ts` — compose rules guidance from the projected selection/finding context while retaining the existing 12-turn default and 32-turn hard maximum.
+- Modify `ui/src/features/assistant/assistant-bridge-client.test.ts` — focused rules/provider/fallback provenance and history-bound tests.
+- Modify `ui/src/features/assistant/InvestigationAssistantPage.tsx` — consume current store selection/findings, render immutable measured context separately, and make only the advisory region collapsible.
+- Modify `ui/src/features/assistant/InvestigationAssistantPage.test.tsx` — render the page directly inside `MemoryRouter`; never mount `App`, `router.tsx`, or a production route tree.
+- Create `docs/evidence/m29-guided-investigation-continuity.md` — focused M29.A–C command evidence and explicit unproven boundaries.
+- Modify `STATUS.md`, `docs/product/ui-capability-matrix.md`, `docs/roadmap.md`, and this plan — close M29 without claiming live-provider, packaged-GUI, or native-host behavior that was not run.
+
+#### Contextual Assistant contract
+
+```ts
+export const MAX_ASSISTANT_CONTEXT_FINDINGS = 5;
+
+export type AssistantMeasuredFinding = Readonly<{
+  id: string;
+  kind: FindingKind;
+  severity: string;
+  title: string;
+  description: string;
+  target: FindingTarget;
+  provenance: readonly Readonly<{ kind: string; detail?: string }>[];
+  metrics: Readonly<Record<string, string | number>>;
+}>;
+
+export type AssistantSessionContext = Readonly<{
+  heapDisplayName: string;
+  sourceId?: string;
+  workflowKind?: string;
+  workflowStep?: string;
+  selection: Readonly<{
+    objectId?: string;
+    classKey?: string;
+    leakId?: string;
+    originPane?: InvestigationOriginPane;
+  }>;
+  measuredFindings: readonly AssistantMeasuredFinding[];
+  totalObjects?: number;
+}>;
+```
+
+`buildAssistantMeasuredContext(selection, findingFacts)` matches facts only through stable target identifiers: `leakId`, `objectId`, or `classKey`. It preserves the store’s deterministic order, removes no provenance, caps the advisory projection at five facts, freezes copied nested values, and never reads finding status, notes, bookmarks, row indices, heap paths, raw field values, prior Assistant text, or workflow IDs. No current selection means an empty finding projection; the Assistant must not invent a default focus.
+
+The measured-facts region renders the current selection and matched facts. The collapsible advisory region may reference those facts, but submitting, collapsing, provider failure, or appending a turn must not mutate, replace, decorate, or reorder `findingFacts`. Every appended turn has required `rules`, `provider`, or `fallback` provenance. History remains 12 turns by default and is clamped to the existing 32-turn hard maximum.
+
+#### Task M29.C.1: Pure stable-selection context projection
+
+**Interfaces:**
+- `buildAssistantMeasuredContext(selection, findingFacts): readonly AssistantMeasuredFinding[]`
+- Input uses only `InvestigationSelection` and immutable `FindingFact` values from the active store revision.
+- Output is frozen, deterministically ordered, and capped by `MAX_ASSISTANT_CONTEXT_FINDINGS`.
+
+- [ ] **Step 1: Write failing pure context tests**
+
+Create `assistant-context.test.ts` with leak, object, and class findings. Assert:
+
+```ts
+const projected = buildAssistantMeasuredContext(
+  { revision: 7, objectId: "0x10", classKey: "com.example.Cache", originPane: "inspector" },
+  [unrelatedFact, objectFact, classFact],
+);
+
+expect(projected.map((fact) => fact.id)).toEqual(["collection:0x10", "classloader:duplicate:com.example.Cache"]);
+expect(Object.isFrozen(projected)).toBe(true);
+expect(Object.isFrozen(projected[0]?.target)).toBe(true);
+```
+
+Also assert leak matching by `leakId`, empty output with no selected IDs, store order retained when more than one identifier matches, truncation after five facts, no finding status/user note/Assistant turn included, no input object mutated, and no absolute heap path appears in serialized output.
+
+- [ ] **Step 2: Run context tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/assistant/assistant-context.test.ts --max-concurrency=1
+```
+
+Expected: FAIL because `assistant-context.ts` does not exist.
+
+- [ ] **Step 3: Implement the minimal pure projector**
+
+Copy only the contract fields from matching `FindingFact` values. Match a fact when at least one defined selected stable identifier equals the corresponding target identifier. Freeze copied target, provenance entries/list, metrics, each projected fact, and the capped result list. Do not sort, infer a leak from severity, or consult mutable finding status.
+
+- [ ] **Step 4: Re-run context tests and verify GREEN**
+
+Run the Step 2 command. Expected: PASS.
+
+#### Task M29.C.2: Selection-aware rules guidance with bounded provenance
+
+**Interfaces:**
+- `AssistantSessionContext` uses `selection` plus `measuredFindings`; remove the artifact-leak-specific `focusLeakClassName`, `focusLeakSeverity`, and `focusLeakDescription` inputs.
+- `buildRulesModeAnswer(question, context)` cites selected stable identifiers and matched measured finding titles/descriptions/metrics.
+- `AssistantChatTurn.provenance` remains required for rules, provider, and fallback turns.
+
+- [ ] **Step 1: Write failing bridge-client tests**
+
+Add a context containing selected `objectId`/`classKey` and one projected collection finding. Assert the rules answer names the selected identifiers and measured finding without containing a heap path, raw field value, workflow ID, or prior advisory text. Keep explicit tests that provider success yields `provider`, provider error yields `fallback`, and offline execution yields `rules`.
+
+Retain and re-run the existing history tests:
+
+```ts
+expect(appendBoundedTurn(history, nextTurn)).toHaveLength(12);
+expect(appendBoundedTurn(history, nextTurn, 100)).toHaveLength(32);
+```
+
+- [ ] **Step 2: Run bridge-client tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/assistant/assistant-bridge-client.test.ts --max-concurrency=1
+```
+
+Expected: FAIL because rules guidance still consumes the old leak-specific context instead of the stable selection/finding projection.
+
+- [ ] **Step 3: Implement minimal contextual rules composition**
+
+Render selected leak/object/class identifiers and at most five already-projected measured findings into local rules guidance. Keep the provider bridge’s existing heap-bound session plus optional stable leak ID contract; do not serialize finding payloads into the provider question and do not add native commands. Preserve `DEFAULT_HISTORY_MAX_TURNS = 12`, `HARD_MAX_HISTORY_TURNS = 32`, the required provenance union, provider error sanitization, and deterministic rules fallback.
+
+- [ ] **Step 4: Re-run bridge-client tests and verify GREEN**
+
+Run the Step 2 command. Expected: PASS.
+
+#### Task M29.C.3: Collapsible advisory beside immutable measured facts
+
+**Interfaces:**
+- `InvestigationAssistantPage` selects `objectId`, `classKey`, `leakId`, `originPane`, and `findingFacts` from the active investigation store.
+- The page calls `buildAssistantMeasuredContext` and seeds each ask from that current projection.
+- `<details open>` contains only AI guidance; measured facts and deterministic workbench links remain outside it.
+
+- [ ] **Step 1: Replace route-tree coverage with focused failing page tests**
+
+Render only:
+
+```tsx
+<MemoryRouter>
+  <InvestigationAssistantPage />
+</MemoryRouter>
+```
+
+Seed an immutable finding and matching shared selection. Assert the measured region renders the selected stable target and exact measured title/description/provenance. Submit an offline turn and assert its answer references the matched finding with `Provenance: rules`, while the original `findingFacts[0]` remains referentially and structurally unchanged.
+
+Collapse the `AI guidance` disclosure and assert measured facts plus Dashboard, Object Inspector, Dominators, and Query Console links remain visible and usable. With both Assistant and workflow bridges absent, submit another turn and assert rules guidance still appends. Keep focused provider/fallback provenance, stale-revision rejection, no-path, and 12-turn eviction coverage.
+
+- [ ] **Step 2: Run page tests and verify RED**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/assistant/InvestigationAssistantPage.test.tsx --max-concurrency=1
+```
+
+Expected: FAIL because the page invents a highest-score leak focus, reads artifact leak details directly, mounts through a route helper in tests, and the advisory is not collapsible.
+
+- [ ] **Step 3: Implement the contextual Assistant pane**
+
+Remove score-based default focus. Seed the local selector from the current stable `leakId` only; changing it continues to update shared stable selection. Project matched store findings with the pure helper for both measured rendering and rules context. Show selection identifiers and matched measured facts without editing their payloads. Wrap the existing form/history in an open disclosure labelled `AI guidance`; keep measured facts, provider availability, outbound notice, and deterministic navigation outside the disclosure.
+
+- [ ] **Step 4: Run the complete focused M29.C suite**
+
+Run:
+
+```bash
+cd ui
+bun test \
+  src/features/assistant/assistant-context.test.ts \
+  src/features/assistant/assistant-bridge-client.test.ts \
+  src/features/assistant/InvestigationAssistantPage.test.tsx \
+  --max-concurrency=1
+bun run build
+```
+
+Expected: all focused tests PASS and the TypeScript/Vite production build exits 0.
+
+- [ ] **Step 5: Commit M29.C implementation**
+
+```bash
+git add \
+  ui/src/features/assistant/assistant-context.ts \
+  ui/src/features/assistant/assistant-context.test.ts \
+  ui/src/features/assistant/assistant-bridge-client.ts \
+  ui/src/features/assistant/assistant-bridge-client.test.ts \
+  ui/src/features/assistant/InvestigationAssistantPage.tsx \
+  ui/src/features/assistant/InvestigationAssistantPage.test.tsx
+git commit -m "feat(ui): contextualize investigation assistant"
+```
+
+#### Task M29.C.4: M29 evidence and closeout
+
+- [ ] **Step 1: Run the focused M29 regression suite**
+
+Run all focused M29.A–C tests named in Tasks M29.A.4, M29.B.4, and M29.C.3 in one Bun invocation with `--max-concurrency=1`, followed by `bun run build`. Record exact commands and counts in the evidence file.
+
+- [ ] **Step 2: Write evidence with explicit proof boundaries**
+
+Create `docs/evidence/m29-guided-investigation-continuity.md` covering the unified findings queue, workspace workflow binding, contextual Assistant projection, 12/32 history bounds, provenance, unavailable-bridge behavior, stale response rejection, and immutable measured facts. Mark live-provider behavior, packaged GUI interaction, and native/Tauri behavior `NOT PROVEN` unless each was actually run in this closeout.
+
+- [ ] **Step 3: Synchronize status, capability matrix, roadmap, and checkboxes**
+
+Mark M29 complete in `STATUS.md`, `docs/product/ui-capability-matrix.md`, and `docs/roadmap.md`; link the evidence file; set M30 as next without starting it. Check completed M29.A, M29.B, and M29.C plan steps based on committed work and recorded commands. Do not alter M30 implementation state.
+
+- [ ] **Step 4: Validate and commit closeout**
+
+Run:
+
+```bash
+git diff --check
+git status --short
+```
+
+Expected: only the evidence/status/matrix/roadmap/plan closeout files are modified, apart from ignored untracked `.claude/skills/gitnexus-*`.
+
+Commit:
+
+```bash
+git add \
+  docs/evidence/m29-guided-investigation-continuity.md \
+  docs/superpowers/plans/2026-09-15-m29-guided-investigation-continuity.md \
+  docs/product/ui-capability-matrix.md \
+  docs/roadmap.md \
+  STATUS.md
+git commit -m "docs: close M29 guided continuity"
+```
