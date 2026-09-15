@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-15 (**v0.6.0 cut**; **M25–M30** — [m30](evidence/m30-product-hardening.md); **M31+ gated** — [m31 status](evidence/m31-gated-status.md); packaged GUI still **NOT PROVEN** on WSL)
+> **Last updated:** 2026-09-16 (**v0.6.0 cut**; **M31.B/C Wave 1** — [golden](evidence/m31b-mat-golden.md), [perspectives](evidence/m31c-perspectives.md); Eclipse MAT cross-check and packaged GUI still **NOT PROVEN**)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
@@ -480,7 +480,8 @@ Active risks only. Resolved risks live in [roadmap-archive.md](roadmap-archive.m
 | **M26 Operation and Async Platform** | [superpowers/plans/2026-09-15-m26-async-platform.md](superpowers/plans/2026-09-15-m26-async-platform.md), [evidence/m26-async-platform.md](evidence/m26-async-platform.md) | ✅ Focused correlation, race, cancellation-checkpoint, and cleanup evidence; native Tauri compile and packaged GUI not proven on WSL; some indeterminate engines retain boundary-only cancellation |
 | **M27 Durable Investigations and Integrated Compare** | [superpowers/plans/2026-09-15-m27-durable-investigations-compare.md](superpowers/plans/2026-09-15-m27-durable-investigations-compare.md), [evidence/m27-durable-investigations.md](evidence/m27-durable-investigations.md) | ✅ Focused persistence, snapshot-hydrate, compare-option/result, and Inspector-handoff evidence; packaged GUI not proven on WSL |
 | **M28 Power-Tool Completeness** | [superpowers/plans/2026-09-15-m28-power-tool-completeness.md](superpowers/plans/2026-09-15-m28-power-tool-completeness.md), [evidence/m28-power-tool-completeness.md](evidence/m28-power-tool-completeness.md) | ✅ Focused OQL, analyzer, policy/compare, visualization/export, provenance, and XSS-contract evidence; packaged GUI and native downloads not proven on WSL |
-| **UI → MAT maturity program (M24–M32)** | [superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) | 🧭 Approach C functional loop closed through M30 focused evidence; remaining work is **gated M31+** only; [dependency inventory](product/dependency-currency-inventory.md) |
+| **UI → MAT maturity program (M24–M32)** | [superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md) | 🟡 M31 Wave 1 active after M25–M30 closeout; [dependency inventory](product/dependency-currency-inventory.md) |
+| **M31.B/C MAT golden + perspectives** | [program design](superpowers/specs/2026-09-15-eclipse-mat-equivalent-program-design.md), [31.B evidence](evidence/m31b-mat-golden.md), [31.C evidence](evidence/m31c-perspectives.md) | 🟡 Three `mnemosyne-golden` cases and four persisted fixed perspectives landed; `mat-referenced` = 0 and packaged GUI remain **NOT PROVEN** |
 | **M32 Dependency & toolchain currency** | [product/dependency-currency-inventory.md](product/dependency-currency-inventory.md) | 🧭 First track; registry-verified latest; closes Dependabot #50–#52 |
 
 ---
