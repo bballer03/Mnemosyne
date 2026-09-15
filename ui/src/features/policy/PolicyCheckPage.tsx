@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { ensureDesktopHeapSource, isCiCheckAvailable, runCiCheck } from "./policy-bridge-client";
+import {
+  ensureDesktopHeapSource,
+  isCiCheckAvailable,
+  pickDesktopBaselineSource,
+  runCiCheck,
+} from "./policy-bridge-client";
 
 const DEFAULT_POLICY = `[[rule]]
 id = "leak-budget"
@@ -18,7 +23,11 @@ export function PolicyCheckPage() {
   const [mode, setMode] = useState<"auto" | "deep" | "overview">("deep");
   const [status, setStatus] = useState<string>("Ready.");
   const [running, setRunning] = useState(false);
+  const [pickingBaseline, setPickingBaseline] = useState(false);
+  const [baseline, setBaseline] = useState<{ sourceId: string; displayName: string }>();
   const [response, setResponse] = useState<Awaited<ReturnType<typeof runCiCheck>> | undefined>();
+  const requiresBaseline =
+    /^\s*predicate\s*=\s*["']object_growth_threshold["']\s*(?:#.*)?$/m.test(policyToml);
 
   async function handleRun() {
     setRunning(true);
@@ -27,6 +36,11 @@ export function PolicyCheckPage() {
       if (!isCiCheckAvailable()) {
         setStatus("Policy check requires the desktop host bridge.");
         setResponse({ status: "unavailable" });
+        return;
+      }
+
+      if (requiresBaseline && !baseline) {
+        setStatus("Select a baseline heap before evaluating object_growth_threshold rules.");
         return;
       }
 
@@ -50,6 +64,7 @@ export function PolicyCheckPage() {
         policyToml,
         failOn,
         mode,
+        baselineSourceId: baseline?.sourceId,
       });
       setResponse(result);
       if (result.status === "ready") {
@@ -63,6 +78,25 @@ export function PolicyCheckPage() {
       }
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function handlePickBaseline() {
+    setPickingBaseline(true);
+    try {
+      const result = await pickDesktopBaselineSource();
+      if (result.status === "selected") {
+        setBaseline({ sourceId: result.sourceId, displayName: result.displayName });
+        setStatus(`Baseline selected: ${result.displayName}`);
+      } else if (result.status === "cancelled") {
+        setStatus("Baseline selection cancelled.");
+      } else if (result.status === "unavailable") {
+        setStatus("Baseline picker is unavailable outside the desktop host.");
+      } else {
+        setStatus(result.error);
+      }
+    } finally {
+      setPickingBaseline(false);
     }
   }
 
@@ -109,6 +143,29 @@ export function PolicyCheckPage() {
           }}
         />
       </label>
+
+      <section
+        aria-label="Policy baseline"
+        style={{
+          border: "1px solid #1e293b",
+          borderRadius: 12,
+          padding: "0.85rem",
+          display: "grid",
+          gap: "0.5rem",
+        }}
+      >
+        <strong>Baseline heap {requiresBaseline ? "(required by this policy)" : "(optional)"}</strong>
+        <p style={{ margin: 0, color: "#94a3b8", lineHeight: 1.6 }}>
+          Object-growth rules compare the current heap with a separately selected baseline. Only the
+          host&apos;s opaque source ID is submitted.
+        </p>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+          <button type="button" disabled={pickingBaseline} onClick={() => void handlePickBaseline()}>
+            {pickingBaseline ? "Selecting baseline…" : "Select baseline heap"}
+          </button>
+          {baseline ? <span>Selected: {baseline.displayName}</span> : <span>No baseline selected.</span>}
+        </div>
+      </section>
 
       <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
         <label>

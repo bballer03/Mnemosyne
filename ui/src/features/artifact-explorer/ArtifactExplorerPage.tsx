@@ -9,6 +9,7 @@ import {
 } from "../heap-explorer/heap-explorer-query-client";
 import { useInvestigationStore } from "../investigation/investigation-store";
 
+import { AnalyzerEnrichmentPanel } from "./components/AnalyzerEnrichmentPanel";
 import { AnalyzerRail } from "./components/AnalyzerRail";
 import { ClassInstancesPanel } from "./components/ClassInstancesPanel";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
@@ -130,6 +131,10 @@ export function ArtifactExplorerPage() {
             Artifact: {artifactName ?? "Unnamed artifact"}
           </div>
         </header>
+      </section>
+
+      <section aria-label="Analyzer enrichment" style={panelStyle}>
+        <AnalyzerEnrichmentPanel />
       </section>
 
       <section

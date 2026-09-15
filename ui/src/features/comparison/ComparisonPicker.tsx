@@ -41,6 +41,15 @@ const visuallyHiddenInputStyle = {
   border: 0,
 } as const;
 
+const identityStrategyDisclosure: Record<IdentityStrategy, string> = {
+  ClassRetained:
+    "Retained-size buckets are fast but size changes can split identity across snapshots.",
+  ClassDominator:
+    "Dominator chain balances continuity and precision without retaining object field bytes.",
+  FullFingerprint:
+    "Full fingerprint reparses both heaps with retained field data and may use materially more memory and time.",
+};
+
 type SnapshotListState =
   | { status: "idle" | "loading" | "unavailable" }
   | { status: "ready"; snapshots: SnapshotManifest[] }
@@ -297,6 +306,7 @@ export function ComparisonPicker() {
               <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
                 <span>Identity strategy</span>
                 <select
+                  aria-label="Identity strategy"
                   value={identityStrategy}
                   onChange={(event) => setIdentityStrategy(event.target.value as IdentityStrategy)}
                   style={inputStyle}
@@ -305,6 +315,9 @@ export function ComparisonPicker() {
                   <option value="ClassDominator">Class + dominator chain</option>
                   <option value="FullFingerprint">Full fingerprint</option>
                 </select>
+                <small style={{ color: identityStrategy === "FullFingerprint" ? "#facc15" : "#94a3b8", lineHeight: 1.5 }}>
+                  {identityStrategyDisclosure[identityStrategy]}
+                </small>
               </label>
               <label style={{ display: "grid", gap: "0.35rem", color: "#cbd5e1", fontSize: "0.9rem" }}>
                 <span>Top N</span>

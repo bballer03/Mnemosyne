@@ -321,10 +321,36 @@ describe("ArtifactExplorerPage", () => {
     const analyzerRail = within(view.getByRole("complementary", { name: /analyzer rail/i }));
 
     expect(analyzerRail.getByText(/artifact recommendations/i)).toBeInTheDocument();
+    expect(analyzerRail.getByText("Trim cache residency.")).toBeInTheDocument();
     expect(analyzerRail.getByText(/string deduplication/i)).toBeInTheDocument();
     // Several optional sections are absent on this seed (top instances cleared above, plus others).
-    expect(analyzerRail.getAllByText(/section_absent/i).length).toBeGreaterThanOrEqual(1);
+    expect(analyzerRail.getAllByText(/^unavailable$/i).length).toBeGreaterThanOrEqual(1);
+    expect(analyzerRail.queryByText(/section_absent/i)).toBeNull();
     expect(analyzerRail.getByText(/top instances/i)).toBeInTheDocument();
+  });
+
+  it("renders partial and fallback analyzer provenance with details", () => {
+    seedArtifactWithHistogram();
+    act(() => {
+      useArtifactStore.setState((state) => ({
+        ...state,
+        artifact: state.artifact
+          ? {
+              ...state.artifact,
+              provenance: [
+                { kind: "Partial", detail: "bounded analyzer rows" },
+                { kind: "Fallback", detail: "heuristic leak ranking" },
+              ],
+            }
+          : state.artifact,
+      }));
+    });
+
+    const view = renderArtifactExplorer();
+    const analyzerRail = within(view.getByRole("complementary", { name: /analyzer rail/i }));
+
+    expect(analyzerRail.getByText(/partial: bounded analyzer rows/i)).toBeInTheDocument();
+    expect(analyzerRail.getByText(/fallback: heuristic leak ranking/i)).toBeInTheDocument();
   });
 
   it("updates the selected bucket detail from the chosen histogram row", async () => {

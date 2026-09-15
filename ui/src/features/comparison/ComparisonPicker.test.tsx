@@ -285,4 +285,40 @@ describe("ComparisonPicker", () => {
       crossReferenceLeaks: true,
     });
   });
+
+  it("explains identity trade-offs and full-fingerprint field-data cost", async () => {
+    if (!globalWindow.window) {
+      throw new Error("Expected window to exist in UI tests.");
+    }
+    globalWindow.window.__MNEMOSYNE_COMPARISON_BRIDGE__ = {
+      diffObjects: async () => createRawObjectDiff(),
+    };
+    globalWindow.window.__MNEMOSYNE_WORKFLOW_BRIDGE__ = {
+      listSnapshots: async () => [
+        {
+          schema_version: 1,
+          heap_sha256: "baseline-key",
+          heap_path: "baseline.hprof",
+          created_at: "2026-09-15T00:00:00Z",
+          mnemosyne_version: "0.5.0",
+          object_count: 10,
+          has_field_data: false,
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    const view = render(<ComparisonPicker />);
+    const page = within(view.container);
+    const strategy = await page.findByRole("combobox", { name: /^identity strategy$/i });
+
+    expect(page.getByText(/dominator chain balances continuity and precision/i)).toBeInTheDocument();
+
+    await user.selectOptions(strategy, "ClassRetained");
+    expect(page.getByText(/retained-size buckets are fast but size changes can split identity/i)).toBeInTheDocument();
+
+    await user.selectOptions(strategy, "FullFingerprint");
+    expect(
+      page.getByText(/reparses both heaps with retained field data and may use materially more memory and time/i),
+    ).toBeInTheDocument();
+  });
 });
