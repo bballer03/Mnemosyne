@@ -3,12 +3,13 @@ import "../../test/setup";
 import { act, cleanup, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
-import { artifactExplorerRoutes } from "../../test/app-route-trees";
 import type { AnalysisArtifact } from "../../lib/analysis-types";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { useInvestigationStore } from "../investigation/investigation-store";
+
+import { ArtifactExplorerPage } from "./ArtifactExplorerPage";
 
 function buildArtifact(options?: { histogram?: AnalysisArtifact["histogram"] }): AnalysisArtifact {
   return {
@@ -163,8 +164,23 @@ function seedArtifactWithoutHistogram() {
   });
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+
+function renderArtifactExplorer(initialEntry = "/artifacts/explorer") {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <ArtifactExplorerPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
 describe("ArtifactExplorerPage", () => {
   beforeEach(() => {
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
     act(() => {
       useArtifactStore.getState().reset();
       useInvestigationStore.setState({
@@ -185,6 +201,7 @@ describe("ArtifactExplorerPage", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__;
 
     act(() => {
       useArtifactStore.getState().reset();
@@ -205,17 +222,15 @@ describe("ArtifactExplorerPage", () => {
   });
 
   it("redirects back to the loader when no artifact is loaded", () => {
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
 
-    expect(view.getByRole("heading", { name: /load analysis artifact/i })).toBeInTheDocument();
+    expect(view.getByTestId("location")).toHaveTextContent("/");
   });
 
   it("renders all histogram rows with retained and shallow comparisons", () => {
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     expect(view.getByRole("heading", { name: /artifact explorer/i })).toBeInTheDocument();
@@ -228,8 +243,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     await user.type(view.getByLabelText(/search histogram/i), "concurrent");
@@ -252,8 +266,7 @@ describe("ArtifactExplorerPage", () => {
       useInvestigationStore.setState({ classKey: "row-100", originPane: "histogram" });
     });
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     expect(histogramRegion.getByText("Showing 1–100 of 101")).toBeInTheDocument();
@@ -271,8 +284,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
 
     await user.click(histogramRegion.getByRole("button", { name: /select java\.util\.concurrent\.ConcurrentHashMap/i }));
@@ -285,8 +297,7 @@ describe("ArtifactExplorerPage", () => {
   it("shows an explicit histogram-absent state when the artifact has no histogram", () => {
     seedArtifactWithoutHistogram();
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
 
     expect(view.getByText(/histogram data is absent from this artifact/i)).toBeInTheDocument();
   });
@@ -306,8 +317,7 @@ describe("ArtifactExplorerPage", () => {
       }));
     });
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const analyzerRail = within(view.getByRole("complementary", { name: /analyzer rail/i }));
 
     expect(analyzerRail.getByText(/artifact recommendations/i)).toBeInTheDocument();
@@ -321,8 +331,7 @@ describe("ArtifactExplorerPage", () => {
     const user = userEvent.setup();
     seedArtifactWithHistogram();
 
-    const router = createMemoryRouter(artifactExplorerRoutes(), { initialEntries: ["/artifacts/explorer"] });
-    const view = render(<RouterProvider router={router} />);
+    const view = renderArtifactExplorer();
     const histogramRegion = within(view.getByRole("region", { name: /histogram explorer/i }));
     const detailRegion = within(view.getByRole("complementary", { name: /selected bucket detail/i }));
 
@@ -331,5 +340,54 @@ describe("ArtifactExplorerPage", () => {
     expect(detailRegion.getByText(/selected bucket/i)).toBeInTheDocument();
     expect(detailRegion.getByText(/java\.util\.concurrent\.ConcurrentHashMap/i)).toBeInTheDocument();
     expect(detailRegion.getByText(/artifact-backed leak hints/i)).toBeInTheDocument();
+  });
+
+  it("preserves histogram filters across instance navigation and remount", async () => {
+    window.__MNEMOSYNE_HEAP_EXPLORER_BRIDGE__ = {
+      listClassInstances: async (classKey, offset, limit) => ({
+        class_key: classKey,
+        total: 1,
+        returned: 1,
+        offset: offset ?? 0,
+        limit: limit ?? 100,
+        truncated: false,
+        instances: [
+          {
+            object_id: "0x2a",
+            class_name: classKey,
+            shallow_size: 64,
+            retained_size: 1024,
+          },
+        ],
+      }),
+    };
+    seedArtifactWithHistogram();
+    act(() => {
+      useInvestigationStore.getState().setHistogramView({
+        searchText: "Cache",
+        groupBy: "class",
+        sortKey: "class",
+        sortDirection: "asc",
+      });
+    });
+    const user = userEvent.setup();
+    const firstView = renderArtifactExplorer();
+
+    await user.click(await firstView.findByRole("button", { name: "Open object 0x2a" }));
+
+    expect(useInvestigationStore.getState().objectId).toBe("0x2a");
+    expect(useInvestigationStore.getState().originPane).toBe("histogram");
+    expect(firstView.getByTestId("location")).toHaveTextContent(
+      "/heap-explorer/object-inspector?objectId=0x2a",
+    );
+
+    firstView.unmount();
+    const secondView = renderArtifactExplorer();
+
+    expect(secondView.getByLabelText(/search histogram/i)).toHaveValue("Cache");
+    expect(secondView.getByLabelText(/histogram group by/i)).toHaveValue("class");
+    expect(secondView.getByLabelText(/histogram sort by/i)).toHaveValue("class");
+    expect(secondView.getByLabelText(/histogram sort direction/i)).toHaveValue("asc");
+    expect(await secondView.findByRole("button", { name: "Open object 0x2a" })).toBeInTheDocument();
   });
 });

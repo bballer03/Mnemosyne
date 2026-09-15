@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
-import type { HistogramResultView } from "../heap-explorer/heap-explorer-query-client";
+import {
+  normalizeHistogramGroupBy,
+  regroupHistogram,
+  type HistogramResultView,
+} from "../heap-explorer/heap-explorer-query-client";
 import { useInvestigationStore } from "../investigation/investigation-store";
 
 import { AnalyzerRail } from "./components/AnalyzerRail";
+import { ClassInstancesPanel } from "./components/ClassInstancesPanel";
 import { ClassloaderExplorerPanel } from "./components/ClassloaderExplorerPanel";
 import { CollectionAnalysisPanel } from "./components/CollectionAnalysisPanel";
 import { DuplicateArrayPanel } from "./components/DuplicateArrayPanel";
@@ -48,6 +53,12 @@ export function ArtifactExplorerPage() {
     }
   }, [selectedClassKey]);
 
+  useEffect(() => {
+    if (!selectedClassKey && selectedHistogramKey) {
+      setClassKey(selectedHistogramKey, "histogram");
+    }
+  }, [selectedClassKey, selectedHistogramKey, setClassKey]);
+
   const handleSelectHistogramKey = useCallback(
     (key: string | undefined) => {
       setSelectedHistogramKey(key);
@@ -70,6 +81,26 @@ export function ArtifactExplorerPage() {
       histogram: liveHistogram,
     };
   }, [artifact, liveHistogram]);
+
+  const activeHistogramGroupBy =
+    normalizeHistogramGroupBy(explorerArtifact?.histogram?.groupBy) ?? histogramView.groupBy;
+
+  const handleRegroupToClass = useCallback(async () => {
+    const artifactGroupBy = normalizeHistogramGroupBy(artifact?.histogram?.groupBy);
+    if (artifactGroupBy === "class") {
+      setHistogramView({ groupBy: "class" });
+      setLiveHistogram(undefined);
+      setHistogramSource("artifact");
+      return;
+    }
+
+    const result = await regroupHistogram("class");
+    if (result.status === "ready") {
+      setHistogramView({ groupBy: "class" });
+      setLiveHistogram(result.data);
+      setHistogramSource("live");
+    }
+  }, [artifact, setHistogramView]);
 
   if (!artifact || !explorerArtifact) {
     return <Navigate to="/" replace />;
@@ -129,6 +160,12 @@ export function ArtifactExplorerPage() {
         </section>
         <aside aria-label="Selected bucket detail" style={panelStyle}>
           <SelectedBucketDetail artifact={explorerArtifact} selectedKey={selectedHistogramKey} />
+          <div style={{ borderTop: "1px solid #1e293b", marginTop: "1rem", paddingTop: "1rem" }}>
+            <ClassInstancesPanel
+              groupBy={activeHistogramGroupBy}
+              onRegroupToClass={handleRegroupToClass}
+            />
+          </div>
         </aside>
       </section>
 

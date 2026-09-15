@@ -34,7 +34,6 @@ const testBatches = [
     "src/features/heap-explorer/HeapDominatorPage.test.tsx",
     "src/features/heap-explorer/HeapQueryConsolePage.test.tsx",
     "src/features/dashboard/DashboardPage.test.tsx",
-    "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
     "src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx",
     "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
   ],
@@ -90,6 +89,12 @@ const testBatches = [
     "src/features/flamegraph/FlamegraphPage.test.tsx",
     "src/host/tauri-bridge.test.ts",
     "src/host/format-host-error.test.ts",
+  ],
+  [
+    // M25.A class-instance drill-down gets a fresh process: keep both jsdom
+    // suites out of the already-heavy heap-explorer route batch.
+    "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
+    "src/features/artifact-explorer/components/ClassInstancesPanel.test.tsx",
   ],
 ];
 

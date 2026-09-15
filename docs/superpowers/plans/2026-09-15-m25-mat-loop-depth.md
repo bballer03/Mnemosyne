@@ -187,25 +187,25 @@
 - Consume current `classKey`; fetch `listClassInstances(classKey, offset, 100)` only for a class grouping and a connected host.
 - On instance pick: `setObjectId(instance.objectId, "histogram")`, then navigate to `/heap-explorer/object-inspector?objectId=<encoded>`.
 
-- [ ] **Step 1: Write failing panel tests**
+- [x] **Step 1: Write failing panel tests**
 
   Directly mount under a one-route `MemoryRouter`. Assert no request without `classKey`, a visible unavailable state without a bridge, exactly the bounded page when ready, an honest truncation/total label, and selected object navigation.
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
   Run: `cd ui && bun test src/features/artifact-explorer/components/ClassInstancesPanel.test.tsx src/features/artifact-explorer/ArtifactExplorerPage.test.tsx --max-concurrency=1`
 
   Expected: FAIL because the panel is absent.
 
-- [ ] **Step 3: Implement the class-instance panel**
+- [x] **Step 3: Implement the class-instance panel**
 
   Replace the right-side aggregate-only detail with aggregate detail plus bounded instances. Do not request instances for package/classloader/superclass buckets; label that state and offer regroup-to-Class.
 
-- [ ] **Step 4: Verify filter continuity**
+- [x] **Step 4: Verify filter continuity**
 
   Add a regression that selects an instance, unmounts/remounts `ArtifactExplorerPage`, and confirms histogram search/group/sort remain in the same investigation revision.
 
-- [ ] **Step 5: Run focused tests and type-check**
+- [x] **Step 5: Run focused tests and type-check**
 
   Run:
 
@@ -217,7 +217,7 @@
 
   Expected: PASS and TypeScript exits 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add ui/src/features/artifact-explorer ui/src/features/investigation ui/run-tests.ts
