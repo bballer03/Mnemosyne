@@ -1,8 +1,8 @@
-# UI capability matrix (M20–M28)
+# UI capability matrix (M20–M29)
 
 Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md), [docs/evidence/m28-power-tool-completeness.md](../evidence/m28-power-tool-completeness.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md), [docs/evidence/m28-power-tool-completeness.md](../evidence/m28-power-tool-completeness.md), [docs/evidence/m29-guided-investigation-continuity.md](../evidence/m29-guided-investigation-continuity.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
@@ -31,13 +31,13 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Multi-hop `OBJECTS` | core query | **shipped** | M22.C — 1–3 hops; reject 4+; Terra cycle/hop fixes (`e3d18a0`, `d06f152`) |
 | `SELECT DISTINCT OBJECTS` | core query | **shipped** | Bounded collapse by target id (`2b4f33c`) |
 | Packaged GUI smoke (WSL) | Tauri bundle | **deferred** | Command/unit/browser evidence only here; launch → M21 native hosts |
-| Investigation session (`/assistant`) | rules + optional host `chatSession` | **shipped** | Rules default; fact/AI separation; deep links (`f3ad203`, `3ab1ef5`, `22ff57b`, `d391953`) |
+| Investigation session (`/assistant`) | rules + optional host `chatSession` | **shipped** | M29.C: stable selection + measured finding projection (cap 5); no score-based default focus; collapsible AI guidance; 12/32 history; rules/provider/fallback provenance (`45b6b32`) |
 | Desktop AI session adapters | Tauri over MCP AI session | **shipped** | create/resume/get/close/chat; 12/32 bounds; rules fallback — **not** live-provider proof on WSL |
-| Workflow get/close/resume | Tauri + WorkflowCard | **shipped** | MCP-parity get/close; resume UI (`532df7c`); basename projection on get (`d391953`) |
-| AI-first guidance vs MAT analysis | advisory only | **partial** | Guidance never claims MAT-equivalent replacement; see M23 evidence NOT-proven table |
+| Workflow get/close/resume | Tauri + WorkflowCard | **shipped** | M29.B: workspace-bound start/resume/advance/close without pasted workflow IDs; display-safe step chrome (`9aec455`) |
+| AI-first guidance vs MAT analysis | advisory only | **partial** | Guidance never claims MAT-equivalent replacement; see M23/M29 evidence NOT-proven tables |
 | Continuous heap lifecycle | investigation store + desktop host | **shipped** | M24.A/B: persistent heap identity with **Open / Open another / Close**. M27.A/B adds strict display-safe workspace metadata persistence and full transactional snapshot hydrate; failed opens preserve the current session. |
 | Shared investigation selection | investigation store | **shipped** | M24.C: `objectId` / `classKey` / `leakId` selection synchronizes histogram, dominators, inspector, and deep-linked routes without stale-object precedence. |
-| Findings + Assistant advisory | rules-derived findings + investigation selection | **shipped** | M24.D: collapsible, Rules-labelled advisory pane with deterministic deep-links; findings remain guidance over deterministic analysis. |
+| Findings queue + Assistant advisory | immutable findingFacts + status map | **shipped** | M29.A: unified measured findings queue with source-scoped replace and stale rejection (`ea6a98c`); M24.D/M29.C keep advisory separate from measured facts. |
 | Correlated operation progress / stale-result rejection | operation registry + Tauri envelopes + investigation store | **shipped** | M26: open/analyze/query/diff/snapshot/flamegraph/GC-path/field-data inspect echo workspace/revision/operation identity; generation-N race tests reject late progress/success. Determinate values appear only when bounded; other phases are explicitly indeterminate. |
 | Cooperative Cancel | core checkpoints + registry commit guards + HeapSessionBar | **partial** | M26 proves prompt cooperative stop in parser/dominator/analysis checkpoints and prevents publication for every protocol-wired family. Query/diff/GC traversal/flame rendering/snapshot I/O have boundary/commit guards but no inner loop checkpoint. `run_ci_check`, explain/fix, source mapping, and workflow/AI lifecycle are not protocol-wired. |
 | In-workbench compare | existing comparison backend + shared compare components | **shipped** | M27.C delivers the post-v0.5.0 slice in investigation chrome. `/compare` remains a thin adapter; no new analyzer was added. |
