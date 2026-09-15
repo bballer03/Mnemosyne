@@ -22,7 +22,7 @@
 | `@vitejs/plugin-react` | ^6.1.1 | 6.1.1 | **current (M32.A)** — closes #51 |
 | `tailwindcss` | 4.3.3 | 4.3.3 | **current (M32.B)** — closes #52 |
 | `@tailwindcss/postcss` | 4.3.3 | 4.3.3 | **current (M32.B)** |
-| `jsdom` | ^24.1.1 | **30.0.1** | **Exception (2026-09-15, owner: M32): M32.C deferred — OOM on bun; keep 24 until RSS ceiling.** |
+| `jsdom` | ^24.1.1 | **30.0.1** | **Exception (2026-09-15 remeasure, owner: M32.C): trial `jsdom@30.0.1` on Bun 1.4.2 refused — `leak-workspace-core` peak **9285.2 MiB** vs ceiling **512 MiB**, then wall-clock timeout/kill. Keep **^24.1.1**. |
 | `@tanstack/react-table` | 9.2.4 | 9.2.4 | **current (M32.B)** |
 | `@testing-library/jest-dom` | 7.0.1 | 7.0.1 | **current (M32.B)** |
 | `typescript` | 7.0.2 | 7.0.2 | **current (M32.B)** |
