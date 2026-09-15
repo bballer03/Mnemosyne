@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-15 (**v0.5.0 shipped**; **M25–M30** evidenced on `feature/mat-maturity-m25-plus` — [m30](evidence/m30-product-hardening.md); **M31+ gated / not started** — [m31 status](evidence/m31-gated-status.md); packaged GUI still **NOT PROVEN** on WSL)
+> **Last updated:** 2026-09-15 (**v0.6.0 cut**; **M25–M30** — [m30](evidence/m30-product-hardening.md); **M31+ gated** — [m31 status](evidence/m31-gated-status.md); packaged GUI still **NOT PROVEN** on WSL)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
