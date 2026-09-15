@@ -1,8 +1,8 @@
-# UI capability matrix (M20–M27)
+# UI capability matrix (M20–M28)
 
 Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md), [docs/evidence/m26-async-platform.md](../evidence/m26-async-platform.md), [docs/evidence/m27-durable-investigations.md](../evidence/m27-durable-investigations.md), [docs/evidence/m28-power-tool-completeness.md](../evidence/m28-power-tool-completeness.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
@@ -12,16 +12,17 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Histogram / regroup | core + session-ops | **shipped** | Live flat regroup on desktop; superclass stays flat unless payload carries explicit parent links; M25.A: sortable ≤100-row pages + shared `histogramView` |
 | Histogram class → instances → Inspector | `list_class_instances` + investigation store | **shipped** | M25.A: class grouping only; bounded pages (100/200); shared `objectId` handoff (`9d00e2e`) |
 | Superclass collapsible tree | (no parent contract on regroup) | **open** | M22.D: expand/collapse only when returned entries include resolvable `parentKey`; current regroup/artifact payloads do not — no invented ancestry |
-| Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes |
+| Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes; M28.A adds structured OQL locations, bounded in-memory history/examples, object-ID navigation, named syntax deferrals, and stale-response rejection. |
 | Lazy dominator tree | session DominatorTree + `getDominatorChildren` | **shipped** | M25.B: expand-on-demand; retained-% filter; paired clear on unload (`8001f7c`, `104d62b`) |
 | Opt-in object fields | `inspect_object` retainFieldData | **shipped** | M25.C: lean inspect by default; CTA + memory-cost disclosure; unavailable vs empty (`9e587ce`) |
 | Path/ref synchronized navigation | investigation store | **shipped** | M25.C: refs/referrers/dominators/GC-path nodes set shared `objectId` (`76b5e5f`) |
-| Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
+| Strings / collections / top instances / unreachable | artifact sections + on-demand analysis | **shipped** | Detail panels + rail anchors (`6dbabb6`); M28.B adds one-request opt-in enrichment with field-data reparse/memory-cost disclosure and honest unavailable/provenance outcomes. |
 | Duplicate arrays / plugins / classloaders | artifact sections + CLI | **shipped** | UI Loaded vs Unique (`5af03f9`); CLI Unique Classes column from existing `unique_class_count` (M22.D) |
 | Compare / leak workspace | existing comparison bridge + investigation store | **shipped** | M27.C shares current/baseline pickers, strategy/top-N/leak controls, match quality, and delta results between persistent chrome and the `/compare` adapter; after-side rows open Inspector. |
 | Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove and basename-only React display. M27.B atomically installs cached graph-derived facts, deep mode/capabilities, opaque snapshot identity, and compatible selection (`d6d73ef`). |
-| Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
-| Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | SVG via blob URL; root selector (`2dbe4f8`); 16 MiB / overview-unavailability UI parity tests still thin (rely on core/MCP) |
+| Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`). M28.B selects object-growth baselines by opaque source ID without replacing the current heap. |
+| Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | M28.C exposes SVG/folded-stack/JSON and all existing roots. Only SVG is previewed through a Blob URL; returned markup/text/JSON is never mounted as HTML. |
+| Workspace analysis-report exports | cached committed `AnalyzeResponse` + core report renderer | **shipped** | M28.C exposes Text/Markdown/HTML/TOON/JSON through the correlated native operation envelope. Allowlisted MIME/extensions, basename-only bounded filenames, control normalization, mode/provenance labels, and download-only HTML are covered by focused tests (`0e8bdd0`). |
 | Portable Windows zip | release CI script | **partial** | Labeled WebView2 prerequisite; clean-image unzip evidence **not proven** (M21) |
 | Desktop asset name/integrity verify | `verify_*` + `generate_sha256sums` + `inspect_*` + `probe_*` + `normalize_*` | **partial** | Release CI fail-closes on names/checksums/secrets/structure; unsigned checksums; **not** launch proof |
 | macOS app zip / Linux AppImage names | `normalize_*` + `probe_*` + `release.yml` | **partial** | Frozen names + ditto zip + ELF/Info.plist probes; native launch **not proven** |
@@ -50,3 +51,4 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 - M24 findings remain **Rules-derived advisory** content. M27 comparison is integrated into persistent chrome, but packaged-GUI interaction remains **NOT proven** on WSL.
 - M26 focused tests prove correlation, rejection, cleanup, and controlled core checkpoints. They do **not** prove packaged-GUI behavior, native Tauri compilation on WSL, or prompt interruption inside every indeterminate operation.
 - M27 focused tests prove display-safe persistence, atomic snapshot hydrate, shared compare rendering, option forwarding, and after-side selection. They do **not** prove packaged-GUI behavior or real multi-GB comparison performance.
+- M28 focused tests prove OQL/analyzer contracts, format selection, operation-envelope wiring, filename/content normalization, provenance labels, and that hostile report/flamegraph bodies are absent from the DOM. Packaged GUI generation/download and native save behavior remain **NOT PROVEN** on WSL.
