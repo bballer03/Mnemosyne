@@ -1,17 +1,21 @@
-# UI capability matrix (M20–M24)
+# UI capability matrix (M20–M25)
 
-Status as of 2026-09-15 on `feature/v0.5.0-mat-maturity`. Legend: **shipped** | **partial** | **planned** | **deferred**.
+Status as of 2026-09-15 on `feature/mat-maturity-m25-plus`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
-Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md). No shipped heap-analysis capability below is left unclassified.
+Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md), [docs/evidence/m25-mat-loop-depth.md](../evidence/m25-mat-loop-depth.md). No shipped heap-analysis capability below is left unclassified.
 
 | Surface | Backend | UI | Notes |
 | --- | --- | --- | --- |
 | Open heap dump (`.hprof`/`.bin`) | Tauri dialog + opaque `sourceId` | **shipped** | Absolute path never enters React (`9af0f47`) |
 | Desktop analyze → artifact | `analyze_heap_capturing_graph` | **shipped** | Incident defaults; path redacted in JSON (`f6c627c`) |
 | JSON artifact import | parser | **shipped** | Browser path; remains available beside desktop open |
-| Histogram / regroup | core + session-ops | **shipped** | Live flat regroup on desktop; superclass stays flat unless payload carries explicit parent links |
+| Histogram / regroup | core + session-ops | **shipped** | Live flat regroup on desktop; superclass stays flat unless payload carries explicit parent links; M25.A: sortable ≤100-row pages + shared `histogramView` |
+| Histogram class → instances → Inspector | `list_class_instances` + investigation store | **shipped** | M25.A: class grouping only; bounded pages (100/200); shared `objectId` handoff (`9d00e2e`) |
 | Superclass collapsible tree | (no parent contract on regroup) | **open** | M22.D: expand/collapse only when returned entries include resolvable `parentKey`; current regroup/artifact payloads do not — no invented ancestry |
 | Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes |
+| Lazy dominator tree | session DominatorTree + `getDominatorChildren` | **shipped** | M25.B: expand-on-demand; retained-% filter; paired clear on unload (`8001f7c`, `104d62b`) |
+| Opt-in object fields | `inspect_object` retainFieldData | **shipped** | M25.C: lean inspect by default; CTA + memory-cost disclosure; unavailable vs empty (`9e587ce`) |
+| Path/ref synchronized navigation | investigation store | **shipped** | M25.C: refs/referrers/dominators/GC-path nodes set shared `objectId` (`76b5e5f`) |
 | Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
 | Duplicate arrays / plugins / classloaders | artifact sections + CLI | **shipped** | UI Loaded vs Unique (`5af03f9`); CLI Unique Classes column from existing `unique_class_count` (M22.D) |
 | Compare / leak workspace | bridges | **shipped** | `/compare` remains a separate comparison surface. M24.E in-workbench compare is **deferred** post-v0.5.0 and does not block the continuous shell cut. |

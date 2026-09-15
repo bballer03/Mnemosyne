@@ -31,11 +31,8 @@ const testBatches = [
     "src/features/heap-explorer/HeapObjectInspectorPage.test.tsx",
     "src/features/heap-explorer/HeapExplorerLayout.test.tsx",
     "src/features/heap-explorer/components/ExplorerCrossNavActions.test.tsx",
-    "src/features/heap-explorer/HeapDominatorPage.test.tsx",
     "src/features/heap-explorer/HeapQueryConsolePage.test.tsx",
     "src/features/dashboard/DashboardPage.test.tsx",
-    "src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx",
-    "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
   ],
   [
     "src/features/heap-explorer/components/ModeRail.test.tsx",
@@ -95,6 +92,18 @@ const testBatches = [
     // suites out of the already-heavy heap-explorer route batch.
     "src/features/artifact-explorer/ArtifactExplorerPage.test.tsx",
     "src/features/artifact-explorer/components/ClassInstancesPanel.test.tsx",
+  ],
+  [
+    // M25.B lazy dominator suites are route/jsdom heavy. Keep them in a
+    // fresh process instead of returning them to the heap-explorer batch
+    // that already approaches Bun's RSS ceiling.
+    "src/features/heap-explorer/HeapDominatorPage.test.tsx",
+    "src/features/heap-explorer/components/DominatorExplorerPanel.test.tsx",
+  ],
+  [
+    // M25.C expanded the inspector relation and field-state coverage.
+    // Run the panel in a fresh process to keep the full gate deterministic.
+    "src/features/heap-explorer/components/ObjectInspectorPanel.test.tsx",
   ],
 ];
 

@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-15 (**v0.4.3** current; **v0.5.0** release prep = M24 Continuous Heap Investigation A–D; M24.E in-workbench compare gated post-0.5.0; full UI→MAT maturity catalog **M24–M31+** — [maturity roadmap](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md); M24 product thesis — [design](superpowers/specs/2026-09-14-m24-continuous-heap-investigation-design.md))
+> **Last updated:** 2026-09-15 (**v0.5.0 shipped**; **M25** MAT loop depth evidenced on `feature/mat-maturity-m25-plus` — [m25 evidence](evidence/m25-mat-loop-depth.md); next **M26** async platform; M24.E compare gated; full catalog **M24–M31+** — [maturity roadmap](superpowers/specs/2026-09-15-ui-mat-maturity-roadmap-design.md))
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  

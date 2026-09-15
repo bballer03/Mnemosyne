@@ -402,11 +402,11 @@
 - Modify: `docs/roadmap.md`
 - Create: `docs/evidence/m25-mat-loop-depth.md`
 
-- [ ] **Step 1: Add new suites to a fresh or light test batch**
+- [x] **Step 1: Add new suites to a fresh or light test batch**
 
   Keep `ClassInstancesPanel.test.tsx` and lazy-tree tests out of any batch already known to approach the Bun/jsdom RSS ceiling.
 
-- [ ] **Step 2: Run supported local gates**
+- [x] **Step 2: Run supported local gates**
 
   Run:
 
@@ -423,15 +423,15 @@
 
   Expected: all focused commands exit 0. Do not run or claim packaged GUI smoke from WSL.
 
-- [ ] **Step 3: Record evidence honestly**
+- [x] **Step 3: Record evidence honestly**
 
   Document bounded row limits, lazy request behavior, field-data cost disclosure, fallback/truncation states, commands run, and a `NOT PROVEN` section for packaged/native UI behavior.
 
-- [ ] **Step 4: Update status/capability docs**
+- [x] **Step 4: Update status/capability docs**
 
   Mark only evidenced slices shipped. Keep native-host and MAT-golden claims gated.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/run-tests.ts STATUS.md docs/product/ui-capability-matrix.md docs/roadmap.md docs/evidence/m25-mat-loop-depth.md
