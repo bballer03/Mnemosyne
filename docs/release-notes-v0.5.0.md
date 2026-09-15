@@ -1,7 +1,7 @@
 # Mnemosyne v0.5.0 Release Notes
 
-> Release date: Pending human/CI cut
-> Tag: Not created by release-prep PR
+> Release date: 2026-09-15
+> Tag: v0.5.0
 > Previous release: [v0.4.3](release-notes-v0.4.3.md)
 
 Product release: make heap investigation continuous across the desktop workbench while keeping advisory findings and comparison scope explicit.
