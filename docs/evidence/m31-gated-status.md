@@ -1,7 +1,7 @@
 # M31+ gated follow-ons — status
 
 **Date:** 2026-09-16 (Wave 1 updated)
-**Plan stub:** [docs/superpowers/plans/2026-09-15-m31-gated-follow-ons.md](../superpowers/plans/2026-09-15-m31-gated-follow-ons.md)  
+**Plan stub:** [docs/superpowers/plans/2026-09-15-m31-gated-follow-ons.md](../superpowers/plans/2026-09-15-m31-gated-follow-ons.md)
 **Program design:** [docs/superpowers/specs/2026-09-15-eclipse-mat-equivalent-program-design.md](../superpowers/specs/2026-09-15-eclipse-mat-equivalent-program-design.md)
 
 Product owner opened selected gates for the **credible MAT-equivalent** program. macOS/Linux launch remains deferred.

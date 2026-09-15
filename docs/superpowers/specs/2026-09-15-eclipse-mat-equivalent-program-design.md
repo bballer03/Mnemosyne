@@ -1,8 +1,8 @@
 # Credible Eclipse MAT–equivalent product program
 
-**Date:** 2026-09-15  
-**Status:** **Sol APPROVED by product-owner autonomy** — gates for M31+/MAT golden/live AI/Open-heap opened for this program. macOS/Linux launch **explicitly deferred**.  
-**Owner:** Sol (agent autonomous execution)  
+**Date:** 2026-09-15
+**Status:** **Sol APPROVED by product-owner autonomy** — gates for M31+/MAT golden/live AI/Open-heap opened for this program. macOS/Linux launch **explicitly deferred**.
+**Owner:** Sol (agent autonomous execution)
 **Related:** [STATUS.md](../../../STATUS.md), [roadmap §2 MAT parity](../../roadmap.md), [m31-gated-status.md](../../evidence/m31-gated-status.md), [older-partials design](2026-09-15-older-partials-closeout-design.md)
 
 ## 1. Purpose
