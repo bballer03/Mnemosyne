@@ -57,25 +57,25 @@
 - Add `setHistogramView(patch: Partial<HistogramViewState>): void`
 - `bumpRevisionOnArtifactChange()` resets heap-bound selection and histogram view; route navigation within one revision does not.
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
   Cover updating search/sort/page, preserving them through `setObjectId(..., "histogram")`, and resetting them only when `bumpRevisionOnArtifactChange()` runs.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
   Run: `cd ui && bun test src/features/investigation/investigation-store.test.ts --max-concurrency=1`
 
   Expected: FAIL because `histogramView` and `setHistogramView` do not exist.
 
-- [ ] **Step 3: Add the minimal typed store state**
+- [x] **Step 3: Add the minimal typed store state**
 
   Keep the default `{ searchText: "", groupBy: "class", sortKey: "retained", sortDirection: "desc", pageOffset: 0 }`. Any search/group/sort change resets `pageOffset` to `0`.
 
-- [ ] **Step 4: Re-run the focused test**
+- [x] **Step 4: Re-run the focused test**
 
   Expected: PASS with route-local selection changes leaving histogram controls unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add ui/src/features/investigation/investigation-store.ts ui/src/features/investigation/investigation-store.test.ts
