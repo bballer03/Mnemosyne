@@ -7,6 +7,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 
 import { heapExplorerRoutes } from "../../test/app-route-trees";
 import { useArtifactStore } from "../artifact-loader/use-artifact-store";
+import { useInvestigationStore } from "../investigation/investigation-store";
 
 function createArtifactFixture() {
   return {
@@ -59,6 +60,13 @@ describe("HeapExplorerLayout", () => {
   beforeEach(() => {
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.setState({
+        revision: 0,
+        objectId: undefined,
+        classKey: undefined,
+        leakId: undefined,
+        originPane: undefined,
+      });
     });
   });
 
@@ -67,6 +75,7 @@ describe("HeapExplorerLayout", () => {
 
     act(() => {
       useArtifactStore.getState().reset();
+      useInvestigationStore.getState().clearSelection();
     });
 
     Object.defineProperty(window, "innerWidth", {
@@ -127,7 +136,7 @@ describe("HeapExplorerLayout", () => {
     );
   });
 
-  it("shows no selected object when the objectId search param does not match any dominator row", () => {
+  it("keeps an unmatched objectId search param as the shared selection seed", () => {
     act(() => {
       useArtifactStore.setState({
         artifactName: "fixture.json",
@@ -142,11 +151,14 @@ describe("HeapExplorerLayout", () => {
     const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
-    expect(page.getByText(/no object selected/i)).toBeInTheDocument();
-    expect(page.getByText(/awaiting selection/i)).toBeInTheDocument();
+    expect(page.getAllByText(/0xdoesnotexist/i).length).toBeGreaterThan(0);
+    expect(useInvestigationStore.getState()).toMatchObject({
+      objectId: "0xdoesnotexist",
+      originPane: "inspector",
+    });
     expect(page.getByRole("link", { name: /open query console/i })).toHaveAttribute(
       "href",
-      "/heap-explorer/query-console",
+      "/heap-explorer/query-console?objectId=0xdoesnotexist",
     );
   });
 
@@ -167,18 +179,20 @@ describe("HeapExplorerLayout", () => {
     const view = render(<RouterProvider router={router} />);
     const page = within(view.container);
 
-    expect(page.getByText(/no object selected/i)).toBeInTheDocument();
+    expect(page.getAllByText(/0xdoesnotexist/i).length).toBeGreaterThan(0);
     expect(page.getByRole("link", { name: /open query console/i })).toHaveAttribute(
       "href",
-      "/heap-explorer/query-console",
+      "/heap-explorer/query-console?objectId=0xdoesnotexist",
     );
 
     await user.click(page.getByRole("button", { name: /select com\.example\.cache 0xdeadbeef/i }));
 
-    expect(page.queryByText(/no object selected/i)).toBeNull();
-    expect(page.queryByText(/awaiting selection/i)).toBeNull();
     expect(page.getAllByText(/com\.example\.Cache/i).length).toBeGreaterThan(0);
     expect(page.getAllByText(/0xdeadbeef/i).length).toBeGreaterThan(0);
+    expect(useInvestigationStore.getState()).toMatchObject({
+      objectId: "0xdeadbeef",
+      originPane: "dominators",
+    });
     expect(page.getByRole("link", { name: /open query console/i })).toHaveAttribute(
       "href",
       "/heap-explorer/query-console?objectId=0xdeadbeef",

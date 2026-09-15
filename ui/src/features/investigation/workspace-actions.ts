@@ -13,6 +13,7 @@ import { useArtifactStore } from "../artifact-loader/use-artifact-store";
 import { useDashboardStore } from "../dashboard/dashboard-store";
 import { useComparisonStore } from "../comparison/comparison-store";
 import { useLeakWorkspaceStore } from "../leak-workspace/leak-workspace-store";
+import { useInvestigationStore } from "./investigation-store";
 
 export type OpenHeapPhase = "idle" | "picking" | "analyzing";
 
@@ -116,6 +117,7 @@ export async function openDesktopHeapLean(
 }
 
 export function applyOpenedHeap(displayName: string, artifact: AnalysisArtifact, sourceId?: string) {
+  useInvestigationStore.getState().bumpRevisionOnArtifactChange();
   useArtifactStore.getState().setArtifact(displayName, artifact);
   useDashboardStore.getState().reset();
   useArtifactStore.getState().addRecentLoad({
@@ -136,6 +138,7 @@ export function applyOpenedSnapshotSession(
   sourceId: string,
   objectCount: number,
 ) {
+  useInvestigationStore.getState().bumpRevisionOnArtifactChange();
   rememberDesktopHeapSource(sourceId, displayName);
   useArtifactStore.setState({
     artifactName: undefined,
@@ -166,4 +169,5 @@ export async function closeInvestigationWorkspace(): Promise<void> {
   useDashboardStore.getState().reset();
   useComparisonStore.getState().reset();
   useLeakWorkspaceStore.getState().reset();
+  useInvestigationStore.getState().bumpRevisionOnArtifactChange();
 }
