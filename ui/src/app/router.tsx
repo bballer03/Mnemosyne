@@ -29,6 +29,7 @@ import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
 import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
 import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
+import { PerspectiveSwitcher } from "../features/investigation/PerspectiveSwitcher";
 import { ComparisonWorkbenchPanel } from "../features/comparison/ComparisonWorkbenchPanel";
 
 /**
@@ -43,6 +44,7 @@ function InvestigationChromeLayout() {
     <>
       <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
         <HeapSessionBar />
+        <PerspectiveSwitcher />
         <FindingsAdvisoryPane />
         {location.pathname === "/compare" ? null : <ComparisonWorkbenchPanel variant="chrome" />}
       </div>
