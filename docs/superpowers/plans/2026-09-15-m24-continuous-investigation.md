@@ -67,7 +67,8 @@
 ### Task 24.D / 24.E
 
 - [x] Findings + Assistant as collapsible, provenance-labelled advisory pane with deterministic deep-links
-- [ ] Gate compare if needed; cut v0.5.0 when 24.A–C (+ D if ready) meet success criteria
+- [x] **Gate M24.E compare to post-v0.5.0 / the next slice.** Keep the existing standalone `/compare` surface; do not block the continuous shell cut on in-workbench compare.
+- [x] M24.A–D meet the scoped v0.5.0 success criteria; prepare release notes and the version bump for the human/CI cut.
 
 ---
 
@@ -75,4 +76,5 @@
 
 - Packaged desktop: open → investigate → open another → close without split-brain
 - Docs: STATUS, capability matrix, release notes
-- Version bump to 0.5.0 across workspace when cutting tag
+- Version bump to 0.5.0 across workspace before the human/CI tag cut
+- M24.E in-workbench compare is explicitly post-v0.5.0 and does not block this cut

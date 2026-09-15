@@ -1,6 +1,6 @@
-# UI capability matrix (M20–M23)
+# UI capability matrix (M20–M24)
 
-Status as of 2026-09-14 on `sync/m15g-m16bcd`. Legend: **shipped** | **partial** | **planned** | **deferred**.
+Status as of 2026-09-15 on `feature/v0.5.0-mat-maturity`. Legend: **shipped** | **partial** | **planned** | **deferred**.
 
 Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench.md), [docs/evidence/m23-guided-investigation.md](../evidence/m23-guided-investigation.md). No shipped heap-analysis capability below is left unclassified.
 
@@ -14,7 +14,7 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Dominators / Inspector / OQL / Threads | core + bridges | **shipped** | Power routes |
 | Strings / collections / top instances / unreachable | artifact sections | **shipped** | Detail panels + rail anchors (`6dbabb6`) |
 | Duplicate arrays / plugins / classloaders | artifact sections + CLI | **shipped** | UI Loaded vs Unique (`5af03f9`); CLI Unique Classes column from existing `unique_class_count` (M22.D) |
-| Compare / leak workspace | bridges | **shipped** | |
+| Compare / leak workspace | bridges | **shipped** | `/compare` remains a separate comparison surface. M24.E in-workbench compare is **deferred** post-v0.5.0 and does not block the continuous shell cut. |
 | Snapshots list/save/remove/open | `list_snapshots` / `save_snapshot` / `remove_snapshot` / `open_snapshot` | **shipped** | Key-only remove; basename in UI; open installs graph + opaque `sourceId` (`2dbe4f8`, `352b3d5`) |
 | Policies (`ci_check`) | Tauri `run_ci_check` | **shipped** | Inline TOML; skip ≠ pass; `evaluation_complete` (`2dbe4f8`, `9ca7a1b`); native/MCP parity tests still thin |
 | Flamegraphs | Tauri `generate_desktop_flamegraph` | **shipped** | SVG via blob URL; root selector (`2dbe4f8`); 16 MiB / overview-unavailability UI parity tests still thin (rely on core/MCP) |
@@ -30,6 +30,10 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 | Desktop AI session adapters | Tauri over MCP AI session | **shipped** | create/resume/get/close/chat; 12/32 bounds; rules fallback — **not** live-provider proof on WSL |
 | Workflow get/close/resume | Tauri + WorkflowCard | **shipped** | MCP-parity get/close; resume UI (`532df7c`); basename projection on get (`d391953`) |
 | AI-first guidance vs MAT analysis | advisory only | **partial** | Guidance never claims MAT-equivalent replacement; see M23 evidence NOT-proven table |
+| Continuous heap lifecycle | investigation store + desktop host | **shipped** | M24.A/B: persistent heap identity with **Open / Open another / Close**; failed replacement opens preserve the current session; recent/snapshot opens commit transactionally. |
+| Shared investigation selection | investigation store | **shipped** | M24.C: `objectId` / `classKey` / `leakId` selection synchronizes histogram, dominators, inspector, and deep-linked routes without stale-object precedence. |
+| Findings + Assistant advisory | rules-derived findings + investigation selection | **shipped** | M24.D: collapsible, Rules-labelled advisory pane with deterministic deep-links; findings remain guidance over deterministic analysis. |
+| In-workbench compare | existing comparison backend and `/compare` route | **deferred** | M24.E gated to post-v0.5.0 / the next slice. The standalone `/compare` route stays shipped and unchanged. |
 
 ## Honesty bar
 
@@ -37,3 +41,4 @@ Evidence notes: [docs/evidence/m20-ui-workbench.md](../evidence/m20-ui-workbench
 - This WSL host yields **command-layer / browser-fallback** evidence only. Do not treat green unit tests as packaged GUI launch proof or as a live AI provider round-trip.
 - Screenshot gallery per workbench family was **not** captured in the 20.H closeout; visual proof is absent, not implied.
 - M23 assistant Ask is **advisory** with explicit provenance; deterministic power tools remain the analysis path.
+- M24 findings remain **Rules-derived advisory** content, and compare remains an honest standalone surface until the post-v0.5.0 in-workbench slice.
