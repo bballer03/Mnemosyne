@@ -179,9 +179,230 @@
 
 ### M28.B — On-demand analyzers
 
-- [ ] Plan one host enrichment request over existing analyzer flags with field-data cost preview.
-- [ ] Commit results only to the matching revision/op and label partial/fallback/unavailable sections.
-- [ ] Add policy baseline picker, compare identity strategy controls, and recommendation content rather than count-only cards.
+**Owned files:**
+- Create: `ui/src/features/artifact-explorer/analyzer-enrichment-client.ts`
+- Create: `ui/src/features/artifact-explorer/analyzer-enrichment-client.test.ts`
+- Create: `ui/src/features/artifact-explorer/components/AnalyzerEnrichmentPanel.tsx`
+- Create: `ui/src/features/artifact-explorer/components/AnalyzerEnrichmentPanel.test.tsx`
+- Modify: `ui/src/features/artifact-explorer/ArtifactExplorerPage.tsx`
+- Modify: `ui/src/features/artifact-explorer/components/AnalyzerRail.tsx`
+- Modify: `ui/src/features/artifact-explorer/ArtifactExplorerPage.test.tsx`
+- Modify: `ui/src/features/policy/policy-bridge-client.ts`
+- Modify: `ui/src/features/policy/PolicyCheckPage.tsx`
+- Modify: `ui/src/features/policy/PolicyCheckPage.test.tsx`
+- Modify: `ui/src/features/comparison/ComparisonPicker.tsx`
+- Modify: `ui/src/features/comparison/ComparisonPicker.test.tsx`
+
+**Interfaces:**
+- `runAnalyzerEnrichment(selection)` sends exactly one `runDesktopAnalysis` host request with `mode: "custom"` and the existing `AnalyzeRequest`-backed analyzer flags. It accumulates already-present optional reports so a later enrichment does not silently discard prior analyzer results.
+- The injected Tauri bridge remains the operation-ID acceptance boundary. The enrichment client additionally captures `{ workspaceId, revision }` and commits the returned artifact only while that workspace revision still matches.
+- Field-data analyzers are exactly strings, collections, duplicate primitive arrays, and threads. Their preview must disclose a full host reparse with retained field/array bytes and potentially material peak-memory and duration cost. Referrers and classloaders remain deep graph analyzers but do not request field-data retention.
+- The lean Home open remains unchanged: strings, collections, duplicate arrays, threads, and referrers stay `false`; classloaders and top instances retain their existing lean defaults.
+- Analyzer outcomes never synthesize data. Missing bridge/source is `unavailable`; missing requested report after a successful response is `unavailable`; response-level `partial` and `fallback` provenance is rendered verbatim with its detail.
+- Policy growth rules use the existing `baselineSourceId` contract. Baseline selection returns an opaque source ID plus display-safe name and must not replace the remembered current heap.
+- M27 already shipped current/baseline snapshot pickers, identity strategy, top-N, leak cross-reference, match quality, and after-side navigation. M28.B adds only plain-language strategy/cost disclosure, especially that `FullFingerprint` reparses both heaps with retained field data.
+
+#### Task 1: One revision-safe analyzer enrichment request
+
+- [ ] **Step 1: Add failing client tests for one accumulated request**
+
+  In `analyzer-enrichment-client.test.ts`, seed a remembered desktop source, a current artifact with `topInstances` and `classloaderReport`, and a bridge spy. Request strings, collections, and referrers together. Assert one host call with:
+
+  ```ts
+  {
+    sourceId: "src-current",
+    mode: "custom",
+    enableClassloaders: true,
+    enableThreads: false,
+    enableStrings: true,
+    enableCollections: true,
+    enableTopInstances: true,
+    enableByReferrer: true,
+    enableDuplicateArrays: false,
+  }
+  ```
+
+  Return a valid enriched artifact and assert it replaces the artifact facts without bumping the current investigation revision.
+
+- [ ] **Step 2: Add failing stale/unavailable/provenance tests**
+
+  Use a deferred bridge promise, change the investigation revision before resolving it, and assert the stale result does not replace the current artifact. Add missing-source and missing-bridge cases that return `unavailable`. Add a response with `Partial` and `Fallback` markers plus one missing requested report and assert the result preserves those markers and identifies the missing section as unavailable.
+
+- [ ] **Step 3: Run the client test and verify RED**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/analyzer-enrichment-client.test.ts --max-concurrency=1`
+
+  Expected: FAIL because no workspace analyzer-enrichment client exists.
+
+- [ ] **Step 4: Implement the minimal enrichment client**
+
+  Add:
+
+  ```ts
+  export type AnalyzerSelection = {
+    strings: boolean;
+    collections: boolean;
+    duplicateArrays: boolean;
+    threads: boolean;
+    referrers: boolean;
+    classloaders: boolean;
+  };
+
+  export type AnalyzerEnrichmentResult =
+    | { status: "ready"; requested: string[]; unavailable: string[]; provenance: ArtifactProvenanceMarker[] }
+    | { status: "stale" }
+    | { status: "unavailable"; message: string }
+    | { status: "error"; message: string };
+  ```
+
+  Read the remembered opaque source, current artifact/name, and current workspace/revision. Call `runDesktopAnalysis` once with the selected-or-already-present flags, parse with `parseAnalysisArtifact`, then re-read the investigation identity before calling `useArtifactStore.setState`. Do not bump the revision or mutate facts on stale, unavailable, or invalid responses.
+
+- [ ] **Step 5: Run the client test and verify GREEN**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/analyzer-enrichment-client.test.ts --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 2: Opt-in analyzer controls and honest outcomes
+
+- [ ] **Step 1: Add failing focused panel tests**
+
+  Render only `AnalyzerEnrichmentPanel`. Assert all six analyzer choices are opt-in and unselected initially. Selecting strings plus referrers must show that strings require retained field data while referrers do not. Before confirmation, assert the preview says the host reparses the current heap, retains field/array bytes, and may materially increase peak memory and duration.
+
+- [ ] **Step 2: Add failing one-submit and outcome-label tests**
+
+  Confirm once and assert the panel calls `runAnalyzerEnrichment` once with the complete selection. Cover `ready`, `stale`, `unavailable`, and `error` statuses. For ready responses, render requested-section availability and every returned `Partial`/`Fallback` marker and detail; never convert an unavailable report into an empty success.
+
+- [ ] **Step 3: Run the panel test and verify RED**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/components/AnalyzerEnrichmentPanel.test.tsx --max-concurrency=1`
+
+  Expected: FAIL because the opt-in panel does not exist.
+
+- [ ] **Step 4: Implement and mount the focused panel**
+
+  Add the panel above the analyzer rail in `ArtifactExplorerPage.tsx`. Keep the submit button disabled until at least one analyzer is selected and while a request is running. Field-data choices must require an explicit confirmation step after the preview; non-field choices may run directly. The page continues to mount its existing artifact-backed detail panels and never mounts a production route tree in tests.
+
+- [ ] **Step 5: Prove lean open remains unchanged**
+
+  Run: `cd ui && bun test src/features/artifact-loader/ArtifactLoaderPage.test.tsx --max-concurrency=1`
+
+  Expected: PASS, including the existing assertion that first open sends `false` for threads, strings, collections, referrers, and duplicate arrays.
+
+- [ ] **Step 6: Run focused explorer tests**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/components/AnalyzerEnrichmentPanel.test.tsx src/features/artifact-explorer/ArtifactExplorerPage.test.tsx --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 3: Recommendation content and analyzer-state honesty
+
+- [ ] **Step 1: Add failing analyzer-rail assertions**
+
+  Extend `ArtifactExplorerPage.test.tsx` so the recommendation card renders the actual recommendation text, not only its count. Add response-level `Partial` and `Fallback` provenance fixtures and assert their labels/details are visible. Assert absent optional analyzer sections use an `UNAVAILABLE` label rather than implying that an analyzer ran and found zero rows.
+
+- [ ] **Step 2: Run the explorer test and verify RED**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/ArtifactExplorerPage.test.tsx --max-concurrency=1`
+
+  Expected: FAIL because recommendations are count-only and absent sections use `SECTION_ABSENT`.
+
+- [ ] **Step 3: Render bounded recommendation content and provenance**
+
+  In `AnalyzerRail.tsx`, render up to the first three recommendation strings as list content and disclose the remaining count. Render response-level partial/fallback provenance markers with their details. Rename the absent-state badge to `UNAVAILABLE`; preserve distinct `EMPTY` for analyzers that ran successfully and returned no findings.
+
+- [ ] **Step 4: Run the explorer test and verify GREEN**
+
+  Run: `cd ui && bun test src/features/artifact-explorer/ArtifactExplorerPage.test.tsx --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 4: Policy baseline picker over opaque sources
+
+- [ ] **Step 1: Add failing policy tests**
+
+  In `PolicyCheckPage.test.tsx`, enter an `object_growth_threshold` policy and assert Run is blocked with an actionable baseline message until a baseline is selected. Mock the heap picker, select `baseline.hprof`, and assert `runCiCheck` receives `baselineSourceId: "src-baseline"` while the remembered current source remains `src-current`. Add cancelled and unavailable picker states.
+
+- [ ] **Step 2: Run the policy test and verify RED**
+
+  Run: `cd ui && bun test src/features/policy/PolicyCheckPage.test.tsx --max-concurrency=1`
+
+  Expected: FAIL because the page never gathers or sends `baselineSourceId`.
+
+- [ ] **Step 3: Add the baseline-source helper and picker**
+
+  Add `pickDesktopBaselineSource()` to `policy-bridge-client.ts` as a thin wrapper around `pickHeapFile()` that returns only selected/cancelled/unavailable/error outcomes and never calls `rememberDesktopHeapSource`. In `PolicyCheckPage.tsx`, render the optional baseline picker, show only the host-provided display name, detect the exact `predicate = "object_growth_threshold"` declaration, require a baseline for that policy, and pass the opaque baseline source ID to `runCiCheck`.
+
+- [ ] **Step 4: Run the policy test and verify GREEN**
+
+  Run: `cd ui && bun test src/features/policy/PolicyCheckPage.test.tsx --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 5: Compare identity-strategy disclosure only
+
+- [ ] **Step 1: Add failing disclosure assertions**
+
+  Extend `ComparisonPicker.test.tsx` to assert each existing identity-strategy choice has plain-language precision/trade-off copy. For `FullFingerprint`, require an explicit warning that both heaps are reparsed with retained field data and may use materially more memory and time.
+
+- [ ] **Step 2: Run the picker test and verify RED**
+
+  Run: `cd ui && bun test src/features/comparison/ComparisonPicker.test.tsx --max-concurrency=1`
+
+  Expected: FAIL because the M27 control exists but does not explain strategy semantics or cost.
+
+- [ ] **Step 3: Add disclosure without widening compare behavior**
+
+  Add an immutable description map keyed by `IdentityStrategy` and render the active description below the existing select. Do not add another strategy control, change defaults, alter bridge inputs, or touch diff identity logic.
+
+- [ ] **Step 4: Run the picker test and verify GREEN**
+
+  Run: `cd ui && bun test src/features/comparison/ComparisonPicker.test.tsx --max-concurrency=1`
+
+  Expected: PASS.
+
+#### Task 6: M28.B verification and implementation commits
+
+- [ ] **Step 1: Run all focused M28.B tests**
+
+  Run:
+
+  ```bash
+  cd ui && bun test \
+    src/features/artifact-explorer/analyzer-enrichment-client.test.ts \
+    src/features/artifact-explorer/components/AnalyzerEnrichmentPanel.test.tsx \
+    src/features/artifact-explorer/ArtifactExplorerPage.test.tsx \
+    src/features/artifact-loader/ArtifactLoaderPage.test.tsx \
+    src/features/policy/PolicyCheckPage.test.tsx \
+    src/features/comparison/ComparisonPicker.test.tsx \
+    src/host/tauri-bridge.test.ts \
+    --max-concurrency=1
+  ```
+
+  Expected: PASS without mounting production routes.
+
+- [ ] **Step 2: Run TypeScript lint and production build**
+
+  Run: `cd ui && bun run lint && bun run build`
+
+  Expected: both commands exit 0.
+
+- [ ] **Step 3: Review scope**
+
+  Run: `git diff --check && git status --short`
+
+  Expected: only M28.B-owned source/tests plus this plan are changed; untracked `.claude/skills/gitnexus-*` remain untouched. GitNexus change detection is attempted only when its tools are available and never blocks this slice.
+
+- [ ] **Step 4: Commit implementation**
+
+  ```bash
+  git add ui/src/features/artifact-explorer \
+    ui/src/features/artifact-loader/ArtifactLoaderPage.test.tsx \
+    ui/src/features/policy \
+    ui/src/features/comparison/ComparisonPicker.tsx \
+    ui/src/features/comparison/ComparisonPicker.test.tsx
+  git commit -m "feat(ui): add on-demand analyzer enrichment"
+  ```
 
 ### M28.C — Visualization and export
 
