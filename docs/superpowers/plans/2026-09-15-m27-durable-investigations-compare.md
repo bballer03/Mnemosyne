@@ -760,7 +760,458 @@ Expected: only M27.B plan/core/snapshot host/UI files are committed; M27.C compa
 
 ### M27.C — Integrated compare
 
-- [ ] Move current/baseline selection into workbench chrome while preserving the standalone `/compare` route as an adapter.
-- [ ] Expose identity strategy, top-N, cross-reference-leaks, and match quality.
-- [ ] Make after-side object deltas set shared `objectId` and open Inspector.
-- [ ] Record focused evidence and `NOT PROVEN` packaged behavior before marking M27 shipped.
+#### Frozen integration contract
+
+The comparison surface is one shared workbench capability, not a second analyzer or a route-owned workflow. `ComparisonWorkbenchPanel` renders beside the persistent investigation chrome whenever an artifact is open; the standalone `/compare` page remains a thin adapter that renders the same picker/results components without duplicating state or host calls. The picker lists cached snapshots through the existing workflow bridge, preselects the current side only when the active workspace has an exact `{ kind: "snapshot", key }` persistence identity, and never guesses from a display name or absolute path.
+
+Live requests keep the existing `runDiffObjects` → `window.__MNEMOSYNE_COMPARISON_BRIDGE__.diffObjects` → Tauri `diff_objects` → `diff_objects_for_session` chain. They send:
+
+```ts
+type DiffObjectsInput = {
+  beforeKey: string; // selected baseline snapshot key
+  afterKey: string; // selected current snapshot key
+  strategy: "ClassRetained" | "ClassDominator" | "FullFingerprint";
+  topN: number; // integer, 1..500; default 50
+  crossReferenceLeaks: boolean; // default false
+};
+```
+
+No graph, heap path, field value, or diff payload enters workspace persistence. Snapshot labels are display-safe basenames from `runListSnapshots`; option values are opaque SHA-256 keys. The result continues to land in `useComparisonStore`, and `MatchQualityBadge` remains the single renderer for collision rate and false-match/false-split risk.
+
+Only `Added` and `RetainedChanged` rows have an after-side object. Their Inspector action converts `exampleObjectId` to the shared string ID, calls `useInvestigationStore.getState().setObjectId(id, "inspector")`, and navigates to `/heap-explorer/object-inspector?objectId=<encoded>`. `Removed` rows remain non-navigable because that object is absent from the current/after heap.
+
+#### Task 8: Add snapshot-backed live comparison controls
+
+**Files:**
+- Modify: `ui/src/features/comparison/comparison-store.ts`
+- Modify: `ui/src/features/comparison/comparison-bridge-client.ts`
+- Modify: `ui/src/features/comparison/comparison-bridge-client.test.ts`
+- Modify: `ui/src/features/comparison/ComparisonPicker.tsx`
+- Modify: `ui/src/features/comparison/ComparisonPicker.test.tsx`
+
+**Interfaces:**
+- Consumes: `runListSnapshots()` and display-safe `SnapshotManifest` from `workflow-landing/workflow-bridge-client.ts`.
+- Consumes: active `persistenceIdentity` from `useInvestigationStore`; only exact snapshot identity may seed `liveAfterKey`.
+- Produces: comparison-store fields `identityStrategy`, `topN`, and `crossReferenceLeaks` plus setters.
+- Changes: `DiffObjectsInput` requires the selected strategy, bounded top-N, and leak-cross-reference flag.
+- Preserves: diff-report JSON upload and explicit bridge-unavailable behavior.
+
+- [ ] **Step 1: Write failing store/bridge option-forwarding tests**
+
+```ts
+it("forwards the selected comparison options unchanged", async () => {
+  let received: DiffObjectsInput | undefined;
+  setComparisonBridge({
+    diffObjects: async (input) => {
+      received = input;
+      return rawEmptyObjectDiff;
+    },
+  });
+
+  await runDiffObjects({
+    beforeKey: "baseline-key",
+    afterKey: "current-key",
+    strategy: "FullFingerprint",
+    topN: 25,
+    crossReferenceLeaks: true,
+  });
+
+  expect(received).toEqual({
+    beforeKey: "baseline-key",
+    afterKey: "current-key",
+    strategy: "FullFingerprint",
+    topN: 25,
+    crossReferenceLeaks: true,
+  });
+});
+```
+
+- [ ] **Step 2: Run focused bridge tests and verify RED**
+
+Run: `cd ui && bun test src/features/comparison/comparison-bridge-client.test.ts --max-concurrency=1`
+
+Expected: TypeScript/test failure because `DiffObjectsInput` does not expose `crossReferenceLeaks` and the required option contract is absent.
+
+- [ ] **Step 3: Add minimal comparison option state and bridge contract**
+
+```ts
+const initialState = {
+  // existing fields
+  identityStrategy: "ClassDominator" as IdentityStrategy,
+  topN: 50,
+  crossReferenceLeaks: false,
+};
+
+export type DiffObjectsInput = {
+  beforeKey: string;
+  afterKey: string;
+  strategy: IdentityStrategy;
+  topN: number;
+  crossReferenceLeaks: boolean;
+};
+```
+
+The store setters clamp top-N to an integer in `1..500`. `reset()` restores all three defaults.
+
+- [ ] **Step 4: Write failing picker tests for current/baseline snapshots and controls**
+
+```ts
+it("lists snapshot basenames and seeds current from the exact snapshot identity", async () => {
+  seedSnapshotIdentity("current-key");
+  installSnapshotList([
+    snapshot("baseline-key", "/private/heaps/baseline.hprof"),
+    snapshot("current-key", "/private/heaps/current.hprof"),
+  ]);
+
+  const view = render(<ComparisonPicker />);
+
+  expect(await view.findByRole("option", { name: "current.hprof" })).toBeInTheDocument();
+  expect(view.getByLabelText(/current snapshot/i)).toHaveValue("current-key");
+  expect(view.getByLabelText(/baseline snapshot/i)).toHaveValue("");
+  expect(view.queryByText("/private/heaps/current.hprof")).not.toBeInTheDocument();
+});
+
+it("submits strategy, top-N, and leak cross-reference", async () => {
+  const calls: DiffObjectsInput[] = [];
+  installSnapshotList([
+    snapshot("baseline-key", "baseline.hprof"),
+    snapshot("current-key", "current.hprof"),
+  ]);
+  installComparisonBridge(async (input) => {
+    calls.push(input);
+    return rawEmptyObjectDiff;
+  });
+  const user = userEvent.setup();
+  const view = render(<ComparisonPicker />);
+
+  await user.selectOptions(await view.findByLabelText(/current snapshot/i), "current-key");
+  await user.selectOptions(view.getByLabelText(/baseline snapshot/i), "baseline-key");
+  await user.selectOptions(view.getByLabelText(/identity strategy/i), "FullFingerprint");
+  await user.clear(view.getByLabelText(/top n/i));
+  await user.type(view.getByLabelText(/top n/i), "25");
+  await user.click(view.getByLabelText(/cross-reference leaks/i));
+  await user.click(view.getByRole("button", { name: /run live diff/i }));
+
+  expect(calls).toEqual([{
+    beforeKey: "baseline-key",
+    afterKey: "current-key",
+    strategy: "FullFingerprint",
+    topN: 25,
+    crossReferenceLeaks: true,
+  }]);
+});
+```
+
+- [ ] **Step 5: Run picker tests and verify RED**
+
+Run: `cd ui && bun test src/features/comparison/ComparisonPicker.test.tsx --max-concurrency=1`
+
+Expected: FAIL because live compare still uses opaque text fields, does not list snapshots, and does not expose the three options.
+
+- [ ] **Step 6: Implement the display-safe snapshot controls**
+
+Use `runListSnapshots()` once per picker mount when both list and diff bridges are available. Render explicit loading, empty, unavailable, and error states. The current and baseline `<select>` values are snapshot keys; labels use only `manifest.heapPath`, which the existing parser has already reduced to a basename. Seed the current side with:
+
+```ts
+const persistenceIdentity = useInvestigationStore.getState().persistenceIdentity;
+if (persistenceIdentity?.kind === "snapshot") {
+  setLiveAfterKey(persistenceIdentity.key);
+}
+```
+
+Submit the live request as:
+
+```ts
+await runDiffObjects({
+  beforeKey: liveBeforeKey,
+  afterKey: liveAfterKey,
+  strategy: identityStrategy,
+  topN,
+  crossReferenceLeaks,
+});
+```
+
+- [ ] **Step 7: Run picker, bridge, and store tests and verify GREEN**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/comparison/comparison-bridge-client.test.ts \
+  src/features/comparison/ComparisonPicker.test.tsx \
+  --max-concurrency=1
+```
+
+Expected: all focused controls and forwarding tests PASS; the JSON-upload and unavailable-state tests remain green.
+
+- [ ] **Step 8: Commit live comparison controls**
+
+```bash
+git add ui/src/features/comparison/comparison-store.ts \
+  ui/src/features/comparison/comparison-bridge-client.ts \
+  ui/src/features/comparison/comparison-bridge-client.test.ts \
+  ui/src/features/comparison/ComparisonPicker.tsx \
+  ui/src/features/comparison/ComparisonPicker.test.tsx
+git commit -m "feat(ui): add snapshot comparison controls"
+```
+
+#### Task 9: Share compare results with investigation chrome
+
+**Files:**
+- Create: `ui/src/features/comparison/ComparisonResults.tsx`
+- Create: `ui/src/features/comparison/ComparisonWorkbenchPanel.tsx`
+- Create: `ui/src/features/comparison/ComparisonWorkbenchPanel.test.tsx`
+- Modify: `ui/src/features/comparison/ComparisonPage.tsx`
+- Modify: `ui/src/features/comparison/ComparisonPage.test.tsx`
+- Modify: `ui/src/app/router.tsx`
+
+**Interfaces:**
+- Produces: `ComparisonResults`, the single store-backed match-quality/delta renderer.
+- Produces: `ComparisonWorkbenchPanel({ variant: "chrome" | "route" })`.
+- Consumes: `useArtifactStore` in chrome mode so no compare control renders without an active artifact.
+- Preserves: `/compare`, report JSON loading, no-differences copy, and all existing comparison-store state.
+
+- [ ] **Step 1: Write a failing focused workbench-panel test**
+
+```ts
+it("opens current-vs-baseline compare beside an active investigation", async () => {
+  seedArtifact("current.hprof");
+  const view = render(
+    <MemoryRouter>
+      <ComparisonWorkbenchPanel variant="chrome" />
+    </MemoryRouter>,
+  );
+
+  await userEvent.click(view.getByRole("button", { name: /compare current to baseline/i }));
+  expect(view.getByLabelText(/comparison picker/i)).toBeInTheDocument();
+});
+
+it("does not render chrome controls without an active artifact", () => {
+  const view = render(
+    <MemoryRouter>
+      <ComparisonWorkbenchPanel variant="chrome" />
+    </MemoryRouter>,
+  );
+  expect(view.queryByRole("button", { name: /compare current to baseline/i })).toBeNull();
+});
+```
+
+- [ ] **Step 2: Run the panel test and verify RED**
+
+Run: `cd ui && bun test src/features/comparison/ComparisonWorkbenchPanel.test.tsx --max-concurrency=1`
+
+Expected: FAIL because the shared workbench panel does not exist.
+
+- [ ] **Step 3: Extract one results renderer and add the chrome panel**
+
+```tsx
+export function ComparisonResults() {
+  const { diffReport, loadStatus } = useComparisonStore();
+  // Render loading, MatchQualityBadge, explicit empty state, and the three
+  // ObjectDeltaTable sections exactly once for both hosts.
+}
+```
+
+Chrome mode renders a compact closed button first and mounts `ComparisonPicker`/`ComparisonResults` only after the user expands it. Route mode is always expanded and keeps the report-file adapter visible.
+
+- [ ] **Step 4: Make `/compare` a thin adapter and wire chrome placement**
+
+`ComparisonPage` keeps its heading/navigation and renders only:
+
+```tsx
+<ComparisonWorkbenchPanel variant="route" />
+```
+
+`InvestigationChromeLayout` renders `<ComparisonWorkbenchPanel variant="chrome" />` below `HeapSessionBar`/`FindingsAdvisoryPane`, except on `/compare` where the route adapter already owns the shared panel. Use `useLocation()` for that duplicate-surface guard.
+
+- [ ] **Step 5: Run focused panel/page tests and verify GREEN**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/comparison/ComparisonWorkbenchPanel.test.tsx \
+  src/features/comparison/ComparisonPage.test.tsx \
+  --max-concurrency=1
+```
+
+Expected: all tests PASS using minimal `MemoryRouter` trees; no test imports or mounts production `routes`.
+
+- [ ] **Step 6: Commit workbench integration**
+
+```bash
+git add ui/src/features/comparison/ComparisonResults.tsx \
+  ui/src/features/comparison/ComparisonWorkbenchPanel.tsx \
+  ui/src/features/comparison/ComparisonWorkbenchPanel.test.tsx \
+  ui/src/features/comparison/ComparisonPage.tsx \
+  ui/src/features/comparison/ComparisonPage.test.tsx \
+  ui/src/app/router.tsx
+git commit -m "feat(ui): integrate compare into workbench"
+```
+
+#### Task 10: Navigate after-side deltas to Inspector
+
+**Files:**
+- Modify: `ui/src/features/comparison/ObjectDeltaTable.tsx`
+- Modify: `ui/src/features/comparison/ObjectDeltaTable.test.tsx`
+
+**Interfaces:**
+- Consumes: shared `useInvestigationStore.setObjectId`.
+- Produces: Inspector links for `Added` and `RetainedChanged` example objects.
+- Preserves: `Removed` rows as evidence-only because no after-side object exists.
+
+- [ ] **Step 1: Write failing after-side navigation tests**
+
+```ts
+it.each(["Added", "RetainedChanged"] as const)(
+  "sets shared objectId and opens Inspector for %s rows",
+  async (kind) => {
+    const delta = deltaFor(kind, 4096);
+    const router = createMemoryRouter(
+      [
+        { path: "/compare", element: <ObjectDeltaTable kind={kind} deltas={[delta]} /> },
+        { path: "/heap-explorer/object-inspector", element: <div>Inspector</div> },
+      ],
+      { initialEntries: ["/compare"] },
+    );
+    const view = render(<RouterProvider router={router} />);
+
+    await userEvent.click(view.getByRole("link", { name: /inspect after object 4096/i }));
+
+    expect(useInvestigationStore.getState()).toMatchObject({
+      objectId: "4096",
+      originPane: "inspector",
+    });
+    expect(view.getByText("Inspector")).toBeInTheDocument();
+  },
+);
+
+it("does not offer after-side navigation for removed rows", () => {
+  const view = render(
+    <MemoryRouter>
+      <ObjectDeltaTable kind="Removed" deltas={[removedDelta]} />
+    </MemoryRouter>,
+  );
+  expect(view.queryByRole("link", { name: /inspect after object/i })).toBeNull();
+});
+```
+
+- [ ] **Step 2: Run the table test and verify RED**
+
+Run: `cd ui && bun test src/features/comparison/ObjectDeltaTable.test.tsx --max-concurrency=1`
+
+Expected: FAIL because delta rows render example IDs as text only.
+
+- [ ] **Step 3: Add the after-side Inspector link**
+
+For `kind !== "Removed"`, render:
+
+```tsx
+<Link
+  to={`/heap-explorer/object-inspector?objectId=${encodeURIComponent(String(delta.exampleObjectId))}`}
+  onClick={() =>
+    useInvestigationStore.getState().setObjectId(String(delta.exampleObjectId), "inspector")
+  }
+>
+  Inspect after object {delta.exampleObjectId}
+</Link>
+```
+
+- [ ] **Step 4: Run the table and shared-selection tests and verify GREEN**
+
+Run:
+
+```bash
+cd ui
+bun test src/features/comparison/ObjectDeltaTable.test.tsx \
+  src/features/investigation/investigation-store.test.ts \
+  --max-concurrency=1
+```
+
+Expected: all tests PASS and removed rows remain non-navigable.
+
+- [ ] **Step 5: Commit Inspector drill-down**
+
+```bash
+git add ui/src/features/comparison/ObjectDeltaTable.tsx \
+  ui/src/features/comparison/ObjectDeltaTable.test.tsx
+git commit -m "feat(ui): inspect after-side diff objects"
+```
+
+#### Task 11: Verify and close M27
+
+**Files:**
+- Create: `docs/evidence/m27-durable-investigations.md`
+- Modify: `docs/superpowers/plans/2026-09-15-m27-durable-investigations-compare.md`
+- Modify: `STATUS.md`
+- Modify: `docs/product/ui-capability-matrix.md`
+- Modify: `docs/roadmap.md`
+
+**Interfaces:**
+- Records: command evidence for M27.A/B/C and the exact commit range.
+- Records: packaged GUI launch as `NOT PROVEN` on WSL; unit/build evidence is not launch evidence.
+- Preserves: M28 as next work only; no M28 implementation begins.
+
+- [ ] **Step 1: Run the complete focused M27.C matrix**
+
+```bash
+cd ui
+bun test src/features/comparison/comparison-bridge-client.test.ts \
+  src/features/comparison/ComparisonPicker.test.tsx \
+  src/features/comparison/ComparisonWorkbenchPanel.test.tsx \
+  src/features/comparison/ComparisonPage.test.tsx \
+  src/features/comparison/ObjectDeltaTable.test.tsx \
+  src/features/investigation/investigation-store.test.ts \
+  --max-concurrency=1
+bun run lint
+bun run build
+```
+
+Expected: focused tests PASS, lint is clean, and the production TypeScript build succeeds. No test mounts the full production route tree.
+
+- [ ] **Step 2: Re-run the M27.B host/core evidence needed for milestone closeout**
+
+```bash
+cargo test -p mnemosyne-core snapshot_analysis_ -- --nocapture
+cargo test --manifest-path tauri/session-ops/Cargo.toml --features test-fixtures \
+  open_snapshot_for_session -- --nocapture
+```
+
+Expected: source-independent snapshot facts and session snapshot reopen tests PASS. Do not claim a packaged GUI launch or native Tauri bundle from these commands.
+
+- [ ] **Step 3: Record evidence and synchronize milestone status**
+
+The evidence file names M27.A display-safe persistence tests, M27.B transactional hydrate tests, M27.C picker/options/match-quality/Inspector tests, lint/build results, and the unchanged analyzer chain. It includes this explicit row:
+
+```md
+| Packaged desktop GUI: reopen persisted workspace, compare snapshots, open Inspector | NOT PROVEN | WSL cannot provide native packaged-GUI launch evidence. |
+```
+
+Mark completed A/B/C plan checkboxes, set M27 shipped-with-caveat in `STATUS.md`, update the capability matrix comparison/durability rows, and change roadmap “next” to M28 without starting it.
+
+- [ ] **Step 4: Run documentation and diff checks**
+
+Run:
+
+```bash
+git diff --check
+git status --short
+git log --oneline -12
+```
+
+Expected: only M27.C implementation/tests and M27 closeout docs are changed or newly committed; untracked `.claude/skills/gitnexus-*` remain ignored.
+
+- [ ] **Step 5: Commit M27 closeout**
+
+```bash
+git add docs/evidence/m27-durable-investigations.md \
+  docs/superpowers/plans/2026-09-15-m27-durable-investigations-compare.md \
+  STATUS.md docs/product/ui-capability-matrix.md docs/roadmap.md
+git commit -m "docs(m27): record durable compare evidence"
+```
+
+- [ ] **Step 6: Push the completed milestone**
+
+Run: `git push origin feature/mat-maturity-m25-plus`
+
+Expected: the remote branch advances through the M27.C implementation and closeout commits without force.
