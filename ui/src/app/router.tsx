@@ -5,6 +5,7 @@ import {
   createBrowserRouter,
   RouterProvider,
   type RouteObject,
+  useLocation,
 } from "react-router-dom";
 
 import { ArtifactLoaderPage } from "../features/artifact-loader/ArtifactLoaderPage";
@@ -28,6 +29,7 @@ import { FlamegraphPage } from "../features/flamegraph/FlamegraphPage";
 import { InvestigationAssistantPage } from "../features/assistant/InvestigationAssistantPage";
 import { FindingsAdvisoryPane } from "../features/investigation/FindingsAdvisoryPane";
 import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
+import { ComparisonWorkbenchPanel } from "../features/comparison/ComparisonWorkbenchPanel";
 
 /**
  * Persistent Open another / Close chrome for every route once a heap is loaded.
@@ -35,11 +37,14 @@ import { HeapSessionBar } from "../features/investigation/HeapSessionBar";
  * test collisions — see M14 note below.
  */
 function InvestigationChromeLayout() {
+  const location = useLocation();
+
   return (
     <>
       <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
         <HeapSessionBar />
         <FindingsAdvisoryPane />
+        {location.pathname === "/compare" ? null : <ComparisonWorkbenchPanel variant="chrome" />}
       </div>
       <Outlet />
     </>
