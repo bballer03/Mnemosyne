@@ -3,6 +3,7 @@ identifier = "allow-desktop-commands"
 description = "Enables all Mnemosyne desktop heap / workflow / assistant IPC commands for the main window."
 commands.allow = [
   "pick_heap_file",
+  "take_startup_heap_file",
   "load_heap_from_source",
   "run_desktop_analysis",
   "run_ci_check",

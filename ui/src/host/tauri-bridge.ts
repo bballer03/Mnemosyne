@@ -177,6 +177,8 @@ export async function injectHostBridges(): Promise<boolean> {
 
   hostWindow.__MNEMOSYNE_DESKTOP_HEAP_BRIDGE__ = {
     pickHeapFile: async () => normalizePickHeapFileResult(await call("pick_heap_file")),
+    takeStartupHeapFile: async () =>
+      normalizePickHeapFileResult(await call("take_startup_heap_file")),
     loadHeapFromSource: (sourceId) =>
       invokeOperation("open", (context) => call("load_heap_from_source", { sourceId, context })),
     runDesktopAnalysis: (input) =>

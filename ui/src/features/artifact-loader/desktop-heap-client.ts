@@ -36,6 +36,7 @@ export type DesktopExportResult = {
 
 export type DesktopHeapBridge = {
   pickHeapFile?: () => Promise<PickHeapFileResult>;
+  takeStartupHeapFile?: () => Promise<PickHeapFileResult>;
   loadHeapFromSource?: (sourceId: string) => Promise<HeapLoadSummary>;
   runDesktopAnalysis?: (input: DesktopAnalysisInput) => Promise<unknown>;
   unloadHeap?: () => Promise<void>;
@@ -85,6 +86,15 @@ export async function pickHeapFile(): Promise<PickHeapFileResult> {
   }
 
   return bridge.pickHeapFile();
+}
+
+export async function takeStartupHeapFile(): Promise<PickHeapFileResult> {
+  const bridge = getDesktopHeapBridge();
+  if (!bridge?.takeStartupHeapFile) {
+    return { status: "unavailable" };
+  }
+
+  return bridge.takeStartupHeapFile();
 }
 
 export async function loadHeapFromSource(sourceId: string): Promise<HeapLoadSummary> {
