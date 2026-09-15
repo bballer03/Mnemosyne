@@ -26,6 +26,10 @@ import {
   type WorkspacePersistenceIdentity,
   type WorkspaceRestoreResult,
 } from "./workspace-persistence";
+import {
+  DEFAULT_PERSPECTIVE_ID,
+  type PerspectiveId,
+} from "./perspectives";
 
 export type InvestigationOriginPane =
   | "histogram"
@@ -111,6 +115,7 @@ type InvestigationState = InvestigationSelection & {
   activeOperation?: ActiveOperation;
   analysisMode?: WorkspaceAnalysisMode;
   capabilities?: WorkspaceAnalysisCapabilities;
+  perspectiveId: PerspectiveId;
   histogramView: HistogramViewState;
   persistenceIdentity?: WorkspacePersistenceIdentity;
   notes: WorkspaceNote[];
@@ -128,6 +133,7 @@ type InvestigationState = InvestigationSelection & {
   requestOperationCancellation: (context: OperationContext) => boolean;
   rejectOperationCancellation: (context: OperationContext) => boolean;
   finishOperation: (context: OperationContext, status: OperationPhase) => boolean;
+  setPerspectiveId: (perspectiveId: PerspectiveId) => void;
   setHistogramView: (patch: Partial<HistogramViewState>) => void;
   setObjectId: (objectId: string | undefined, originPane: InvestigationOriginPane) => void;
   setClassKey: (classKey: string | undefined, originPane: InvestigationOriginPane) => void;
@@ -224,7 +230,10 @@ function buildPersistedWorkspace(state: InvestigationState): PersistedWorkspaceV
     schemaVersion: WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
     identity: state.persistenceIdentity,
     revision: state.revision,
-    layout: state.originPane ? { activePane: state.originPane } : {},
+    layout: {
+      perspectiveId: state.perspectiveId,
+      ...(state.originPane ? { activePane: state.originPane } : {}),
+    },
     filters: { histogram: { ...state.histogramView } },
     selection: {
       revision: state.revision,
@@ -278,6 +287,7 @@ function persistenceMetadataChanged(
     current.classKey !== previous.classKey ||
     current.leakId !== previous.leakId ||
     current.originPane !== previous.originPane ||
+    current.perspectiveId !== previous.perspectiveId ||
     current.histogramView !== previous.histogramView ||
     current.notes !== previous.notes ||
     current.bookmarks !== previous.bookmarks ||
@@ -314,6 +324,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
   activeOperation: undefined,
   analysisMode: undefined,
   capabilities: undefined,
+  perspectiveId: DEFAULT_PERSPECTIVE_ID,
   ...clearedSelection,
   histogramView: { ...defaultHistogramView },
   persistenceIdentity: undefined,
@@ -438,6 +449,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     }
     return true;
   },
+  setPerspectiveId: (perspectiveId) => set({ perspectiveId }),
   setHistogramView: (patch) =>
     set((state) => {
       const resetsPage =
@@ -465,6 +477,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       set({
         persistenceIdentity: identity,
         revision: compatibility.revision,
+        perspectiveId: DEFAULT_PERSPECTIVE_ID,
         notes: [],
         bookmarks: [],
         activeWorkflow: undefined,
@@ -487,6 +500,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       activeOperation: undefined,
       ...restored.selection,
       originPane: restored.layout.activePane,
+      perspectiveId: restored.layout.perspectiveId ?? DEFAULT_PERSPECTIVE_ID,
       histogramView: { ...restored.filters.histogram },
       notes: restored.notes,
       bookmarks: restored.bookmarks,
@@ -510,6 +524,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       analysisMode: mode,
       capabilities,
       persistenceIdentity: identity,
+      perspectiveId: DEFAULT_PERSPECTIVE_ID,
       ...clearedSelection,
       histogramView: { ...defaultHistogramView },
       notes: [],
@@ -539,6 +554,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       ...baseState,
       ...restored.selection,
       originPane: restored.layout.activePane,
+      perspectiveId: restored.layout.perspectiveId ?? DEFAULT_PERSPECTIVE_ID,
       histogramView: { ...restored.filters.histogram },
       notes: restored.notes,
       bookmarks: restored.bookmarks,
@@ -557,6 +573,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
     savePersistedWorkspace(get());
     set({
       persistenceIdentity: undefined,
+      perspectiveId: DEFAULT_PERSPECTIVE_ID,
       notes: [],
       bookmarks: [],
       lastPersistenceNotice: undefined,
@@ -713,6 +730,7 @@ export const useInvestigationStore = create<InvestigationState>((set, get) => ({
       activeOperation: undefined,
       analysisMode: undefined,
       capabilities: undefined,
+      perspectiveId: DEFAULT_PERSPECTIVE_ID,
       ...clearedSelection,
       histogramView: { ...defaultHistogramView },
       persistenceIdentity: undefined,

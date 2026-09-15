@@ -9,6 +9,7 @@ import {
   type PersistedWorkflowBinding,
   type WorkflowKindId,
 } from "../workflow-landing/workflow-types";
+import { isPerspectiveId, type PerspectiveId } from "./perspectives";
 
 export const WORKSPACE_PERSISTENCE_SCHEMA_VERSION = 1 as const;
 
@@ -69,6 +70,7 @@ export type PersistedWorkspaceV1 = {
   revision: number;
   layout: {
     activePane?: InvestigationOriginPane;
+    perspectiveId?: PerspectiveId;
   };
   filters: {
     histogram: HistogramViewState;
@@ -366,7 +368,10 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
     return { status: "rejected", reason: "invalid workspace identity or revision" };
   }
 
-  if (!isRecord(value.layout) || hasExactKeys(value.layout, ["activePane"])) {
+  if (
+    !isRecord(value.layout) ||
+    hasExactKeys(value.layout, ["activePane", "perspectiveId"])
+  ) {
     return { status: "rejected", reason: "invalid workspace layout" };
   }
   const activePane =
@@ -378,6 +383,15 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
         : null;
   if (activePane === null) {
     return { status: "rejected", reason: "invalid active pane" };
+  }
+  const perspectiveId =
+    value.layout.perspectiveId === undefined
+      ? undefined
+      : isPerspectiveId(value.layout.perspectiveId)
+        ? value.layout.perspectiveId
+        : null;
+  if (perspectiveId === null) {
+    return { status: "rejected", reason: "invalid perspective id" };
   }
 
   if (!isRecord(value.filters) || hasExactKeys(value.filters, ["histogram"])) {
@@ -435,7 +449,10 @@ export function parsePersistedWorkspace(value: unknown): WorkspaceParseResult {
       schemaVersion: WORKSPACE_PERSISTENCE_SCHEMA_VERSION,
       identity,
       revision: value.revision,
-      layout: activePane === undefined ? {} : { activePane },
+      layout: {
+        ...(activePane === undefined ? {} : { activePane }),
+        ...(perspectiveId === undefined ? {} : { perspectiveId }),
+      },
       filters: { histogram },
       selection: {
         revision: value.selection.revision,
@@ -528,11 +545,18 @@ export function restoreCompatibleWorkspace(
     }
   }
 
+  const layout: PersistedWorkspaceV1["layout"] = {
+    ...(record.layout.perspectiveId
+      ? { perspectiveId: record.layout.perspectiveId }
+      : {}),
+    ...(isActivePaneCompatible(record.layout.activePane, selection)
+      ? { activePane: record.layout.activePane }
+      : {}),
+  };
+
   return {
     revision: compatibility.revision,
-    layout: isActivePaneCompatible(record.layout.activePane, selection)
-      ? record.layout
-      : {},
+    layout,
     filters: record.filters,
     selection,
     notes: record.notes,

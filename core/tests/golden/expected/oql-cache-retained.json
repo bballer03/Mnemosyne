@@ -1,0 +1,26 @@
+{
+  "case_id": "oql-cache-retained",
+  "command": "query SELECT @objectId, @retainedSize FROM \"com.example.BigCache\" WHERE @retainedSize >= 4",
+  "eclipse_mat_reference": null,
+  "equivalence": "mnemosyne-golden",
+  "fixture": "build_graph_fixture",
+  "output": {
+    "columns": [
+      "@objectId",
+      "@retainedSize"
+    ],
+    "rows": [
+      [
+        {
+          "Id": 4096
+        },
+        {
+          "Int": 4
+        }
+      ]
+    ],
+    "total_matched": 1,
+    "truncated": false
+  },
+  "schema_version": 1
+}
