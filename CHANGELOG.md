@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-18
+
+### Added
+- Desktop startup heap open via positional path or `--open`, with opaque `sourceId` bridge flow.
+- Windows native **File → Open Heap** menu and portable Open With / file-association helper script.
+- Named workbench perspectives (Leak Hunt, Dominator Browse, Compare, OQL Lab) with persistence.
+- Graph-resolved superclass histogram `parent_key` for collapsible tree UI (flat when unresolved).
+- Synthetic MAT golden CI harness (`mnemosyne-golden` baselines).
+- Loopback MCP live-AI provider path evidence and setup docs.
+
+### Changed
+- Workspace, Tauri, session-ops, and Homebrew formula versions bump to `0.6.1`. Homebrew SHA-256 values remain from v0.6.0 until v0.6.1 archives publish.
+- M31.A–C Windows-first / synthetic golden / perspectives progressed; M31.D–E and macOS/Linux launch remain deferred or gated.
+
 ## [0.6.0] - 2026-09-15
 
 ### Added
