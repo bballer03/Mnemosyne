@@ -6,10 +6,10 @@ class Mnemosyne < Formula
 
   if Hardware::CPU.arm?
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-aarch64-apple-darwin.tar.gz"
-    sha256 "e74f19831b7cc89ed40edc7adcd2dcea68cb9becacda0ad29f06ca9e1e17a70e"
+    sha256 "3ac1e4067db856bb3b6b0efa70a3cb1ac38af0c37cb3077b4f6156a50d0d0113"
   else
     url "https://github.com/bballer03/mnemosyne/releases/download/v#{version}/mnemosyne-cli-x86_64-apple-darwin.tar.gz"
-    sha256 "941e5aa50b21a7bb669562930540eab8d630deb87bccf2b26bd29850d5f5df27"
+    sha256 "120e28d43a576d2c7eb043b45a32461714d8b891f87aa0c630b24ca3fa3a2a08"
   end
 
   def install
