@@ -1,6 +1,6 @@
 # Mnemosyne Roadmap — Path to MAT
 
-> **Last updated:** 2026-09-16 (**v0.6.0 cut**; **M31.B/C Wave 1** — [golden](evidence/m31b-mat-golden.md), [perspectives](evidence/m31c-perspectives.md); Eclipse MAT cross-check and packaged GUI still **NOT PROVEN**)
+> **Last updated:** 2026-09-18 (**v0.6.1** cut; **M31.A–C** Waves 0–2 — [31.A](evidence/m31a-windows-os-integration.md), [golden](evidence/m31b-mat-golden.md), [perspectives](evidence/m31c-perspectives.md); Eclipse MAT cross-check and macOS/Linux launch still **NOT PROVEN** / deferred)
 > **Owner:** Tech PM Agent  
 > **Goal:** Reach Eclipse MAT-level **investigation maturity** (workflow + capability) while extending Mnemosyne's structural differentiators (provenance, streaming overview, MCP, ci-check, single-binary distribution)  
 > **Historical archive:** [roadmap-archive.md](roadmap-archive.md)  
