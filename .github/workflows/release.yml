@@ -118,7 +118,7 @@ jobs:
           fi
 
       - name: Upload packaged binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-${{ matrix.target }}
           path: ${{ matrix.archive_name }}
@@ -415,14 +415,14 @@ jobs:
 
       - name: Upload Windows portable zip
         if: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-windows-portable
           path: dist-portable/Mnemosyne-*-windows-x64-portable.zip
           if-no-files-found: error
 
       - name: Upload desktop bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.target }}
           # Upload only normalized frozen/fallback names. Uploading raw Tauri
